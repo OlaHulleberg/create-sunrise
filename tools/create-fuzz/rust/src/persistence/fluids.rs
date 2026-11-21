@@ -97,6 +97,15 @@ fn fluid_tank_of(c: &Compound) -> Option<(Fluid, u32)> {
     fluid_of(c).map(|f| (f, int(c, "Amount").max(0) as u32))
 }
 
+/// glue/fluids/saved.rs `live_fields`: the drain's `ProcessingTicks`.
+pub fn live_drain(w: &CreateWorld, p: Pos, fields: &mut Compound) {
+    if let Some(d) = w.dims[0].drains.get(&p)
+        && let Some(Tag::Compound(c)) = fields.get_mut(DRAIN)
+    {
+        c.insert("ProcessingTicks".into(), Tag::Int(d.processing));
+    }
+}
+
 /// glue/fluids/saved.rs `save`: the fluid blocks' fields, by block entity.
 pub fn save_entities(w: &CreateWorld, column: (i32, i32), out: &mut BTreeMap<Pos, Compound>) {
     let here = |p: &Pos| (p[0] >> 4, p[2] >> 4) == column;

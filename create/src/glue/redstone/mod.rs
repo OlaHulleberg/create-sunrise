@@ -251,6 +251,17 @@ impl Subsystem for Redstone {
         saved::saved_keys(block)
     }
 
+    fn live_fields(
+        &self,
+        dim: usize,
+        now: i64,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        fields: &mut Compound,
+    ) {
+        saved::live_fields(dim, now, pos, block, fields);
+    }
+
     fn chunk_unload(&self, dim: usize, chunk: [i32; 2]) {
         analog::column_unloaded(dim, chunk);
     }

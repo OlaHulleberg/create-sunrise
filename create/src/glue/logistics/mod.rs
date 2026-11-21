@@ -250,6 +250,35 @@ impl Subsystem for Logistics {
         saved_keys(block)
     }
 
+    fn live_fields(
+        &self,
+        dim: usize,
+        now: i64,
+        pos: [i32; 3],
+        block: Block,
+        fields: &mut Compound,
+    ) {
+        if !matches!(
+            block,
+            Block::AndesiteFunnel
+                | Block::AndesiteBeltFunnel
+                | Block::BrassFunnel
+                | Block::BrassBeltFunnel
+        ) {
+            return;
+        }
+        let now = now.max(0) as u64;
+        match with_world(|w| w.saved_funnel_cooldown(dim, pos, now)).flatten() {
+            Some(0) => {
+                fields.remove(&TRANSFER_COOLDOWN.into());
+            }
+            Some(c) => {
+                fields.insert(TRANSFER_COOLDOWN.into(), Tag::Int(c as i32));
+            }
+            None => {}
+        }
+    }
+
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         // The belt break cascade first: `BeltBlock.onRemove` runs at block-change time in
         // Java, before every block entity tick, and `BeltTunnelBlock.neighborChanged` breaks

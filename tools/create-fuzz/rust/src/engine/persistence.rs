@@ -224,6 +224,18 @@ impl Run {
     /// this very tick (a wrench turning a water wheel) is lost.
     pub(super) fn reload(&mut self) {
         self.publish_entities();
+        let now = u64::from(self.now);
+        let mut at: Vec<Pos> = self.persisted.records.keys().copied().collect();
+        at.extend(self.w.dims[0].funnels.keys().copied());
+        at.sort();
+        at.dedup();
+        for p in at {
+            let fields = self.persisted.records.entry(p).or_default();
+            crate::persistence::entities::live_fields(&self.w, p, now, fields);
+            if fields.is_empty() {
+                self.persisted.records.remove(&p);
+            }
+        }
         self.load_saved();
     }
 

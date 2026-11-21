@@ -21,6 +21,18 @@ const SPOUT: &str = "SpoutTank";
 const DRAIN: &str = "DrainTank";
 const CONNECTIONS: [&str; 2] = ["Connections", "ConnectionFluids"];
 
+/// `ItemDrainBlockEntity.write`'s `ProcessingTicks` from the live drain at `pos`.
+pub(super) fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compound) {
+    if block != Block::ItemDrain {
+        return;
+    }
+    if let Some(ticks) =
+        with_world(|w| w.dims[dim].drains.get(&pos).map(|d| d.processing)).flatten()
+    {
+        super::super::entity_data::patch(fields, DRAIN, "ProcessingTicks", Tag::Int(ticks));
+    }
+}
+
 pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
     match block {
         Block::FluidTank => &[TANK, BOILER],

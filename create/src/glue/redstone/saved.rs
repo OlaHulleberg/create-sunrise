@@ -73,6 +73,46 @@ pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
 /// `RedstoneLinkBlockEntity.write`, `BrassDiodeBlockEntity.write`,
 /// `AnalogLeverBlockEntity.write`, `SmartObserverBlockEntity.write` and
 /// `ThresholdSwitchBlockEntity.write` of column `chunk`'s block entities.
+/// `AnalogLeverBlockEntity.write`'s `ChangeTimer` at game time `now`.
+fn change_timer(l: &create_engine::lever::Lever, now: i64) -> i32 {
+    l.due.map_or(0, |t| (t - now).clamp(0, 15) as i32)
+}
+
+/// `SmartObserverBlockEntity.write`'s `TurnOff` at game time `now`.
+fn turn_off(o: &create_engine::observe::Observer, now: i64) -> i32 {
+    o.off_at.map_or(0, |t| (t - now).clamp(0, 64) as i32)
+}
+
+/// The timers [`save`] writes, from the live lever or observer at `pos` at game time `now`.
+pub(super) fn live_fields(
+    dim: usize,
+    now: i64,
+    pos: [i32; 3],
+    block: Block,
+    fields: &mut Compound,
+) {
+    let left = with_world(|w| {
+        let d = &w.dims[dim];
+        match block {
+            Block::AnalogLever => d
+                .levers
+                .levers
+                .get(&pos)
+                .map(|l| (CHANGE_TIMER, change_timer(l, now))),
+            Block::ContentObserver => d
+                .detectors
+                .observers
+                .get(&pos)
+                .map(|o| (TURN_OFF, turn_off(o, now))),
+            _ => None,
+        }
+    })
+    .flatten();
+    if let Some((key, left)) = left {
+        fields.insert(key.into(), Tag::Int(left));
+    }
+}
+
 pub(super) fn save(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut Entities) {
     let dim = lv.dim;
     let now = lv.game_time();
@@ -101,14 +141,14 @@ pub(super) fn save(lv: &ServerLevel<'_>, chunk: [i32; 2], out: &mut Entities) {
         ]);
     }
     for (pos, l) in levers {
-        let left = l.due.map_or(0, |t| (t - now).clamp(0, 15) as i32);
+        let left = change_timer(&l, now);
         out.entry(pos).or_default().extend([
             (STATE.into(), Tag::Int(i32::from(l.state))),
             (CHANGE_TIMER.into(), Tag::Int(left)),
         ]);
     }
     for (pos, o) in observers {
-        let left = o.off_at.map_or(0, |t| (t - now).clamp(0, 64) as i32);
+        let left = turn_off(&o, now);
         out.entry(pos).or_default().extend([
             (FILTER.into(), filter_to_nbt(lv, o.filter.as_ref())),
             (TURN_OFF.into(), Tag::Int(left)),

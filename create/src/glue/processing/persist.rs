@@ -71,6 +71,45 @@ fn fluid_of(t: &Tag) -> Option<(tank::Fluid, u32)> {
     Some((fluid, int(c, "Amount").clamp(0, 1000) as u32))
 }
 
+/// What counts down in [`save_entities`]' records, from the live deployer's `Timer`, crusher's
+/// `Remaining` (`ProcessingInventory.remainingTime`) or burner's `Remaining`
+/// (`remainingBurnTime`) at `pos`.
+pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compound) {
+    use super::super::entity_data::patch;
+    with_world(|w| {
+        let d = &w.dims[dim];
+        match block {
+            Block::Deployer => {
+                if let Some(dp) = d.deployers.get(&pos)
+                    && let Some(Tag::Compound(c)) = fields.get_mut(&DEPLOYER.into())
+                    && let Some(Tag::IntArray(v)) = c.get_mut(&"Values".into())
+                    && v.len() > 1
+                {
+                    v[1] = dp.timer;
+                }
+            }
+            Block::CrushingWheelController => {
+                if let Some((c, _)) = d.crushers.get(&pos) {
+                    patch(
+                        fields,
+                        CRUSHER,
+                        "Remaining",
+                        Tag::Float(c.remaining.to_bits()),
+                    );
+                }
+            }
+            Block::BlazeBurner => {
+                if let Some(b) = d.burners.get(&pos)
+                    && b.creative.is_none()
+                {
+                    patch(fields, BURNER, "Remaining", Tag::Int(b.remaining));
+                }
+            }
+            _ => {}
+        }
+    });
+}
+
 /// `DeployerBlockEntity.write`, `CrushingWheelControllerBlockEntity.write`,
 /// `BlazeBurnerBlockEntity.write`, `BasinBlockEntity.write`'s tanks and
 /// `MechanicalCrafterBlockEntity.write`'s `ConnectedInput` and `Cover` of column `chunk`.
