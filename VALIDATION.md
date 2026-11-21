@@ -1,23 +1,27 @@
 # Validation
 
-Checked on 2026-11-20 (Linux x86_64, Rust 1.99.1, a fresh build directory), pinned to Sunrise
+Checked on 2026-11-21 at main `c6f9470` (Linux x86_64, Rust 1.99.1, a fresh clone), pinned to Sunrise
 `94256510f74e6843754e0a93fd9e4da7e45b1056` in `create/sunrise-mod.toml`.
 `cargo sunrise-mod` uses the signature-verified release tool and SDK from
 `sdk-94256510f74e6843754e0a93fd9e4da7e45b1056`, with the published release key.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-`684e89b` on `9425651` passed the in-game smoke test below. Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
+`684e89b` on `9425651` passed the in-game smoke test below, and `c6f9470` was tried in game for the fixes merged
+since (#203-#224). Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
 the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
+
+In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `create/.sunrise/`, and the other
+`create/` commands fail without it (`no matching package named sunrise-mod-api`).
 
 | Where | Command | Result |
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (101 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (820 engine tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (117 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (900 engine tests) |
 | `create/` | `cargo sunrise-mod check` | Pass (official `94256510f7` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
 | `create/` | `cargo sunrise-mod fits target/sunrise-mod/create.smod --build 94256510f74e6843754e0a93fd9e4da7e45b1056` | Pass (`made for`) |
@@ -25,7 +29,7 @@ the first nightly smoke test used `2d81263`, and the registry smoke tests used `
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (53 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (55 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
 | `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
 
 ## Saved minecart riders on `9425651`
@@ -273,6 +277,39 @@ xvfb-run -a python3 tools/check-potato-projectile.py --ctl "$CTL" \
 ```
 
 In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test (or `--fixture --case flight` for the two billboard screenshots). Do not ship the instrumented build or publish the screenshots. Dedicated multiplayer, a free camera and flight prediction were not checked.
+
+## Fixes #203-#224 in game on `9425651` (main `c6f9470`)
+
+Built with `sunrise-launcher native-build` against `nightly-2026-11-20-9425651`, a fresh creative world (survival where
+noted), driven by `sunrise-ctl`, read back with `/data get`, screenshots and the player's state.
+
+| PR | Item | Result | Evidence |
+|---|---|---|---|
+| #203 | Spout fill across a reload | Pass | Ticks frozen mid-fill at `ProcessingTicks` 16 (started tick 354), saved and reloaded: the next fill started at tick 375, so the first ran its 20 ticks, not restarted; all four bottles filled |
+| #203 | Press over a depot | Pass | Three iron pressed one at a time into three sheets, held at `Pos` 0.5 |
+| #206 | Ejector incoming stacks | Pass | Redstone-held ejector turning at 16 holding 5 iron, a hopper above, ticks stepped: each arrival sits in `Incoming` from `Pos` 0.125 to the centre, then joins (5, 6, 7 … 10) |
+| #208 | Rest of a pressed belt stack | Pass | Four iron on a belt under a press all became sheets and moved on to the end depot |
+| #208 | Funnel cooldown across a reload | Pass | `TransferCooldown` 400 set with `/data merge`, saved and reloaded: the next extraction came 14-20 s later (8 ticks without the saved cooldown) |
+| #208, #209 | Brass tunnel targets and clicks | Pass | Two grouped tunnels: holding 16 iron it saved `Targets` for both; a standing wrench click took the 16 into the inventory, `shape=straight` kept; targets and shape kept over a reload |
+| #210 | Fan progress cleared by a fill | Pass | A glass bottle on a depot in a blasting current (`FanProcessingTime` 111 and falling), filled by the spout: the water bottle restarted at 150 |
+| #214 | Interfaces on a bearing | Pass | A glued arm with an interface and a chest docks once a turn with a stationary interface; a chute above put 128 cobblestone into the arm's chest, and the arm kept turning. Not tried on a cart |
+| #215 | Standing on and riding structures | Fail | Stood on a turning bearing and on a cart (after a reload). A piston lift (2 poles, 16 rpm) carried the player up 152.0 → 153.875, then pushed them off sideways as it stopped: the rider is 1/8 below the top when the blocks are placed, and Create's `moveCollidedEntitiesOnDisassembly` (`AbstractContraptionEntity.java:690`) has no port. A cart assembled at rest left its structure and collider at the assembler when pushed |
+| #216 | Belt lengthening | Pass | A 5-long belt driven at its end, lengthened at its start in creative: the motor and the end save size 6, the new segment 7; middle segments 6 to 3 in chain order (checked by create-fuzz) |
+| #217 | Copycat friction and light | Fail | Sticks slide the same 1.3 blocks on ice copycat steps and empty ones (7.8 on ice). The friction hook gets no block entity data, so it reads air. A glowstone copycat made by a player gives block light 0 until a reload (15 after) |
+| #217 | Deployer harvest | Pass | Punching stone two blocks ahead: a stick leaves it, an iron pickaxe breaks it and drops cobblestone |
+| #217 | Diving helmet and boots | Pass | Survival, under water with a backtank holding `create:backtank_air` 900: air held at 300 for 15 s while the tank went 897 → 884. Boots sink at −0.21 per tick, −0.025 without |
+| #217 | Coupled carts | Not tried | `sunrise-ctl` can't target minecarts |
+| #218 | Boots on a sloped belt | Pass | 5-long upward belt: carried with no boots and with cardboard boots, not carried with diving boots |
+| #218 | Toolbox fed by a hopper | Pass | Stone, dirt and a shulker box: stone to slot 0, dirt to slot 4, the shulker box stays |
+| #219 | Basin recipes | Pass | Pressed: 4 honey bottles to a honey block and 4 glass bottles (slots 9, 10); 18 nuggets to 2 ingots |
+| #220 | Filter screen | Pass | A ghost slot copies one diamond and the cursor keeps 5; shift-click fills the next ghost slot; clicking the held filter does nothing; deny saved; all kept over a reload |
+| #220 | Campfire smoke on a cart | Fail | A lit campfire on an assembled minecart contraption, moving and stopped, before and after a reload: no smoke |
+| #221 | Old world migration | Pass | A world saved on `7b4c440` (motor 64 rpm, depot 5 diamonds, tank 2000 mB water, glowstone copycat, basin 1 iron) opened with all of it in entity data (`create:fields`), the same after a second reload; light 15 at the copycat |
+| #221 | `/data merge` | Pass | Reached a spout (`SpoutTank`), a funnel (`TransferCooldown`), a motor (`ScrollValue`, applied as Create's `read` does: the next change) and copycats |
+| #221 | Placing with data | Fail | A brass funnel with `Filter` diamond filters at once, but its record has no `Filter` and after a reload it lets dirt through. A blaze burner with `BurnerState` places smouldering |
+| #222 | Drops from broken blocks | Pass | Survival: an andesite casing broken by hand drops nothing; with an iron pickaxe it drops itself |
+| #222 | Belt eject | Pass | Items off the end of a running belt with no receiver land just past its end (x −1.29) |
+| #224 | Steam engine across a reload | Pass | 2×2 boiler, kindled burner, pump supply 48: engine at −64, capacity 16384; saved and reloaded the same, `Remaining` fuel 1387 → 1362 |
 
 ## In-game smoke test on `9425651` (main `684e89b`)
 
