@@ -4984,9 +4984,9 @@ impl CreateWorld {
     }
 
     /// `updateBoilerState` for the tank blocks to look at, by their controller: the engines on
-    /// every block of the tank counted (`BoilerData.evaluate`); a tank without engines is no
-    /// boiler, a new boiler loses its windows (`setWindows(false)`), and engines no longer on a
-    /// boiler stop their shafts.
+    /// every block of the tank counted (`BoilerData.evaluate`, `notifyUpdate` when they
+    /// changed); a tank without engines is no boiler, a new boiler loses its windows
+    /// (`setWindows(false)`), and engines no longer on a boiler stop their shafts.
     pub fn evaluate_boilers(&mut self, dim: usize) {
         if self.dims[dim].boiler_checks.is_empty() {
             return;
@@ -5001,6 +5001,7 @@ impl CreateWorld {
             if controller != Some(p)
                 && let Some(b) = self.dims[dim].boilers.remove(&p)
             {
+                self.dims[dim].unsaved.push((p[0] >> 4, p[2] >> 4));
                 stopped.extend(b.engines);
                 self.dims[dim]
                     .plumbing
@@ -5025,6 +5026,7 @@ impl CreateWorld {
             let d = &mut self.dims[dim];
             if engines.is_empty() && whistles.is_empty() {
                 if let Some(b) = d.boilers.remove(&c) {
+                    d.unsaved.push((c[0] >> 4, c[2] >> 4));
                     stopped.extend(b.engines);
                     d.plumbing.sound_checks.extend_from_slice(&b.whistles);
                 }
@@ -5032,6 +5034,7 @@ impl CreateWorld {
             }
             let b = d.boilers.entry(c).or_default();
             let was_active = b.data.is_active();
+            let attached = (b.data.attached_engines, b.data.attached_whistles);
             stopped.extend(b.engines.iter().filter(|e| !engines.contains(e)).copied());
             d.plumbing.sound_checks.extend_from_slice(&b.whistles);
             d.plumbing.sound_checks.extend_from_slice(&whistles);
@@ -5039,9 +5042,13 @@ impl CreateWorld {
             b.data.attached_engines = engines.len() as i32;
             b.data.attached_whistles = whistles.len() as i32;
             b.data.needs_heat_level_update = true;
+            let changed = attached != (b.data.attached_engines, b.data.attached_whistles);
             b.engines = engines;
             b.whistles = whistles;
             d.boiler_heat_checks.push(c);
+            if changed {
+                d.unsaved.push((c[0] >> 4, c[2] >> 4));
+            }
             if !was_active && m.window {
                 if let Some(m) = d.tanks.multis.get_mut(&c) {
                     m.window = false;
@@ -5084,21 +5091,22 @@ impl CreateWorld {
             .collect()
     }
 
-    /// The heat of each block under the boiler at `tank` (`updateTemperature`); its engines
-    /// follow.
+    /// The heat of each block under the boiler at `tank` (`updateTemperature`, `notifyUpdate`
+    /// when it changed); its engines follow.
     pub fn set_boiler_heat(&mut self, dim: usize, tank: [i32; 3], heats: &[i32]) {
         let Some(b) = self.dims[dim].boilers.get_mut(&tank) else {
             return;
         };
         if b.data.update_temperature(heats.iter().copied()) {
+            self.mark_unsaved(dim, tank);
             // Its whistles sound only while it is heated.
             self.boiler_whistles_changed(dim, tank);
         }
         self.drive_engines(dim, tank);
     }
 
-    /// One tick of the boilers (`BoilerData.tick`): each samples its water supply every 5 ticks,
-    /// and its engines follow. Tanks without engines are not here.
+    /// One tick of the boilers (`BoilerData.tick`): each samples its water supply every 5 ticks
+    /// (`notifyUpdate`), and its engines follow. Tanks without engines are not here.
     pub fn tick_boilers(&mut self, dim: usize) {
         let d = &mut self.dims[dim];
         if d.boilers.is_empty() {
@@ -5112,6 +5120,7 @@ impl CreateWorld {
             }
         }
         for &tank in &sampled {
+            self.mark_unsaved(dim, tank);
             self.drive_engines(dim, tank);
         }
         sampled.clear();
@@ -9492,6 +9501,81 @@ mod tests {
         );
         let reloaded = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
         assert_eq!(reloaded.network.map(|n| n.size), Some(1));
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_boilers_changes_mark_its_column_unsaved() {
+        // create-fuzz seed 619: `notifyUpdate` in `updateBoilerState`, `BoilerData.tick`'s
+        // sample and its `updateTemperature`; a column saved later keeps what the boiler holds.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:fluid_tank",
+                vec![("bottom", "true"), ("top", "true"), ("shape", "plain")],
+            ),
+            (
+                "create:steam_engine",
+                vec![
+                    ("face", "wall"),
+                    ("facing", "south"),
+                    ("waterlogged", "false"),
+                ],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:powered_shaft", vec![("axis", "x")]),
+            ("create:blaze_burner", vec![("blaze", "kindled")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let square = [[0, 0, 0], [1, 0, 0], [0, 0, 1], [1, 0, 1]];
+        for p in square {
+            w.block_changed(0, [p[0], -1, p[2]], 0, 14);
+        }
+        for p in square {
+            w.block_changed(0, p, 0, 10);
+        }
+        w.tick_fluid_entities(0, |_| None);
+        let c = [0, 0, 0];
+        let (engine, shaft) = ([1, 0, 2], [1, 0, 4]);
+        w.block_changed(0, shaft, 0, 12);
+        w.block_changed(0, engine, 0, 11);
+        w.take_unsaved(0);
+        w.evaluate_boilers(0);
+        assert_eq!(w.take_unsaved(0), [(0, 0)]);
+        w.dims[0].boiler_checks.push(c);
+        w.evaluate_boilers(0);
+        assert!(w.take_unsaved(0).is_empty(), "the same engines");
+        w.set_boiler_heat(0, c, &[1, 1, 1, 1]);
+        assert_eq!(w.take_unsaved(0), [(0, 0)]);
+        w.set_boiler_heat(0, c, &[1, 1, 1, 1]);
+        assert!(w.take_unsaved(0).is_empty(), "the same heat");
+        w.fill_boiler(0, [1, 0, 0], crate::tank::Fluid::Water, 50);
+        w.tick_boilers(0);
+        assert_eq!(w.take_unsaved(0), [(0, 0)]);
+        let saved = w.column_boilers(0, 0, 0)[0].1;
+        assert_eq!(
+            (
+                saved.water_supply,
+                saved.active_heat,
+                saved.attached_engines
+            ),
+            (10.0, 4, 1)
+        );
+        for _ in 1..crate::steam::SAMPLE_RATE {
+            w.tick_boilers(0);
+            assert!(w.take_unsaved(0).is_empty(), "between samples");
+        }
+        w.tick_boilers(0);
+        assert_eq!(w.take_unsaved(0), [(0, 0)]);
+        w.block_changed(0, engine, 11, 0);
+        w.take_unsaved(0);
+        w.evaluate_boilers(0);
+        assert!(w.dims[0].boilers.is_empty());
+        assert_eq!(w.take_unsaved(0), [(0, 0)]);
         states::clear_range();
     }
 
