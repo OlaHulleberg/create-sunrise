@@ -53,6 +53,35 @@ impl Run {
         });
     }
 
+    /// The glue's `nudge_entities` (`EjectorBlockEntity.nudgeEntities`): items whose box (a
+    /// quarter block each way) meets the ejector's block, inset a pixel at the sides, go up 2
+    /// pixels.
+    pub(super) fn nudge_items(&mut self, p: Pos) {
+        let inset = 1.0 / 16.0;
+        let lo = [
+            f64::from(p[0]) + inset,
+            f64::from(p[1]),
+            f64::from(p[2]) + inset,
+        ];
+        let hi = [
+            f64::from(p[0] + 1) - inset,
+            f64::from(p[1] + 1),
+            f64::from(p[2] + 1) - inset,
+        ];
+        for e in &mut self.item_entities {
+            let a = e.at;
+            let meets = a[0] - 0.125 < hi[0]
+                && a[0] + 0.125 > lo[0]
+                && a[1] < hi[1]
+                && a[1] + 0.25 > lo[1]
+                && a[2] - 0.125 < hi[2]
+                && a[2] + 0.125 > lo[2];
+            if meets {
+                e.at[1] += 0.125;
+            }
+        }
+    }
+
     /// The end of the server tick: the harness discards the item entities.
     pub(super) fn dispose_item_entities(&mut self) {
         let tick = self.now;
