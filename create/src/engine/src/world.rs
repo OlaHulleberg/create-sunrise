@@ -2566,6 +2566,32 @@ impl CreateWorld {
         std::mem::take(&mut self.dims[dim].gauge_changes)
     }
 
+    /// `KineticBlockEntity.read` of the part `sub` at `pos` (`Kinetics::restore_state`). An
+    /// encased fan read turning ticks from its first tick on (`EncasedFanBlockEntity.tick` reads
+    /// the loaded `getSpeed`), with no speed change to wait for.
+    pub fn restore_kinetic_state(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        sub: u8,
+        saved: crate::kinetics::SavedKineticState,
+    ) -> bool {
+        let d = &mut self.dims[dim];
+        if !d.kinetics.restore_state(pos, sub, saved) {
+            return false;
+        }
+        if let Some(speed) = d.kinetics.speed(pos, sub)
+            && speed != 0.0
+            && let Some(fan) = d.fans.get_mut(&pos)
+        {
+            fan.speed = speed;
+            if !d.running_fans.contains(&pos) {
+                d.running_fans.push(pos);
+            }
+        }
+        true
+    }
+
     /// Fans to tick: each turning one, and one that just stopped (its current goes). Those whose
     /// current is due to be looked at again (`fanBlockCheckRate`) are marked to rebuild.
     pub fn fans_to_tick(&mut self, dim: usize) -> Vec<[i32; 3]> {
@@ -9369,6 +9395,41 @@ mod tests {
                 .iter()
                 .all(|(_, m)| m.multi.is_some_and(|m| m.blocks() == 1 && !m.window))
         );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_reloaded_fan_blows_from_its_first_tick() {
+        // Seed 2487: a fan at -64 RPM blasting a honey bottle on a depot is saved with
+        // `FanProcessingTime` 3; Java's reloaded fan processes it on each of the next three ticks.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "north")]),
+            ("create:encased_fan", vec![("facing", "north")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, fan) = ([0, 8, 1], [0, 8, 0]);
+        w.block_changed(0, fan, 0, 11);
+        w.block_changed(0, motor, 0, 10);
+        w.set_motor(0, motor, 64.0);
+        w.tick(0, &mut Vec::new());
+        let speed = w.speed(0, fan).unwrap();
+        assert!(speed != 0.0);
+        let saved = [motor, fan].map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        w.column_unloaded(0, 0, 0);
+        w.dims[0].kinetics = crate::kinetics::Kinetics::new();
+        w.block_loaded(0, fan, 11);
+        w.block_loaded(0, motor, 10);
+        for (p, s) in [motor, fan].into_iter().zip(saved) {
+            assert!(w.restore_kinetic_state(0, p, 0, s));
+        }
+        assert_eq!(w.fans_to_tick(0), vec![fan]);
+        assert_eq!(w.dims[0].fans[&fan].speed, speed);
+        assert!(w.dims[0].fans[&fan].rebuild);
         states::clear_range();
     }
 

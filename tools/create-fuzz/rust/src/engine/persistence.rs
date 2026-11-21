@@ -420,7 +420,7 @@ impl Run {
             for sub in 0..2 {
                 if let Some(saved) = entities.get(&(p, sub)).and_then(codec::saved_from_nbt) {
                     assert!(
-                        self.w.dims[0].kinetics.restore_state(p, sub, saved),
+                        self.w.restore_kinetic_state(0, p, sub, saved),
                         "saved kinetic part missing at {p:?} port {sub}"
                     );
                 }
