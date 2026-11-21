@@ -209,7 +209,7 @@ pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> boo
 
 /// `BeltTunnelItem.updateCustomBlockEntityTag`: the belt segment under a tunnel placed from its
 /// item takes the tunnel's casing while it has none, as the block is placed; the tunnel takes
-/// its shape at once (`getStateForPlacement`).
+/// its shape (`getStateForPlacement`) and looks at its connections (`onPlace`) at once.
 pub struct TunnelItem;
 
 #[mod_api::sunrise_part]
@@ -243,6 +243,9 @@ impl mod_api::ItemPart for TunnelItem {
             super::belt::set_casing(&mut lv, below, Some(kind));
         }
         shape_tunnel(&mut lv, pos, true);
+        // `onPlace`: its connections, before the save that can follow the placement at once.
+        update_brass_connections(&lv, vec![pos]);
+        super::super::persist::publish(&mut lv);
     }
 }
 
@@ -385,24 +388,32 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
             conn_checks.push(p);
         }
     }
-    let brass_info = collect_brass_info(lv, &conn_checks);
-    if !brass_info.is_empty() {
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            let mut changed = Vec::new();
-            for p in conn_checks {
-                tunnel::update_connections(
-                    p,
-                    &mut d.brass,
-                    &|q| brass_info.get(&q).copied(),
-                    &mut changed,
-                );
-            }
-            for p in changed {
-                w.mark_unsaved(dim, p);
-            }
-        });
+    update_brass_connections(lv, conn_checks);
+}
+
+/// `BrassTunnelBlockEntity.updateTunnelConnections` for the brass tunnels at `roots`, in order:
+/// their connections across their axis, and the mode handed on to a tunnel newly joined.
+fn update_brass_connections(lv: &ServerLevel<'_>, roots: Vec<[i32; 3]>) {
+    let dim = lv.dim;
+    let brass_info = collect_brass_info(lv, &roots);
+    if brass_info.is_empty() {
+        return;
     }
+    with_world(|w| {
+        let d = &mut w.dims[dim];
+        let mut changed = Vec::new();
+        for p in roots {
+            tunnel::update_connections(
+                p,
+                &mut d.brass,
+                &|q| brass_info.get(&q).copied(),
+                &mut changed,
+            );
+        }
+        for p in changed {
+            w.mark_unsaved(dim, p);
+        }
+    });
 }
 
 /// Collects `(axis, has_flaps)` for every brass tunnel reachable from `roots` across its axis.

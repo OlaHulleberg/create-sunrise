@@ -1,0 +1,290 @@
+{
+ "blocks": [
+  {
+   "motor": 32,
+   "pos": [
+    -1,
+    8,
+    0
+   ],
+   "state": "create:creative_motor[facing=east]"
+  },
+  {
+   "pos": [
+    0,
+    8,
+    0
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    0,
+    8,
+    5
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    1,
+    8,
+    0
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    1,
+    8,
+    5
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    2,
+    8,
+    0
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    2,
+    8,
+    5
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    3,
+    8,
+    3
+   ],
+   "state": "create:depot[waterlogged=false]"
+  }
+ ],
+ "checkpoints": [
+  62
+ ],
+ "events": [
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    0
+   ],
+   "tick": 8
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    5
+   ],
+   "tick": 14
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    1,
+    8,
+    0
+   ],
+   "tick": 20
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    1,
+    8,
+    5
+   ],
+   "tick": 26
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    2,
+    8,
+    0
+   ],
+   "tick": 32
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    2,
+    8,
+    5
+   ],
+   "tick": 38
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:brass_tunnel",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    3
+   ],
+   "tick": 48
+  },
+  {
+   "action": {
+    "kind": "scroll_setting",
+    "row": 0,
+    "value": 3
+   },
+   "pos": [
+    0,
+    9,
+    3
+   ],
+   "tick": 56
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:brass_tunnel",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    1,
+    8,
+    3
+   ],
+   "tick": 60
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:brass_tunnel",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    2,
+    8,
+    3
+   ],
+   "tick": 61
+  },
+  {
+   "action": {
+    "kind": "reload"
+   },
+   "pos": [
+    -1,
+    8,
+    0
+   ],
+   "tick": 61
+  }
+ ],
+ "seed": 19054,
+ "ticks": 63,
+ "version": 3
+}

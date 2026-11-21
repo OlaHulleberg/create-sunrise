@@ -152,21 +152,26 @@ impl Run {
                 conn_checks.push(p);
             }
         }
-        let brass_info = self.collect_brass_info(&conn_checks);
-        if !brass_info.is_empty() {
-            let mut changed = Vec::new();
-            let d = &mut self.w.dims[0];
-            for p in conn_checks {
-                tunnel::update_connections(
-                    p,
-                    &mut d.brass,
-                    &|q| brass_info.get(&q).copied(),
-                    &mut changed,
-                );
-            }
-            for p in changed {
-                self.w.mark_unsaved(0, p);
-            }
+        self.update_brass_connections(conn_checks);
+    }
+    /// The glue's `update_brass_connections`.
+    fn update_brass_connections(&mut self, roots: Vec<Pos>) {
+        let brass_info = self.collect_brass_info(&roots);
+        if brass_info.is_empty() {
+            return;
+        }
+        let mut changed = Vec::new();
+        let d = &mut self.w.dims[0];
+        for p in roots {
+            tunnel::update_connections(
+                p,
+                &mut d.brass,
+                &|q| brass_info.get(&q).copied(),
+                &mut changed,
+            );
+        }
+        for p in changed {
+            self.w.mark_unsaved(0, p);
         }
     }
     /// A tunnel item or a wrench on a tunnel (`BeltTunnelBlock.onWrenched`, the wrench's
@@ -218,7 +223,7 @@ impl Run {
             return false;
         }
         // The game places the block item with the port's default state; the item part
-        // (`TunnelItem`) cases the belt and gives the tunnel its shape.
+        // (`TunnelItem`) cases the belt, gives the tunnel its shape and its connections.
         let at = if self.replaceable(p) {
             p
         } else {
@@ -238,6 +243,8 @@ impl Run {
                 self.set_belt_casing(below, Some(kind));
             }
             self.shape_tunnel(at, true);
+            self.update_brass_connections(vec![at]);
+            self.publish_interaction();
         }
         true
     }

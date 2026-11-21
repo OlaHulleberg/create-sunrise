@@ -676,3 +676,21 @@ fn shortening_a_belt_end_ejects_the_stack_past_it() {
     );
     assert_eq!(d.motion, [0.0, 0.125, 0.125]);
 }
+
+#[test]
+fn a_tunnel_joining_its_group_as_the_world_saves_keeps_the_group_mode() {
+    // Seed 19054: the first tunnel is set to `forced_round_robin` at tick 56, two more join at
+    // 60 and 61, and the world reloads after the third is placed. Java's `onPlace` →
+    // `updateTunnelConnections` hands the group's mode to it at once, so all three load with it.
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/brass-join-then-reload.json")).unwrap();
+    let r = super::run(&sc);
+    for x in 0..3 {
+        let t = r.checkpoints[&62].blocks[&format!("{x},9,3")]
+            .tunnel
+            .clone()
+            .and_then(|t| t.brass)
+            .expect("a brass tunnel");
+        assert_eq!(t.mode, "forced_round_robin", "{x}");
+    }
+}
