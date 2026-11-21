@@ -301,6 +301,11 @@ impl Run {
         if seg.hovering_end(hit) {
             // `BeltSlicer.java:86-93`: `detachKinetics`, `invalidateItemHandler` and
             // `beltLength = 0` on every segment (`take_belt`), as the glue's `use_wrench`.
+            let rpm = self.w.dims[0]
+                .belt_of
+                .get(&p)
+                .and_then(|c| self.w.speed(0, *c))
+                .unwrap_or(0.0);
             let (_, mut taken) = self.w.take_belt(0, p).unwrap();
             let next = add(
                 p,
@@ -321,12 +326,18 @@ impl Run {
             self.set(p, AIR);
             let chain: Vec<_> = taken.chain.iter().copied().filter(|q| *q != p).collect();
             if seg.part == belt::Part::End {
-                // `BeltSlicer.java:106-113`: items past the new end are ejected (native item
-                // flight is outside the comparison); the controller keeps its inventory.
-                taken
-                    .items
-                    .items
-                    .retain(|i| i.position <= (length - 1) as f32);
+                // `BeltSlicer.java:106-113`: items past the new end are ejected; the controller
+                // keeps its inventory.
+                let (gone, kept): (Vec<belt::Item>, Vec<belt::Item>) =
+                    std::mem::take(&mut taken.items.items)
+                        .into_iter()
+                        .partition(|i| i.position > (length - 1) as f32);
+                taken.items.items = kept;
+                for i in gone {
+                    // `BeltInventory.eject` reads the zeroed `beltLength` (glue `eject_item`).
+                    let (at, motion) = belt::eject(chain[0], &taken.segment, 0, rpm, i.position);
+                    self.spawn_item(at, motion, &i.item, i.count);
+                }
                 self.w.reform_belt(0, chain[0], taken.items);
             } else {
                 // `BeltSlicer.java:116-132`: the next segment is the controller now, with a
