@@ -5,6 +5,12 @@
 
 use crate::kinetics::{Axis, Dir};
 
+/// `BeltTunnelBlock.isValidPositionForPlacement`: a tunnel goes only on a flat belt segment
+/// (`below`: the segment under it, if a belt is there).
+pub fn valid_position(below: Option<crate::belt::Segment>) -> bool {
+    below.is_some_and(|s| s.slope == crate::belt::Slope::Horizontal)
+}
+
 /// `BeltTunnelBlock.Shape`, by its state value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Shape {
@@ -674,6 +680,20 @@ pub fn distribute(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn tunnels_go_only_on_flat_belts() {
+        let seg = |slope: &str| {
+            crate::belt::Segment::read(
+                [("facing", "north"), ("slope", slope), ("part", "middle")].into_iter(),
+            )
+        };
+        assert!(valid_position(seg("horizontal")));
+        for slope in ["upward", "downward", "vertical", "sideways"] {
+            assert!(!valid_position(seg(slope)), "{slope}");
+        }
+        assert!(!valid_position(None));
+    }
 
     #[test]
     fn filter_clicks_take_only_their_open_sides_slots() {

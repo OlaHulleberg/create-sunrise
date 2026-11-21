@@ -225,7 +225,8 @@ impl Run {
         } else {
             add(p, face.offset())
         };
-        if self.replaceable(at) {
+        // `BeltTunnelItem.canPlace` (the placement part).
+        if self.replaceable(at) && tunnel::valid_position(self.belt_below(at)) {
             let state = format!("{item}[axis=x,shape=straight]");
             self.set(at, self.id(&state));
         }

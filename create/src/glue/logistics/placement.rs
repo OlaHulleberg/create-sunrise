@@ -99,6 +99,13 @@ impl BlockPart for Placement {
             let o = side.offset();
             [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]
         };
+        if matches!(block, Block::AndesiteTunnel | Block::BrassTunnel) {
+            // `BeltTunnelItem.canPlace`.
+            let below = info_at(beside(Dir::Down)).and_then(|(_, i)| i.belt);
+            if !create_engine::tunnel::valid_position(below) {
+                return Some(None);
+            }
+        }
         if block == Block::ItemVault {
             // ItemVaultBlock.getStateForPlacement: the axis of the vault it was placed against
             // unless sneaking, else the player's horizontal facing's.
