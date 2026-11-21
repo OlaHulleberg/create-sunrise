@@ -10,5 +10,8 @@
     "com/simibubi/create/content/logistics/tunnel/",
     "com/simibubi/create/content/logistics/chute/",
     "com/simibubi/create/content/logistics/box/"
+  ],
+  "fluids": [
+    "com/simibubi/create/content/fluids/"
   ]
 }

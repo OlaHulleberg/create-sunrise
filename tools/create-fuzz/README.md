@@ -125,6 +125,8 @@ classes never loaded. Class ID mismatches fail analysis.
 `corpus/` (override `FUZZ_CORPUS`) keeps full scenarios that increase cumulative branch coverage. It is
 ignored because it is generated, binary-version-dependent run data. Existing scenarios are replayed on
 each run before new rounds; 80% of new rounds mutate a corpus member, the rest explore fresh seeds.
+New rounds take seeds from 0, or from `FUZZ_COVER_SEEDS_FROM` so a continuation explores seeds its
+previous campaigns did not.
 Mutations add/remove/replace blocks, adjust motor speeds or event ticks, keeping legal generated states,
 bounded positions and a settling window. Differences and instability use the same recording path as
 `fuzz` (`FUZZ_FOUND`). `work/coverage/classes.tsv` lists every included class, `never-reached.tsv` lists
@@ -289,6 +291,7 @@ boiler, reads the heat under the tank, samples the water supply, converts shafts
 shafts and back through `PoweredShaftBlock.getEquivalent`, and ticks blaze burners.
 
 Fluid histories use `fluids.json` state domains and version-3 player uses for pipe/pump/tank placement, wrench/glass/copper casing, creative actor bucket exchange (`game_mode`), smart filter slots, and redstone-controlled valve transmissions. `fluid_inputs.rs` drives creative tanks, drains, depot/belt spouts and a startup-audited component-free recipe subset. Observations include tank shapes/contents, six connection pressures and flights, world fluid state, machine storage/cycles/held items, filters and depot output slots. Rust reads the engine's stored per-side pressure, flow progress and open-end buffers directly, including sources retained by a live network. Component-bearing potions, arbitrary recipes, contraptions and item entity flight are outside the admitted contract.
+From seed 1152 up, the tank family also places a tank on top of the formed tank without sneaking (`FluidTankItem.tryMultiPlace`), with and without a stone in that layer. From seed 1792 up, the pump family meets water and lava in a pipe junction over a tank and pours water into a lava source and lava into a water source (`FluidReactions`).
 
 Shrinking evaluates one candidate at a time. Check/fuzz batches are bounded by observed checkpoint cells and JSON records stream through buffered readers/writers. On the shared VM, run runtime sweeps and shrinks one at a time under `prlimit --as=3000000000`, after checking at least 4 GiB is available.
 

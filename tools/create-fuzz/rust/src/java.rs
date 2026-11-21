@@ -61,9 +61,9 @@ pub fn varied(dir: &Path, cases: &[Scenario], offset: usize, phase: u8) -> Vec<S
     snapshots
 }
 
-pub fn covered(dir: &Path, case: &Scenario) -> (Snapshot, std::path::PathBuf) {
-    let (mut snapshots, path) = expect(exchange(dir, std::slice::from_ref(case), true, None));
-    (snapshots.remove(0), path)
+pub fn covered(dir: &Path, case: &Scenario) -> Result<(Snapshot, std::path::PathBuf), Refused> {
+    let (mut snapshots, path) = exchange(dir, std::slice::from_ref(case), true, None)?;
+    Ok((snapshots.remove(0), path))
 }
 
 fn expect<T>(answer: Result<T, Refused>) -> T {

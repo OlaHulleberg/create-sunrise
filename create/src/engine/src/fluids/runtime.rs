@@ -462,6 +462,11 @@ impl Transport {
     pub fn tick_pipe(&mut self, host: &mut impl Host, pos: Pos) -> Option<(Fluid, Fluid)> {
         self.refresh_pump_pressure(host);
         let collision = self.tick_behaviour(host, pos);
+        if collision.is_some() {
+            // FluidReactions breaks the pipe within this tick, and its onRemove walks
+            // propagateChangedPipe at once, not at the next level tick's prepare.
+            self.propagate_changed_pipe(host, pos);
+        }
         if let Cell::Pump(f) = host.cell(pos, Dir::Down) {
             let speed = host.speed(pos).abs();
             for (d, c) in &mut self.pipes.get_mut(&pos)?.interfaces {
@@ -1113,6 +1118,41 @@ mod tests {
                 .pressure(),
             [0., 32.]
         );
+    }
+
+    #[test]
+    fn a_collision_wipes_the_neighbours_pressure_in_its_own_tick() {
+        let mut world = World::default();
+        world.cells.extend([
+            ([0, 0, 0], Cell::Pipe(Dir::East.bit() | Dir::West.bit())),
+            ([1, 0, 0], Cell::Pipe(Dir::East.bit() | Dir::West.bit())),
+            ([2, 0, 0], Cell::Tank),
+        ]);
+        let mut transport = register(&world);
+        let pipe = transport.pipes.get_mut(&[0, 0, 0]).unwrap();
+        pipe.phase = UpdatePhase::Idle;
+        for (side, c) in &mut pipe.interfaces {
+            c.flow = Some(super::super::transport::Flow {
+                fluid: if *side == Dir::East {
+                    Fluid::Lava
+                } else {
+                    Fluid::Water
+                },
+                inbound: true,
+                progress: 1.,
+                complete: true,
+            });
+        }
+        let beside = Face {
+            pos: [1, 0, 0],
+            side: Dir::West,
+        };
+        transport
+            .connection_mut(beside)
+            .unwrap()
+            .set_pressure([32., 0.]);
+        assert!(transport.tick_pipe(&mut world, [0, 0, 0]).is_some());
+        assert_eq!(transport.connection(beside).unwrap().pressure(), [0., 0.]);
     }
 
     #[test]

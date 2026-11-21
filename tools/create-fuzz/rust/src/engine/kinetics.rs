@@ -76,6 +76,7 @@ impl Run {
         }
         let mut events = Vec::new();
         self.tick_fans();
+        self.tick_tank_layers();
         self.tick_fluids();
         self.tick_boilers();
         self.tick_burners();

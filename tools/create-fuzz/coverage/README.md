@@ -1,8 +1,9 @@
 # Reviewed branch explanations
 
 `subsystems.json` defines membership by slash-separated Java package prefix. Belts
-are deliberately also counted in kinetics; depot classes belong to belts. Adding
-fluids requires a new membership entry and reviewed rules, without reporter changes.
+are deliberately also counted in kinetics; depot classes belong to belts. Fluids are
+`content/fluids`: pipes, pumps, tanks and the boilers, drains, spouts and hose pulleys
+in that package.
 
 `reasons.tsv` uses exact JVM class and method signatures (`*` means the whole
 class), inclusive source line bounds, a category, an explanation and a SHA-256 of
@@ -10,13 +11,14 @@ the reviewed Create Java source. Explanations currently cover only the reviewed
 entries in that file. Unreviewed entries remain UNCLASSIFIED and fail the command;
 there is no fallback that labels reachable gameplay out of scope.
 
-Run `./run.sh fuzz gaps [kinetics|belts] --provenance campaign.json` after a coverage
+Run `./run.sh fuzz gaps [kinetics|belts|fluids] --provenance campaign.json` after a coverage
 campaign. By default it reads `$FUZZ_COVERAGE_REPORT/never-reached.tsv`, or
 `$FUZZ_DIR/coverage/never-reached.tsv`, and writes `docs/coverage/*.md`. The sibling
 `classes.tsv` is required to detect missing package denominators. Provenance JSON
-must contain `fuzzer`, `engine`, `create` (full commits) and `command`. The reports, and
-the campaign's input TSVs and provenance they are built from, are generated and not tracked
-(see `.gitignore`). Keep a campaign's inputs beside its reports to regenerate them offline:
+must contain `fuzzer`, `engine`, `create` (full commits) and `command`. The reviewed
+campaign's `never-reached.tsv`, `classes.tsv` and `campaign.json` are tracked in
+`docs/coverage/input/`, with [its summary](../docs/coverage/summary.md); the per-group
+reports are rebuilt from them and not tracked:
 
 ```
 ./run.sh fuzz gaps --input docs/coverage/input/never-reached.tsv --provenance docs/coverage/input/campaign.json

@@ -33,7 +33,7 @@ def main():
         data = dict(fuzzer=revision(root),
                     engine=os.environ.get('FUZZ_ENGINE_REVISION') or revision(engine),
                     create=revision(create),
-                    command=f'./run.sh fuzz cover {rounds}',
+                    command=(f'FUZZ_COVER_SEEDS_FROM={os.environ["FUZZ_COVER_SEEDS_FROM"]} ' if os.environ.get('FUZZ_COVER_SEEDS_FROM') else '') + f'./run.sh fuzz cover {rounds}',
                     includes=os.environ['FUZZ_COVERAGE_INCLUDES'],
                     port=os.environ.get('FUZZ_PORT', '25599'),
                     corpus_scenarios=count, corpus_sha256=digest, complete=False)

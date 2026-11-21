@@ -601,6 +601,65 @@ impl Run {
         }
     }
 
+    /// `FluidTankItem.tryMultiPlace`, as the glue's `TankItem` queues it: a tank placed (not
+    /// sneaking) on the top or bottom face of a tank wider than one fills the free rest of that
+    /// layer in the next level tick. The actor's 64 tanks always cover a layer.
+    fn queue_tank_layer(&mut self, p: Pos, face: Dir, sneaking: bool) {
+        let up = match face {
+            Dir::Up => true,
+            Dir::Down => false,
+            _ => return,
+        };
+        if sneaking {
+            return;
+        }
+        let on = [p[0], p[1] + if up { -1 } else { 1 }, p[2]];
+        let Some((c, m)) = self.w.tank(0, on) else {
+            return;
+        };
+        if m.width == 1 {
+            return;
+        }
+        let start_y = if up {
+            c[1] + i32::from(m.height)
+        } else {
+            c[1] - 1
+        };
+        if start_y != p[1] {
+            return;
+        }
+        let mut free = Vec::new();
+        for x in 0..i32::from(m.width) {
+            for z in 0..i32::from(m.width) {
+                let q = [c[0] + x, start_y, c[2] + z];
+                if q == p || self.w.block_at(0, q) == Some(create_engine::Block::FluidTank) {
+                    continue;
+                }
+                if !self.replaceable(q) {
+                    return;
+                }
+                free.push(q);
+            }
+        }
+        if !free.is_empty() {
+            self.tank_layers.push(free);
+        }
+    }
+
+    /// The glue's `place::tick_layers`: each queued place still free takes a tank.
+    pub(super) fn tick_tank_layers(&mut self) {
+        for free in std::mem::take(&mut self.tank_layers) {
+            for q in free {
+                if self.replaceable(q) {
+                    self.set(
+                        q,
+                        self.id("create:fluid_tank[bottom=true,shape=window,top=true]"),
+                    );
+                }
+            }
+        }
+    }
+
     fn place_cog(&mut self, p: Pos, item: &str, large: bool, axis: Axis) {
         if self.w.valid_cog_position(0, p, large, axis) {
             let state = format!("{item}[axis={},waterlogged=false]", axis_name(axis));
@@ -655,6 +714,7 @@ impl Run {
             );
             // TankItem.on_block_placed_by publishes the accepted placement.
             self.publish_interaction();
+            self.queue_tank_layer(p, face, sneaking);
             return;
         }
         if [

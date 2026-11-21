@@ -232,6 +232,8 @@ pub struct Run {
     filter_amounts: HashMap<Pos, create_engine::board::FilterAmount>,
     handles: HashMap<Pos, crate::handles::Handle>,
     brackets: HashMap<Pos, create_engine::decor::Bracket>,
+    /// Tank layers a player's placement queued (`FluidTankItem.tryMultiPlace`).
+    tank_layers: Vec<Vec<Pos>>,
     measured_trig: HashMap<Pos, String>,
     java_ties: bool,
     native_origin: Pos,
@@ -303,6 +305,7 @@ impl Run {
             filter_amounts: HashMap::new(),
             handles: HashMap::new(),
             brackets: HashMap::new(),
+            tank_layers: Vec::new(),
             measured_trig: HashMap::new(),
             java_ties: false,
             native_origin: [0; 3],

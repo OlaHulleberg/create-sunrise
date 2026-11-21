@@ -47,7 +47,8 @@ impl Run {
         self.w.kinetic_base_ticks_through(0, pos);
         let mut transport = std::mem::take(&mut self.w.dims[0].fluid_transport);
         if let Some((a, b)) = transport.tick_pipe(self, pos) {
-            self.set(pos, AIR);
+            // The glue's `lv.destroy_block(pos, true)` (`FluidReactions.handlePipeFlowCollision`).
+            self.break_block(pos, false);
             transport.remove(pos);
             if let Some(name) = create_engine::open_end::flow_collision(a, b) {
                 self.set(pos, self.id(name));
