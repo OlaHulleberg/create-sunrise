@@ -335,11 +335,14 @@ fn push_onto_depot(
 }
 
 /// The depot at `depot`'s turn in the transport walk (`DepotBehaviour.tick` calls
-/// `handleBeltFunnelOutput`; `FunnelBlockEntity.tick` returns at once for `TAKING_FROM_BELT`): a
-/// belt funnel pulling from it above takes what `pull_from_depot` gives. True when a stack moved
-/// (the depot's tick then ends there).
-pub(super) fn depot_output(lv: &mut ServerLevel<'_>, depot: [i32; 3]) -> bool {
+/// `handleBeltFunnelOutput` once its held stack has `arrived`; `FunnelBlockEntity.tick` returns
+/// at once for `TAKING_FROM_BELT`): a belt funnel pulling from it above takes what
+/// `pull_from_depot` gives. True when a stack moved (the depot's tick then ends there).
+pub(super) fn depot_output(lv: &mut ServerLevel<'_>, depot: [i32; 3], arrived: bool) -> bool {
     use create_engine::funnel::{Mode, belt_mode};
+    if !arrived {
+        return false;
+    }
     let pos = [depot[0], depot[1] + 1, depot[2]];
     let Some(f) = funnel_at(lv, pos) else {
         return false;
@@ -351,18 +354,19 @@ pub(super) fn depot_output(lv: &mut ServerLevel<'_>, depot: [i32; 3]) -> bool {
         return false;
     }
     let behind = create_engine::funnel::behind(pos, f.facing);
-    pull_from_depot(lv, pos, face(f.facing), behind) == Some(Some(true))
+    pull_from_depot(lv, pos, face(f.facing), behind, true) == Some(Some(true))
 }
 
 /// `DepotBehaviour.handleBeltFunnelOutput` for a pulling belt funnel over a depot: the depot's
-/// outputs, then its held stack once it has come to rest, go into the inventory behind the
-/// funnel as far as they fit and its filter passes them (`tryExportingToBeltFunnel`). Answers as
+/// outputs, then its held stack when `held` lets it, go into the inventory behind the funnel as
+/// far as they fit and its filter passes them (`tryExportingToBeltFunnel`). Answers as
 /// `extract_in_front`.
 fn pull_from_depot(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     side: Direction,
     behind: [i32; 3],
+    held: bool,
 ) -> Option<Option<bool>> {
     let below = [pos[0], pos[1] - 1, pos[2]];
     let dim = lv.dim;
@@ -373,15 +377,8 @@ fn pull_from_depot(
     {
         return Some(None);
     }
-    let resting = with_world(|w| {
-        w.dims[dim]
-            .depots
-            .get(&below)
-            .is_some_and(|h| h.is_none_or(|h| !h.sliding()))
-    })
-    .unwrap_or(false);
     let mut slots: Vec<u32> = (1..create_engine::depot::SLOTS as u32).collect();
-    if resting {
+    if held {
         slots.push(0);
     }
     for slot in slots {
@@ -556,7 +553,15 @@ pub(super) fn tick_funnel(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         // A depot hands its stack over at its own turn (`depot_output`); an ejector's
         // `DepotBehaviour` does not take a turn in the walk, so its funnel pulls here.
         Mode::TakingFromBelt if ejector_below(lv, pos) => {
-            pull_from_depot(lv, pos, side, behind);
+            let below = [pos[0], pos[1] - 1, pos[2]];
+            let resting = with_world(|w| {
+                w.dims[dim]
+                    .depots
+                    .get(&below)
+                    .is_some_and(|h| h.is_none_or(|h| !h.sliding()))
+            })
+            .unwrap_or(false);
+            pull_from_depot(lv, pos, side, behind, resting);
             Some(Some(false))
         }
         // Inserting, pulling from a belt (the belt does it), paused or invalid: dormant.

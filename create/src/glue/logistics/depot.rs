@@ -279,7 +279,7 @@ pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         .is_some_and(|(slot, item, _)| *slot == 0 && upright(&*lv.host, item));
     let arrived = with_world(|w| w.tick_depot(lv.dim, pos, standing)) == Some(true);
     // `handleBeltFunnelOutput` before the processing above.
-    if !super::funnel::depot_output(lv, pos) && arrived {
+    if !super::funnel::depot_output(lv, pos, arrived) && arrived {
         process_held(lv, pos);
     }
 }
