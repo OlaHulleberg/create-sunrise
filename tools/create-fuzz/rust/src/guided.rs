@@ -29,13 +29,17 @@ pub fn run(rounds: u64) {
     let mut first = std::collections::HashMap::<String, crate::Snapshot>::new();
     let mut repeat_checks = 0;
 
-    let mut rng = Rng::new(0);
+    let first_seed: u64 = std::env::var("FUZZ_COVER_SEEDS_FROM").map_or(0, |s| {
+        s.parse()
+            .expect("FUZZ_COVER_SEEDS_FROM: the first fresh seed")
+    });
+    let mut rng = Rng::new(first_seed);
     let mut covered = 0;
     let mut counts = crate::Counts::default();
     let mut history = String::from("round\tseed\tnew_branches\n");
     for round in 0..replay.len() as u64 + rounds {
         let replaying = round < replay.len() as u64;
-        let seed = round - round.min(replay.len() as u64);
+        let seed = first_seed + round - round.min(replay.len() as u64);
         let sc: Scenario = if replaying {
             replay[round as usize].clone()
         } else if !corpus.seeds.is_empty() && rng.chance(0.8) {
@@ -48,7 +52,15 @@ pub fn run(rounds: u64) {
             serde_json::to_string_pretty(&sc).unwrap(),
         )
         .unwrap();
-        let (snapshot, exec) = java::covered(&dir, &sc);
+        let (snapshot, exec) = match java::covered(&dir, &sc) {
+            Ok(answer) => answer,
+            Err(java::Refused(error)) => {
+                counts.unsupported += 1;
+                history.push_str(&format!("{round}\t{}\t0\n", sc.seed));
+                println!("seed {}: refused by the Java side: {error}", sc.seed);
+                continue;
+            }
+        };
         let key = serde_json::to_string(&sc).unwrap();
         if frequency.get(&key).copied().unwrap_or(0) > 1 {
             if let Some(previous) = first.get(&key) {
