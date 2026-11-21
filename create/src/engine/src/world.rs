@@ -337,7 +337,7 @@ pub struct Dimension {
     /// Andesite tunnels to shape again: after their own neighbour changed (`updateShape`, a
     /// state that still fits is kept), and after their belt's did or they were placed
     /// (`updateTunnel`, `getStateForPlacement`: the new shape at once); those just placed
-    /// (their belt gets a casing).
+    /// (`onPlace`: their connections).
     pub tunnel_checks: Vec<[i32; 3]>,
     /// Deployers and their cycle and held stack, those mid-stroke or waiting out their pause
     /// (the only ones that tick), what was saved for those not placed yet, and those whose
@@ -1804,7 +1804,7 @@ impl CreateWorld {
                 )
             };
             if tunnel(new) && !tunnel(old) {
-                // `BeltTunnelItem`: the belt below is cased.
+                // `onPlace`: its connections are looked at.
                 self.dims[dim].tunnels_new.push(pos);
                 // `BeltTunnelBlock.getStateForPlacement`: a tunnel just placed takes the shape
                 // its surroundings give at once. A later state change of its own (the wrench's

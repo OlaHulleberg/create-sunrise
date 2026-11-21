@@ -57,35 +57,64 @@ impl Run {
     fn cased_below(&self, p: Pos) -> bool {
         self.belt_cased([p[0], p[1] - 1, p[2]])
     }
-    /// `tick_tunnels`: tunnels just placed case their horizontal belt in their own kind; those
-    /// placed or whose neighbours changed take the shape their outputs give, and break when no
-    /// cased horizontal belt holds them.
+    /// `BeltTunnelBlock.canSurvive` and `getTunnelState` (glue `shape_tunnel`).
+    fn shape_tunnel(&mut self, pos: Pos, at_once: bool) {
+        let Some(now) = self.tunnel_state(pos) else {
+            return;
+        };
+        let seg = self
+            .belt_below(pos)
+            .filter(|s| s.slope == belt::Slope::Horizontal);
+        let Some(seg) = seg.filter(|_| self.cased_below(pos)) else {
+            self.break_block(pos, false);
+            return;
+        };
+        let axis = seg.facing.axis();
+        let output = |side: Dir| {
+            let q = add([pos[0], pos[1] - 1, pos[2]], side.offset());
+            if let Some((Block::Belt, i)) = self.w.table.get(self.at(q)) {
+                return i.belt.is_some_and(|b| b.facing.axis() == side.axis());
+            }
+            self.direct_input_at(q) && self.direct_input_accepts(q, side)
+        };
+        let left = tunnel::left(axis);
+        let (on_left, on_right) = (output(left), output(left.opposite()));
+        let fw = if axis == Axis::X {
+            Dir::East
+        } else {
+            Dir::South
+        };
+        let ends = [fw, fw.opposite()].map(|d| {
+            let next = add(pos, d.offset());
+            let funnel = self.extended_funnel(next, d.opposite());
+            (self.tunnel_state(next).is_some() || funnel, funnel)
+        });
+        let window = ends[0].0 && ends[1].0 && !(ends[0].1 && ends[1].1);
+        let fresh = (axis, tunnel::shape_for(on_left, on_right, window));
+        let (axis2, shape2) = if at_once {
+            fresh
+        } else {
+            tunnel::updated(now, fresh)
+        };
+        if (axis2, shape2) == now {
+            return;
+        }
+        let name = self.name(self.at(pos));
+        let next = with_prop(
+            &with_prop(&name, "axis", if axis2 == Axis::X { "x" } else { "z" }),
+            "shape",
+            shape2.name(),
+        );
+        self.set(pos, self.id(&next));
+    }
+    /// `tick_tunnels`: tunnels placed or whose neighbours changed take the shape their outputs
+    /// give, and break when no cased horizontal belt holds them.
     pub(super) fn tick_tunnels(&mut self) {
         let d = &mut self.w.dims[0];
         let new = std::mem::take(&mut d.tunnels_new);
         let kept = std::mem::take(&mut d.tunnel_checks);
         let fresh = std::mem::take(&mut d.tunnel_fresh);
         let initialized = std::mem::take(&mut d.brass_initialize);
-        for &pos in &new {
-            if self.tunnel_state(pos).is_none() {
-                continue;
-            }
-            if self
-                .belt_below(pos)
-                .is_some_and(|s| s.slope == belt::Slope::Horizontal)
-                && !self.cased_below(pos)
-            {
-                let brass = self
-                    .w
-                    .table
-                    .get(self.at(pos))
-                    .is_some_and(|(b, _)| b == Block::BrassTunnel);
-                self.set_belt_casing(
-                    [pos[0], pos[1] - 1, pos[2]],
-                    Some(if brass { "brass" } else { "andesite" }),
-                );
-            }
-        }
         let mut checks: Vec<(Pos, bool)> = fresh
             .into_iter()
             .map(|p| (p, true))
@@ -95,53 +124,7 @@ impl Run {
         checks.dedup_by_key(|c| c.0);
         let check_positions: Vec<Pos> = checks.iter().map(|c| c.0).collect();
         for (pos, at_once) in checks {
-            let Some(now) = self.tunnel_state(pos) else {
-                continue;
-            };
-            let seg = self
-                .belt_below(pos)
-                .filter(|s| s.slope == belt::Slope::Horizontal);
-            let Some(seg) = seg.filter(|_| self.cased_below(pos)) else {
-                self.break_block(pos, false);
-                continue;
-            };
-            let axis = seg.facing.axis();
-            let output = |side: Dir| {
-                let q = add([pos[0], pos[1] - 1, pos[2]], side.offset());
-                if let Some((Block::Belt, i)) = self.w.table.get(self.at(q)) {
-                    return i.belt.is_some_and(|b| b.facing.axis() == side.axis());
-                }
-                self.direct_input_at(q) && self.direct_input_accepts(q, side)
-            };
-            let left = tunnel::left(axis);
-            let (on_left, on_right) = (output(left), output(left.opposite()));
-            let fw = if axis == Axis::X {
-                Dir::East
-            } else {
-                Dir::South
-            };
-            let ends = [fw, fw.opposite()].map(|d| {
-                let next = add(pos, d.offset());
-                let funnel = self.extended_funnel(next, d.opposite());
-                (self.tunnel_state(next).is_some() || funnel, funnel)
-            });
-            let window = ends[0].0 && ends[1].0 && !(ends[0].1 && ends[1].1);
-            let fresh = (axis, tunnel::shape_for(on_left, on_right, window));
-            let (axis2, shape2) = if at_once {
-                fresh
-            } else {
-                tunnel::updated(now, fresh)
-            };
-            if (axis2, shape2) == now {
-                continue;
-            }
-            let name = self.name(self.at(pos));
-            let next = with_prop(
-                &with_prop(&name, "axis", if axis2 == Axis::X { "x" } else { "z" }),
-                "shape",
-                shape2.name(),
-            );
-            self.set(pos, self.id(&next));
+            self.shape_tunnel(pos, at_once);
         }
         // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before
         // neighbour shape updates (matching `onPlace` before `updateShape`), so a joining
@@ -218,8 +201,8 @@ impl Run {
         if item != "create:andesite_tunnel" && item != "create:brass_tunnel" {
             return false;
         }
-        // The game places the block item with the port's default state; `tick_tunnels`
-        // then cases the belt and gives the tunnel its shape, or breaks it.
+        // The game places the block item with the port's default state; the item part
+        // (`TunnelItem`) cases the belt and gives the tunnel its shape.
         let at = if self.replaceable(p) {
             p
         } else {
@@ -229,6 +212,16 @@ impl Run {
         if self.replaceable(at) && tunnel::valid_position(self.belt_below(at)) {
             let state = format!("{item}[axis=x,shape=straight]");
             self.set(at, self.id(&state));
+            let below = [at[0], at[1] - 1, at[2]];
+            if self.belt_below(at).is_some() && !self.cased_below(at) {
+                let kind = if item == "create:brass_tunnel" {
+                    "brass"
+                } else {
+                    "andesite"
+                };
+                self.set_belt_casing(below, Some(kind));
+            }
+            self.shape_tunnel(at, true);
         }
         true
     }

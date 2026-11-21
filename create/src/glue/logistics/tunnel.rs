@@ -1,4 +1,4 @@
-//! Andesite and brass tunnels on the server: casing their belt when placed, their shape from
+//! Andesite and brass tunnels on the server: casing their belt when placed (`TunnelItem`), their shape from
 //! what lies beside their segment, and brass tunnels sharing a stack out among their sides
 //! (`BrassTunnelBlockEntity.tick`).
 
@@ -207,6 +207,45 @@ pub fn grab_stacks(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> boo
     true
 }
 
+/// `BeltTunnelItem.updateCustomBlockEntityTag`: the belt segment under a tunnel placed from its
+/// item takes the tunnel's casing while it has none, as the block is placed; the tunnel takes
+/// its shape at once (`getStateForPlacement`).
+pub struct TunnelItem;
+
+#[mod_api::sunrise_part]
+impl mod_api::ItemPart for TunnelItem {
+    fn on_block_placed_by(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::OnBlockPlacedByEvent<'_>,
+    ) {
+        let Some(dimension) = event.level.dimension().id(&*host) else {
+            return;
+        };
+        let dimension = dimension.to_string();
+        let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        let pos = event.pos;
+        let kind = match info_at(&lv, pos) {
+            Some((Block::BrassTunnel, _)) => "brass",
+            Some((Block::AndesiteTunnel, _)) => "andesite",
+            _ => return,
+        };
+        let below = [pos[0], pos[1] - 1, pos[2]];
+        if info_at(&lv, below).and_then(|(_, i)| i.belt).is_none() {
+            return;
+        }
+        let cased = lv.block_state(below).is_some_and(|s| {
+            s.property(&lv.host.block_states(), "casing").ok().flatten() == Some("true")
+        });
+        if !cased {
+            super::belt::set_casing(&mut lv, below, Some(kind));
+        }
+        shape_tunnel(&mut lv, pos, true);
+    }
+}
+
 /// `BrassTunnelBlockEntity.getAdjacent`: the brass tunnel of the same axis beside the one at
 /// `pos` across its axis (`left`: counterclockwise from the axis' positive way).
 fn brass_adjacent(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, left: bool) -> Option<[i32; 3]> {
@@ -214,8 +253,83 @@ fn brass_adjacent(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, left: bool) -
     (brass_axis(lv, next) == Some(axis)).then_some(next)
 }
 
-/// Andesite tunnels: those just placed case their belt (`BeltTunnelItem`); those whose
-/// surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
+/// `BeltTunnelBlock.canSurvive` and `getTunnelState` for the tunnel at `pos`: it breaks without a
+/// cased, flat belt below, else takes the shape its segment's outputs give (`at_once`: as placed
+/// or `updateTunnel`; otherwise `updateShape`, keeping a state whose window still fits).
+fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool) {
+    let belt_below = |lv: &ServerLevel<'_>, p: [i32; 3]| {
+        info_at(lv, [p[0], p[1] - 1, p[2]]).and_then(|(_, i)| i.belt)
+    };
+    let cased = |lv: &ServerLevel<'_>, p: [i32; 3]| {
+        let Some(state) = lv.block_state([p[0], p[1] - 1, p[2]]) else {
+            return false;
+        };
+        let facts = lv.host.block_states();
+        state.property(&facts, "casing").ok().flatten() == Some("true")
+    };
+    let Some(now) = tunnel_state(lv, pos) else {
+        return;
+    };
+    let seg = belt_below(lv, pos).filter(|s| s.slope == Slope::Horizontal);
+    let Some(seg) = seg.filter(|_| cased(lv, pos)) else {
+        lv.destroy_block(pos, true);
+        return;
+    };
+    let axis = seg.facing.axis();
+    // `hasValidOutput` beside the belt segment: a belt across it, or anything taking items
+    // from that side (`DirectBeltInputBehaviour.canInsertFromSide`: a depot, an ejector, a
+    // floor funnel, a chute, an item drain, a processing machine).
+    let output = |lv: &ServerLevel<'_>, side: Dir| {
+        let o = side.offset();
+        let p = [pos[0] + o[0], pos[1] - 1, pos[2] + o[2]];
+        if let Some((Block::Belt, i)) = info_at(lv, p) {
+            return i.belt.is_some_and(|b| b.facing.axis() == side.axis());
+        }
+        super::belt::direct_input_at(lv, p) && super::belt::direct_input_accepts(lv, p, side)
+    };
+    let left = tunnel::left(axis);
+    let (on_left, on_right) = (output(lv, left), output(lv, left.opposite()));
+    // `canHaveWindow`: tunnels on both ends.
+    let fw = if axis == Axis::X {
+        Dir::East
+    } else {
+        Dir::South
+    };
+    // Or an extended belt funnel facing back into it, but not on both.
+    let ends = [fw, fw.opposite()].map(|d| {
+        let o = d.offset();
+        let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
+        let funnel = super::funnel::funnel_at(lv, next).is_some_and(|f| {
+            f.belt == Some(create_engine::funnel::BeltShape::Extended) && f.facing == d.opposite()
+        });
+        (tunnel_state(lv, next).is_some() || funnel, funnel)
+    });
+    let window = ends[0].0 && ends[1].0 && !(ends[0].1 && ends[1].1);
+    let fresh = (axis, tunnel::shape_for(on_left, on_right, window));
+    let (axis2, shape2) = if at_once {
+        fresh
+    } else {
+        tunnel::updated(now, fresh)
+    };
+    if (axis2, shape2) == now {
+        return;
+    }
+    let Some(state) = lv.block_state(pos) else {
+        return;
+    };
+    let next = {
+        let facts = lv.host.block_states();
+        let axis_name = if axis2 == Axis::X { "x" } else { "z" };
+        state
+            .with(&facts, "axis", axis_name)
+            .and_then(|s| s.with(&facts, "shape", shape2.name()))
+    };
+    if let Ok(next) = next {
+        lv.set_state(pos, next, update_all());
+    }
+}
+
+/// Andesite tunnels: those whose surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
 /// the belts and depots beside their segment give (`updateShape`, `getTunnelState`).
 pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
@@ -233,27 +347,6 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     if new.is_empty() && kept.is_empty() && fresh.is_empty() && initialized.is_empty() {
         return;
     }
-    let belt_below = |lv: &ServerLevel<'_>, p: [i32; 3]| {
-        info_at(lv, [p[0], p[1] - 1, p[2]]).and_then(|(_, i)| i.belt)
-    };
-    let cased = |lv: &ServerLevel<'_>, p: [i32; 3]| {
-        let Some(state) = lv.block_state([p[0], p[1] - 1, p[2]]) else {
-            return false;
-        };
-        let facts = lv.host.block_states();
-        state.property(&facts, "casing").ok().flatten() == Some("true")
-    };
-    for pos in &new {
-        if tunnel_state(lv, *pos).is_none() {
-            continue;
-        }
-        if belt_below(lv, *pos).is_some_and(|s| s.slope == Slope::Horizontal) && !cased(lv, *pos) {
-            // `BeltTunnelItem`: the tunnel's own kind of casing.
-            let brass = super::info_at(lv, *pos).is_some_and(|(b, _)| b == Block::BrassTunnel);
-            let kind = if brass { "brass" } else { "andesite" };
-            super::belt::set_casing(lv, [pos[0], pos[1] - 1, pos[2]], Some(kind));
-        }
-    }
     let mut checks: Vec<([i32; 3], bool)> = fresh
         .into_iter()
         .map(|p| (p, true))
@@ -264,67 +357,7 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     checks.dedup_by_key(|c| c.0);
     let check_positions: Vec<[i32; 3]> = checks.iter().map(|c| c.0).collect();
     for (pos, at_once) in checks {
-        let Some(now) = tunnel_state(lv, pos) else {
-            continue;
-        };
-        let seg = belt_below(lv, pos).filter(|s| s.slope == Slope::Horizontal);
-        let Some(seg) = seg.filter(|_| cased(lv, pos)) else {
-            lv.destroy_block(pos, true);
-            continue;
-        };
-        let axis = seg.facing.axis();
-        // `hasValidOutput` beside the belt segment: a belt across it, or anything taking items
-        // from that side (`DirectBeltInputBehaviour.canInsertFromSide`: a depot, an ejector, a
-        // floor funnel, a chute, an item drain, a processing machine).
-        let output = |lv: &ServerLevel<'_>, side: Dir| {
-            let o = side.offset();
-            let p = [pos[0] + o[0], pos[1] - 1, pos[2] + o[2]];
-            if let Some((Block::Belt, i)) = info_at(lv, p) {
-                return i.belt.is_some_and(|b| b.facing.axis() == side.axis());
-            }
-            super::belt::direct_input_at(lv, p) && super::belt::direct_input_accepts(lv, p, side)
-        };
-        let left = tunnel::left(axis);
-        let (on_left, on_right) = (output(lv, left), output(lv, left.opposite()));
-        // `canHaveWindow`: tunnels on both ends.
-        let fw = if axis == Axis::X {
-            Dir::East
-        } else {
-            Dir::South
-        };
-        // Or an extended belt funnel facing back into it, but not on both.
-        let ends = [fw, fw.opposite()].map(|d| {
-            let o = d.offset();
-            let next = [pos[0] + o[0], pos[1], pos[2] + o[2]];
-            let funnel = super::funnel::funnel_at(lv, next).is_some_and(|f| {
-                f.belt == Some(create_engine::funnel::BeltShape::Extended)
-                    && f.facing == d.opposite()
-            });
-            (tunnel_state(lv, next).is_some() || funnel, funnel)
-        });
-        let window = ends[0].0 && ends[1].0 && !(ends[0].1 && ends[1].1);
-        let fresh = (axis, tunnel::shape_for(on_left, on_right, window));
-        let (axis2, shape2) = if at_once {
-            fresh
-        } else {
-            tunnel::updated(now, fresh)
-        };
-        if (axis2, shape2) == now {
-            continue;
-        }
-        let Some(state) = lv.block_state(pos) else {
-            continue;
-        };
-        let next = {
-            let facts = lv.host.block_states();
-            let axis_name = if axis2 == Axis::X { "x" } else { "z" };
-            state
-                .with(&facts, "axis", axis_name)
-                .and_then(|s| s.with(&facts, "shape", shape2.name()))
-        };
-        if let Ok(next) = next {
-            lv.set_state(pos, next, update_all());
-        }
+        shape_tunnel(lv, pos, at_once);
     }
     // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before neighbour
     // shape updates (matching `onPlace` before `updateShape`), so a joining tunnel takes the

@@ -185,6 +185,10 @@ impl Subsystem for Logistics {
             );
         }
         placement::register(r);
+        for item in ["create:andesite_tunnel", "create:brass_tunnel"] {
+            let key = r.item_key(item);
+            r.item_part(key, tunnel::TunnelItem);
+        }
         for block in PARTS {
             r.block_part(states::key(block), LogisticsBlock);
         }
