@@ -129,6 +129,34 @@ pub fn generate(seed: u64) -> crate::scenario::Scenario {
             }
         }
     }
+    // `FluidTankItem.tryMultiPlace`: a tank placed on top of the formed tank, not sneaking,
+    // fills the free rest of that layer; a stone in the layer stops it.
+    let layer = (seed / 1152) % 3;
+    if layer != 0 {
+        if layer == 2 {
+            sc.blocks.push(Placed {
+                pos: [width - 1, 4 + height, width - 1],
+                state: "minecraft:stone".into(),
+                motor: None,
+            });
+        }
+        sc.events.push(Change {
+            tick: 45,
+            pos: [0, 3 + height, 0],
+            action: Some(Action::Use {
+                item: "create:fluid_tank".into(),
+                face: Face::Up,
+                hit: [0.5, 1., 0.5],
+                yaw: 0.,
+                pitch: 0.,
+                sneaking: false,
+            }),
+            state: None,
+            motor: None,
+            turn: None,
+        });
+        sc.checkpoints = vec![30, 40, 45, 46, 47, 48, 50, 60, 80];
+    }
     sc.events.push(Change {
         tick: 55,
         pos: [0, 4, 0],
@@ -176,6 +204,24 @@ mod tests {
                 .unwrap()
                 .is_err()
         );
+    }
+}
+
+#[cfg(test)]
+mod layers {
+    #[test]
+    fn a_tank_placed_on_top_fills_the_free_layer_in_the_next_tick() {
+        let count = |seed, tick: u32| {
+            crate::engine::run(&super::generate(seed)).checkpoints[&tick]
+                .blocks
+                .iter()
+                .filter(|(k, b)| {
+                    k.split(',').nth(1) == Some("5") && b.state.starts_with("create:fluid_tank")
+                })
+                .count()
+        };
+        assert_eq!((count(1224, 45), count(1224, 46)), (0, 9));
+        assert_eq!(count(2376, 46), 1);
     }
 }
 
