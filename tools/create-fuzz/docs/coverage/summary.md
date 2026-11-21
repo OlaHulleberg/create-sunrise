@@ -69,15 +69,15 @@ branches in 4 rounds.
 
 - Tank layers (`FluidTankItem.tryMultiPlace`, tank family from seed 1152): a tank placed on top of a
   formed 2- or 3-wide tank without sneaking fills the free rest of that layer the next tick; a stone
-  in the layer stops it. `FluidTankItem` went from 32 of 50 branches (an earlier, interrupted run without the variants) to 34. Mutated tank cases
-  (random sneaking) also multi-place, so only the 2 branches of the layer itself are its own. Java
-  and the port agree on every case.
+  in the layer stops it. `FluidTankItem` went from 32 of 50 branches (an earlier, interrupted run
+  without the variants) to 34. Mutated tank cases (random sneaking) also multi-place, so only the 2
+  branches of the layer itself are its own. Java and the port agree on every case.
 - Fluid reactions (pump family from seed 1792): water and lava pumped into one junction over a tank
   break the pipe into cobblestone (`handlePipeFlowCollision`); water poured into a lava source makes
   obsidian and lava into a water source stone (`handlePipeSpillCollision`). `FluidReactions` went
-  from 0 of 50 branches in that run to 15. In campaign C, these cases and their mutants alone reached 37
-  branches: 10 in `handlePipeSpillCollisionFallback`, 11 in `OpenEndedPipe.provideFluidToSpace`,
-  5 in `PipeConnection.manageFlows`, 4 in `PumpBlockEntity.hasReachedValidEndpoint`, 5 in
+  from 0 of 50 branches in that run to 15. In campaign C, these cases and their mutants alone
+  reached 37 branches: 10 in `handlePipeSpillCollisionFallback`, 11 in
+  `OpenEndedPipe.provideFluidToSpace`, 5 in `PipeConnection.manageFlows`, 4 in `PumpBlockEntity.hasReachedValidEndpoint`, 5 in
   `FluidNetwork` and 2 more. They first showed a driver gap: the pipe a collision breaks dropped as
   an item in Java and not in the driver, which set air where the glue calls `destroy_block(pos,
   true)`. The driver now drops it; then every case matches.
@@ -85,6 +85,25 @@ branches in 4 rounds.
   mutation) instead of aborting.
 
 ## Port differences
+
+### Pressure for one tick after a pipe flow collision (fixed)
+
+[fluid-pipe-collision-pressure.json](../../cases/fluid-pipe-collision-pressure.json), the shrunk
+sweep seed 1874 (1906 the same at 128 rpm): water and lava pumped at 8 rpm into one junction over a
+tank.
+
+- Java: the collision breaks the junction inside its block entity tick (`BlockHelper.destroyBlock`,
+  FluidReactions.java:32), and `FluidPipeBlock.onRemove` walks
+  `FluidPropagator.propagateChangedPipe` at once (FluidPipeBlock.java:148-151): at the end of that
+  tick the pipes on both sides and the pump's connections hold no pressure.
+- Port: `Transport::remove` only queued the change, and the walk ran in the next level tick's
+  `prepare`, so for that one tick the pump and both pipes kept 8 (`tick 132: 2,4,0: pump pressure:
+  java Some(0.0) rust Some(8.0)`, six more connection pressures). Seeds 1810 and 1842, the same
+  junction at 32 rpm, matched at their checkpoints, which the family takes every second tick.
+- Fix (`engine: a pipe broken by a fluid collision wipes its neighbours' pressure that tick`):
+  `Transport::tick_pipe` walks `propagate_changed_pipe` from the pipe as soon as its flows collide,
+  while it still stands. The glue and the driver share it. `main` has no case reaching this; its pump
+  family has no junction of two fluids.
 
 ### A tunnel used off a belt drops as an item
 
