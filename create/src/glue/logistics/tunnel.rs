@@ -253,6 +253,16 @@ fn brass_adjacent(lv: &ServerLevel<'_>, pos: [i32; 3], axis: Axis, left: bool) -
     (brass_axis(lv, next) == Some(axis)).then_some(next)
 }
 
+/// `BrassTunnelBlockEntity.updateTunnelConnections` → `updateFilterPresence`: the tunnel at
+/// `pos` keeps the side filters of the open sides of `open` (its axis and shape).
+fn keep_side_filters(lv: &mut ServerLevel<'_>, pos: [i32; 3], open: (Axis, tunnel::Shape)) {
+    let dim = lv.dim;
+    let sides = tunnel::sides(open.0, open.1);
+    if with_world(|w| w.keep_side_filters(dim, pos, &sides)).unwrap_or(false) {
+        show_tunnel_filters(lv, pos);
+    }
+}
+
 /// `BeltTunnelBlock.canSurvive` and `getTunnelState` for the tunnel at `pos`: it breaks without a
 /// cased, flat belt below, else takes the shape its segment's outputs give (`at_once`: as placed
 /// or `updateTunnel`; otherwise `updateShape`, keeping a state whose window still fits).
@@ -311,6 +321,8 @@ fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool) {
     } else {
         tunnel::updated(now, fresh)
     };
+    // `updateShape` runs `updateTunnelConnections` before its state is set, `updateTunnel` after.
+    keep_side_filters(lv, pos, if at_once { (axis2, shape2) } else { now });
     if (axis2, shape2) == now {
         return;
     }
@@ -362,6 +374,11 @@ pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before neighbour
     // shape updates (matching `onPlace` before `updateShape`), so a joining tunnel takes the
     // group's mode; a loaded one looks at its connections again (`initialize`).
+    for &p in &initialized {
+        if let Some(open) = tunnel_state(lv, p) {
+            keep_side_filters(lv, p, open);
+        }
+    }
     let mut conn_checks = new;
     for p in initialized.into_iter().chain(check_positions) {
         if !conn_checks.contains(&p) {

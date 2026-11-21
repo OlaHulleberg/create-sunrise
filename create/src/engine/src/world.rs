@@ -5279,6 +5279,34 @@ impl CreateWorld {
     }
 
     /// The column of `pos` must be saved again (its belt's items moved).
+    /// `SidedFilteringBehaviour.updateFilterPresence`: the brass tunnel at `pos` keeps the
+    /// filters of its open sides `sides` only, a filter item on another side dropping
+    /// (`removeFilter` → `FilteringBehaviour.destroy`). True when one went.
+    pub fn keep_side_filters(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        sides: &[crate::kinetics::Dir],
+    ) -> bool {
+        let d = &mut self.dims[dim];
+        let mut removed = false;
+        for side in crate::kinetics::Dir::ALL {
+            if sides.contains(&side) {
+                continue;
+            }
+            if let Some(f) = d.tunnel_filters.remove(&(pos, side)) {
+                removed = true;
+                if f.is_filter_item() {
+                    d.dropped_filters.push((pos, f));
+                }
+            }
+        }
+        if removed {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+        removed
+    }
+
     pub fn mark_unsaved(&mut self, dim: usize, pos: [i32; 3]) {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
@@ -6029,6 +6057,39 @@ mod tests {
         assert!(w.dims[0].tunnel_fresh.is_empty());
         assert_eq!(w.dims[0].tunnel_checks, vec![at]);
         states::clear_range();
+    }
+
+    #[test]
+    fn a_brass_tunnel_drops_the_filters_of_sides_it_lost() {
+        // Seed 6382: a `cross` tunnel along z with an iron ingot on its west filter loses the
+        // depot west of its belt; Java's tunnel then has sides east, north and south and no west
+        // filter, so the west slot is empty when the depot comes back.
+        use crate::filter::{Filter, Spec};
+        use crate::kinetics::Dir;
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            std::iter::empty::<(&str, std::iter::Empty<(&str, &str)>)>(),
+        ));
+        let at = [0, 9, 2];
+        let d = &mut w.dims[0];
+        d.tunnel_filters
+            .insert((at, Dir::West), Filter::item("minecraft:iron_ingot"));
+        d.tunnel_filters.insert(
+            (at, Dir::North),
+            Filter::compile(&Spec::item("create:filter")),
+        );
+        let all = [Dir::North, Dir::South, Dir::West, Dir::East];
+        assert!(!w.keep_side_filters(0, at, &all));
+        assert_eq!(w.dims[0].tunnel_filters.len(), 2);
+        let sides = crate::tunnel::sides(crate::kinetics::Axis::Z, crate::tunnel::Shape::TRight);
+        assert!(!sides.contains(&Dir::West));
+        assert!(w.keep_side_filters(0, at, &sides));
+        assert!(!w.dims[0].tunnel_filters.contains_key(&(at, Dir::West)));
+        assert!(w.dims[0].dropped_filters.is_empty());
+        assert!(w.keep_side_filters(0, at, &[]));
+        assert!(w.dims[0].tunnel_filters.is_empty());
+        assert_eq!(w.dims[0].dropped_filters.len(), 1);
+        assert_eq!(w.dims[0].dropped_filters[0].0, at);
     }
 
     fn item_belt_world(rpm: f32) -> CreateWorld {

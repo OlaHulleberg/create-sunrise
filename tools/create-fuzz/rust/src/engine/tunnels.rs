@@ -57,6 +57,16 @@ impl Run {
     fn cased_below(&self, p: Pos) -> bool {
         self.belt_cased([p[0], p[1] - 1, p[2]])
     }
+    /// `updateFilterPresence` (glue `keep_side_filters`).
+    fn keep_side_filters(&mut self, pos: Pos, open: (Axis, tunnel::Shape)) {
+        let sides = tunnel::sides(open.0, open.1);
+        let before = self.tunnel_filters.len();
+        self.tunnel_filters
+            .retain(|(p, side), _| *p != pos || sides.contains(side));
+        if self.tunnel_filters.len() != before {
+            self.w.mark_unsaved(0, pos);
+        }
+    }
     /// `BeltTunnelBlock.canSurvive` and `getTunnelState` (glue `shape_tunnel`).
     fn shape_tunnel(&mut self, pos: Pos, at_once: bool) {
         let Some(now) = self.tunnel_state(pos) else {
@@ -96,6 +106,7 @@ impl Run {
         } else {
             tunnel::updated(now, fresh)
         };
+        self.keep_side_filters(pos, if at_once { (axis2, shape2) } else { now });
         if (axis2, shape2) == now {
             return;
         }
@@ -130,6 +141,11 @@ impl Run {
         // neighbour shape updates (matching `onPlace` before `updateShape`), so a joining
         // tunnel takes the group's mode; a loaded one looks at its connections again
         // (`initialize`).
+        for &p in &initialized {
+            if let Some(open) = self.tunnel_state(p) {
+                self.keep_side_filters(p, open);
+            }
+        }
         let mut conn_checks = new;
         for p in initialized.into_iter().chain(check_positions) {
             if !conn_checks.contains(&p) {
