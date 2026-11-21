@@ -107,14 +107,9 @@ pub(crate) fn set_funnel_filter(
     filters::return_filter(lv, p, pos, old);
 }
 
-/// `withCallback(invVersionTracker.reset)`: the funnel at `pos` looks at its inventory again.
+/// `withCallback(invVersionTracker.reset)` for the funnel at `pos`.
 pub(crate) fn wake_funnel(dim: usize, pos: [i32; 3]) {
-    with_world(|w| {
-        let d = &mut w.dims[dim];
-        if let Some(due) = d.funnels.get_mut(&pos) {
-            *due = 0;
-        }
-    });
+    with_world(|w| w.wake_funnel(dim, pos));
 }
 
 /// What the inventory `behind` gives on `side` to the funnel at `pos`

@@ -47,6 +47,16 @@ impl crate::world::CreateWorld {
         }
     }
 
+    /// `filtering.withCallback(invVersionTracker.reset)`: a dormant funnel at `pos` looks at its
+    /// inventory again; one counting down its `extractionCooldown` keeps counting.
+    pub fn wake_funnel(&mut self, dim: usize, pos: [i32; 3]) {
+        if let Some(due) = self.dims[dim].funnels.get_mut(&pos)
+            && *due == u64::MAX
+        {
+            *due = 0;
+        }
+    }
+
     /// `FunnelBlockEntity.write`'s `TransferCooldown`.
     pub fn column_funnels(&self, dim: usize, cx: i32, cz: i32, now: u64) -> Vec<([i32; 3], u32)> {
         let mut out: Vec<_> = self.dims[dim]
@@ -292,6 +302,24 @@ pub fn past_opening(pos: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_filter_change_keeps_the_extraction_cooldown() {
+        // Seed 2471: a brass belt funnel that just pushed 5 gold onto its belt saves
+        // `TransferCooldown` 7 after tick 106; its amount set to 62 then, Java saves 6 after 107.
+        use super::{cooldown, due_after};
+        let mut w = crate::world::CreateWorld::new(crate::world::StateTable::new(
+            10,
+            std::iter::empty::<(&str, std::iter::Empty<(&str, &str)>)>(),
+        ));
+        let at = [0, 9, 4];
+        w.dims[0].funnels.insert(at, due_after(7, 106));
+        w.wake_funnel(0, at);
+        assert_eq!(cooldown(w.dims[0].funnels[&at], 107), 6);
+        w.dims[0].funnels.insert(at, u64::MAX);
+        w.wake_funnel(0, at);
+        assert_eq!(w.dims[0].funnels[&at], 0);
+    }
+
     #[test]
     fn funnels_take_items_on_their_open_side() {
         use super::past_opening;
