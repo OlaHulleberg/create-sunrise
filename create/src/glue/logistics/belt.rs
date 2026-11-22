@@ -1430,6 +1430,22 @@ fn belt_support(
     (segment.slope == belt::Slope::Horizontal).then_some((hit.block, segment))
 }
 
+/// `BeltMovementHandler.shouldIgnoreBlocking`: a hanging entity, one pistons ignore, or one
+/// riding `me`. None when the client cannot read `other`.
+fn ignores_blocking(
+    host: &dyn mod_api::Host,
+    me: mod_api::EntityRef,
+    other: mod_api::EntityRef,
+) -> Option<bool> {
+    if other.is_hanging(host).ok()? == Some(true) {
+        return Some(true);
+    }
+    if other.piston_push_reaction(host).ok()? == Some(mod_api::PushReaction::IgnoreEntity) {
+        return Some(true);
+    }
+    Some(other.vehicle(host).is_some() && other.root_vehicle(host) == Some(me))
+}
+
 /// `BeltMovementHandler.transportEntity` for the local player after travel, before its position
 /// report. Use one contact for either flat SELF movement or the legacy slope push.
 pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
@@ -1493,14 +1509,21 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
         let ahead = motion.map(|v| v / length * 0.5);
         let from = std::array::from_fn(|i| lo[i] + ahead[i] + ahead[i].abs());
         let to = std::array::from_fn(|i| hi[i] + ahead[i] - ahead[i].abs());
-        // With no client push-reaction query we cannot decide whether any non-passenger
-        // in the forward probe blocks. Do not infer a block or zero its velocity.
-        if level.entities_in(&*host, from, to).is_none_or(|entities| {
+        let blocked = level.entities_in(&*host, from, to).and_then(|entities| {
             entities
                 .into_iter()
-                .any(|other| other != e && other.root_vehicle(&*host) != Some(e))
-        }) {
-            return;
+                .filter(|other| *other != e)
+                .map(|other| ignores_blocking(&*host, e, other).map(|ignored| !ignored))
+                .try_fold(false, |any, blocks| Some(any || blocks?))
+        });
+        match blocked {
+            // A body the client cannot read: neither move the player nor stop it.
+            None => return,
+            Some(true) => {
+                host.set_local_player_velocity([0.0; 3]);
+                return;
+            }
+            Some(false) => {}
         }
     }
     if !matches!(host.move_local_player_by(motion), Ok(Some(_))) {

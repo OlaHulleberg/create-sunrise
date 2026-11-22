@@ -9,11 +9,11 @@
 //! server's stack ten ticks after the last change (`SchematicSyncPacket`); Print places it at
 //! once in creative (`SchematicPlacePacket`, `super::print_instantly`).
 //!
-//! The deployed schematic's blocks are not drawn (`SchematicRenderer`): no world draw takes a
-//! block state's model outside a block entity (`API_GAPS.md`). Its outline, checkered faces,
-//! the face looked at, the rotation axis and the mirror plane are drawn as Create's
-//! (`AABBOutline`, `LineOutline`); the checkered faces sample Create's checkerboard
-//! (`AllSpecialTextures.CHECKERED`) through the glue's `Checkered` pipeline (`pipelines`).
+//! The deployed schematic's blocks are not drawn yet (`SchematicRenderer`, `API_GAPS.md`). Its
+//! outline, checkered faces, the face looked at, the rotation axis and the mirror plane are
+//! drawn as Create's (`AABBOutline`, `LineOutline`); the checkered faces sample Create's
+//! checkerboard (`AllSpecialTextures.CHECKERED`) through the glue's `Checkered` pipeline
+//! (`pipelines`).
 
 use super::super::net;
 use super::super::pipelines::Textured;

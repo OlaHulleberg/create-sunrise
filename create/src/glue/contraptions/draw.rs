@@ -598,7 +598,8 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
 /// light where each block is now).
 #[derive(Clone, Copy)]
 enum Lighting {
-    /// Drawn spinning (`spin`): the game lights each quad where it turns to.
+    /// Drawn spinning (`spin`): the level lights each block where it turns to, each frame
+    /// (`level_light`).
     Host,
     /// Drawn where `WorldPose` puts it this frame: each block reads the light at its cell.
     Sampled(WorldPose),
@@ -776,6 +777,9 @@ fn draw_blocks(
     let level = matches!(lighting, Lighting::Sampled(_))
         .then(|| host.level(host.dimension()))
         .flatten();
+    if let Lighting::Host = lighting {
+        draw.level_light();
+    }
     for b in blocks {
         let props: Vec<(&str, &str)> = b
             .props
@@ -998,6 +1002,9 @@ impl BlockEntityDrawContext for Unkept<'_> {
     }
     fn set_light(&mut self, light: u32) {
         self.0.set_light(light);
+    }
+    fn level_light(&mut self) {
+        self.0.level_light();
     }
     fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
         self.0.quad(sprite, corners, uv, tint)

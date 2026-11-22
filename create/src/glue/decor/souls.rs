@@ -9,10 +9,9 @@
 //! particles and `SOUL_ESCAPE` a quarter of the ticks.
 //!
 //! Create's client runs the pulses where its packet arrives; here the server runs them and sends
-//! the souls to the players within 32 blocks. Left out (`API_GAPS.md`, Client): the souls are
-//! drawn facing the camera, where Create turns a soul only about the vertical and lays its base
-//! flat on the ground (`CustomRotationParticle.getCustomRotation`), and a soul that the light
-//! reaches is not taken away (`SoulParticle.tick` reading the client level's light).
+//! the souls to the players within 32 blocks. A soul turns only about the vertical and its base
+//! lies flat (`CustomRotationParticle.getCustomRotation`); either goes once light reaches it
+//! (`SoulParticle.tick`).
 
 use super::super::server::ServerLevel;
 use crate::glue::names::Named as _;
@@ -270,21 +269,25 @@ fn random(p: &ModParticle, salt: u64) -> f32 {
     (h % 10_000) as f32 / 10_000.0
 }
 
+/// `SoulPulseEffect.isDark`: no block light where the particle is.
+fn dark_at(level: &dyn mod_api::ParticleLevelView, p: &mod_api::ModParticle) -> bool {
+    let at = p.position.map(|v| v.floor() as i32);
+    level.brightness(mod_api::LightLayer::Block, at) < 1
+}
+
 /// `SoulParticle` (not a perimeter one): 0.5 big, still, its 53 frames in their start, loop
-/// and end stages, two ticks a frame.
+/// and end stages, two ticks a frame, turned to the camera's yaw (`getCustomRotation`), gone
+/// once lit.
 pub(super) struct Soul;
 
 impl ParticleProvider for Soul {
-    fn tick(
-        &self,
-        particles: &mut mod_api::ParticleBatch,
-        _level: &dyn mod_api::ParticleLevelView,
-    ) {
+    fn tick(&self, particles: &mut mod_api::ParticleBatch, level: &dyn mod_api::ParticleLevelView) {
         let one = |p: &mut mod_api::ModParticle| {
             let mut a = if p.state[0] == 0.0 {
                 p.size = 0.5;
                 p.lifetime = i32::MAX;
                 p.velocity = [0.0; 3];
+                p.facing = mod_api::ParticleFacing::AroundY;
                 SoulAnimation {
                     stage: 1,
                     ticks: 0,
@@ -318,22 +321,24 @@ impl ParticleProvider for Soul {
                 f64::from(a.loops),
                 f64::from(a.start_ticks | a.end_ticks << 8 | a.num_loops << 16),
             ];
+            if !dark_at(level, p) {
+                p.removed = true;
+            }
         };
         particles.iter_mut().for_each(one);
     }
 }
 
-/// `SoulBaseParticle`: 0.5 big, still, 90 to 140 ticks, its 8 frames looping every 16 ticks.
+/// `SoulBaseParticle`: 0.5 big, still, 90 to 140 ticks, its 8 frames looping every 16 ticks,
+/// turned 90° about x (`getCustomRotation`), gone once lit.
 pub(super) struct SoulBase;
 
 impl ParticleProvider for SoulBase {
-    fn tick(
-        &self,
-        particles: &mut mod_api::ParticleBatch,
-        _level: &dyn mod_api::ParticleLevelView,
-    ) {
+    fn tick(&self, particles: &mut mod_api::ParticleBatch, level: &dyn mod_api::ParticleLevelView) {
         let one = |p: &mut mod_api::ModParticle| {
             if p.state[0] == 0.0 {
+                let half = std::f32::consts::FRAC_PI_4;
+                p.facing = mod_api::ParticleFacing::Fixed([half.sin(), 0.0, 0.0, half.cos()]);
                 p.size = 0.5;
                 p.velocity = [0.0; 3];
                 p.lifetime = (90.0 / (random(p, 4) * 0.36 + 0.64)) as i32;
@@ -343,6 +348,9 @@ impl ParticleProvider for SoulBase {
             let loop_length = (p.state[0] as i32).max(1);
             // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
             p.frame = ((p.age % loop_length) * 7 / loop_length) as u32;
+            if !dark_at(level, p) {
+                p.removed = true;
+            }
         };
         particles.iter_mut().for_each(one);
     }

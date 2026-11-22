@@ -152,7 +152,7 @@ impl Subsystem for Sources {
     }
 
     fn animated(&self, block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
-        handles::animated(block, pos, entity)
+        handles::animated(block, pos, entity) || stress::flash_color(pos).is_some()
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {

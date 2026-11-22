@@ -251,7 +251,6 @@ fn axis_index(d: Dir) -> usize {
 /// The particle types the flows spawn.
 struct Keys {
     item: ParticleKey,
-    block: ParticleKey,
     dripping_water: ParticleKey,
     dripping_lava: ParticleKey,
 }
@@ -261,7 +260,6 @@ static KEYS: OnceLock<Keys> = OnceLock::new();
 pub(super) fn register(r: &mut dyn Registrar) {
     let _ = KEYS.set(Keys {
         item: r.particle_key("minecraft:item"),
-        block: r.particle_key("minecraft:block"),
         dripping_water: r.particle_key("minecraft:dripping_water"),
         dripping_lava: r.particle_key("minecraft:dripping_lava"),
     });
@@ -283,18 +281,17 @@ const IDLE_CHANCE: f64 = 1.0 / 1000.0;
 /// `PipeConnection.RIM_RADIUS`.
 const RIM_RADIUS: f64 = 1.0 / 4.0 + 1.0 / 64.0;
 
-/// `FluidFX.getFluidParticle`: Create's fluid particle (see the module's doc).
+/// `FluidFX.getFluidParticle`: `FluidStackParticle`, a crumb of the fluid's still sprite in
+/// 0.8 times its tint (`multiplyColor`).
 fn fluid_particle(keys: &Keys, fluid: Fluid) -> Option<ParticleOptions> {
     let tint = match fluid {
-        Fluid::Water => Some(0x3F_76E4),
-        Fluid::Potion(p) => Some(p.color()),
-        _ => None,
+        Fluid::Water => 0x3F_76E4,
+        Fluid::Potion(p) => p.color(),
+        _ => 0xFF_FFFF,
     };
+    let [r, g, b] = [16, 8, 0].map(|s| 0.8 * ((tint >> s) & 0xFF) as f32 / 255.0);
     let sprite = still_sprite(fluid);
-    Some(match tint {
-        Some(tint) => ParticleOptions::block(keys.block, sprite.into(), tint),
-        None => ParticleOptions::item(keys.item, vec![sprite.into()]),
-    })
+    Some(ParticleOptions::item(keys.item, vec![sprite.into()]).with_color([r, g, b, 1.0]))
 }
 
 /// The fluid's still sprite (`IClientFluidTypeExtensions.getStillTexture`).

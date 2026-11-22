@@ -528,6 +528,18 @@ pub(crate) struct FilterScreen;
 
 #[mod_api::sunrise_part]
 impl MenuPart for FilterScreen {
+    /// `HeldItemGhostItemMenu.stillValid`: the filter it opened from is still in that hand
+    /// (the selected slot is checked each tick, `filters::player_tick`).
+    fn menu_still_valid(
+        &self,
+        _context: &dyn mod_api::LoopContext,
+        event: &mut mod_api::MenuStillValidEvent<'_>,
+    ) {
+        if let Some(opened) = &event.opening_item {
+            event.valid &= opened.stack_matches;
+        }
+    }
+
     fn menu_clicked(
         &self,
         host: &mut dyn mod_api::ServerHost,

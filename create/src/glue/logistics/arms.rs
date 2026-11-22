@@ -1593,7 +1593,11 @@ fn nudge_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             .kind(&*lv.host)
             .map(|k| k.name(&*lv.host))
             .unwrap_or_default();
-        if kind.as_str() == "minecraft:player" {
+        let dead = lv.host.living(e).and_then(|l| l.alive(&*lv.host)) == Some(false);
+        if dead
+            || e.piston_push_reaction(&*lv.host) == Ok(Some(mod_api::PushReaction::IgnoreEntity))
+            || kind.as_str() == "minecraft:player"
+        {
             continue;
         }
         let Some(at) = e.position(&*lv.host) else {

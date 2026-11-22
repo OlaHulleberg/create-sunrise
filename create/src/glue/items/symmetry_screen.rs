@@ -4,9 +4,6 @@
 //! (`SymmetryWandItem.use` / `useOn`), from the next client tick; closing it sends the mirror to
 //! the server (`ConfigureSymmetryWandPacket`), which writes it into the wand still in that
 //! hand.
-//!
-//! The wand Create draws four times its size, turned, right of the window (`GuiGameElement` with
-//! a rotation) is drawn flat at that size: a screen's item has no rotation.
 
 use super::gadget_gui::{
     self as gui, CURIOSITIES, I_CONFIRM, corner, icon_button, inside, selection_tooltip, tr,
@@ -212,8 +209,14 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn mod_api::DrawContext, o: &Open, mo
         mouse,
         o.pressed,
     );
-    // The wand, four times its size, right of the window.
-    draw.item_stack(&o.wand, [x + 178.0, y + 45.0], 64.0);
+    // The wand, four times its size, right of the window, turned (`rotate(-70, 20, 20)`).
+    let view = mod_api::Gui3dView::new([x + 210.0, y + 77.0], 64.0, wand_turn());
+    if draw
+        .model_3d(mod_api::Gui3dSubject::Item(&o.wand), view)
+        .is_err()
+    {
+        draw.item_stack(&o.wand, [x + 178.0, y + 45.0], 64.0);
+    }
     // The hovered input's tooltip.
     let tip = if inside(at(TYPE_INPUT, x, y), mouse) {
         Some(selection_tooltip(
@@ -326,6 +329,27 @@ pub(super) fn screen_closing(host: &dyn ClientHost, event: &mut ScreenClosingEve
     if let Some(open) = OPEN.with_borrow_mut(Option::take) {
         LATER.with_borrow_mut(|l| l.0.push(open.configure));
     }
+}
+
+/// `GuiRenderBuilder.transformMatrix`'s turn of the wand: `ZP` 20°, then `XP` -70°, then `YP`
+/// 20°, as a row-major 3x4 transform.
+fn wand_turn() -> [f32; 12] {
+    let (sz, cz) = 20f32.to_radians().sin_cos();
+    let (sx, cx) = (-70f32).to_radians().sin_cos();
+    let (sy, cy) = 20f32.to_radians().sin_cos();
+    let rz = [[cz, -sz, 0.0], [sz, cz, 0.0], [0.0, 0.0, 1.0]];
+    let rx = [[1.0, 0.0, 0.0], [0.0, cx, -sx], [0.0, sx, cx]];
+    let ry = [[cy, 0.0, sy], [0.0, 1.0, 0.0], [-sy, 0.0, cy]];
+    let mul = |a: [[f32; 3]; 3], b: [[f32; 3]; 3]| {
+        std::array::from_fn::<[f32; 3], 3, _>(|i| {
+            std::array::from_fn(|j| (0..3).map(|k| a[i][k] * b[k][j]).sum())
+        })
+    };
+    let m = mul(mul(rz, rx), ry);
+    [
+        m[0][0], m[0][1], m[0][2], 0.0, m[1][0], m[1][1], m[1][2], 0.0, m[2][0], m[2][1], m[2][2],
+        0.0,
+    ]
 }
 
 #[cfg(test)]

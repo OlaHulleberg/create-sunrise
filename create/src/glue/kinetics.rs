@@ -1031,9 +1031,14 @@ impl BlockEntityPart for KineticEntity {
             Some(Tag::Int(n)) => create_engine::kinetics::Dir::ALL.get(*n as usize).copied(),
             _ => None,
         };
+        let flash = super::sources::stress::flash_color(event.pos);
         for d in client::draws_from_source(block, &info, event.pos, speeds, source) {
-            if !systems.iter().any(|s| s.draws_itself(block, &d)) {
-                draw_turning(event.draw, block, &own, &d);
+            if systems.iter().any(|s| s.draws_itself(block, &d)) {
+                continue;
+            }
+            match flash {
+                Some(color) => draw_turning_colored(host, event.draw, block, &own, &d, color),
+                None => draw_turning(event.draw, block, &own, &d),
             }
         }
         // SpeedControllerRenderer: the bracket a block up, turned across the controller's axis.
@@ -1189,6 +1194,35 @@ pub fn draw_turning(
         Some(p) => draw.block(model, &[p]),
         None => draw.block(model, own),
     };
+    draw.still();
+}
+
+/// [`draw_turning`] in the draw colour `color` (`SuperByteBuffer.color`), through the block
+/// state's model: `block` draws with its default tints only.
+fn draw_turning_colored(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    own: &[(&str, &str)],
+    d: &Draw,
+    color: u32,
+) {
+    let Some((key, prop)) = model_block(block, d.model) else {
+        return;
+    };
+    let props: Vec<(&str, &str)> = prop.map_or_else(|| own.to_vec(), |p| vec![p]);
+    let model = host.block_state_default(key).and_then(|state| {
+        let state = super::trains::with_props(host, state, &props)?;
+        host.render_assets().block_state_model(state).ok()
+    });
+    let Some(model) = model else {
+        return draw_turning(draw, block, own, d);
+    };
+    draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
+    let options = mod_api::TerrainModelOptions::default().with_color(color);
+    if draw.terrain_model(model, options).is_err() {
+        draw.block(key, &props);
+    }
     draw.still();
 }
 

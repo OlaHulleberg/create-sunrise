@@ -350,7 +350,7 @@ impl Subsystem for Items {
     }
 
     fn world_closed(&self) {
-        filters::clear_item_groups();
+        filters::invalidate_item_groups();
         symmetry::world_closed();
     }
 
