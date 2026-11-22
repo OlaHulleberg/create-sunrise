@@ -406,6 +406,9 @@ pub fn millstone(seed: u64) -> Scenario {
     ));
     let mut tick = 10;
     for _ in 0..3 + r.below(4) {
+        if tick + 40 > sc.ticks {
+            break;
+        }
         let item = r.pick(inputs("millstone")).as_str();
         let count = 1 + r.below(if rolled(item) { 6 } else { 20 }) as u8;
         let a = match r.below(5) {
@@ -445,6 +448,7 @@ pub fn millstone(seed: u64) -> Scenario {
             turn: None,
         });
     }
+    sc.events.retain(|e| e.tick < sc.ticks);
     sc.checkpoints.retain(|t| *t < sc.ticks);
     sc.checkpoints.extend((60..sc.ticks).step_by(20));
     sc.checkpoints.sort_unstable();
@@ -497,6 +501,9 @@ pub fn crushing(seed: u64) -> Scenario {
     }
     let mut tick = 20;
     for _ in 0..2 + r.below(3) {
+        if tick + 40 > sc.ticks {
+            break;
+        }
         let item = r.pick(inputs("crusher")).as_str();
         let count = 1 + r.below(if rolled(item) { 4 } else { 16 }) as u8;
         sc.events.push(act(
@@ -520,6 +527,7 @@ pub fn crushing(seed: u64) -> Scenario {
             turn: None,
         });
     }
+    sc.events.retain(|e| e.tick < sc.ticks);
     sc.checkpoints.retain(|t| *t < sc.ticks);
     sc.checkpoints.extend((40..sc.ticks).step_by(10));
     sc.checkpoints.sort_unstable();
@@ -564,6 +572,9 @@ pub fn saw(seed: u64) -> Scenario {
     }
     let mut tick = 10;
     for _ in 0..3 + r.below(4) {
+        if tick + 40 > sc.ticks {
+            break;
+        }
         let item = r.pick(inputs("saw")).as_str();
         let a = if r.chance(0.6) {
             drop_on(item, 1 + r.below(8) as u8)
@@ -595,6 +606,7 @@ pub fn saw(seed: u64) -> Scenario {
             turn: None,
         });
     }
+    sc.events.retain(|e| e.tick < sc.ticks);
     sc.checkpoints.retain(|t| *t < sc.ticks);
     sc.checkpoints.extend((30..sc.ticks).step_by(10));
     sc.checkpoints.sort_unstable();
