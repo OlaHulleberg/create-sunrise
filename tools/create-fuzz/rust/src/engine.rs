@@ -466,7 +466,7 @@ impl Run {
             // `DepotBehaviour.destroy`: the outputs (`ItemHelper.dropContents`), then the held
             // stack; the merging stacks are the engine's.
             for s in self.depot_outputs.remove(&p).unwrap_or_default() {
-                self.pop_resource(p, &s.item, s.count);
+                self.drop_item_stack(p.map(f64::from), &s.item, s.count);
             }
             if let Some(s) = self.depot_stacks.remove(&p) {
                 self.pop_resource(p, &s.item, s.count);
@@ -508,7 +508,7 @@ impl Run {
         }) {
             // `ChuteBlockEntity.destroy`: its stack drops (`Containers.dropItemStack`).
             if let Some(s) = self.chute_stacks.remove(&p) {
-                self.pop_resource(p, &s.item, s.count);
+                self.drop_item_stack(p.map(f64::from), &s.item, s.count);
             }
             self.w.dims[0].chutes.remove(&p);
         }
