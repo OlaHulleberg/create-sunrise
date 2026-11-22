@@ -257,6 +257,109 @@ pub fn saw_put(
     true
 }
 
+/// The saw's `ITEMS` handler (`SawBlockEntity.registerCapabilities`: its `ProcessingInventory`
+/// on every side but its bottom): one item into slot 0 while it holds nothing (`saw_put`),
+/// nothing out (`extractItem` gives nothing). The inventory lives in the engine, so an insert
+/// the host's transaction later aborts cannot be taken back, as with a belt segment's handler.
+pub struct SawItems {
+    pub dimension: String,
+    pub dim: usize,
+    pub pos: [i32; 3],
+}
+
+impl SawItems {
+    fn slot(&self, index: usize) -> Option<(String, u8)> {
+        with_world(|w| {
+            let s = w.dims[self.dim].saws.get(&self.pos)?;
+            // Results sit after the input's slot 0 in Create's inventory.
+            let i = if s.applied {
+                index.checked_sub(1)?
+            } else {
+                index
+            };
+            s.slots.get(i).cloned()
+        })
+        .flatten()
+    }
+
+    fn empty(&self) -> bool {
+        with_world(|w| {
+            w.dims[self.dim]
+                .saws
+                .get(&self.pos)
+                .is_none_or(|s| s.slots.is_empty())
+        })
+        .unwrap_or(false)
+    }
+}
+
+impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
+    fn size(&self, _host: &mut dyn mod_api::ServerHost) -> usize {
+        32
+    }
+    fn resource(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        index: usize,
+    ) -> Option<mod_api::ItemResource> {
+        let (item, n) = self.slot(index)?;
+        stacks::stack(&*host, &item, u32::from(n)).map(|s| mod_api::ItemResource::of(&s))
+    }
+    fn amount(&self, _host: &mut dyn mod_api::ServerHost, index: usize) -> u32 {
+        self.slot(index).map_or(0, |(_, n)| u32::from(n))
+    }
+    /// `withSlotLimit(!bulkCutting)`: one item a slot.
+    fn capacity(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        _index: usize,
+        _resource: &mod_api::ItemResource,
+    ) -> u32 {
+        1
+    }
+    fn is_valid(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        index: usize,
+        _resource: &mod_api::ItemResource,
+    ) -> bool {
+        index == 0 && self.empty()
+    }
+    fn insert(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        _tx: &mod_api::Transaction,
+        index: usize,
+        resource: &mod_api::ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let stack = resource.as_stack();
+        if index != 0 || amount == 0 || stack.damage() != 0 {
+            return 0;
+        }
+        let progress = stacks::sequenced_progress(stack);
+        // The engine keeps items by id, but for a sequenced assembly's progress.
+        if stack.components().is_some() && progress.is_none() {
+            return 0;
+        }
+        let item = stacks::id(&*host, stack);
+        let Some(mut lv) = ServerLevel::new(host, &self.dimension) else {
+            return 0;
+        };
+        u32::from(saw_put(&mut lv, self.pos, &item, progress))
+    }
+    fn extract(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        _tx: &mod_api::Transaction,
+        _index: usize,
+        _resource: &mod_api::ItemResource,
+        _amount: u32,
+    ) -> u32 {
+        0
+    }
+}
+
 /// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
 /// end, the results thrown off the way the saw turns (onto a belt or depot there, else as items).
 pub fn tick_saws(lv: &mut ServerLevel<'_>) {
@@ -283,7 +386,11 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
 fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
     let dim = lv.dim;
     {
-        let along_first = lv.info(pos).map(|(_, i)| i.along_first)?;
+        let (along_first, facing) = lv.info(pos).map(|(_, i)| (i.along_first, i.facing))?;
+        // `canProcess`: a saw not facing up keeps what it was given.
+        if facing != Some(Dir::Up) {
+            return Some(Step::Wait);
+        }
         let speed = lv.speed(pos);
         let mut saw = with_world(|w| w.dims[dim].saws.get(&pos).cloned()).flatten()?;
         let item = saw.slots.first().map(|s| s.0.clone()).unwrap_or_default();

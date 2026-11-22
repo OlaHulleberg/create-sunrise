@@ -531,8 +531,8 @@ impl Subsystem for Tools {
     }
 }
 
-/// The `ITEMS` handlers of the processing machines of the kinetic type: a crafter's group's and
-/// a crushing wheel controller's. None for the others, whose slots the game offers.
+/// The `ITEMS` handlers of the processing machines of the kinetic type: a crafter's group's, a
+/// crushing wheel controller's and a saw's. None for the others, whose slots the game offers.
 fn provide_items(
     host: &mut dyn ServerHost,
     side: mod_api::BlockSide,
@@ -546,6 +546,13 @@ fn provide_items(
         Block::MechanicalCrafter => crafter::provide_items(host, side),
         Block::CrushingWheelController => {
             Some(Box::new(crusher::CrusherItems { dim, pos: side.pos }))
+        }
+        Block::MechanicalSaw if side.side != Some(mod_api::Direction::Down) => {
+            Some(Box::new(saw::SawItems {
+                dimension,
+                dim,
+                pos: side.pos,
+            }))
         }
         _ => None,
     }
