@@ -14,15 +14,12 @@ use super::super::world::with_world;
 use create_engine::Block;
 use create_engine::gauge::SpeedLevel;
 use create_engine::kinetics::Axis;
-use mod_api::{ParticleKey, ParticleOptions, ParticleProvider, Registrar};
+use mod_api::{ParticleProvider, Registrar};
 use std::cell::RefCell;
-use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 
 /// The particle type's name: Create's.
 pub const NAME: &str = "create:rotation_indicator";
-
-static KEY: OnceLock<ParticleKey> = OnceLock::new();
 
 thread_local! {
     /// Blocks whose indicators are due, by level, with the ticks left (`particleSpawnCountdown`).
@@ -39,7 +36,6 @@ pub(super) static TYPE: std::sync::OnceLock<mod_api::ParticleType<()>> = std::sy
 pub(super) fn register(r: &mut dyn Registrar) {
     let ty = crate::glue::particle_type(r, NAME);
     let _ = TYPE.set(ty);
-    let _ = KEY.set(ty.key());
 }
 
 /// `queueRotationIndicators`: the block at `pos` shows its indicators in two ticks.
@@ -93,7 +89,7 @@ fn radii(block: Block) -> (f32, f32) {
 
 /// `spawnRotationIndicators`: twenty sparks at the block's centre, none while it stands still.
 fn spawn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let Some(&key) = KEY.get() else {
+    let Some(ty) = TYPE.get() else {
         return;
     };
     let dim = lv.dim;
@@ -118,7 +114,7 @@ fn spawn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let (r1, r2) = radii(block);
     let data = encode(level.color(), particle_speed, axis, r1, r2);
     let center = pos.map(|v| f64::from(v) + 0.5);
-    let options = ParticleOptions::simple(key);
+    let options = ty.options(());
     for _ in 0..20 {
         // One particle, its velocity the "spread" times the speed (vanilla's count 0).
         let _ = lv

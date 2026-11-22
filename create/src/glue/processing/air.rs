@@ -31,7 +31,6 @@ const DENSITY: f32 = 0.5;
 
 /// The particle types the current spawns.
 pub(super) struct Keys {
-    pub air_flow: ParticleKey,
     pub flame: ParticleKey,
     pub block: ParticleKey,
     pub soul_fire_flame: ParticleKey,
@@ -51,7 +50,6 @@ pub(super) fn register(r: &mut dyn Registrar) {
     let air_flow = crate::glue::particle_type(r, AIR_FLOW);
     let _ = AIR_FLOW_TYPE.set(air_flow);
     let _ = KEYS.set(Keys {
-        air_flow: air_flow.key(),
         flame: r.particle_key("minecraft:flame"),
         block: r.particle_key("minecraft:block"),
         soul_fire_flame: r.particle_key("minecraft:soul_fire_flame"),
@@ -273,7 +271,9 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         };
         host.add_particle(&options, at, v);
     }
-    let options = ParticleOptions::simple(keys.air_flow);
+    let Some(options) = AIR_FLOW_TYPE.get().map(|t| t.options(())) else {
+        return;
+    };
     for f in &fans {
         if f.current.max <= 0.0 || random() >= DENSITY {
             continue;

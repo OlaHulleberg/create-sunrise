@@ -142,7 +142,6 @@ static FLIGHT: AttachmentType<Flight> = AttachmentType {
 };
 
 static ITEM_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
-static AIR_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 /// `AllDataComponents.SHAPER_SWAP`: the main hand's cannon lets the off hand's fire next.
 const SWAP: &str = "create:shaper_swap";
 
@@ -221,7 +220,6 @@ impl Subsystem for PotatoCannon {
         let _ = ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         let air = crate::glue::particle_type(r, AIR);
         let _ = AIR_TYPE.set(air);
-        let _ = AIR_PARTICLE.set(air.key());
         let key = r.item_key(CANNON);
         r.item_part(key, CannonPart);
         let _ = AMMO_KEYS.set(
@@ -655,9 +653,9 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
             let options = mod_api::ParticleOptions::item_stack(*key, shot_stack.clone());
             let _ = level.send_particles(host, &options, None, barrel, v, 1.0, 0);
         }
-        if let Some(key) = AIR_PARTICLE.get() {
+        if let Some(ty) = AIR_TYPE.get() {
             let v = [0, 1, 2].map(|i| look_n[i] * 2.0 + off(i + 3, 0.5));
-            let options = mod_api::ParticleOptions::simple(*key);
+            let options = ty.options(());
             let _ = level.send_particles(host, &options, None, barrel, v, 1.0, 0);
         }
     }

@@ -28,14 +28,14 @@ use std::sync::OnceLock;
 pub(super) const SOUL: &str = "create:soul";
 pub(super) const SOUL_BASE: &str = "create:soul_base";
 
-static KEYS: OnceLock<[ParticleKey; 3]> = OnceLock::new();
+static VANILLA_SOUL: OnceLock<ParticleKey> = OnceLock::new();
 pub(super) static TYPES: OnceLock<[mod_api::ParticleType<()>; 2]> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
     let soul = crate::glue::particle_type(r, SOUL);
     let base = crate::glue::particle_type(r, SOUL_BASE);
     let _ = TYPES.set([soul, base]);
-    let _ = KEYS.set([soul.key(), base.key(), r.particle_key("minecraft:soul")]);
+    let _ = VANILLA_SOUL.set(r.particle_key("minecraft:soul"));
 }
 
 #[derive(Default)]
@@ -166,16 +166,10 @@ fn soul_fits(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         .is_some_and(|b| b.is_empty())
 }
 
-fn send(lv: &mut ServerLevel<'_>, key: ParticleKey, at: [f64; 3], v: [f64; 3]) {
-    let _ = lv.level.send_particles(
-        &mut *lv.host,
-        &ParticleOptions::simple(key),
-        None,
-        at,
-        v,
-        1.0,
-        0,
-    );
+fn send(lv: &mut ServerLevel<'_>, options: &ParticleOptions, at: [f64; 3], v: [f64; 3]) {
+    let _ = lv
+        .level
+        .send_particles(&mut *lv.host, options, None, at, v, 1.0, 0);
 }
 
 /// The level's tick: the bells' souls after a ring, then each pulse's ring
@@ -185,7 +179,8 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     let Some(mut level) = LEVELS.with_borrow_mut(|l| l.remove(&dim)) else {
         return;
     };
-    let Some(&[soul_key, base_key, vanilla_soul]) = KEYS.get() else {
+    let (Some(&[soul_type, base_type]), Some(&vanilla_soul)) = (TYPES.get(), VANILLA_SOUL.get())
+    else {
         return;
     };
     // `HauntedBellBlockEntity.tick`.
@@ -209,7 +204,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
         ];
         send(
             lv,
-            vanilla_soul,
+            &ParticleOptions::simple(vanilla_soul),
             at,
             [r[3] * 0.04 - 0.02, 0.1, r[4] * 0.04 - 0.02],
         );
@@ -242,8 +237,18 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
                     f64::from(p[1]),
                     f64::from(p[2]) + 0.5,
                 ];
-                send(lv, soul_key, [c[0], c[1] + 0.5, c[2]], [0.0; 3]);
-                send(lv, base_key, [c[0], c[1] + 0.01, c[2]], [0.0; 3]);
+                send(
+                    lv,
+                    &soul_type.options(()),
+                    [c[0], c[1] + 0.5, c[2]],
+                    [0.0; 3],
+                );
+                send(
+                    lv,
+                    &base_type.options(()),
+                    [c[0], c[1] + 0.01, c[2]],
+                    [0.0; 3],
+                );
             }
         }
     }
