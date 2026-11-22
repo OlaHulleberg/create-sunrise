@@ -4,6 +4,8 @@
 use super::{recipes, stacks};
 use crate::glue::kinetics::dir_name;
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use crate::glue::server::{ServerLevel, update_all};
 use crate::glue::world::with_world;
 use create_engine::kinetics::{Axis, Dir};
@@ -264,12 +266,11 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
         &self,
         host: &mut dyn mod_api::ServerHost,
         _index: usize,
-        resource: &mod_api::ItemResource,
+        resource: Option<&mod_api::ItemResource>,
     ) -> u32 {
-        u32::from(stacks::limit(
-            &*host,
-            &stacks::id(&*host, resource.as_stack()),
-        ))
+        resource.map_or(64, |r| {
+            u32::from(stacks::limit(&*host, &stacks::id(&*host, r.as_stack())))
+        })
     }
     fn is_valid(
         &self,
@@ -286,7 +287,7 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
             })
             .unwrap_or(false)
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn mod_api::ServerHost,
         _tx: &mod_api::Transaction,
@@ -317,7 +318,7 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
         .flatten()
         .unwrap_or(0)
     }
-    fn extract(
+    fn extract_at(
         &self,
         _host: &mut dyn mod_api::ServerHost,
         _tx: &mod_api::Transaction,
@@ -346,7 +347,7 @@ fn crushable_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Option<
             if lv.host.item_entity(e).is_some() || lv.host.living(e).is_none() {
                 return false;
             }
-            if e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:player") {
+            if e.kind(&*lv.host).map(|k| k.name(&*lv.host)).as_deref() == Some("minecraft:player") {
                 let creative = e
                     .uuid(&mut *lv.host)
                     .and_then(|u| lv.host.player(u))

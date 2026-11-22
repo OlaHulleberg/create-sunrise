@@ -9,10 +9,10 @@
 pub const STACKS_PER_COMPARTMENT: usize = 4;
 /// Create's slots: 8 compartments.
 pub const STORED: usize = 8 * STACKS_PER_COMPARTMENT;
-/// The container's slots: a `minecraft:generic_9x4` menu's.
+/// The container's slots: as many as a `minecraft:generic_9x4` menu's.
 pub const SLOTS: usize = 36;
 /// The menu the container opens.
-pub const MENU: &str = "minecraft:generic_9x4";
+pub const MENU: &str = "create:toolbox";
 
 /// The screen (`ToolboxScreen`): the toolbox's background (`AllGuiTextures.TOOLBOX`, 188 x 171)
 /// 30 px in from the window's left, the player's inventory (`PLAYER_INVENTORY`, 176 x 108)

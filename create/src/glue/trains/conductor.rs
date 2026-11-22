@@ -8,6 +8,7 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::schedule_screen::{schedule_of, with_schedule};
 use crate::glue::items;
+use crate::glue::names::Named as _;
 use create_engine::schedule::{Runtime, Schedule};
 use mod_api::{
     EntityInteractEvent, EntityRef, Hand, InteractionResult, PlayerRef, ServerHost, SoundSource,
@@ -113,11 +114,15 @@ pub fn interact(
     let player = host.players().acting_player()?;
     let target: EntityRef = host.entity(event.entity as u32)?;
     let seat = super::riding::seat_of(&*host, target)?;
-    let dimension = player.level(&*host)?.dimension().id(&*host)?;
+    let dimension = player
+        .level(&*host)?
+        .dimension()
+        .id(&*host)
+        .map(str::to_owned)?;
     let dim = ServerLevel::new(host, &dimension)?.dim;
     let holding = event
         .stack
-        .filter(|s| s.item().id(&*host) == "create:schedule")
+        .filter(|s| s.item().name(&*host) == "create:schedule")
         .cloned();
     let conductor = conductor_seat(dim, seat.train, usize::from(seat.car), seat.local, &*host);
     let has_schedule = with_world(|w| {

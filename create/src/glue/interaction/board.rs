@@ -8,6 +8,7 @@ use super::super::net;
 use super::super::states;
 use super::item_use_overrides;
 use super::values::{self, VALUE_SETTINGS, may_use_value_box, value_box_hit};
+use crate::glue::names::Named as _;
 use crate::glue::stock::gauge_client as gauge;
 use create_engine::Block as B;
 use create_engine::board::{self, Board, Hold, Layout, Settings, Step};
@@ -176,7 +177,7 @@ fn filter_board_hit(
     let player = host.local_player()?;
     let bypass = items::held(host, player, Hand::Main).is_some_and(|s| {
         matches!(
-            s.item().id(host).as_str(),
+            s.item().name(host).as_str(),
             "create:wrench" | "create:mechanical_arm"
         )
     });
@@ -300,7 +301,7 @@ pub(super) fn right_click(host: &mut dyn ClientHost, event: &mut RightClickBlock
     }
     // `ItemUseOverrides`: the crank's, the valve handles' and the lever's own use takes the
     // click over the held item, sneaking included; the wrench keeps its own use.
-    let held = click.stack.map(|s| s.item().id(&*host));
+    let held = click.stack.map(|s| s.item().name(&*host));
     if create_engine::item_use_overrides::invokes_use(block, held.as_deref())
         && item_use_overrides::answers(&*host, player, block)
     {
@@ -479,7 +480,7 @@ fn aimed_value_box(host: &dyn ClientHost) -> Option<[i32; 3]> {
 
 /// Whether the vanilla mapping `name` is held.
 fn mapping_down(host: &dyn ClientHost, name: &str) -> bool {
-    host.mapping(name).ok().flatten().is_some_and(|m| m.down)
+    crate::glue::keys::down(host, name)
 }
 
 /// Whether the client's player holds the wrench in the main hand.
@@ -688,11 +689,9 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) -> bool {
     let Some(pick) = pick else {
         return false;
     };
-    let key = host
-        .mapping("key.use")
-        .ok()
-        .flatten()
-        .and_then(|m| host.text_string(&m.label).ok())
+    let key = crate::glue::keys::label(host, "key.use")
+        .map(|label| host.text_string(&label))
+        .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "Use".to_owned());
     let tip = board::release_to_confirm(&key);
     let text = |s: Settings| {

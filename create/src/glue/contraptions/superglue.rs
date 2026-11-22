@@ -17,6 +17,7 @@ use super::super::persist::mark_unsaved;
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::{center, found};
+use crate::glue::names::Named as _;
 use crate::glue::pipelines::Textured;
 use create_engine::glue;
 use mod_api::{
@@ -137,7 +138,7 @@ pub(super) fn render(
     let Some(player) = host.local_player() else {
         return;
     };
-    let holding = held(host, player, Hand::Main).is_some_and(|s| s.item().id(host) == ITEM);
+    let holding = held(host, player, Hand::Main).is_some_and(|s| s.item().name(host) == ITEM);
     if !holding {
         return;
     }
@@ -316,14 +317,14 @@ pub(super) fn right_click_block(host: &mut HostSide, event: &mut RightClickBlock
     }
     let (id, state, player) = match host {
         HostSide::Server(h) => (
-            stack.item().id(&**h),
+            stack.item().name(&**h),
             h.level(click.dimension.key().id())
                 .and_then(|l| l.block_state(&**h, click.pos)),
             h.player(click.player)
                 .map(|p| (p.may_build(&**h) == Some(true), sneaking(&**h, p))),
         ),
         HostSide::Client(h) => (
-            stack.item().id(&**h),
+            stack.item().name(&**h),
             h.level(h.dimension())
                 .and_then(|l| l.block_state(&**h, click.pos)),
             h.local_player()
@@ -360,7 +361,7 @@ pub(super) fn right_click_block(host: &mut HostSide, event: &mut RightClickBlock
 }
 
 fn is_glue(host: &dyn ServerHost, player: PlayerRef) -> bool {
-    held(host, player, Hand::Main).is_some_and(|s| s.item().id(host) == ITEM)
+    held(host, player, Hand::Main).is_some_and(|s| s.item().name(host) == ITEM)
 }
 
 fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<InteractionResult> {

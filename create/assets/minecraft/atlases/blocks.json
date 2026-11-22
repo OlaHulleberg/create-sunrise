@@ -117,6 +117,26 @@
     },
     {
       "type": "minecraft:single",
+      "resource": "create:block/creative_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/creative_fluid_tank_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/fluid_tank_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/fluid_tank_inner_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/fluid_tank_top_connected"
+    },
+    {
+      "type": "minecraft:single",
       "resource": "create:block/palettes/acacia_window_connected"
     },
     {
@@ -290,6 +310,38 @@
     {
       "type": "minecraft:single",
       "resource": "create:block/palettes/warped_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_bottom_large"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_bottom_medium"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_front_large"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_front_medium"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_side_large"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_side_medium"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_top_large"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/vault/vault_top_medium"
     }
   ]
 }

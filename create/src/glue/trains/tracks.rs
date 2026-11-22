@@ -19,6 +19,8 @@ use super::super::states;
 use super::super::world::{level_index, with_world};
 use super::saved;
 use crate::glue::items;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::network::Target;
 use create_engine::track::{self, End, Failure, Request, TrackShape};
@@ -27,10 +29,9 @@ use create_engine::track_render::{Mat4, Piece, girder_parts, segment_parts};
 use create_engine::trains::SignalState;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
-    BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent,
-    BlockFace, BlockPart, BlockState, ClientHost, Compound, Host, HostBlockStates, HostSide,
-    InteractionResult, ItemPart, OnBlockPlacedByEvent, Registrar, ServerHost, SupportType, Tag,
-    Text, UseOnEvent,
+    BlockEntityRenderBoundingBoxEvent, BlockEntityUpdateTagEvent, BlockFace, BlockPart, BlockState,
+    ClientHost, Compound, Host, HostBlockStates, HostSide, InteractionResult, ItemPart,
+    OnBlockPlacedByEvent, Registrar, ServerHost, SupportType, Tag, Text, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -98,7 +99,11 @@ impl ItemPart for TrackItem {
             }
         };
         let player = host.player(event.player)?;
-        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let dimension = player
+            .level(&*host)?
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
         use_track(&mut lv, player, event.pos, event.face)
             .then_some(InteractionResult::SuccessServer)
@@ -114,7 +119,7 @@ impl ItemPart for TrackItem {
         if shape_of(&*host, event.state).is_none() {
             return;
         }
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -285,7 +290,7 @@ fn lay_track(
     // `TrackBlockItem.useOn`: metal girders in the off hand lay a girder curve. A block in the
     // off hand paves under the run (`paveTracks`), costing what it lays.
     let girder = items::held(&*lv.host, player, mod_api::Hand::Off)
-        .is_some_and(|s| s.item().id(&*lv.host) == "create:metal_girder");
+        .is_some_and(|s| s.item().name(&*lv.host) == "create:metal_girder");
     let (paving, pavement) = match paver(lv, player, info.positions[0]) {
         Some(p) => pave(lv, &info, &p),
         None => (Vec::new(), 0),
@@ -383,7 +388,7 @@ struct Paver {
 fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Option<Paver> {
     let host = &*lv.host;
     let stack = items::held(host, player, mod_api::Hand::Off)?;
-    let id = stack.item().id(host);
+    let id = stack.item().name(host);
     if matches!(
         id.as_str(),
         "create:wooden_bracket" | "create:metal_bracket"
@@ -395,7 +400,7 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     let facts = host.block_states();
     if facts.has_block_entity(state) == Some(true)
         || block
-            .id(host)
+            .name(host)
             .strip_prefix("create:")
             .and_then(Block::from_name)
             .is_some_and(Block::has_block_entity)
@@ -409,7 +414,7 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     if !collides {
         return None;
     }
-    let girder = block.id(host) == "create:metal_girder";
+    let girder = block.name(host) == "create:metal_girder";
     let slab = super::with_props(host, state, &[("type", "double")]);
     if let Some(double) = slab {
         state = double;
@@ -643,7 +648,7 @@ fn mark_selection(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, from: Op
     let Some(mut stack) = items::held(&*lv.host, player, Hand::Main) else {
         return;
     };
-    if stack.item().id(&*lv.host) != "create:track" {
+    if stack.item().name(&*lv.host) != "create:track" {
         return;
     }
     items::set_custom(
@@ -809,7 +814,7 @@ fn set_stack_pick(
     let Some(mut stack) = items::held(&*lv.host, player, hand) else {
         return;
     };
-    if stack.item().id(&*lv.host) != "create:track_signal" {
+    if stack.item().name(&*lv.host) != "create:track_signal" {
         return;
     }
     items::set_custom(
@@ -964,7 +969,11 @@ impl ItemPart for SignalItem {
         };
         PLACING.with_borrow_mut(|m| m.remove(&event.player));
         let player = host.player(event.player)?;
-        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let dimension = player
+            .level(&*host)?
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
         use_signal(&mut lv, player, event)
     }
@@ -982,7 +991,7 @@ impl ItemPart for SignalItem {
         if event.state.block() != states::key(Block::TrackSignal) {
             return;
         }
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1123,11 +1132,10 @@ impl BlockPart for TrackEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for TrackEntity {
-    fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
-        let HostSide::Server(host) = host else {
+    fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
+        let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) else {
             return;
         };
-        let entity = event.entity;
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
             return;
         };
@@ -1140,7 +1148,12 @@ impl BlockEntityPart for TrackEntity {
         if !ours {
             return;
         }
-        let Some(dim) = level.dimension().id(&*host).and_then(|d| level_index(&d)) else {
+        let Some(dim) = level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .and_then(|d| level_index(&d))
+        else {
             return;
         };
         LOADED.with_borrow_mut(|l| l.push((dim, pos)));
@@ -1202,7 +1215,12 @@ impl BlockEntityPart for TrackEntity {
         }
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         // Hot: every kept block's draw; three compares for any other block.
         let block = event.state.block();
         if block == states::key(Block::TrackStation) {

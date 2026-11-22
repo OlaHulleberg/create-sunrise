@@ -29,6 +29,10 @@
 
 use super::super::net;
 use super::super::server::ServerLevel;
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::toolbox::{self as tb, STACKS_PER_COMPARTMENT};
 use create_engine::{Block, dye};
 use mod_api::{
@@ -72,7 +76,7 @@ fn same_kind(host: &dyn mod_api::Host, a: &ItemStack, b: &ItemStack) -> bool {
     if unstackable_tool(a) && unstackable_tool(b) {
         return a.item() == b.item();
     }
-    let connector = |s: &ItemStack| s.item().id(host) == "create:belt_connector";
+    let connector = |s: &ItemStack| s.item().name(host) == "create:belt_connector";
     if connector(a) && connector(b) {
         return true;
     }
@@ -269,18 +273,27 @@ fn settle(lv: &mut ServerLevel<'_>, pos: [i32; 3], c: usize, stacks: Vec<Option<
 /// `ToolboxBlockEntity.registerCapabilities`: the toolbox's `ToolboxInventory`, for hoppers,
 /// pipes and other mods, ahead of the game's plain slots.
 pub(crate) fn provide_items(
-    host: &mut dyn ServerHost,
+    _level: &dyn mod_api::LevelHost,
     side: BlockSide,
-) -> Option<Box<dyn ResourceHandler<ItemResource>>> {
-    let dimension = side.level.dimension().id(&*host)?;
-    let lv = ServerLevel::new(host, &dimension)?;
-    if !is_toolbox(&lv, side.pos) {
-        return None;
+    state: mod_api::BlockState,
+    _entity: mod_api::BlockEntityRef,
+    offer: &mut mod_api::BlockCapabilityOffer<'_, dyn ResourceHandler<ItemResource>>,
+) {
+    let toolbox = super::super::states::id(state)
+        .and_then(|id| {
+            super::super::world::with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()
+        })
+        .is_some_and(dye::is_toolbox);
+    let dimension =
+        super::super::world::level_of(side.level).and_then(super::super::world::level_id);
+    if let (true, Some(dimension)) = (toolbox, dimension) {
+        offer.offer(|| {
+            Box::new(ToolboxItems {
+                dimension,
+                pos: side.pos,
+            })
+        });
     }
-    Some(Box::new(ToolboxItems {
-        dimension,
-        pos: side.pos,
-    }))
 }
 
 struct ToolboxItems {
@@ -295,7 +308,7 @@ impl ToolboxItems {
 
     /// `ToolboxInventory.isItemValid`.
     fn accepts(&self, lv: &ServerLevel<'_>, index: usize, stack: &ItemStack) -> bool {
-        if index >= tb::STORED || !tb::fits_inside_container_items(&stack.item().id(&*lv.host)) {
+        if index >= tb::STORED || !tb::fits_inside_container_items(&stack.item().name(&*lv.host)) {
             return false;
         }
         let kinds = filters(lv, self.pos);
@@ -359,9 +372,15 @@ impl ResourceHandler<ItemResource> for ToolboxItems {
             .map_or(0, |s| s.count())
     }
     /// `ItemStackHandler.getStackLimit`: the slot's 64, or the item's own stack size if less.
-    fn capacity(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> u32 {
-        match self.level(host) {
-            Some(lv) if index < tb::STORED => max_stack(&lv, resource.as_stack()).min(64),
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        match (self.level(host), resource) {
+            (Some(lv), Some(r)) if index < tb::STORED => max_stack(&lv, r.as_stack()).min(64),
+            (Some(_), None) if index < tb::STORED => 64,
             _ => 0,
         }
     }
@@ -370,7 +389,7 @@ impl ResourceHandler<ItemResource> for ToolboxItems {
             .is_some_and(|lv| self.accepts(&lv, index, resource.as_stack()))
     }
     /// `ToolboxInventory.insertItem` (`ItemStackHandler.insertItem`).
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -404,7 +423,7 @@ impl ResourceHandler<ItemResource> for ToolboxItems {
         }
     }
     /// `ItemStackHandler.extractItem`.
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -576,7 +595,6 @@ fn equipped(host: &dyn ServerHost, player: PlayerRef) -> Vec<(usize, [i32; 3], u
 }
 
 fn set_equipped(host: &mut dyn ServerHost, player: PlayerRef, list: &[(usize, [i32; 3], usize)]) {
-    let mut data = player.persistent_data(&*host).unwrap_or_default();
     let mut c = Compound::new();
     for (hotbar, pos, slot) in list {
         let mut e = Compound::new();
@@ -584,12 +602,8 @@ fn set_equipped(host: &mut dyn ServerHost, player: PlayerRef, list: &[(usize, [i
         e.insert("Pos".into(), Tag::IntArray(pos.to_vec()));
         c.insert(hotbar.to_string().as_str().into(), Tag::Compound(e));
     }
-    if c.is_empty() {
-        data.remove(&DATA.into());
-    } else {
-        data.insert(DATA.into(), Tag::Compound(c));
-    }
-    let _ = player.set_persistent_data(host, data);
+    let value = (!c.is_empty()).then_some(Tag::Compound(c));
+    let _ = player.set_persistent_data_key(host, &DATA.into(), value.as_ref());
 }
 
 /// `syncData`: the equipped slots to the player's client.
@@ -1201,7 +1215,7 @@ pub(super) fn loaded(host: &mut dyn ServerHost, entity: mod_api::BlockEntityRef)
     let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
         return;
     };
-    let Some(dimension) = level.dimension().id(&*host) else {
+    let Some(dimension) = level.dimension().id(&*host).map(str::to_owned) else {
         return;
     };
     if let Some(mut lv) = ServerLevel::new(host, &dimension) {
@@ -1366,7 +1380,7 @@ fn selected_hotbar(host: &dyn ClientHost) -> u8 {
 
 /// `ToolboxHandlerClient.clientTick` and `onKeyInput`: the key asks the server for the menu.
 pub(crate) fn client_tick(host: &mut dyn ClientHost) {
-    if COOLDOWN.get() > 0 && !host.is_down(MOD, KEY) {
+    if COOLDOWN.get() > 0 && !crate::glue::keys::mod_down(&*host, MOD, KEY) {
         COOLDOWN.set(COOLDOWN.get() - 1);
     }
     if MENU.with_borrow(Option::is_some) {
@@ -1382,14 +1396,13 @@ pub(crate) fn client_tick(host: &mut dyn ClientHost) {
         // `keyReleased` of the tool belt key on Alt (a modifier, which the window reports while
         // held): let go, the menu closes. Another key closes it on its release
         // (`screen_key_released`).
-        let bound = host
-            .mod_key(MOD, KEY)
-            .map_or_else(|| "key.keyboard.left.alt".to_owned(), |(k, _)| k);
+        let bound = crate::glue::keys::mod_binding(&*host, MOD, KEY)
+            .unwrap_or_else(|| "key.keyboard.left.alt".to_owned());
         if bound.ends_with(".alt") && !host.modifiers().alt() && MENU.with_borrow(Option::is_some) {
             HOTBAR.set(selected_hotbar(&*host));
             close_menu();
         }
-    } else if host.consume_click(MOD, KEY)
+    } else if crate::glue::keys::mod_consume_click(host, MOD, KEY)
         && COOLDOWN.get() == 0
         && host.playing()
         && host
@@ -1666,7 +1679,7 @@ fn draw_menu(
     if let Some(tip) = tip {
         let a = (fade * 255.0) as u32;
         if a > 8 {
-            let w = host.text_width(&tip).unwrap_or(0) as f32;
+            let w = host.text_width(&tip) as f32;
             let _ = draw.gui_paint(&[mod_api::GuiDraw::Text {
                 text: tip,
                 x: (c[0] - (w / 2.0).round()) as i32,
@@ -1683,12 +1696,15 @@ pub(crate) fn screen_mouse_pressed(
     host: &dyn ClientHost,
     event: &mut mod_api::ScreenMouseButtonPressedPreEvent<'_>,
 ) -> Flow {
+    pressed(host, event.screen, event.button)
+}
+
+fn pressed(host: &dyn ClientHost, screen: &mod_api::ScreenView<'_>, button: i32) -> Flow {
     if host.mod_screen() != Some(MOD) || MENU.with_borrow(Option::is_none) {
         return Flow::Continue;
     }
-    let button = event.button;
     let size = SIZE.get();
-    let mouse = event.screen.mouse;
+    let mouse = screen.mouse;
     let d = [
         mouse[0] - (size[0] / 2.0).floor(),
         mouse[1] - (size[1] / 2.0).floor(),
@@ -1811,13 +1827,7 @@ pub(crate) fn screen_key_pressed(
         }
     });
     if picked {
-        let mut ev = mod_api::ScreenMouseButtonPressedPreEvent {
-            screen: event.screen,
-            button: 0,
-            modifiers: 0,
-            cancelled: false,
-        };
-        screen_mouse_pressed(host, &mut ev);
+        pressed(host, event.screen, 0);
         return Flow::Cancel;
     }
     Flow::Continue
@@ -1831,9 +1841,8 @@ pub(crate) fn screen_key_released(
     if host.mod_screen() != Some(MOD) || MENU.with_borrow(Option::is_none) {
         return Flow::Continue;
     }
-    let bound = host
-        .mod_key(MOD, KEY)
-        .map_or_else(|| "key.keyboard.left.alt".to_owned(), |(k, _)| k);
+    let bound = crate::glue::keys::mod_binding(host, MOD, KEY)
+        .unwrap_or_else(|| "key.keyboard.left.alt".to_owned());
     if event.key != bound {
         return Flow::Continue;
     }
@@ -1917,13 +1926,13 @@ impl mod_api::MenuPart for CompartmentRules {
         };
         // By name, which the client's prediction can read too (it has no Create world).
         let toolbox = level.block_state(host, pos).is_some_and(|s| {
-            let name = s.block().id(host);
+            let name = s.block().name(host);
             name.starts_with("create:") && name.ends_with("_toolbox")
         });
         if !toolbox {
             return;
         }
-        if !tb::fits_inside_container_items(&event.stack.item().id(host)) {
+        if !tb::fits_inside_container_items(&event.stack.item().name(host)) {
             event.may_place = false;
             return;
         }
@@ -1941,13 +1950,11 @@ impl mod_api::MenuPart for CompartmentRules {
                 _ => None,
             });
         let kind = kept.and_then(|f| ItemStack::from_nbt(host, f)).or_else(|| {
-            (0..STACKS_PER_COMPARTMENT)
-                .find_map(|i| {
-                    event
-                        .context
-                        .slot(event.container, c * STACKS_PER_COMPARTMENT + i)
-                })
-                .cloned()
+            (0..STACKS_PER_COMPARTMENT).find_map(|i| {
+                event
+                    .context
+                    .slot(event.container, c * STACKS_PER_COMPARTMENT + i)
+            })
         });
         if kind.is_some_and(|k| !same_kind(host, &k, event.stack)) {
             event.may_place = false;

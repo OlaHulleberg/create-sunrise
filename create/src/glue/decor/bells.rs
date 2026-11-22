@@ -15,8 +15,8 @@ use super::super::states;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockClick, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost, Compound,
-    InteractionResult, Registrar, ServerHost, Tag, UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockEntityPart, BlockPart, ClientHost, Compound, InteractionResult, Registrar,
+    ServerHost, Tag, UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -215,7 +215,12 @@ impl BlockPart for BellDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for BellDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let name = match event.block {
             "create:peculiar_bell" => "part_peculiar_bell",
             "create:haunted_bell" => "part_haunted_bell",

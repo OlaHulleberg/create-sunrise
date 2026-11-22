@@ -16,9 +16,9 @@ use create_engine::kinetics::{
 use create_engine::world::keeps_state;
 use mod_api::HostBlockStates;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntitySubmitEvent,
-    BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, ClientHost, Compound,
-    HostSide, Registrar, RegistrationContext, Tag,
+    BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntityTypeKey,
+    BlockEntityUpdateTagEvent, BlockKey, BlockPart, ClientHost, Compound, Registrar,
+    RegistrationContext, Tag,
 };
 use std::sync::OnceLock;
 
@@ -866,15 +866,14 @@ impl BlockPart for KineticEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for KineticEntity {
-    fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
-        let HostSide::Server(host) = host else {
+    fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
+        let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) else {
             return;
         };
-        let entity = event.entity;
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
             return;
         };
-        let Some(dimension) = level.dimension().id(&*host) else {
+        let Some(dimension) = level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(dim) = level_index(&dimension) else {
@@ -1007,7 +1006,12 @@ impl BlockEntityPart for KineticEntity {
         (!shown.is_empty()).then_some(shown)
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -1027,9 +1031,14 @@ impl BlockEntityPart for KineticEntity {
             Some(Tag::Int(n)) => create_engine::kinetics::Dir::ALL.get(*n as usize).copied(),
             _ => None,
         };
+        let flash = super::sources::stress::flash_color(event.pos);
         for d in client::draws_from_source(block, &info, event.pos, speeds, source) {
-            if !systems.iter().any(|s| s.draws_itself(block, &d)) {
-                draw_turning(event.draw, block, &own, &d);
+            if systems.iter().any(|s| s.draws_itself(block, &d)) {
+                continue;
+            }
+            match flash {
+                Some(color) => draw_turning_colored(host, event.draw, block, &own, &d, color),
+                None => draw_turning(event.draw, block, &own, &d),
             }
         }
         // SpeedControllerRenderer: the bracket a block up, turned across the controller's axis.
@@ -1185,6 +1194,35 @@ pub fn draw_turning(
         Some(p) => draw.block(model, &[p]),
         None => draw.block(model, own),
     };
+    draw.still();
+}
+
+/// [`draw_turning`] in the draw colour `color` (`SuperByteBuffer.color`), through the block
+/// state's model: `block` draws with its default tints only.
+fn draw_turning_colored(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: Block,
+    own: &[(&str, &str)],
+    d: &Draw,
+    color: u32,
+) {
+    let Some((key, prop)) = model_block(block, d.model) else {
+        return;
+    };
+    let props: Vec<(&str, &str)> = prop.map_or_else(|| own.to_vec(), |p| vec![p]);
+    let model = host.block_state_default(key).and_then(|state| {
+        let state = super::trains::with_props(host, state, &props)?;
+        host.render_assets().block_state_model(state).ok()
+    });
+    let Some(model) = model else {
+        return draw_turning(draw, block, own, d);
+    };
+    draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
+    let options = mod_api::TerrainModelOptions::default().with_color(color);
+    if draw.terrain_model(model, options).is_err() {
+        draw.block(key, &props);
+    }
     draw.still();
 }
 

@@ -36,6 +36,8 @@ use super::states;
 use super::subsystem::Subsystem;
 use super::world::{level_id, level_index, with_world};
 use super::{kinetics, persist};
+use crate::glue::names::Named as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
@@ -46,8 +48,8 @@ use create_engine::stock::{
 use mod_api::{
     AnalogOutputEvent, AttachmentCodec, AttachmentType, BlockPart, Command, CommandArgumentValue,
     Compound, Flow, HasAnalogOutputEvent, Holder, HostBlockStates, InteractionResult, ItemPart,
-    ItemStack, LevelHost, OnBlockPlacedByEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ServerHost, SetPlacedByEvent, Tag, UseItemOnEvent,
+    ItemStack, LevelHost, OnBlockPlacedByEvent, PlayerRef, Registrar, RegistrationContext,
+    ServerHost, SetPlacedByEvent, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -770,7 +772,11 @@ impl Subsystem for Stock {
         if player.entity().spectator(&*host) == Some(true) {
             return None;
         }
-        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let dimension = player
+            .level(&*host)?
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
         let entity = lv.host.entity(event.entity as u32)?;
         let ticker = keeper::ticker_beside(&lv, entity)?;
@@ -810,7 +816,7 @@ impl Subsystem for Stock {
         if click.hand != mod_api::Hand::Main
             || click
                 .stack
-                .is_some_and(|s| s.item().id(&*host) == "create:goggles")
+                .is_some_and(|s| s.item().name(&*host) == "create:goggles")
         {
             return Flow::Continue;
         }
@@ -852,7 +858,7 @@ impl Subsystem for Stock {
     ) -> Flow {
         if let Some(dim) = level_index(event.dimension.key().id()) {
             let pos = [event.pos.x, event.pos.y, event.pos.z];
-            shop::drops(dim, pos, event.drops);
+            shop::drops(dim, pos, &mut event.drops);
         }
         Flow::Continue
     }
@@ -965,7 +971,7 @@ impl Subsystem for Stock {
     /// order (`stock`, `order`; its screen does both), a requester's order (`requester`), and the
     /// gauge's settings and connections (`gauge`, `gauge_connect`, `gauge_craft`: what its
     /// screens do).
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
         for usage in [
             "create_debug network <pos:block_pos> <id:text>",
             "create_debug stock <pos:block_pos>",
@@ -975,15 +981,11 @@ impl Subsystem for Stock {
             "create_debug gauge_connect <from:block_pos> <to:text>",
             "create_debug gauge_craft <pos:block_pos> <recipe:text>",
         ] {
-            event.commands.push(Command::op(usage, 2));
+            commands.push(Command::op(usage, 2));
         }
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         let verbs = [
             "network",
             "stock",
@@ -998,7 +1000,7 @@ impl Subsystem for Stock {
         };
         let here = event.command.position;
         let player = command_player(event.source).map(|p| p.uuid());
-        let Some(dimension) = event.command.dimension.id(&*host) else {
+        let Some(dimension) = event.command.dimension.id(&*host).map(str::to_owned) else {
             return Flow::Cancel;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1470,7 +1472,7 @@ impl BlockPart for StockBlock {
         }
         let linking = event.click.stack.is_some_and(|s| {
             matches!(
-                s.item().id(&*host).as_str(),
+                s.item().name(&*host).as_str(),
                 "create:stock_link"
                     | "create:stock_ticker"
                     | "create:factory_gauge"
@@ -1640,7 +1642,7 @@ pub(super) fn program_requester(
     let Some(mut stack) = super::items::held(&*lv.host, player, mod_api::Hand::Main) else {
         return;
     };
-    let id = stack.item().id(&*lv.host);
+    let id = stack.item().name(&*lv.host);
     let cloth = id.starts_with("create:") && id.ends_with("_table_cloth");
     if id != "create:redstone_requester" && !cloth {
         return;
@@ -1730,6 +1732,7 @@ impl BlockPart for RequesterPlacement {
             .level
             .dimension()
             .id(&*host)
+            .map(str::to_owned)
             .and_then(|d| level_index(&d))
         else {
             return;
@@ -1792,7 +1795,13 @@ fn linked_block(b: Block) -> bool {
 #[mod_api::sunrise_part]
 impl ItemPart for StockItem {
     fn on_block_placed_by(&self, host: &mut dyn ServerHost, event: &mut OnBlockPlacedByEvent<'_>) {
-        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
+        let Some(dimension) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .map(|d| d.to_string())
+        else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1842,7 +1851,7 @@ impl ItemPart for StockItem {
                     return Some(InteractionResult::Success);
                 }
                 // `FactoryPanelBlockItem.place`: an untuned gauge is refused.
-                (event.stack.item().id(&*host) == "create:factory_gauge"
+                (event.stack.item().name(&*host) == "create:factory_gauge"
                     && tuned(event.stack).is_none())
                 .then_some(InteractionResult::Fail)
             }
@@ -1854,7 +1863,7 @@ impl ItemPart for StockItem {
                 let dimension = player.dimension(&*host)?.to_string();
                 let lv = ServerLevel::new(host, &dimension)?;
                 if !block_at(&lv, event.pos).is_some_and(linked_block) {
-                    if event.stack.item().id(&*lv.host) == "create:factory_gauge"
+                    if event.stack.item().name(&*lv.host) == "create:factory_gauge"
                         && tuned(event.stack).is_none()
                     {
                         gauge::refuse_untuned(host, player, event.pos);
@@ -2610,7 +2619,7 @@ pub(crate) fn gauge_status(lv: &ServerLevel<'_>, link: [i32; 3]) -> Vec<(i64, St
             with(dim, |n| {
                 let g = n.gauges.get(&pp)?;
                 let (id, max) = match &g.filter {
-                    Some(k) => (k.0.item().id(host), body::stack_limit(host, &k.0)),
+                    Some(k) => (k.0.item().name(host), body::stack_limit(host, &k.0)),
                     None => ("minecraft:air".to_owned(), 64),
                 };
                 let mark = if g.demand(max) == 0 {

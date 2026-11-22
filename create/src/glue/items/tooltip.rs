@@ -5,6 +5,8 @@
 //! (`KineticStats`) at the end, numbers with goggles on.
 
 use super::{Item, is};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use mod_api::text::TextStyle;
 use mod_api::{ClientHost, EquipmentSlot, ItemTooltipEvent, Text};
 
@@ -37,7 +39,7 @@ fn line(parts: Vec<Text>) -> (Text, u32) {
 /// `ItemDescription.getTooltipTranslationKey`: the description id, or the one Create gives
 /// a family of items (`useKey`, `referKey`).
 fn description_key(host: &dyn ClientHost, item: mod_api::ItemKey) -> Option<String> {
-    let id = item.id(host);
+    let id = item.name(host);
     let name = id.strip_prefix("create:")?;
     let shared = match name {
         "cardboard_helmet" | "cardboard_chestplate" | "cardboard_leggings" | "cardboard_boots" => {
@@ -57,7 +59,7 @@ fn description_key(host: &dyn ClientHost, item: mod_api::ItemKey) -> Option<Stri
     // A `BlockItem`'s description id is its block's.
     Some(match host.item_block(item) {
         Some(block) => {
-            let block = block.id(host);
+            let block = block.name(host);
             format!("block.{}", block.replacen(':', ".", 1))
         }
         None => format!("item.create.{name}"),
@@ -68,10 +70,7 @@ fn description_key(host: &dyn ClientHost, item: mod_api::ItemKey) -> Option<Stri
 /// underscore takes no width), each starting with `indent` spaces; every underscore toggles
 /// between the primary and the highlight colour, across lines too.
 fn cut(host: &dyn ClientHost, s: &str, indent: usize) -> Vec<(Text, u32)> {
-    let width = |w: &str| {
-        host.text_width(&Text::literal(w.replace('_', "")))
-            .unwrap_or(0)
-    };
+    let width = |w: &str| host.text_width(&Text::literal(w.replace('_', "")));
     // `BreakIterator.getLineInstance`: a break after each run of spaces and after a hyphen.
     let mut words: Vec<String> = Vec::new();
     let mut word = String::new();
@@ -200,7 +199,7 @@ fn kinetic_stats(host: &dyn ClientHost, item: mod_api::ItemKey) -> Vec<(Text, u3
     let Some(block) = host.item_block(item) else {
         return Vec::new();
     };
-    let id = block.id(host);
+    let id = block.name(host);
     let Some(mut block) = id
         .strip_prefix("create:")
         .and_then(create_engine::Block::from_name)
@@ -312,11 +311,15 @@ pub(super) fn item_tooltip(host: &dyn ClientHost, event: &mut ItemTooltipEvent<'
     };
     if let Some(lines) = description(host, &format!("{key}.tooltip")) {
         let at = 1.min(event.lines.len());
-        event.lines.splice(at..at, lines);
+        for (i, (text, color)) in lines.into_iter().enumerate() {
+            let _ = event.lines.insert(at + i, text, color);
+        }
     }
     let stats = kinetic_stats(host, item);
     if !stats.is_empty() {
-        event.lines.push((Text::literal(""), u32::MAX));
-        event.lines.extend(stats);
+        let _ = event.lines.push(Text::literal(""), u32::MAX);
+        for (text, color) in stats {
+            let _ = event.lines.push(text, color);
+        }
     }
 }

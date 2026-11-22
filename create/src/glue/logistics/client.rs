@@ -7,6 +7,7 @@
 use super::super::states;
 use super::BELT_COLOR;
 use super::items::stack_of;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::arm;
 use create_engine::belt;
@@ -17,8 +18,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::math::{Mat4, Vec3};
 use create_engine::place::mth_sin;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent,
-    BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, Host, ItemDisplayContext, Tag,
+    BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart,
+    ClientHost, Compound, Host, ItemDisplayContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -154,7 +155,7 @@ pub fn ejector_target_message(data: &[u8]) {
 /// What the main hand holds, by id.
 fn main_hand(host: &dyn ClientHost) -> Option<String> {
     let player = host.local_player()?;
-    super::super::items::held(host, player, mod_api::Hand::Main).map(|s| s.item().id(host))
+    super::super::items::held(host, player, mod_api::Hand::Main).map(|s| s.item().name(host))
 }
 
 /// The target of the ejector a wrench looks at (`checkForWrench`): `h` ahead along its facing
@@ -317,7 +318,7 @@ pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::RenderLevelSt
         return;
     };
     let held =
-        super::super::items::held(host, player, mod_api::Hand::Main).map(|s| s.item().id(host));
+        super::super::items::held(host, player, mod_api::Hand::Main).map(|s| s.item().name(host));
     let points = match held.as_deref() {
         Some("create:mechanical_arm") => SELECTED.with_borrow(Clone::clone),
         Some("create:wrench") => {
@@ -489,7 +490,7 @@ pub fn predict_click(
     if filter_slot_hit(block, &info, click)
         && click
             .stack
-            .is_none_or(|s| s.item().id(&*host) != "create:clipboard")
+            .is_none_or(|s| s.item().name(&*host) != "create:clipboard")
     {
         *event.cancellation_result = mod_api::InteractionResult::Success;
         return mod_api::Flow::Cancel;
@@ -1151,7 +1152,42 @@ impl BlockPart for LogisticsEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for LogisticsEntity {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        self.submit(host, &mut crate::glue::Submit::of(event));
+    }
+
+    /// A belt's controller draws all its items: it is in view while any of the belt is.
+    fn block_entity_render_bounding_box(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut BlockEntityRenderBoundingBoxEvent<'_>,
+    ) {
+        let pos = event.pos;
+        let Some((seg, length)) = CLIENT.with_borrow(|c| {
+            c.belts
+                .get(&pos)
+                .map(|b| (b.contents.segment, i32::from(b.contents.length)))
+        }) else {
+            return;
+        };
+        let ends = [0, length - 1].map(|i| belt::position_for_offset(pos, &seg, length, i));
+        let b = &mut *event.bounds;
+        for e in ends {
+            for k in 0..3 {
+                let rel = (e[k] - pos[k]) as f32;
+                b[k] = b[k].min(rel);
+                b[k + 3] = b[k + 3].max(rel + 1.0);
+            }
+        }
+    }
+}
+
+impl LogisticsEntity {
+    fn submit(&self, host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
         let Some((block, info)) = table_info(host, event.state) else {
             return;
         };
@@ -1217,31 +1253,6 @@ impl BlockEntityPart for LogisticsEntity {
             }
             Block::MechanicalArm => draw_arm(draw, host, pos, partial_tick),
             _ => {}
-        }
-    }
-
-    /// A belt's controller draws all its items: it is in view while any of the belt is.
-    fn block_entity_render_bounding_box(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut BlockEntityRenderBoundingBoxEvent<'_>,
-    ) {
-        let pos = event.pos;
-        let Some((seg, length)) = CLIENT.with_borrow(|c| {
-            c.belts
-                .get(&pos)
-                .map(|b| (b.contents.segment, i32::from(b.contents.length)))
-        }) else {
-            return;
-        };
-        let ends = [0, length - 1].map(|i| belt::position_for_offset(pos, &seg, length, i));
-        let b = &mut *event.bounds;
-        for e in ends {
-            for k in 0..3 {
-                let rel = (e[k] - pos[k]) as f32;
-                b[k] = b[k].min(rel);
-                b[k + 3] = b[k + 3].max(rel + 1.0);
-            }
         }
     }
 }
@@ -1944,7 +1955,7 @@ fn draw_filter_stack(
 pub(crate) fn draw_carried(
     host: &dyn ClientHost,
     block: Block,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
 ) {
     match block {
         Block::Depot | Block::WeightedEjector => {
@@ -1960,7 +1971,7 @@ pub(crate) fn draw_carried(
         | Block::SmartChute
         | Block::BrassFunnel
         | Block::BrassBeltFunnel
-        | Block::BrassTunnel => LogisticsEntity.block_entity_submit(host, event),
+        | Block::BrassTunnel => LogisticsEntity.submit(host, event),
         // `BeltRenderer` riding: the segment and its casing, still, and the belt's items from
         // the segment that keeps them, laid out from where its controller is.
         Block::Belt => {
@@ -2159,7 +2170,6 @@ mod tests {
 
     #[test]
     fn client_layout_does_not_infer_package_geometry_without_a_model() {
-        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
         let host = mod_api::testing::FakeHost::new();
         let id = "create:cardboard_package_10x8";
         assert!(create_engine::package::is_package(id));

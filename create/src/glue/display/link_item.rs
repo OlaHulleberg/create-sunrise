@@ -7,6 +7,7 @@
 use super::super::items;
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
+use crate::glue::names::Named as _;
 use mod_api::{
     Compound, Hand, HostSide, InteractionResult, ItemPart, ItemStack, PlayerRef, Registrar,
     RightClickBlockEvent, Tag, TriState, UseOnEvent,
@@ -76,8 +77,8 @@ pub(super) fn right_click_block(host: &HostSide, event: &mut RightClickBlockEven
         return;
     };
     let id = match host {
-        HostSide::Server(h) => stack.item().id(&**h),
-        HostSide::Client(h) => stack.item().id(&**h),
+        HostSide::Server(h) => stack.item().name(&**h),
+        HostSide::Client(h) => stack.item().name(&**h),
     };
     if id != "create:display_link" {
         return;

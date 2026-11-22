@@ -18,7 +18,7 @@
 //! `fluid_container` and `has_fluid` know the buckets (the items the game gives a fluid
 //! handler), `has_color` dyes, fireworks and colour-named items, and
 //! `shulker_fill_level` a shulker box's `container`. `in_item_group` checks the creative
-//! catalog; the picker still needs the SDK to expose each tab's display name (`API_GAPS.md`).
+//! catalog the side last built, and names a tab by its title.
 //!
 //! `max_enchanted` reads each enchantment's maximum level from the server's data
 //! (`enchantment/*.json`'s `max_level`, listed by a data reload listener), as the host answers
@@ -30,6 +30,10 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::filter_screen;
 use super::{creative, custom, give_back, held, set_custom, set_held, set_slot, slot_stack};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::owned::OwnedPlace as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::filter::{
     self, ATTRIBUTES_KEY, Attribute, BLACKLIST_KEY, Filter, ITEMS_KEY, LIST_SLOTS, MODE_KEY, Mode,
     Passes, Probe, RESPECT_NBT_KEY, Spec,
@@ -38,26 +42,22 @@ use create_engine::ghost_menu;
 use mod_api::HostTransaction;
 use mod_api::{
     CommandArgumentValue, CommandSource, Compound, CreativeModeTabs, CreativeTabPermissions, Hand,
-    Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef,
-    RunModCommandEvent, ServerHost, SoundSource, Tag, Text, UseItemEvent, UseOnEvent,
+    Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef, ServerHost,
+    SoundSource, Tag, Text, UseItemEvent, UseOnEvent,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::Arc;
 
 thread_local! {
-    /// A snapshot for read-only filter probes, which may run in a capability query. Remove
-    /// it when the SDK can read the already-built catalog without a mutable Host.
-    static ITEM_GROUPS: RefCell<Option<Arc<CreativeModeTabs>>> = const { RefCell::new(None) };
     static ITEM_GROUPS_DIRTY: Cell<bool> = const { Cell::new(true) };
 }
 
+/// `InItemGroupAttribute.appliesTo`'s `buildContents`: the catalog is built again after a data
+/// load, where the probes read it (`built_creative_tabs`).
 pub(super) fn refresh_item_groups(host: &mut dyn ServerHost) {
-    if ITEM_GROUPS_DIRTY.get()
-        && let Ok(tabs) = host.creative_tabs(CreativeTabPermissions::Normal)
-    {
-        ITEM_GROUPS.set(Some(tabs));
+    if ITEM_GROUPS_DIRTY.get() && host.creative_tabs(CreativeTabPermissions::Normal).is_ok() {
         ITEM_GROUPS_DIRTY.set(false);
     }
 }
@@ -66,9 +66,14 @@ pub(super) fn invalidate_item_groups() {
     ITEM_GROUPS_DIRTY.set(true);
 }
 
-pub(super) fn clear_item_groups() {
-    ITEM_GROUPS.set(None);
-    invalidate_item_groups();
+/// The creative catalog this side last built.
+fn item_groups(host: &dyn Host) -> Option<Arc<CreativeModeTabs>> {
+    host.built_creative_tabs().ok().flatten()
+}
+
+/// `InItemGroupAttribute.tabContainsItem`.
+fn tab_contains(host: &dyn Host, tab: &mod_api::CreativeModeTabInfo, stack: &ItemStack) -> bool {
+    tab.contains(host, stack) || tab.contains(host, &ItemStack::of(stack.item()))
 }
 
 fn flag(t: Option<&Tag>) -> bool {
@@ -138,7 +143,7 @@ pub(crate) fn spec(host: &dyn Host, stack: &ItemStack) -> Spec {
     let c = custom(stack);
     let list = c.get(&ITEMS_KEY.into());
     Spec {
-        item: stack.item().id(host),
+        item: stack.item().name(host),
         components: components(stack),
         has_list: list.is_some(),
         list: decode_items(host, list, LIST_SLOTS)
@@ -175,7 +180,7 @@ pub(crate) fn spec(host: &dyn Host, stack: &ItemStack) -> Spec {
 /// keeping the stack for its save and its return.
 pub(crate) fn filter_of(host: &dyn Host, stack: &ItemStack) -> Filter {
     let mut s = stack.clone();
-    if filter::FilterItem::of(&s.item().id(host)).is_some() {
+    if filter::FilterItem::of(&s.item().name(host)).is_some() {
         let _ = s.set_count(1);
     }
     Filter::compile(&spec(host, &s)).with_source(Rc::new(s))
@@ -412,7 +417,7 @@ impl<'a> Looked<'a> {
         Looked {
             host,
             stack,
-            id: stack.item().id(host),
+            id: stack.item().name(host),
         }
     }
 }
@@ -466,12 +471,9 @@ impl Probe for Looked<'_> {
                 .and_then(|id| host.tags().key(&id))
                 .and_then(|k| host.tags().is_in_tag(item, k))
                 .unwrap_or(false),
-            Attribute::InItemGroup(group) => ITEM_GROUPS.with_borrow(|tabs| {
-                tabs.as_ref()
-                    .and_then(|tabs| tabs.tab(group))
-                    .is_some_and(|tab| {
-                        tab.contains(host, stack) || tab.contains(host, &ItemStack::of(item))
-                    })
+            Attribute::InItemGroup(group) => item_groups(host).is_some_and(|tabs| {
+                tabs.tab(group)
+                    .is_some_and(|tab| tab_contains(host, tab, stack))
             }),
             Attribute::AddedBy(m) => self.id.split_once(':').map_or("minecraft", |s| s.0) == m,
             // `getEnchantmentsForCrafting`: a book's stored ones.
@@ -670,7 +672,7 @@ pub(super) fn register_commands(commands: &mut Vec<mod_api::Command>) {
 
 /// `create_debug filter <slot> list <allow|deny> [nbt] <item>...`,
 /// `... attribute <any|all|none> <[!]type[=value]>...`, `... address <text>`.
-pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) -> String {
+pub(super) fn command(host: &mut dyn ServerHost, event: &CommandCall<'_>) -> String {
     const USAGE: &str = "usage: create_debug filter <hand|offhand|slot> list <allow|deny> [nbt] \
                          <item>... | attribute <any|all|none> <[!]attribute[=value]>... | address <text>";
     let CommandSource::Player { player, .. } = event.source else {
@@ -698,7 +700,7 @@ pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>)
         "address" => filter::PACKAGE_FILTER,
         _ => return USAGE.into(),
     };
-    let id = stack.item().id(&*host);
+    let id = stack.item().name(&*host);
     if id != want {
         return format!("filter: {slot} holds {id}, not {want}");
     }
@@ -931,7 +933,7 @@ thread_local! {
 fn menu_key(host: &dyn Host, kind: ghost_menu::Kind) -> Option<mod_api::MenuKey> {
     let keys = MENU_KEYS.with_borrow_mut(|k| {
         if k.is_none() {
-            let find = |id: &str| host.menu_keys().into_iter().find(|m| m.id(host) == id);
+            let find = |id: &str| host.menu_keys().into_iter().find(|m| m.name(host) == id);
             *k = find(filter_screen::FILTER_MENU)
                 .zip(find(filter_screen::ATTRIBUTE_MENU))
                 .map(|(a, b)| [a, b]);
@@ -958,7 +960,7 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
     let Some(stack) = held(&*host, player, Hand::Main) else {
         return;
     };
-    let kind = match filter::FilterItem::of(&stack.item().id(&*host)) {
+    let kind = match filter::FilterItem::of(&stack.item().name(&*host)) {
         Some(filter::FilterItem::List) => ghost_menu::Kind::Filter,
         Some(filter::FilterItem::Attribute) => ghost_menu::Kind::AttributeFilter,
         _ => return,
@@ -988,7 +990,7 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
         mode: Mode::ALL.iter().position(|a| *a == mode).unwrap_or(0) as u8,
         chosen: chosen
             .iter()
-            .map(|(kind, value, inverted)| (attr_line(kind, value.clone()), *inverted))
+            .map(|(kind, value, inverted)| (attr_line(h, kind, value.clone()), *inverted))
             .collect(),
     };
     let selected = player.selected_slot(h).unwrap_or(0);
@@ -997,14 +999,11 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
         ghost_menu::Kind::AttributeFilter => "item.create.attribute_filter",
     };
     let title = Text::translate(title, Vec::new());
-    let Ok(Some(window)) = player.open_mod_menu(
-        host,
-        key,
-        title,
-        opened.encode(),
-        None,
-        mod_api::MenuReplace::InPlace,
-    ) else {
+    let mut request = mod_api::ModMenuOpen::new(key, title);
+    request.extra = opened.encode();
+    request.opening_hand = Some(Hand::Main);
+    request.replace = mod_api::MenuReplace::CloseFirst;
+    let Ok(Some(window)) = player.open_mod_menu(host, request) else {
         return;
     };
     let menu = ghost_menu::Menu::new(kind, ghost, Vec::new(), selected);
@@ -1096,20 +1095,23 @@ fn refresh(
     menu.creative = creative(host, player);
 }
 
-/// A click on an open filter menu (`AbstractContainerMenu.clicked`), done on the server's copy
-/// of the menu and written back: the inventory, the cursor and the ghost slots.
-pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClickedEvent) {
+/// A click on an open filter menu (`GhostItemMenu.clicked`), done on the server's copy of the
+/// menu and written back in place of the default: the inventory, the cursor and the ghost slots.
+pub(super) fn menu_clicked(
+    host: &mut dyn ServerHost,
+    event: &mod_api::MenuClickedEvent<'_>,
+) -> mod_api::Flow {
     let Some(mut session) =
         SESSIONS.with_borrow_mut(|m| m.remove(&event.uuid).filter(|s| s.window == event.window))
     else {
-        return;
+        return mod_api::Flow::Continue;
     };
     let uuid = event.uuid;
     let Some(player) = host.player(uuid) else {
-        return;
+        return mod_api::Flow::Cancel;
     };
     let Some(menu) = host.menu(uuid, session.window) else {
-        return;
+        return mod_api::Flow::Cancel;
     };
     let size = session.menu.ghost.len();
     let cursor = menu.carried(&*host).flatten();
@@ -1117,11 +1119,11 @@ pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClick
     if !still_valid(&*host, player, &session) {
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
         host.close_menu(uuid);
-        return;
+        return mod_api::Flow::Cancel;
     }
     let Some(click) = ghost_menu::Click::of(event.mode) else {
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
-        return;
+        return mod_api::Flow::Cancel;
     };
     // Create's menus number the player's slots first, Sunrise's the menu's own.
     let index = match usize::try_from(event.slot) {
@@ -1157,7 +1159,7 @@ pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClick
     if written.is_err() {
         session.menu = before;
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
-        return;
+        return mod_api::Flow::Cancel;
     }
     show_ghosts(host, uuid, &session, Some(&before.ghost));
     if let Some(living) = host.living(player.entity()) {
@@ -1171,6 +1173,7 @@ pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClick
         reference_changed(host, player, &mut session);
     }
     SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
+    mod_api::Flow::Cancel
 }
 
 /// `AttributeFilterScreen.referenceItemChanged`: the reference item's attributes, read on the
@@ -1210,7 +1213,7 @@ pub(super) fn player_tick(host: &mut dyn ServerHost, player: PlayerRef) {
 }
 
 /// How an attribute reads (`getTranslationKey`, `getTranslationParameters`).
-fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
+fn attr_line(host: &dyn Host, kind: &str, value: Option<String>) -> filter_screen::AttrLine {
     let name = kind.strip_prefix("create:").unwrap_or(kind);
     let (key, arg, arg_key) = match name {
         "in_tag" => (
@@ -1220,15 +1223,18 @@ fn attr_line(kind: &str, value: Option<String>) -> filter_screen::AttrLine {
                 .map(|v| format!("#{}", v.trim_start_matches('#'))),
             false,
         ),
-        // Show the registry id, not a guessed title. A saved row without an id is unknown.
+        // `group.getDisplayName().getString()`, or `<none>` for a tab that is not there.
         "in_item_group" => (
             name.to_owned(),
             Some(
                 value
                     .as_deref()
-                    .filter(|v| !v.is_empty())
-                    .unwrap_or("?")
-                    .to_owned(),
+                    .and_then(|id| {
+                        item_groups(host)?
+                            .tab(id)
+                            .map(|t| host.text_string(&t.display_name))
+                    })
+                    .unwrap_or_else(|| "<none>".to_owned()),
             ),
             false,
         ),
@@ -1325,9 +1331,9 @@ impl mod_api::ServerReloadListener for ItemTagNames {
     fn prepare(
         &self,
         context: &mod_api::ServerReloadContext,
-    ) -> Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, mod_api::ReloadResourceError> {
         let names: Vec<String> = context.list().map(ToString::to_string).collect();
-        Ok(<dyn mod_api::ReloadApply>::new(move || {
+        Ok(Box::new(move || {
             if let Ok(mut tags) = ITEM_TAGS.lock() {
                 *tags = names;
             }
@@ -1347,7 +1353,7 @@ impl mod_api::ServerReloadListener for EnchantmentLevels {
     fn prepare(
         &self,
         context: &mod_api::ServerReloadContext,
-    ) -> Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, mod_api::ReloadResourceError> {
         let levels: BTreeMap<String, i32> = context
             .list()
             .filter_map(|id| {
@@ -1355,7 +1361,7 @@ impl mod_api::ServerReloadListener for EnchantmentLevels {
                 Some((id.to_string(), max_level(text)?))
             })
             .collect();
-        Ok(<dyn mod_api::ReloadApply>::new(move || {
+        Ok(Box::new(move || {
             if let Ok(mut m) = ENCHANTMENT_MAX.lock() {
                 *m = levels;
             }
@@ -1444,7 +1450,7 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
     let mut out: Vec<filter_screen::AttrLine> = SINGLETONS
         .iter()
         .filter(|n| Attribute::parse(n, None).is_ok_and(|a| looked.attribute(&a)))
-        .map(|n| attr_line(&format!("create:{n}"), None))
+        .map(|n| attr_line(host, &format!("create:{n}"), None))
         .collect();
     // `InTagAttribute.Type.getAllAttributes`: the tags the item is in.
     let tags = ITEM_TAGS.lock().map(|t| t.clone()).unwrap_or_default();
@@ -1455,11 +1461,26 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
             .and_then(|k| host.tags().is_in_tag(stack.item(), k))
             .unwrap_or(false);
         if inside {
-            out.push(attr_line("create:in_tag", Some(tag)));
+            out.push(attr_line(host, "create:in_tag", Some(tag)));
+        }
+    }
+    // `InItemGroupAttribute.Type.getAllAttributes`: the item tabs holding it.
+    if let Some(tabs) = item_groups(host) {
+        for tab in tabs
+            .tabs
+            .iter()
+            .filter(|t| t.category && tab_contains(host, t, stack))
+        {
+            out.push(attr_line(
+                host,
+                "create:in_item_group",
+                Some(tab.id.clone()),
+            ));
         }
     }
     let id = looked.id.clone();
     out.push(attr_line(
+        host,
         "create:added_by",
         Some(id.split_once(':').map_or("minecraft", |s| s.0).to_owned()),
     ));
@@ -1469,20 +1490,24 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
         "minecraft:enchantments"
     };
     for e in enchantment_ids(component(host, stack, which)) {
-        out.push(attr_line("create:has_enchant", Some(e)));
+        out.push(attr_line(host, "create:has_enchant", Some(e)));
     }
     if let Some(size) = shulker_level(host, stack, &id) {
         for l in ["empty", "partial", "full"] {
             if shulker_level_holds(l, size) {
-                out.push(attr_line("create:shulker_fill_level", Some(l.to_owned())));
+                out.push(attr_line(
+                    host,
+                    "create:shulker_fill_level",
+                    Some(l.to_owned()),
+                ));
             }
         }
     }
     for c in colors_of(host, stack, &id) {
-        out.push(attr_line("create:has_color", Some(c)));
+        out.push(attr_line(host, "create:has_color", Some(c)));
     }
     if let Some(f) = held_fluid(&id) {
-        out.push(attr_line("create:has_fluid", Some(f)));
+        out.push(attr_line(host, "create:has_fluid", Some(f)));
     }
     let renamed = stack
         .components()
@@ -1491,17 +1516,21 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
         && let Some(name) =
             plain_name(component(host, stack, "minecraft:custom_name")).filter(|n| !n.is_empty())
     {
-        out.push(attr_line("create:has_name", Some(name)));
+        out.push(attr_line(host, "create:has_name", Some(name)));
     }
     if let Some(Tag::Compound(w)) = component(host, stack, "minecraft:written_book_content") {
         if let Some(author) = text(w.get(&"author".into())).filter(|a| !a.is_empty()) {
-            out.push(attr_line("create:book_author", Some(author)));
+            out.push(attr_line(host, "create:book_author", Some(author)));
         }
         let generation = match w.get(&"generation".into()) {
             Some(Tag::Int(i)) => *i,
             _ => 0,
         };
-        out.push(attr_line("create:book_copy", Some(generation.to_string())));
+        out.push(attr_line(
+            host,
+            "create:book_copy",
+            Some(generation.to_string()),
+        ));
     }
     out
 }
@@ -1620,7 +1649,6 @@ pub(super) fn menu_closed(host: &mut dyn ServerHost, event: &mod_api::MenuClosed
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glue::subsystem::Subsystem;
     use mod_api::prelude::*;
     use mod_api::testing::FakeHost;
     use mod_api::{Backend, BackendRef, CreativeModeTabInfo, ItemKey};
@@ -1635,9 +1663,19 @@ mod tests {
         }
     }
     impl Backend for CatalogHost {}
+    thread_local! {
+        static CATALOG: std::cell::RefCell<Option<Arc<CreativeModeTabs>>> =
+            const { std::cell::RefCell::new(None) };
+    }
+
     impl ItemsHost for CatalogHost {
         fn max_damage(&self, _: ItemKey) -> Option<u32> {
             None
+        }
+        fn built_creative_tabs(
+            &self,
+        ) -> Result<Option<Arc<CreativeModeTabs>>, mod_api::CreativeTabReadError> {
+            Ok(CATALOG.with_borrow(Clone::clone))
         }
     }
     impl ItemsBackend for CatalogHost {
@@ -1647,34 +1685,32 @@ mod tests {
     }
 
     #[test]
-    fn item_group_membership_survives_invalidation_until_refresh() {
+    fn item_group_membership_reads_the_built_catalog() {
         let mut fixture = FakeHost::new();
         let id = Identifier::parse("create:cogwheel").unwrap();
         fixture.registries.resolve_items([id.clone()]).unwrap();
         let stack = ItemStack::of(fixture.item_key(&id).unwrap());
-        let tab = CreativeModeTabInfo::new(
-            "create:base".into(),
-            true,
-            vec![stack.clone()],
-            vec![stack.clone()],
-        );
-        ITEM_GROUPS.set(Some(Arc::new(CreativeModeTabs::new(
-            CreativeTabPermissions::Normal,
-            vec![tab],
-        ))));
-        ITEM_GROUPS_DIRTY.set(false);
         let probe = Looked {
             host: &CatalogHost,
             stack: &stack,
             id: id.to_string(),
         };
         let predicate = Attribute::InItemGroup("create:base".into());
-        assert!(probe.attribute(&predicate));
-        super::super::Items.tags_updated(&mut fixture);
-        assert!(ITEM_GROUPS_DIRTY.get());
-        assert!(probe.attribute(&predicate));
-        clear_item_groups();
         assert!(!probe.attribute(&predicate));
+        let tab = CreativeModeTabInfo::new(
+            "create:base".into(),
+            true,
+            Text::translate("itemGroup.create.base", Vec::new()),
+            vec![stack.clone()],
+            vec![stack.clone()],
+        );
+        CATALOG.set(Some(Arc::new(CreativeModeTabs::new(
+            CreativeTabPermissions::Normal,
+            vec![tab],
+        ))));
+        assert!(probe.attribute(&predicate));
+        assert!(!probe.attribute(&Attribute::InItemGroup("create:palettes".into())));
+        CATALOG.set(None);
     }
 
     #[test]

@@ -8,14 +8,16 @@ use super::super::world::level_index;
 use super::{
     MATERIAL, SPECIAL, body, center, copycat_block, set_material, shape_of, shown, with, with_prop,
 };
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::Block;
 use create_engine::copycat::{self as cc, Drawn, Shape, Special, Use};
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, BlockState,
-    CanHarvestBlockEvent, ClientHost, Compound, Direction, FrictionEvent, Hand, HostBlockStates,
-    HostSide, InteractionResult, ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent,
-    PlayerRef, ServerHost, SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
+    BlockEntityPart, BlockEntityUpdateTagEvent, BlockPart, BlockState, CanHarvestBlockEvent,
+    ClientHost, Compound, Direction, FrictionEvent, Hand, HostBlockStates, HostSide,
+    InteractionResult, ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent, PlayerRef,
+    ServerHost, SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 
 fn dir(d: Direction) -> Dir {
@@ -170,7 +172,7 @@ impl BlockPart for CopycatBlock {
         let dimension = click.dimension.key().id().to_owned();
         let mut lv = ServerLevel::new(host, &dimension)?;
         let pos = click.pos;
-        if stack.item().id(&*lv.host) == "create:wrench" {
+        if stack.item().name(&*lv.host) == "create:wrench" {
             return None;
         }
         let shape = shape_of(&*lv.host, event.state)?;
@@ -182,7 +184,7 @@ impl BlockPart for CopycatBlock {
                 Shape::Panel(_) => "create:copycat_panel",
                 Shape::Step { .. } => "create:copycat_step",
             };
-            if stack.item().id(&*lv.host) == own {
+            if stack.item().name(&*lv.host) == own {
                 return helper(&mut lv, player, click, stack, event.state, shape);
             }
         }
@@ -407,7 +409,7 @@ impl ItemPart for CopycatItem {
         let Some(player) = event.placer else {
             return;
         };
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(living) = host.living(player.entity()) else {
@@ -469,7 +471,17 @@ impl BlockEntityPart for CopycatEntity {
 
     /// `CopycatModel`: the material cut to the copycat's box, the copycat base when it holds
     /// none; a panel's trapdoor whole and its bars as the copycat bars' model.
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        self.submit(host, &mut crate::glue::Submit::of(event));
+    }
+}
+
+impl CopycatEntity {
+    fn submit(&self, host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
         let Some(shape) = shape_of(host, event.state) else {
             return;
         };
@@ -542,6 +554,6 @@ impl BlockEntityPart for CopycatEntity {
 }
 
 /// A copycat riding a moving structure: its material as it was taken (`CopycatModel`).
-pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-    CopycatEntity.block_entity_submit(host, event);
+pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
+    CopycatEntity.submit(host, event);
 }

@@ -13,6 +13,7 @@ use super::persist;
 use super::server::ServerLevel;
 use super::states;
 use super::world::{level_index, with_world};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::sequencer::{self as seq, Instruction, Kind, Speed};
 use mod_api::text::TextStyle;
@@ -178,7 +179,7 @@ impl mod_api::BlockPart for Gearshift {
         let click = event.click;
         let player = host.player(click.player)?;
         if let Some(stack) = click.stack {
-            let item = stack.item().id(&*host);
+            let item = stack.item().name(&*host);
             if item == "create:wrench" {
                 return None;
             }

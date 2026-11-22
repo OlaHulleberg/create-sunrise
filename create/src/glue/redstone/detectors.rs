@@ -4,9 +4,11 @@
 
 use super::block_at;
 use crate::glue::items::filters;
+use crate::glue::names::Named as _;
 use crate::glue::net;
 use crate::glue::persist;
 use crate::glue::server::{ServerLevel, UPDATE_CLIENTS, update_all};
+use crate::glue::subsystem::CommandCall;
 use crate::glue::world::{try_with_world, with_world};
 use create_engine::Block;
 use create_engine::filter::Filter;
@@ -15,7 +17,7 @@ use create_engine::observe::{self, CENTRE_REACH, Seen, Slot, Watch};
 use create_engine::parts::StateInfo;
 use mod_api::{
     BlockClick, Command, CommandArgumentValue, Flow, HostTransaction, InteractionResult, ItemStack,
-    PlayerRef, RegisterCommandsEvent, RunModCommandEvent, ServerHost, Text,
+    PlayerRef, ServerHost, Text,
 };
 
 /// `getSignal` / `getDirectSignal` of an analog lever (its block entity's state), a smart
@@ -236,7 +238,7 @@ pub(crate) fn slot_stack(lv: &ServerLevel<'_>, pos: [i32; 3], slot: u32) -> Opti
 
 /// The item id of `stack`.
 pub(crate) fn item_id(lv: &ServerLevel<'_>, stack: &ItemStack) -> String {
-    stack.item().id(&*lv.host)
+    stack.item().name(&*lv.host)
 }
 
 /// `getMaxStackSize` of `stack`'s item.
@@ -262,7 +264,7 @@ fn container_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Vec<Slot<I
                     .host
                     .max_stack_size(r.item())
                     .unwrap_or(64)
-                    .min(handler.capacity(&mut *lv.host, i, &r).max(1)),
+                    .min(handler.capacity(&mut *lv.host, i, Some(&r)).max(1)),
             },
             _ => Slot {
                 item: None,
@@ -289,7 +291,7 @@ fn seen_at(
         block_item: if block_item {
             lv.block_state(target)
                 .and_then(|s| lv.host.block_item(s.block()))
-                .map(|k| k.id(&*lv.host))
+                .map(|k| k.name(&*lv.host))
                 .filter(|n| n != "minecraft:air")
         } else {
             None
@@ -410,19 +412,19 @@ fn capability_tanks(
                 .host
                 .fluid_key("minecraft:water")
                 .map(|k| mod_api::FluidResource::of(&mod_api::FluidStack::new(k, 1)));
-            let capacity = water.map_or(0, |w| handler.capacity(&mut *lv.host, i, &w));
+            let capacity = water.map_or(0, |w| handler.capacity(&mut *lv.host, i, Some(&w)));
             tanks.push(create_engine::observe::TankSlot::of(None, capacity));
             continue;
         };
-        let capacity = handler.capacity(&mut *lv.host, i, &r);
+        let capacity = handler.capacity(&mut *lv.host, i, Some(&r));
         let fluid = r
             .fluid()
             .key()
-            .and_then(|k| create_engine::tank::Fluid::of_id(&k.id(&*lv.host)));
+            .and_then(|k| create_engine::tank::Fluid::of_id(&k.name(&*lv.host)));
         // `drain(fluidInTank, SIMULATE)`: taken in a transaction that is then dropped.
         let drained = lv
             .host
-            .transaction(|host, tx| Err::<(), u32>(handler.extract(host, tx, i, &r, amount)))
+            .transaction(|host, tx| Err::<(), u32>(handler.extract_at(host, tx, i, &r, amount)))
             .err()
             .unwrap_or(0);
         tanks.push(create_engine::observe::TankSlot {
@@ -710,18 +712,18 @@ const THRESHOLD_USAGE: &str =
 /// `/create_debug threshold <pos> <offBelow> <onAbove> [inverted] [stacks]`, standing in for
 /// the switch's screen (`ConfigureThresholdSwitchPacket.applySettings`), and
 /// `/create_debug redstone_state <pos>`: what a lever, observer or switch holds. For tests.
-pub(super) fn register_commands(event: &mut RegisterCommandsEvent<'_>) {
-    event.commands.push(Command::op(
+pub(super) fn register_commands(commands: &mut Vec<mod_api::Command>) {
+    commands.push(Command::op(
         "create_debug threshold <pos:block_pos> <values:text>",
         2,
     ));
-    event.commands.push(Command::op(
+    commands.push(Command::op(
         "create_debug redstone_state <pos:block_pos>",
         2,
     ));
 }
 
-pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
+pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
     let c = event.command;
     let literals: Vec<&str> = c.literals.iter().map(String::as_str).collect();
     let set = match literals.as_slice() {
@@ -738,7 +740,12 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
     let Some(CommandArgumentValue::BlockPos(pos)) = arg("pos").cloned() else {
         return Flow::Continue;
     };
-    let Some(dimension) = c.dimension.id(&*host).map(|d| d.to_string()) else {
+    let Some(dimension) = c
+        .dimension
+        .id(&*host)
+        .map(str::to_owned)
+        .map(|d| d.to_string())
+    else {
         return Flow::Cancel;
     };
     let line = match ServerLevel::new(host, &dimension) {

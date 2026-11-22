@@ -11,7 +11,9 @@
 //! A placed clipboard (`ClipboardBlock`) is the decor port's block: it opens the screen with
 //! [`open`] and writes back the pages a client sends for its position.
 
+use crate::glue::names::Named as _;
 use crate::glue::net;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::clipboard::{self as cb, Content, Editor, Entry, Key, Kind};
 use mod_api::{
     ClientHost, Compound, DrawContext, Flow, HostSide, InteractionResult, ItemPart, ItemStack,
@@ -310,7 +312,7 @@ pub(super) fn client_message(
         .find(|(i, _)| *i == slot)
         .map(|(_, s)| s);
     if let Some(stack) = stack
-        && stack.item().id(&*host) == "create:clipboard"
+        && stack.item().name(&*host) == "create:clipboard"
     {
         let edited = with_content(&stack, edit.content.as_ref());
         if let Err(e) = player.set_inventory_slot(host, slot, Some(edited)) {
@@ -417,8 +419,7 @@ fn ours(host: &dyn ClientHost) -> bool {
 fn advance(host: &dyn ClientHost) -> impl Fn(char) -> f32 + '_ {
     move |c: char| {
         let mut b = [0u8; 4];
-        host.text_width(&Text::literal(c.encode_utf8(&mut b) as &str))
-            .unwrap_or(0) as f32
+        host.text_width(&Text::literal(c.encode_utf8(&mut b) as &str)) as f32
     }
 }
 

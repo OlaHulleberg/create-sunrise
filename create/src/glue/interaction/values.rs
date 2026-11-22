@@ -6,6 +6,7 @@ use super::super::items::{self, Item};
 use super::super::net;
 use super::super::server::{ServerLevel, update_all};
 use super::super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::Block as B;
 use create_engine::board;
 use create_engine::kinetics::Dir;
@@ -607,7 +608,7 @@ pub(crate) fn settings_at(
                 && let Some(state) = lv.block_state(pos)
             {
                 let item =
-                    items::held(&*lv.host, player, Hand::Main).map(|s| s.item().id(&*lv.host));
+                    items::held(&*lv.host, player, Hand::Main).map(|s| s.item().name(&*lv.host));
                 let back = items::sneaking(&*lv.host, player);
                 super::super::blocks::use_valve_handle(
                     lv,

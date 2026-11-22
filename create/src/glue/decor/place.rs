@@ -150,7 +150,7 @@ impl ItemPart for Placed {
         let Some((block, info)) = block_of(id) else {
             return;
         };
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {

@@ -19,14 +19,16 @@ use super::super::states::key;
 use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
 use super::{center, create_info, in_click_level, name_props, prop};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::controller::{self as ct, Client, Lectern, ToClient, ToServer};
 use mod_api::{
     BlockPart, ClientHost, Command, CommandArgumentValue, CommandSource, Compound, Flow, Hand,
     Host, HostSide, InteractionResult, ItemPart, ItemStack, KeyMappingPreEvent, LivingRef,
-    OnItemUseFirstEvent, PlayerRef, PlayerTickPostEvent, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ServerHost, SoundPlay, SoundSource, Tag, Text,
-    UseItemEvent, UseItemOnEvent,
+    OnItemUseFirstEvent, PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext,
+    ServerHost, SoundPlay, SoundSource, Tag, Text, UseItemEvent, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 
@@ -58,6 +60,7 @@ impl mod_api::BlockEntityPart for LecternDraw {
         host: &dyn ClientHost,
         event: &mut mod_api::BlockEntitySubmitEvent<'_>,
     ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = super::super::states::id(event.state) else {
             return;
         };
@@ -367,7 +370,7 @@ impl Subsystem for Controller {
         _host: &mut dyn ClientHost,
         event: &mut KeyMappingPreEvent<'_>,
     ) -> Flow {
-        if movement_captured() && event.pressed && MAPPINGS.contains(&event.mapping) {
+        if captures(event.mapping, event.pressed) {
             return Flow::Cancel;
         }
         Flow::Continue
@@ -379,18 +382,14 @@ impl Subsystem for Controller {
         }
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        event.commands.push(Command::op(
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        commands.push(Command::op(
             "create_debug controller <button:integer> <items:text>",
             2,
         ));
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         run_command(host, event)
     }
 }
@@ -444,7 +443,7 @@ fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
 }
 
 fn is_controller(host: &dyn Host, s: Option<&ItemStack>) -> bool {
-    s.is_some_and(|s| s.item().id(host) == ITEM)
+    s.is_some_and(|s| s.item().name(host) == ITEM)
 }
 
 /// A new controller holding `items`.
@@ -473,8 +472,14 @@ pub(crate) fn movement_buttons(host: &dyn ClientHost) -> u8 {
     MAPPINGS
         .iter()
         .enumerate()
-        .filter(|(_, mapping)| host.mapping_physical_down(mapping) == Ok(Some(true)))
+        .filter(|(_, mapping)| crate::glue::keys::physical_down(host, mapping))
         .fold(0, |buttons, (i, _)| buttons | 1 << i)
+}
+
+/// `ControlsUtil`'s capture: a movement press while the controls are held does not move the
+/// player.
+pub(crate) fn captures(mapping: &str, pressed: bool) -> bool {
+    movement_captured() && pressed && MAPPINGS.contains(&mapping)
 }
 
 fn movement_captured() -> bool {
@@ -485,9 +490,9 @@ fn movement_captured() -> bool {
 pub(crate) fn sync_movement_capture(host: &mut dyn ClientHost) {
     let captured = movement_captured();
     for mapping in MAPPINGS {
-        let down = !captured && host.mapping_physical_down(mapping) == Ok(Some(true));
-        if let Err(error) = host.set_mapping_down(mapping, down)
-            && error != mod_api::MappingError::NoWorld
+        let down = !captured && crate::glue::keys::physical_down(&*host, mapping);
+        if let Err(error) = crate::glue::keys::set_down(host, mapping, down)
+            && error != mod_api::MappingError::Unavailable
         {
             crate::create_log!("[create] could not set movement mapping {mapping}: {error:?}");
         }
@@ -668,7 +673,7 @@ fn item_word(word: Option<&&str>) -> String {
 
 /// `create_debug controller <button> <first|-> [second|-]`: the controller in the main hand
 /// takes a button's frequency (its screen, `LinkedControllerMenu`, stands in).
-fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
+fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
     let cmd = event.command;
     if cmd
         .literals

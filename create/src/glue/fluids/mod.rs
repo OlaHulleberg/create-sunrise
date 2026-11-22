@@ -65,6 +65,7 @@ mod spouted;
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::parts::StateInfo;
 use create_engine::tank::{Codes, Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
@@ -228,7 +229,7 @@ impl Subsystem for Fluids {
         &self,
         host: &dyn mod_api::ClientHost,
         block: create_engine::Block,
-        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        event: &mut crate::glue::Submit<'_>,
     ) {
         client::draw_carried(host, block, event);
     }
@@ -815,7 +816,7 @@ fn world_fluid(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<(Fluid, bool)> {
     if f.is_empty() {
         return None;
     }
-    let fluid = match f.fluid.id(&*lv.host).as_str() {
+    let fluid = match f.fluid.name(&*lv.host).as_str() {
         "minecraft:water" | "minecraft:flowing_water" => Fluid::Water,
         "minecraft:lava" | "minecraft:flowing_lava" => Fluid::Lava,
         "create:honey" | "create:flowing_honey" => Fluid::Honey,

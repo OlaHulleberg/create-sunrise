@@ -19,9 +19,8 @@ use create_engine::client::{Draw, Model, WheelSpin};
 use create_engine::gauge::{Needle, Shown, dial_faces, dial_pose};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, ModBlockEntity, ParticleOptions,
-    Registrar, RegistrationContext, Tag,
+    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart, BlockPart,
+    ClientHost, Compound, ModBlockEntity, ParticleOptions, Registrar, RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -233,26 +232,30 @@ impl BlockEntityPart for Animated {
         }
     }
 
-    fn block_entity_client_tick(
-        &self,
-        host: &mut dyn ClientHost,
-        event: &mut BlockEntityClientTickEvent<'_>,
-    ) {
-        let Some((block, _)) = client_block(&*host, event.state) else {
+    fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
+        let Some((state, pos, level, shown, target)) = event.subject.with_view(|v| {
+            let nbt = v.nbt();
+            (
+                v.state(),
+                v.position(),
+                v.level(),
+                shown_of(nbt),
+                speeds_of(nbt)[0],
+            )
+        }) else {
             return;
         };
-        let pos = event.pos;
+        let host = event.subject.host();
+        let Some((block, _)) = client_block(&*host, state) else {
+            return;
+        };
         match block {
             Block::Speedometer | Block::Stressometer => {
-                let Some(shown) = shown_of(&event.entity.nbt) else {
+                let Some(shown) = shown else {
                     return;
                 };
-                let time = event
-                    .block_entity
-                    .level(&*host)
-                    .and_then(|l| l.game_time(&*host))
-                    .unwrap_or(0) as u64;
-                if let Some((block, info)) = client_block(&*host, event.state) {
+                let time = level.game_time(&*host).unwrap_or(0) as u64;
+                if let Some((block, info)) = client_block(&*host, state) {
                     dust(host, block, &info, pos, &shown);
                 }
                 if block == Block::Stressometer {
@@ -276,7 +279,6 @@ impl BlockEntityPart for Animated {
                 });
             }
             Block::Flywheel => {
-                let target = speeds_of(&event.entity.nbt)[0];
                 CLIENT.with_borrow_mut(|c| {
                     let w = c.wheels.entry(pos).or_default();
                     // `tickChaser`: a step too small to move it leaves it for good.
@@ -287,7 +289,12 @@ impl BlockEntityPart for Animated {
         }
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some((block, info)) = client_block(host, event.state) else {
             return;
         };
@@ -349,7 +356,7 @@ fn dust(host: &mut dyn ClientHost, block: Block, info: &StateInfo, pos: [i32; 3]
 
 /// `GaugeVisual.DialFace.updateTransform`: each shown face's dial turned about its pivot to the
 /// needle, between its last two ticks while it moves.
-fn draw_dials(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
+fn draw_dials(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     let Some(facing) = info.facing else {
         return;
     };
@@ -374,7 +381,7 @@ fn draw_dials(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
 }
 
 fn draw_dials_at(
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
     facing: create_engine::kinetics::Dir,
     along_first: bool,
     progress: f32,
@@ -397,7 +404,7 @@ fn draw_dials_at(
 /// `FlywheelRenderer`'s wheel: the block's own model turning at its drawn speed. Kept turning
 /// on the animation clock once it has caught its shaft up; drawn at its angle each frame while
 /// it eases.
-fn draw_wheel(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
+fn draw_wheel(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     let Some(axis) = info.axis else {
         return;
     };

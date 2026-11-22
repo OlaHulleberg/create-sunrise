@@ -20,10 +20,12 @@
 //! (the weathered iron window) by a random rule picking a sheet's tile, which the rule of that
 //! sheet matches again to join it.
 //!
+//! Vaults and fluid tanks join only their own multiblock: their rules are Sunrise's
+//! (`connect_group`), by the connection group the glue publishes for each block's controller.
+//!
 //! Left out: copper roofs (`ROOF`: joined by collision heights, stairs mapped by shape), the
-//! crafters' and brass tunnels' sides (joined by their block entities), fluid tanks' joins their
-//! state doesn't tell (the tank's size and block entity: `tank_files` joins the rest), a pillar's `ConnectedPillarBlock` sides (the port keeps them unset:
-//! same pillars join), a vault joining only its own vault (two vaults side by side join), the
+//! crafters' and brass tunnels' sides (joined by their block entities), a pillar's
+//! `ConnectedPillarBlock` sides (the port keeps them unset: same pillars join), the
 //! glass panes' mirrored left and right on their north and west faces
 //! (`GlassPaneCTBehaviour.reverseUVsHorizontally`), and casings joining the encased blocks of their
 //! casing (`CasingConnectivity`): a casing joins only its own block, an encased block its own
@@ -372,6 +374,9 @@ enum Join {
     /// The same block state: the same block in the same form (`state == other`, or the axis,
     /// shafts and sides Create compares).
     State,
+    /// The same block (`state`: the same state) of the same multiblock
+    /// (`ConnectivityHandler.isConnected`), by the connection group the glue publishes.
+    Group { state: bool },
 }
 
 /// `block`'s faces showing `original` take `sheet` (Create's `_connected` sheet
@@ -831,8 +836,8 @@ fn plans() -> Vec<Plan> {
         ],
     );
     // `ItemVaultCTBehaviour`: each face's sheet of the vault's size (a large vault's when it is
-    // 3 wide, else the medium one's), joined to the same vault block in the same state (Create
-    // also asks that it is the same vault).
+    // 3 wide, else the medium one's), joined to the same vault block in the same state of the
+    // same vault.
     for (large, size) in [(false, "medium"), (true, "large")] {
         let state = format!("item_vault:large={large}");
         let rules = ["front", "side", "top", "bottom"]
@@ -849,7 +854,42 @@ fn plans() -> Vec<Plan> {
                 .by_texture()
             })
             .collect();
-        plan(&format!("item_vault_{size}"), &[&state], Join::State, rules);
+        plan(
+            &format!("item_vault_{size}"),
+            &[&state],
+            Join::Group { state: true },
+            rules,
+        );
+    }
+    // `FluidTankCTBehaviour` (`HorizontalCTBehaviour` of `RECTANGLE` sheets): the sides', the
+    // top's and the inside's sheets, joined to the same tank block of the same tank.
+    for (block, side, top, inner) in [
+        (
+            "fluid_tank",
+            "fluid_tank",
+            "fluid_tank_top",
+            "fluid_tank_inner",
+        ),
+        (
+            "creative_fluid_tank",
+            "creative_fluid_tank",
+            "creative_casing",
+            "creative_casing",
+        ),
+    ] {
+        let mut rules = vec![
+            rule(side, &format!("{side}_connected"), Rectangle, Faces::Sides),
+            rule(top, &format!("{top}_connected"), Rectangle, Faces::Ends),
+        ];
+        if inner != top {
+            rules.push(rule(
+                inner,
+                &format!("{inner}_connected"),
+                Rectangle,
+                Faces::Ends,
+            ));
+        }
+        plan(block, &[block], Join::Group { state: false }, rules);
     }
     out
 }
@@ -901,8 +941,8 @@ fn properties(plan: &Plan, rule: &Rule, matched: &str, dir: &str) -> String {
             .collect::<Vec<_>>()
             .join(" "),
         match plan.join {
-            Join::Block | Join::Casing => "block",
-            Join::State => "state",
+            Join::Block | Join::Casing | Join::Group { state: false } => "block",
+            Join::State | Join::Group { state: true } => "state",
         },
         (0..count)
             .map(|i| tile(dir, i))
@@ -930,153 +970,6 @@ fn push_common(out: &mut String, rule: &Rule) {
     });
 }
 
-/// `FluidTankCTBehaviour` (`HorizontalCTBehaviour` of `RECTANGLE` sheets) for the fluid and
-/// creative tanks, as far as a tank block's state tells which of its neighbours are in its tank:
-/// up and down by `top` and `bottom`, the sides of a two-wide tank with windows by its corner
-/// `shape`. Each face of each state takes the tile of its context, by a `fixed` rule matching the
-/// state and the face; a block whose neighbours its state doesn't tell (a plain shape, or a
-/// window that may be one block wide or the middle of a three-wide side) joins only up and down.
-/// The block's own sprites name the sheets (`FluidTankModel`: the sides, the top and the
-/// inside's floor and ceiling).
-fn tank_files(
-    read: &dyn Fn(&str) -> Option<Vec<u8>>,
-    out: &mut BTreeMap<String, Vec<u8>>,
-    skipped: &mut Vec<String>,
-) {
-    type V = [i32; 3];
-    const N: V = [0, 0, -1];
-    const S: V = [0, 0, 1];
-    const E: V = [1, 0, 0];
-    const W: V = [-1, 0, 0];
-    const U: V = [0, 1, 0];
-    // (block, side, top, inside) sprites; each has a `_connected` sheet.
-    let tanks = [
-        (
-            "fluid_tank",
-            "fluid_tank",
-            "fluid_tank_top",
-            "fluid_tank_inner",
-        ),
-        (
-            "creative_fluid_tank",
-            "creative_fluid_tank",
-            "creative_casing",
-            "creative_casing",
-        ),
-    ];
-    // Each face and its texture's up and right as read from outside (`buildContext`).
-    let faces: [(&str, V, V); 6] = [
-        ("north", U, W),
-        ("south", U, E),
-        ("east", U, N),
-        ("west", U, S),
-        ("up", N, E),
-        ("down", S, E),
-    ];
-    let shapes = [
-        "plain",
-        "window",
-        "window_nw",
-        "window_ne",
-        "window_sw",
-        "window_se",
-    ];
-    let mut cut_sheets: BTreeMap<&str, bool> = BTreeMap::new();
-    for (block, side, top, inner) in tanks {
-        if read(&format!("assets/create/blockstates/{block}.json")).is_none() {
-            skipped.push(format!("{block}: no blockstate"));
-            continue;
-        }
-        for sprite in [side, top, inner] {
-            if cut_sheets.contains_key(sprite) {
-                continue;
-            }
-            let src = format!("assets/create/textures/block/{sprite}_connected.png");
-            let ok = match read(&src).map(|b| decode(&b)) {
-                Some(Ok(img)) if img.w == img.h && img.w % 4 == 0 => {
-                    let t = img.w / 4;
-                    for i in 0..16u32 {
-                        let (sx, sy) = ((i % 4) * t, (i / 4) * t);
-                        let mut px = Vec::with_capacity((t * t * 4) as usize);
-                        for y in 0..t {
-                            let s = (((sy + y) * img.w + sx) * 4) as usize;
-                            px.extend_from_slice(&img.px[s..s + (t * 4) as usize]);
-                        }
-                        out.insert(
-                            format!(
-                                "assets/create/optifine/ctm/tiles/{sprite}_connected/sheet_{i}.png"
-                            ),
-                            encode(&Image { w: t, h: t, px }),
-                        );
-                    }
-                    true
-                }
-                _ => {
-                    skipped.push(format!(
-                        "{sprite}_connected: not a 4x4 sheet in the sources"
-                    ));
-                    false
-                }
-            };
-            cut_sheets.insert(sprite, ok);
-        }
-        let mut n = 0;
-        for shape in shapes {
-            // The horizontal neighbours in its tank a block of this shape surely has.
-            let (dx, dz): (i32, i32) = match shape {
-                "window_nw" => (1, 1),
-                "window_ne" => (-1, 1),
-                "window_sw" => (1, -1),
-                "window_se" => (-1, -1),
-                _ => (0, 0),
-            };
-            for top_v in [false, true] {
-                for bottom_v in [false, true] {
-                    let joined = |d: V| match d {
-                        [0, 1, 0] => !top_v,
-                        [0, -1, 0] => !bottom_v,
-                        [x, 0, 0] => x == dx,
-                        [0, 0, z] => z == dz,
-                        _ => false,
-                    };
-                    let neg = |v: V| v.map(|c| -c);
-                    for (face, up, right) in faces {
-                        let sprites: &[&str] = match face {
-                            "up" | "down" if top == inner => &[top],
-                            "up" | "down" => &[top, inner],
-                            _ => &[side],
-                        };
-                        let ctx = Ctx {
-                            up: joined(up),
-                            down: joined(neg(up)),
-                            left: joined(neg(right)),
-                            right: joined(right),
-                            ..Ctx::default()
-                        };
-                        if ctx == Ctx::default() {
-                            continue;
-                        }
-                        let index = CtType::Rectangle.index(ctx);
-                        for sprite in sprites {
-                            if !cut_sheets.get(sprite).copied().unwrap_or(false) {
-                                continue;
-                            }
-                            let props = format!(
-                                "method=fixed\nmatchTiles=create:block/{sprite}\nmatchBlocks=create:{block}:top={top_v}:bottom={bottom_v}:shape={shape}\nfaces={face}\ntiles=create:optifine/ctm/tiles/{sprite}_connected/sheet_{index}\n"
-                            );
-                            out.insert(
-                                format!("assets/create/optifine/ctm/{block}/tank_{n}.properties"),
-                                props.into_bytes(),
-                            );
-                            n += 1;
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
 /// Directions expressible by a native table, without model-specific rotation or mirroring.
 fn native_faces(rule: &Rule) -> Option<&'static [&'static str]> {
     if rule.by_texture || !rule.seams || !rule.random.is_empty() {
@@ -1092,9 +985,43 @@ fn native_faces(rule: &Rule) -> Option<&'static [&'static str]> {
     }
 }
 
+/// The faces of a rule joined by a connection group, which only native rules can read: any
+/// orientation and cover.
+fn group_faces(rule: &Rule) -> Option<&'static [&'static str]> {
+    if !rule.random.is_empty() {
+        return None;
+    }
+    match rule.faces {
+        Faces::All => Some(&["all"]),
+        Faces::Sides => Some(&["sides"]),
+        Faces::Ends => Some(&["up", "down"]),
+        Faces::Some(_) => None,
+    }
+}
+
 /// All rules of a plan must fit: do not register competing native and local rules.
 fn native(plan: &Plan) -> bool {
-    plan.join == Join::Block && plan.rules.iter().all(|rule| native_faces(rule).is_some())
+    match plan.join {
+        Join::Block => plan.rules.iter().all(|rule| native_faces(rule).is_some()),
+        Join::Group { .. } => plan.rules.iter().all(|rule| group_faces(rule).is_some()),
+        _ => false,
+    }
+}
+
+/// A plan's block entry as a native rule names it: `name:prop=value` becomes a block with
+/// that state.
+fn native_block(b: &str) -> serde_json::Value {
+    let mut parts = b.split(':');
+    let block = format!("create:{}", parts.next().unwrap_or_default());
+    let state: serde_json::Map<String, serde_json::Value> = parts
+        .filter_map(|p| p.split_once('='))
+        .map(|(k, v)| (k.to_owned(), json!([v])))
+        .collect();
+    if state.is_empty() {
+        json!(block)
+    } else {
+        json!({ "block": block, "state": state })
+    }
 }
 
 /// Generated Sunrise rules and the sprites they require. The outcomes use exactly the
@@ -1104,12 +1031,22 @@ pub(super) fn native_assets() -> (BTreeMap<String, Vec<u8>>, BTreeSet<String>) {
     let mut sprites = BTreeSet::new();
     for plan in plans().into_iter().filter(native) {
         for (i, rule) in plan.rules.into_iter().enumerate() {
-            let Some(faces) = native_faces(&rule) else {
+            let group = matches!(plan.join, Join::Group { .. });
+            let faces = if group {
+                group_faces(&rule)
+            } else {
+                native_faces(&rule)
+            };
+            let Some(faces) = faces else {
                 continue;
             };
             let sheet = format!("create:block/{}", rule.sheet);
             sprites.insert(sheet.clone());
-            let table = rule.ty.name();
+            let table = if rule.seams {
+                rule.ty.name().to_owned()
+            } else {
+                format!("{}_uncovered", rule.ty.name())
+            };
             files
                 .entry(format!(
                     "assets/create/sunrise/connected_tables/{table}.json"
@@ -1150,17 +1087,24 @@ pub(super) fn native_assets() -> (BTreeMap<String, Vec<u8>>, BTreeSet<String>) {
                         "tiles": tiles,
                     }))
                 });
+            let mut file = json!({
+                "method": "table",
+                "blocks": plan.blocks.iter().map(|b| native_block(b)).collect::<Vec<_>>(),
+                "sprites": [rule.original],
+                "faces": faces,
+                "connect": if plan.join == (Join::Group { state: true }) { "state" } else { "block" },
+                "sheet": sheet,
+                "table": table,
+            });
+            if group {
+                file["connect_group"] = json!(true);
+            }
+            if rule.by_texture {
+                file["orient"] = json!("texture");
+            }
             files.insert(
                 format!("assets/create/sunrise/connected/{}_{i}.json", plan.name),
-                crate::pretty(&json!({
-                    "method": "table",
-                    "blocks": plan.blocks.iter().map(|b| format!("create:{b}")).collect::<Vec<_>>(),
-                    "sprites": [rule.original],
-                    "faces": faces,
-                    "connect": "block",
-                    "sheet": sheet,
-                    "table": table,
-                })),
+                crate::pretty(&file),
             );
         }
     }
@@ -1267,7 +1211,6 @@ pub fn files(read: &dyn Fn(&str) -> Option<Vec<u8>>) -> (BTreeMap<String, Vec<u8
             }
         }
     }
-    tank_files(read, &mut out, &mut skipped);
     (out, skipped)
 }
 

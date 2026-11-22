@@ -6,8 +6,9 @@
 use crate::glue::server::ServerLevel;
 use create_engine::processing::{Book, Output, Recipe};
 use create_engine::{basin, deployer, drain, fan, runtime_data, sequenced, spout, tank};
+use mod_api::prelude::RecipesHost;
 use mod_api::serde_json::Value;
-use mod_api::{Host, Identifier, ItemStack, RecipeInput, RecipeRule};
+use mod_api::{Identifier, ItemStack, RecipeInput, RecipeRule, ReloadContext};
 use std::cell::RefCell;
 
 /// Create's recipe books, by the machine that runs them.
@@ -92,10 +93,16 @@ pub fn register(r: &mut dyn mod_api::Registrar) {
     }
 }
 
+fn item_name(host: &dyn ReloadContext, item: mod_api::ItemKey) -> String {
+    host.item_key_id(item)
+        .map(str::to_owned)
+        .unwrap_or_default()
+}
+
 /// The crafting recipes whose file is of serializer `serializer` (`minecraft:crafting_shaped`,
 /// `minecraft:crafting_shapeless`): the game lists every crafting serializer's recipes under
 /// `minecraft:crafting`.
-pub fn crafting_of(host: &dyn Host, serializer: &str) -> Vec<mod_api::Recipe> {
+pub fn crafting_of(host: &(impl RecipesHost + ?Sized), serializer: &str) -> Vec<mod_api::Recipe> {
     host.recipes_of_type("minecraft:crafting")
         .iter()
         .filter(|r| r.json["type"].as_str() == Some(serializer))
@@ -124,7 +131,7 @@ pub fn clear() {
 
 /// Reads every book from the server's recipes in force and replaces the old ones at once.
 /// None at all when Create's milling and pressing recipes are missing (its data isn't there).
-pub fn publish(host: &dyn Host) {
+pub fn publish(host: &dyn ReloadContext) {
     let milling = read_book(host, "create:milling");
     let pressing = read_book(host, "create:pressing");
     if milling.is_empty() && pressing.is_empty() {
@@ -132,7 +139,11 @@ pub fn publish(host: &dyn Host) {
         return;
     }
     // `RuntimeDataGenerator`'s recipes (wood cutting, concrete washing), made from the items.
-    let items: Vec<String> = host.item_keys().into_iter().map(|k| k.id(host)).collect();
+    let items: Vec<String> = host
+        .item_keys()
+        .into_iter()
+        .map(|k| item_name(host, k))
+        .collect();
     let mut cutting = read_book(host, "create:cutting").recipes;
     cutting.extend(runtime_data::cutting(&items));
     cutting.extend(read_stonecutting(host));
@@ -172,7 +183,7 @@ pub fn publish(host: &dyn Host) {
 /// them (the game's reading), or a `neoforge:block_tag` as Create's data writes it (the items
 /// of the tag's blocks, in the host's block order), which the game reads only in its own recipe
 /// types.
-fn ingredient(host: &dyn Host, json: &Value) -> Option<Vec<String>> {
+fn ingredient(host: &dyn ReloadContext, json: &Value) -> Option<Vec<String>> {
     if json["type"].as_str() == Some("neoforge:block_tag") {
         let tag = json["tag"].as_str()?;
         let items: Vec<String> = host
@@ -180,24 +191,24 @@ fn ingredient(host: &dyn Host, json: &Value) -> Option<Vec<String>> {
             .into_iter()
             .filter(|&b| host.block_in_tag(b, tag) == Some(true))
             .filter_map(|b| host.block_item(b))
-            .map(|i| i.id(host))
+            .map(|i| item_name(host, i))
             .filter(|i| i != "minecraft:air")
             .collect();
         return (!items.is_empty()).then_some(items);
     }
     let ing = host.recipe_ingredient(&json.to_string()).ok()??;
-    Some(ing.order)
+    Some(ing.order.clone())
 }
 
 /// A result stack from recipe-file JSON.
-fn result(host: &dyn Host, json: &Value) -> Option<ItemStack> {
+fn result(host: &dyn ReloadContext, json: &Value) -> Option<ItemStack> {
     host.recipe_result(&json.to_string()).ok()?
 }
 
-fn output(host: &dyn Host, o: &Value) -> Option<Output> {
+fn output(host: &dyn ReloadContext, o: &Value) -> Option<Output> {
     let stack = result(host, o)?;
     Some(Output {
-        item: super::stacks::id(host, &stack),
+        item: item_name(host, stack.item()),
         count: stack.count().min(255) as u8,
         chance: o["chance"].as_f64().unwrap_or(1.0) as f32,
     })
@@ -233,7 +244,7 @@ pub fn recipe_fluid(json: &Value) -> Option<(tank::Fluid, u32)> {
     Some((tank::Fluid::of_id(id)?, amount))
 }
 
-fn read_book(host: &dyn Host, kind: &str) -> Book {
+fn read_book(host: &dyn ReloadContext, kind: &str) -> Book {
     let recipes = host
         .recipes_of_type(kind)
         .iter()
@@ -262,7 +273,7 @@ fn read_book(host: &dyn Host, kind: &str) -> Book {
 
 /// A vanilla cooking recipe type (`minecraft:smelting`) as a book: its one ingredient, its one
 /// result, as the game parsed them.
-fn read_cooking(host: &dyn Host, kind: &str) -> Book {
+fn read_cooking(host: &dyn ReloadContext, kind: &str) -> Book {
     let recipes = host
         .recipes_of_type(kind)
         .iter()
@@ -273,7 +284,7 @@ fn read_cooking(host: &dyn Host, kind: &str) -> Book {
                 id: r.id.clone(),
                 ingredients: vec![input.order.clone()],
                 results: vec![Output {
-                    item: super::stacks::id(host, out),
+                    item: item_name(host, out.item()),
                     count: out.count().min(255) as u8,
                     chance: 1.0,
                 }],
@@ -287,7 +298,7 @@ fn read_cooking(host: &dyn Host, kind: &str) -> Book {
 /// `SawBlockEntity.getRecipes` with `allowStonecuttingOnSaw`: vanilla's stonecutting recipes
 /// cut on a saw too, after Create's cutting ones, each 50 ticks (`start`: only a cutting
 /// recipe has its own time).
-fn read_stonecutting(host: &dyn Host) -> Vec<Recipe> {
+fn read_stonecutting(host: &dyn ReloadContext) -> Vec<Recipe> {
     host.recipes_of_type("minecraft:stonecutting")
         .iter()
         .filter_map(|r| {
@@ -298,7 +309,7 @@ fn read_stonecutting(host: &dyn Host) -> Vec<Recipe> {
                 id: r.id.clone(),
                 ingredients: vec![input.order.clone()],
                 results: vec![Output {
-                    item: super::stacks::id(host, result),
+                    item: item_name(host, result.item()),
                     count: result.count().min(64) as u8,
                     chance: 1.0,
                 }],
@@ -311,7 +322,7 @@ fn read_stonecutting(host: &dyn Host) -> Vec<Recipe> {
 /// `MechanicalMixerBlockEntity.matchStaticFilters`: shapeless crafting recipes of more than one
 /// ingredient that the press doesn't compress (`canCompress`: 4 or 9 of the same) mix in a
 /// basin too, after Create's own.
-fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
+fn read_shapeless_mixing(host: &dyn ReloadContext) -> Vec<basin::Recipe> {
     let mut found = Vec::new();
     for r in crafting_of(host, "minecraft:crafting_shapeless").iter() {
         if r.ingredients.len() < 2 || r.id.ends_with("_manual_only") {
@@ -329,7 +340,7 @@ fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
             id: r.id.clone(),
             ingredients,
             results: vec![Output {
-                item: super::stacks::id(host, out),
+                item: item_name(host, out.item()),
                 count: out.count().min(64) as u8,
                 chance: 1.0,
             }],
@@ -347,7 +358,7 @@ fn read_shapeless_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
 /// splash and lingering ones listed apiece) as a heated mixing recipe, its reagent with
 /// 1000 mB of the potion fluid it starts from making 1000 mB of the one it ends at (a regular
 /// water bottle's is water).
-fn read_potion_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
+fn read_potion_mixing(host: &dyn ReloadContext) -> Vec<basin::Recipe> {
     use create_engine::tank::{potion_fluid, potion_item};
     let mut found = Vec::new();
     for r in host.recipes_of_type("minecraft:brewing").iter() {
@@ -394,7 +405,7 @@ fn read_potion_mixing(host: &dyn Host) -> Vec<basin::Recipe> {
 }
 
 /// A basin recipe type: item and fluid ingredients and results, with its `heat_requirement`.
-fn read_basin(host: &dyn Host, kind: &str) -> Vec<basin::Recipe> {
+fn read_basin(host: &dyn ReloadContext, kind: &str) -> Vec<basin::Recipe> {
     host.recipes_of_type(kind)
         .iter()
         .filter_map(|r| {
@@ -432,7 +443,7 @@ fn read_basin(host: &dyn Host, kind: &str) -> Vec<basin::Recipe> {
 
 /// `ItemApplicationRecipe`s: the item worked on, the one held, the results; `_manual_only`
 /// ones left out (`CAN_BE_AUTOMATED`).
-fn read_application(host: &dyn Host, kind: &str, manual: bool) -> Vec<deployer::Recipe> {
+fn read_application(host: &dyn ReloadContext, kind: &str, manual: bool) -> Vec<deployer::Recipe> {
     host.recipes_of_type(kind)
         .iter()
         .filter(|r| manual || !r.id.ends_with("_manual_only"))
@@ -461,7 +472,7 @@ fn read_application(host: &dyn Host, kind: &str, manual: bool) -> Vec<deployer::
 }
 
 /// `create:emptying`: each item its fluid and what is left of it.
-fn read_emptying(host: &dyn Host) -> Vec<(String, drain::Emptying)> {
+fn read_emptying(host: &dyn ReloadContext) -> Vec<(String, drain::Emptying)> {
     let mut out = Vec::new();
     for r in host.recipes_of_type("create:emptying").iter() {
         let json = &*r.json;
@@ -476,7 +487,7 @@ fn read_emptying(host: &dyn Host) -> Vec<(String, drain::Emptying)> {
             .iter()
             .find(|o| o.get("amount").is_none())
             .and_then(|o| result(host, o))
-            .map(|s| super::stacks::id(host, &s));
+            .map(|s| item_name(host, s.item()));
         for item in items {
             out.push((
                 item,
@@ -492,7 +503,7 @@ fn read_emptying(host: &dyn Host) -> Vec<(String, drain::Emptying)> {
 }
 
 /// `create:filling`: an item and a fluid, what it becomes.
-fn read_filling(host: &dyn Host) -> Vec<spout::Filling> {
+fn read_filling(host: &dyn ReloadContext) -> Vec<spout::Filling> {
     let mut out = Vec::new();
     for r in host.recipes_of_type("create:filling").iter() {
         let json = &*r.json;
@@ -505,7 +516,7 @@ fn read_filling(host: &dyn Host) -> Vec<spout::Filling> {
         let Some(made) = json["results"].get(0).and_then(|o| result(host, o)) else {
             continue;
         };
-        let made = super::stacks::id(host, &made);
+        let made = item_name(host, made.item());
         for item in items {
             out.push(spout::Filling {
                 item,
@@ -521,7 +532,7 @@ fn read_filling(host: &dyn Host) -> Vec<spout::Filling> {
 /// `create:sequenced_assembly` (`SequencedAssemblyRecipeSerializer`): the starting items, the
 /// transitional item, each step's recipe type with a deployer's second ingredient or a spout's
 /// fluid, the loops (1 unset) and the weighted results.
-fn read_sequenced(host: &dyn Host) -> Vec<sequenced::Assembly> {
+fn read_sequenced(host: &dyn ReloadContext) -> Vec<sequenced::Assembly> {
     use sequenced::{Assembly, Outcome, Step};
     host.recipes_of_type("create:sequenced_assembly")
         .iter()
@@ -559,7 +570,7 @@ fn read_sequenced(host: &dyn Host) -> Vec<sequenced::Assembly> {
                 .map(|o| {
                     let stack = result(host, o)?;
                     Some(Outcome {
-                        item: super::stacks::id(host, &stack),
+                        item: item_name(host, stack.item()),
                         count: stack.count().min(255) as u8,
                         weight: o["chance"].as_f64().unwrap_or(1.0) as f32,
                     })
@@ -578,7 +589,7 @@ fn read_sequenced(host: &dyn Host) -> Vec<sequenced::Assembly> {
 }
 
 /// `create:mechanical_crafting`: a pattern of up to any size, its key, `accept_mirrored`.
-fn read_mechanical_crafting(host: &dyn Host) -> Vec<create_engine::crafter::Shaped> {
+fn read_mechanical_crafting(host: &dyn ReloadContext) -> Vec<create_engine::crafter::Shaped> {
     host.recipes_of_type("create:mechanical_crafting")
         .iter()
         .filter_map(|r| {
@@ -608,7 +619,7 @@ fn read_mechanical_crafting(host: &dyn Host) -> Vec<create_engine::crafter::Shap
                 height,
                 cells,
                 mirrored: json["accept_mirrored"].as_bool().unwrap_or(true),
-                result: (super::stacks::id(host, &out), out.count().min(64) as u8),
+                result: (item_name(host, out.item()), out.count().min(64) as u8),
             })
         })
         .collect()

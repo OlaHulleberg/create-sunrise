@@ -8,7 +8,8 @@
 use super::subsystem::Subsystem;
 use mod_api::{
     ClientHost, IPayloadContext, IPayloadHandler, PayloadBytes, PayloadHandleError, PayloadId,
-    PayloadReader, PayloadSendError, PayloadWriter, PlayerRef, Registrar, ServerHost,
+    PayloadSendError, PlayerRef, Registrar, ServerHost,
+    wire::{Reader, Writer},
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, VecDeque};
@@ -28,19 +29,30 @@ fn id() -> PayloadId {
 }
 
 fn encode(channel: &str, data: &[u8]) -> PayloadBytes {
-    let mut w = PayloadWriter::new(MAX_BODY + 4096);
-    w.string(channel);
-    w.bytes(data, MAX_BODY);
+    let mut w = Writer::new();
+    w.limit(MAX_BODY + 4096);
+    w.put_str(channel);
+    if data.len() <= MAX_BODY {
+        w.put_len(data.len());
+        w.put_bytes(data);
+    }
     // Within the limit by construction: a channel name and at most `MAX_BODY` bytes.
-    PayloadBytes(w.finish().unwrap_or_default())
+    PayloadBytes(if w.error().is_none() {
+        w.into_bytes()
+    } else {
+        Vec::new()
+    })
 }
 
 fn decode(bytes: &[u8]) -> Option<(String, Vec<u8>)> {
-    let mut r = PayloadReader::new(bytes);
-    let channel = r.string().ok()?;
-    let data = r.bytes(MAX_BODY).ok()?.to_vec();
-    r.finish().ok()?;
-    Some((channel, data))
+    let mut r = Reader::new(bytes);
+    let channel: String = r.take().ok()?;
+    let len = r.take_len(1).ok()?;
+    if len > MAX_BODY {
+        return None;
+    }
+    let data = r.take_bytes(len).ok()?.to_vec();
+    r.rest().is_empty().then_some((channel, data))
 }
 
 /// The server's receiver: hands each message to the subsystem that owns its channel.

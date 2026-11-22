@@ -18,6 +18,7 @@ use super::items::{creative, sneaking};
 use super::server::{ServerLevel, update_all};
 use super::states;
 use super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::place;
@@ -152,7 +153,7 @@ impl mod_api::BlockPart for Clicked {
     ) -> Option<InteractionResult> {
         let click = event.click;
         let stack = click.stack?;
-        let item = stack.item().id(&*host);
+        let item = stack.item().name(&*host);
         let player = host.player(click.player)?;
         // `if (player.isShiftKeyDown() || !player.mayBuild()) return PASS`.
         if sneaking(&*host, player) || player.may_build(&*host) != Some(true) {

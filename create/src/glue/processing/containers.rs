@@ -51,13 +51,9 @@ impl mod_api::BlockPart for ToolboxDraw {}
 
 #[mod_api::sunrise_part]
 impl mod_api::BlockEntityPart for ToolboxDraw {
-    fn block_entity_on_load(
-        &self,
-        host: mod_api::HostSide,
-        event: &mut mod_api::BlockEntityOnLoadEvent,
-    ) {
-        if let mod_api::HostSide::Server(host) = host {
-            super::toolbelt::loaded(host, event.entity);
+    fn block_entity_on_load(&self, event: &mut mod_api::BlockEntityOnLoadEvent<'_>) {
+        if let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) {
+            super::toolbelt::loaded(host, entity);
         }
     }
 
@@ -75,6 +71,7 @@ impl mod_api::BlockEntityPart for ToolboxDraw {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::BlockEntitySubmitEvent<'_>,
     ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(text) = host.block_state_string(event.state) else {
             return;
         };
@@ -196,7 +193,7 @@ struct ContentsChanged;
 #[mod_api::sunrise_part]
 impl BlockPart for ContentsChanged {
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {

@@ -16,6 +16,7 @@ use super::super::subsystem::Subsystem;
 use super::super::world::level_index;
 use super::super::world::with_world;
 use super::create_info;
+use crate::glue::owned::LevelLists as _;
 use create_engine::collider::{self, Aabb, Frame, Pose};
 use create_engine::kinetics::Dir;
 use mod_api::{
@@ -158,6 +159,7 @@ impl Subsystem for Colliders {
                 GeneralSavePolicy::Save,
                 false,
                 false,
+                Some(mod_api::PushReaction::IgnoreEntity),
                 chunks,
                 1,
                 1,
@@ -241,12 +243,12 @@ struct Carrying;
 
 #[mod_api::sunrise_part]
 impl EntityPart for Carrying {
-    fn general_entity_tick(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut GeneralEntityTickEvent<'_>,
-    ) {
-        apply_to(host, event.entity);
+    fn general_entity_tick(&self, event: &mut GeneralEntityTickEvent<'_>) {
+        let Some(entity) = event.subject.with_view(|v| v.handle()) else {
+            return;
+        };
+        let host = event.subject.host();
+        apply_to(host, entity);
     }
 }
 

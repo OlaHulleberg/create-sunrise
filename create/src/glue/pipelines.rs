@@ -86,8 +86,7 @@ fn steam_jet_id(frame: usize) -> Identifier {
 }
 
 /// Bind the current generation's handles after the initial resource load and after a reload.
-pub fn bind_steam_jets(host: &dyn ClientHost) {
-    let assets = host.render_assets();
+pub fn bind_steam_jets(assets: &dyn mod_api::RenderAssets) {
     STEAM_JETS.set(std::array::from_fn(|frame| {
         assets.render_pipeline(&steam_jet_id(frame)).ok()
     }));
@@ -107,7 +106,7 @@ pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
         else {
             continue;
         };
-        event.pipelines.push(
+        event.register(
             RenderPipeline::new(id, shader.clone(), t.blend(), WorldDepth::Tested)
                 .textured(PipelineTexture::Sprite(sprite))
                 .optional(),
@@ -116,7 +115,7 @@ pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
     for frame in 0..STEAM_JET_FRAMES {
         let sprite = Identifier::parse(&format!("create:block/special/steam_jet_{frame}"))
             .expect("steam jet sprite id");
-        event.pipelines.push(
+        event.register(
             RenderPipeline::new(
                 steam_jet_id(frame),
                 shader.clone(),

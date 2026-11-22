@@ -96,6 +96,7 @@ pub mod actor_draw;
 pub mod actors;
 mod bearings;
 pub mod colliders;
+use crate::glue::names::Named as _;
 pub(crate) use bearings::LAST_EXCEPTION;
 use bearings::set_exception;
 
@@ -115,13 +116,13 @@ use super::server::ServerLevel;
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::with_world;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::contraption::{Chassis, Found, Sticky};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, ItemStack, LeftClickBlockEvent,
-    PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent,
-    ServerHost,
+    PlayerRef, Registrar, RegistrationContext, ServerHost,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -319,7 +320,10 @@ impl Subsystem for Contraptions {
         let Some((anchor, local, target)) = draw::decode_click(data) else {
             return true;
         };
-        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+        let Some(dimension) = player
+            .level(&*host)
+            .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
+        else {
             return true;
         };
         if let Some(mut lv) = ServerLevel::new(host, &dimension) {
@@ -398,15 +402,11 @@ impl Subsystem for Contraptions {
         Flow::Continue
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        actors::register_commands(event);
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        actors::register_commands(commands);
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         actors::run_command(host, event)
     }
 }
@@ -1265,7 +1265,7 @@ fn clicker(host: &dyn ServerHost, click: &BlockClick<'_>) -> Clicker {
     let sneaking = player
         .and_then(|p| p.entity().is_shift_key_down(host))
         .unwrap_or(false);
-    let held = click.stack.map(|s| s.item().id(host));
+    let held = click.stack.map(|s| s.item().name(host));
     let after_empty_main = click.hand == mod_api::Hand::Off
         && player.is_none_or(|p| {
             super::items::held(host, p, mod_api::Hand::Main).is_none_or(|s| s.count() == 0)

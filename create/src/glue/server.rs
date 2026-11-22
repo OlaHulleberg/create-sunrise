@@ -5,6 +5,7 @@
 //! (`impl ServerLevel<'_> { .. }`).
 
 use super::states;
+use crate::glue::owned::LevelLists as _;
 use mod_api::{
     BlockState, BlockUpdateFlags, Compound, Direction, HostBlockStates, LevelRef, NeighbourUpdate,
     PlayerRef, ServerHost, Tag,
@@ -41,6 +42,7 @@ impl<'a> ServerLevel<'a> {
     pub fn new(host: &'a mut dyn ServerHost, dimension: &'a str) -> Option<ServerLevel<'a>> {
         let dim = super::world::level_index(dimension)?;
         let level = host.level(dimension)?;
+        super::world::note_level(level, dim);
         Some(ServerLevel {
             host,
             level,

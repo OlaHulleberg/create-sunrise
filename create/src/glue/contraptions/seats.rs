@@ -20,6 +20,8 @@ use super::super::states::key;
 use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
 use super::{clicker, in_click_level};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use create_engine::Block;
 use create_engine::dye::{self, DyeColor};
 use create_engine::{seat, turntable};
@@ -64,6 +66,7 @@ impl Subsystem for Seats {
             GeneralSavePolicy::Save,
             true,
             false,
+            None,
             5,
             i32::MAX,
             1,
@@ -176,7 +179,7 @@ fn is_seat(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
 
 fn kind_of(lv: &ServerLevel<'_>, e: EntityRef) -> String {
     e.kind(&*lv.host)
-        .map(|k| k.id(&*lv.host))
+        .map(|k| k.name(&*lv.host))
         .unwrap_or_default()
 }
 

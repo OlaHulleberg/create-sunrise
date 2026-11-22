@@ -9,6 +9,7 @@ use super::items;
 use super::{info_at, mark_touched};
 use crate::glue::contraptions::actors;
 use crate::glue::items::filters;
+use crate::glue::owned::OwnedStack as _;
 use create_engine::Block;
 use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::Dir;
@@ -933,6 +934,12 @@ pub fn tick_vaults(lv: &mut ServerLevel<'_>) {
                 if l { "true" } else { "false" },
                 UPDATE_CLIENTS,
             );
+        }
+    }
+    // `ItemVaultCTBehaviour.connectsTo`: a vault's blocks join only each other.
+    for (pos, controller) in with_world(|w| w.vault_groups(dim)).unwrap_or_default() {
+        if matches!(info_at(lv, pos), Some((Block::ItemVault, _))) {
+            super::super::connection_group(lv, pos, controller);
         }
     }
 }

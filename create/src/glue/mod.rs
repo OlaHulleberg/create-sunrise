@@ -14,12 +14,15 @@ pub mod fluids;
 pub mod gauges;
 pub mod interaction;
 pub mod items;
+pub mod keys;
 pub mod kinetics;
 #[macro_use]
 pub mod log;
 pub mod logistics;
 pub mod models;
+pub mod names;
 pub mod net;
+pub mod owned;
 pub mod packages;
 pub mod persist;
 pub mod pipelines;
@@ -47,7 +50,7 @@ use subsystem::Subsystem;
 /// Resolve a stack's hover name in the caller's language for plain labels and search.
 pub(crate) fn item_name(host: &dyn Host, stack: &ItemStack) -> String {
     host.hover_name(stack)
-        .and_then(|name| host.text_string(&name))
+        .map(|name| host.text_string(&name))
         .unwrap_or_default()
 }
 
@@ -145,6 +148,66 @@ thread_local! {
     /// The client's copy of the engine's state table, for drawing (a client of a remote server
     /// has no server thread of its own to build it).
     static CLIENT_TABLE: RefCell<Option<StateTable>> = const { RefCell::new(None) };
+}
+
+/// A block entity being drawn (`block_entity_submit`, or one the glue draws itself riding a
+/// structure).
+pub struct Submit<'a> {
+    pub pos: [i32; 3],
+    pub block: &'a str,
+    pub state: mod_api::BlockState,
+    pub entity: &'a mod_api::ModBlockEntity,
+    pub draw: &'a mut dyn mod_api::BlockEntityDrawContext,
+}
+
+impl<'a> Submit<'a> {
+    pub fn of(event: &'a mut mod_api::BlockEntitySubmitEvent<'_>) -> Submit<'a> {
+        Submit {
+            pos: event.pos,
+            block: event.block,
+            state: event.state,
+            entity: event.entity,
+            draw: &mut *event.draw,
+        }
+    }
+}
+
+/// `ConnectivityHandler.isConnected` for connected textures: the block at `pos` joins the blocks
+/// of the multiblock whose controller is `controller` (`BlockPos.asLong`), none for None.
+pub fn connection_group(
+    lv: &mut server::ServerLevel<'_>,
+    pos: [i32; 3],
+    controller: Option<[i32; 3]>,
+) {
+    let group = controller.map(|[x, y, z]| {
+        ((i64::from(x) & 0x3FF_FFFF) << 38
+            | (i64::from(z) & 0x3FF_FFFF) << 12
+            | (i64::from(y) & 0xFFF)) as u64
+    });
+    let level = lv.level;
+    let _ = level.set_connection_group(&mut *lv.host, pos, group);
+}
+
+/// Registers one of Create's particle types (`ICustomParticleData.createType`, which does not
+/// override the limiter). Each particle keeps its own state, so the options carry nothing.
+pub fn particle_type(r: &mut dyn mod_api::Registrar, id: &str) -> mod_api::ParticleType<()> {
+    r.register_particle_type(
+        id,
+        false,
+        mod_api::ParticleMapCodec::unit(),
+        mod_api::ParticleStreamCodec::wire(),
+    )
+}
+
+/// The server's block entity of a `block_entity_on_load`, and the host to reach it with.
+pub fn loaded_entity<'a>(
+    subject: &'a mut mod_api::BlockEntitySideScope<'_>,
+) -> Option<(mod_api::BlockEntityRef, &'a mut dyn mod_api::ServerHost)> {
+    let mod_api::BlockEntitySideScope::Server(scope) = subject else {
+        return None;
+    };
+    let entity = scope.with_view(|v| v.handle())?;
+    Some((entity, scope.host()))
 }
 
 /// Gives the subsystems column `chunk`'s saved data, once while it is loaded: when the column

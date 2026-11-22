@@ -60,7 +60,7 @@ pub(crate) fn helper_target(
     point: [f64; 3],
     item: mod_api::ItemKey,
 ) -> Option<crate::glue::interaction::HelperTarget> {
-    let id = item.id(&*lv.host);
+    let id = item.name(&*lv.host);
     clicks::helper_target(lv, player, pos, point, &id)
         .or_else(|| ladders::helper_target(lv, player, pos, item))
 }
@@ -69,6 +69,7 @@ use super::server::ServerLevel;
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::decor::Bracket;
 use create_engine::kinetics::Dir;
@@ -157,7 +158,7 @@ fn block_of(id: u32) -> Option<(Block, StateInfo)> {
 fn create_block(host: &dyn Host, state: BlockState) -> Option<Block> {
     state
         .block()
-        .id(host)
+        .name(host)
         .strip_prefix("create:")
         .and_then(Block::from_name)
 }
@@ -307,7 +308,7 @@ fn give(host: &mut dyn ServerHost, player: PlayerRef, id: &str) {
 
 /// The id of the level `player` is in.
 fn player_dimension(host: &dyn Host, player: PlayerRef) -> Option<String> {
-    player.level(host)?.dimension().id(host)
+    player.level(host)?.dimension().id(host).map(str::to_owned)
 }
 
 pub struct Decor;
@@ -330,7 +331,7 @@ impl Subsystem for Decor {
         &self,
         host: &dyn mod_api::ClientHost,
         block: Block,
-        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        event: &mut crate::glue::Submit<'_>,
     ) {
         if block == Block::Placard {
             placard::draw_carried(host, event);
@@ -413,11 +414,10 @@ impl Subsystem for Decor {
     }
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
-        providers.register(souls::SOUL.to_owned(), std::sync::Arc::new(souls::Soul));
-        providers.register(
-            souls::SOUL_BASE.to_owned(),
-            std::sync::Arc::new(souls::SoulBase),
-        );
+        if let Some(&[soul, base]) = souls::TYPES.get() {
+            providers.register_sprite_set(soul, std::sync::Arc::new(souls::Soul));
+            providers.register_sprite_set(base, std::sync::Arc::new(souls::SoulBase));
+        }
     }
 
     fn client_reset(&self) {

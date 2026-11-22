@@ -5,6 +5,7 @@
 use super::super::server::ServerLevel;
 use super::super::states;
 use super::{add, block_of, face_of, flag, prop, with, with_props};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::decor::{self, Side};
 use create_engine::kinetics::{Axis, Dir};
@@ -81,7 +82,7 @@ pub(super) fn track_beside(lv: &ServerLevel<'_>, pos: [i32; 3], d: Dir) -> bool 
             Dir::from_axis(across, positive),
         );
         lv.block_state(p).is_some_and(|s| {
-            s.block().id(&*lv.host) == "create:track"
+            s.block().name(&*lv.host) == "create:track"
                 && prop(&*lv.host, s, "shape").as_deref() == Some(want)
         })
     })

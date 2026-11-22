@@ -8,7 +8,7 @@ use super::super::server::ServerLevel;
 use super::super::states;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
-use mod_api::{BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, Tag};
+use mod_api::{BlockEntityPart, BlockPart, ClientHost, Compound, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -71,7 +71,12 @@ impl BlockPart for BellDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for BellDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         if event.state.block() != states::key(Block::DeskBell) {
             return;
         }

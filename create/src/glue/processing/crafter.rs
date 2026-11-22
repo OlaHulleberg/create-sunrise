@@ -153,30 +153,37 @@ pub fn crafter_handler_insert(
 /// funnels, arms, chutes and hoppers put through): one item into each crafter of the group that
 /// is idle, uncovered and empty (`Inventory.insertItem`); nothing comes out. None for any other
 /// block of the kinetic type.
-pub fn provide_items(
-    host: &mut dyn ServerHost,
-    side: BlockSide,
-) -> Option<Box<dyn ResourceHandler<ItemResource>>> {
-    let dimension = side.level.dimension().id(&*host)?;
-    let lv = ServerLevel::new(host, &dimension)?;
-    crafter_at(&lv, side.pos)?;
-    let group = crafter_group(&lv, side.pos);
-    Some(Box::new(CrafterItems {
+pub fn provide_items(side: BlockSide, dim: usize) -> Box<dyn ResourceHandler<ItemResource>> {
+    Box::new(CrafterItems {
         level: side.level,
-        dim: lv.dim,
-        group,
-    }))
+        dim,
+        pos: side.pos,
+    })
 }
 
 struct CrafterItems {
     level: LevelRef,
     dim: usize,
-    group: Vec<[i32; 3]>,
+    pos: [i32; 3],
 }
 
 impl CrafterItems {
-    fn held(&self, host: &dyn mod_api::Host, index: usize) -> Option<ItemStack> {
-        let p = *self.group.get(index)?;
+    /// The crafter's group as it stands now (`ConnectedInputHandler`).
+    fn group(&self, host: &mut dyn ServerHost) -> Vec<[i32; 3]> {
+        let Some(dimension) = super::super::world::level_id(self.dim) else {
+            return Vec::new();
+        };
+        let Some(lv) = ServerLevel::new(host, &dimension) else {
+            return Vec::new();
+        };
+        if crafter_at(&lv, self.pos).is_none() {
+            return Vec::new();
+        }
+        crafter_group(&lv, self.pos)
+    }
+
+    fn held(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemStack> {
+        let p = *self.group(host).get(index)?;
         host.block_entity(self.level, p)?
             .item_slot(host, 0)
             .ok()
@@ -185,20 +192,20 @@ impl CrafterItems {
 }
 
 impl ResourceHandler<ItemResource> for CrafterItems {
-    fn size(&self, _host: &mut dyn ServerHost) -> usize {
-        self.group.len()
+    fn size(&self, host: &mut dyn ServerHost) -> usize {
+        self.group(host).len()
     }
     fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<ItemResource> {
-        self.held(&*host, index).map(|s| ItemResource::of(&s))
+        self.held(host, index).map(|s| ItemResource::of(&s))
     }
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
-        self.held(&*host, index).map_or(0, |s| s.count())
+        self.held(host, index).map_or(0, |s| s.count())
     }
     /// `Inventory`'s slot limit: one item.
-    fn capacity(&self, _host: &mut dyn ServerHost, _index: usize, _: &ItemResource) -> u32 {
+    fn capacity(&self, _host: &mut dyn ServerHost, _index: usize, _: Option<&ItemResource>) -> u32 {
         1
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -206,17 +213,14 @@ impl ResourceHandler<ItemResource> for CrafterItems {
         resource: &ItemResource,
         amount: u32,
     ) -> u32 {
-        let Some(&p) = self.group.get(index) else {
+        let Some(&p) = self.group(host).get(index) else {
             return 0;
         };
         // `if (phase != Phase.IDLE) return stack; if (covered) return stack;`
         let idle = with_world(|w| w.dims[self.dim].crafters.get(&p).map(|c| c.phase))
             .flatten()
             .is_none_or(|ph| ph == Phase::Idle);
-        if amount == 0
-            || !idle
-            || crafter_covered(self.dim, p)
-            || self.held(&*host, index).is_some()
+        if amount == 0 || !idle || crafter_covered(self.dim, p) || self.held(host, index).is_some()
         {
             return 0;
         }
@@ -235,7 +239,7 @@ impl ResourceHandler<ItemResource> for CrafterItems {
             Err(_) => 0,
         }
     }
-    fn extract(
+    fn extract_at(
         &self,
         _host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -516,7 +520,7 @@ fn insert_item(lv: &mut ServerLevel<'_>, t: [i32; 3], face: Direction, item: &st
             let Some(cap) = level.capability(host, &ITEMS, t, Some(face)) else {
                 return Err(());
             };
-            Ok::<u32, ()>(cap.insert_any(host, tx, &resource, n))
+            Ok::<u32, ()>(cap.insert(host, tx, &resource, n).unwrap_or(0))
         })
         .unwrap_or(0)
 }

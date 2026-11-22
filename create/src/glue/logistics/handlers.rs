@@ -15,7 +15,7 @@ use mod_api::{
 
 /// The engine's index of `level`.
 fn dim_of(host: &dyn mod_api::Host, level: LevelRef) -> Option<usize> {
-    level_index(&level.dimension().id(host)?)
+    level_index(&level.dimension().id(host).map(str::to_owned)?)
 }
 
 /// The Create block at `pos` and its state's facts.
@@ -28,14 +28,27 @@ fn block_at(
     with_world(|w| w.table.get(id).map(|(b, i)| (b, *i))).flatten()
 }
 
-/// The handler `side` asks the block of: a depot's, a belt segment's, a vault's or a chute's;
-/// None for the rest.
-pub fn provide(
-    host: &mut dyn ServerHost,
+/// Offers the handler `side` asks the block of: a depot's, a belt segment's, a vault's or a
+/// chute's; none for the rest.
+pub fn offer(
+    _level: &dyn mod_api::LevelHost,
     side: BlockSide,
+    state: mod_api::BlockState,
+    _entity: BlockEntityRef,
+    offer: &mut mod_api::BlockCapabilityOffer<'_, dyn ResourceHandler<ItemResource>>,
+) {
+    if let Some(handler) = provide(side, state) {
+        offer.offer(|| handler);
+    }
+}
+
+fn provide(
+    side: BlockSide,
+    state: mod_api::BlockState,
 ) -> Option<Box<dyn ResourceHandler<ItemResource>>> {
-    let (block, _) = block_at(&*host, side.level, side.pos)?;
-    let dim = dim_of(&*host, side.level)?;
+    let id = states::id(state)?;
+    let block = with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten()?;
+    let dim = super::super::world::level_of(side.level)?;
     let at = At {
         level: side.level,
         pos: side.pos,
@@ -65,11 +78,9 @@ pub fn provide(
         Block::Chute | Block::SmartChute => Some(Box::new(ChuteItems(at))),
         Block::BrassTunnel => Some(Box::new(TunnelItems(at))),
         Block::Packager | Block::Repackager | Block::PackageFrogport => {
-            crate::glue::packages::packager_items(host, side, dim)
+            crate::glue::packages::packager_items(side, dim)
         }
-        b if create_engine::dye::is_postbox(b) => {
-            crate::glue::packages::packager_items(host, side, dim)
-        }
+        b if create_engine::dye::is_postbox(b) => crate::glue::packages::packager_items(side, dim),
         _ => None,
     }
 }
@@ -95,6 +106,11 @@ fn limit(host: &dyn mod_api::Host, resource: &ItemResource) -> u32 {
     host.max_stack_size(resource.item())
         .unwrap_or(64)
         .clamp(1, 64)
+}
+
+/// `getStackInSlot(slot).getOrDefault(MAX_STACK_SIZE, 64)`.
+fn held_limit(host: &dyn mod_api::Host, e: Option<BlockEntityRef>, slot: usize) -> u32 {
+    read(host, e, slot).map_or(64, |s| host.max_stack_size(s.item()).unwrap_or(64))
 }
 
 /// Takes up to `amount` of `resource` out of slot `slot` of `e`.
@@ -178,7 +194,7 @@ impl DepotItems {
         else {
             return 0;
         };
-        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+        let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
             return 0;
         };
         let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) else {
@@ -204,7 +220,7 @@ impl DepotItems {
     /// `DepotBehaviour.insert` onto an empty depot: the stack put into its held slot is its held
     /// stack, arriving from above (`handler_motion`).
     fn arrived(&self, host: &mut dyn ServerHost, e: BlockEntityRef) {
-        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+        let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
@@ -229,13 +245,33 @@ impl ResourceHandler<ItemResource> for DepotItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         read(&*host, self.0.entity(&*host, self.0.pos), index).map_or(0, |s| s.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
-        limit(&*host, resource)
+    /// `getSlotLimit`: the main slot's `maxStackSize` (an ejector's setting, else the held
+    /// stack's), 64 for the outputs.
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        if let Some(resource) = resource {
+            return limit(&*host, resource);
+        }
+        if index != 0 {
+            return 64;
+        }
+        let ejector = with_world(|w| {
+            w.dims[self.0.dim]
+                .ejectors
+                .get(&self.0.pos)
+                .map(|e| u32::from(e.max_stack))
+        })
+        .flatten();
+        ejector.unwrap_or_else(|| held_limit(&*host, self.0.entity(&*host, self.0.pos), 0))
     }
     fn is_valid(&self, _host: &mut dyn ServerHost, index: usize, _: &ItemResource) -> bool {
         index == 0
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -265,7 +301,7 @@ impl ResourceHandler<ItemResource> for DepotItems {
         }
         n
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -322,7 +358,7 @@ impl ResourceHandler<ItemResource> for BeltItems {
             return None;
         }
         let (_, _, item) = self.stack_at(&*host)?;
-        let dimension = self.0.level.dimension().id(&*host)?;
+        let dimension = self.0.level.dimension().id(&*host).map(str::to_owned)?;
         let lv = super::super::server::ServerLevel::new(host, &dimension)?;
         super::belt::belt_stack(&lv, &item).map(|s| ItemResource::of(&s))
     }
@@ -333,10 +369,21 @@ impl ResourceHandler<ItemResource> for BeltItems {
         self.stack_at(&*host)
             .map_or(0, |(_, _, s)| u32::from(s.count))
     }
-    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
-        limit(&*host, resource)
+    /// `getSlotLimit`: the stack at the offset's own limit, else 64.
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        match resource {
+            Some(resource) => limit(&*host, resource),
+            None => self
+                .resource(host, index)
+                .map_or(64, |r| host.max_stack_size(r.item()).unwrap_or(64)),
+        }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -350,7 +397,7 @@ impl ResourceHandler<ItemResource> for BeltItems {
         let Some(stack) = resource.to_stack(amount.min(u32::from(u8::MAX))) else {
             return 0;
         };
-        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+        let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
             return 0;
         };
         let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) else {
@@ -364,7 +411,7 @@ impl ResourceHandler<ItemResource> for BeltItems {
             None => 0,
         }
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -378,7 +425,7 @@ impl ResourceHandler<ItemResource> for BeltItems {
         let Some((c, segment, item)) = self.stack_at(&*host) else {
             return 0;
         };
-        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+        let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
             return 0;
         };
         let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
@@ -432,10 +479,15 @@ impl ResourceHandler<ItemResource> for VaultItems {
         };
         read(&*host, self.at.entity(&*host, pos), slot).map_or(0, |s| s.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
-        limit(&*host, resource)
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        _index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        resource.map_or(64, |r| limit(&*host, r))
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -452,7 +504,7 @@ impl ResourceHandler<ItemResource> for VaultItems {
         let room = limit(&*host, resource);
         put(host, tx, e, slot, resource, amount, room)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -482,13 +534,22 @@ impl ResourceHandler<ItemResource> for ChuteItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         read(&*host, self.0.entity(&*host, self.0.pos), index).map_or(0, |s| s.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
-        limit(&*host, resource)
+    /// `getSlotLimit`: the held stack's limit, else 64.
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        match resource {
+            Some(resource) => limit(&*host, resource),
+            None => held_limit(&*host, self.0.entity(&*host, self.0.pos), index),
+        }
     }
     fn is_valid(&self, host: &mut dyn ServerHost, index: usize, resource: &ItemResource) -> bool {
         index == 0 && accepts(&*host, self.0, resource.as_stack())
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -512,7 +573,7 @@ impl ResourceHandler<ItemResource> for ChuteItems {
         }
         n
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -530,7 +591,7 @@ impl ResourceHandler<ItemResource> for ChuteItems {
 /// the chute at no commit it hears of (no `contents_changed`), so it is told here; should the
 /// transaction abort, the chute's next tick finds it empty and lets it go again.
 fn chute_given(host: &mut dyn ServerHost, at: At) {
-    let Some(dimension) = at.level.dimension().id(&*host) else {
+    let Some(dimension) = at.level.dimension().id(&*host).map(str::to_owned) else {
         return;
     };
     let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
@@ -578,7 +639,7 @@ impl TunnelItems {
     }
 
     fn target(&self, host: &mut dyn ServerHost) -> Option<create_engine::tunnel::HandlerTarget> {
-        let dimension = self.0.level.dimension().id(&*host)?;
+        let dimension = self.0.level.dimension().id(&*host).map(str::to_owned)?;
         let lv = super::super::server::ServerLevel::new(host, &dimension)?;
         let pos = self.0.pos;
         let target = super::tunnel::handler_target(&lv, pos)?;
@@ -601,10 +662,19 @@ impl ResourceHandler<ItemResource> for TunnelItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         read(&*host, self.0.entity(&*host, self.0.pos), index).map_or(0, |s| s.count())
     }
-    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
-        limit(&*host, resource)
+    /// `getSlotLimit`: the stack to distribute's limit, else 64.
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        match resource {
+            Some(resource) => limit(&*host, resource),
+            None => held_limit(&*host, self.0.entity(&*host, self.0.pos), index),
+        }
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -614,7 +684,7 @@ impl ResourceHandler<ItemResource> for TunnelItems {
     ) -> u32 {
         match self.target(host) {
             Some(create_engine::tunnel::HandlerTarget::BeltBelow) => {
-                self.belt().insert(host, tx, index, resource, amount)
+                self.belt().insert_at(host, tx, index, resource, amount)
             }
             Some(create_engine::tunnel::HandlerTarget::Distribute) if index == 0 => {
                 let Some(e) = self.0.entity(&*host, self.0.pos) else {
@@ -626,7 +696,7 @@ impl ResourceHandler<ItemResource> for TunnelItems {
             _ => 0,
         }
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -634,6 +704,6 @@ impl ResourceHandler<ItemResource> for TunnelItems {
         resource: &ItemResource,
         amount: u32,
     ) -> u32 {
-        self.belt().extract(host, tx, index, resource, amount)
+        self.belt().extract_at(host, tx, index, resource, amount)
     }
 }

@@ -3,6 +3,7 @@
 //! stripped wood, a sturdy sheet on a brass casing...) turns the block into the recipe's block.
 
 use super::{recipes, stacks};
+use crate::glue::names::Named as _;
 use crate::glue::server::ServerLevel;
 use create_engine::processing::Rng;
 use mod_api::{EquipmentSlot, InteractionResult, RightClickBlockEvent, ServerHost};
@@ -33,7 +34,7 @@ pub fn apply_in_world(host: &mut dyn ServerHost, event: &mut RightClickBlockEven
     let Some(block) = lv.level.block(host, pos) else {
         return false;
     };
-    let Some(target) = host.block_item(block).map(|i| i.id(host)) else {
+    let Some(target) = host.block_item(block).map(|i| i.name(host)) else {
         return false;
     };
     let held = stacks::id(host, stack);

@@ -10,9 +10,10 @@
 //! the reference item's attributes, read where the recipes are, when it changes.
 
 use super::super::net;
+use crate::glue::owned::OwnedEquipment as _;
 use mod_api::text::TextStyle;
 use mod_api::{
-    ClientHost, DrawContext, Flow, Hand, Host, ItemStack, MenuPart, Screen, ScreenClosingEvent,
+    ClientHost, DrawContext, Flow, Hand, Host, ItemStack, MenuPart, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, SoundPlay, Tag, Text,
 };
@@ -338,28 +339,25 @@ fn attribute_menu(menu: &str) -> Option<bool> {
     }
 }
 
-/// Runs `f` on the open screen's state, read from the menu's extra data when it opened.
-fn with_open<R>(host: &dyn ClientHost, attribute: bool, f: impl FnOnce(&mut Open) -> R) -> R {
-    OPEN.with_borrow_mut(|o| {
-        let open = o.get_or_insert_with(|| {
-            let opened = host
-                .screen_extra_data()
-                .and_then(|d| Opened::decode(&d))
-                .unwrap_or_default();
-            Open {
-                attribute,
-                deny: opened.deny,
-                respect: opened.respect,
-                mode: opened.mode,
-                chosen: opened.chosen,
-                options: Vec::new(),
-                option: 0,
-                reference: false,
-                pressed: false,
-            }
-        });
-        f(open)
-    })
+/// Runs `f` on the open screen's state (`open_screen` reads it from the menu's extra data).
+fn with_open<R>(attribute: bool, f: impl FnOnce(&mut Open) -> R) -> R {
+    OPEN.with_borrow_mut(|o| f(o.get_or_insert_with(|| Open::new(attribute, Opened::default()))))
+}
+
+impl Open {
+    fn new(attribute: bool, opened: Opened) -> Open {
+        Open {
+            attribute,
+            deny: opened.deny,
+            respect: opened.respect,
+            mode: opened.mode,
+            chosen: opened.chosen,
+            options: Vec::new(),
+            option: 0,
+            reference: false,
+            pressed: false,
+        }
+    }
 }
 
 fn ours(menu: Option<&str>) -> Option<bool> {
@@ -382,12 +380,12 @@ fn menu_slot(host: &dyn ClientHost, slot: usize) -> Option<ItemStack> {
 }
 
 /// The reference item's attributes arrived.
-pub(crate) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
+pub(crate) fn server_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
     if channel != CHANNEL {
         return false;
     }
     if let Some(ToClient::Options(lines)) = ToClient::decode(data) {
-        with_open(&*host, true, |o| {
+        with_open(true, |o| {
             o.options = lines;
             o.option = 0;
         });
@@ -406,111 +404,148 @@ pub(crate) fn tick(host: &mut dyn ClientHost) {
     }
 }
 
-/// The filters' screens on their menus.
+/// `AbstractFilterScreen.init`: the window (`setWindowSize`, moved by `setWindowOffset`,
+/// which a centred screen gets by growing twice the offset), the ghost slots and the
+/// player's inventory where the menu puts them.
+pub(crate) fn open_screen(
+    _host: &dyn ClientHost,
+    open: mod_api::MenuScreenOpen<'_>,
+) -> Option<mod_api::MenuScreen> {
+    let attribute = attribute_menu(open.menu)?;
+    let opened = Opened::decode(open.extra).unwrap_or_default();
+    OPEN.with_borrow_mut(|o| *o = Some(Open::new(attribute, opened)));
+    let l = layout(attribute);
+    let w = l.window();
+    let slots: Vec<[f32; 2]> = if attribute {
+        vec![REFERENCE_SLOT, SELECTED_SLOT]
+    } else {
+        (0..LIST_SLOTS).map(|i| list_slot([0.0, 0.0], i)).collect()
+    };
+    let layout = mod_api::MenuScreenLayout {
+        width: w[0] - 2.0 * l.offset[0],
+        height: w[1] - 2.0 * l.offset[1],
+        slots: slots
+            .into_iter()
+            .map(|position| {
+                Some(mod_api::ScreenSlot {
+                    position,
+                    no_item_icon: None,
+                })
+            })
+            .collect(),
+        inventory_x: l.inventory[0],
+        inventory_y: l.inventory[1],
+        own_labels: true,
+        own_background: true,
+        ..Default::default()
+    };
+    Some(
+        mod_api::MenuScreen::new(layout)
+            .with_draw(move |host, frame, draw| screen_draw(host, attribute, frame, draw))
+            .with_click(move |host, frame, right| screen_click(host, attribute, frame, right))
+            .with_tooltip(move |host, frame, slot, lines| {
+                screen_tooltip(host, attribute, frame, slot, lines)
+            }),
+    )
+}
+
+fn screen_draw(
+    host: &dyn ClientHost,
+    attribute: bool,
+    frame: mod_api::MenuScreenFrame<'_>,
+    draw_cx: &mut dyn mod_api::DrawContext,
+) {
+    let mouse = frame.pointer.map(|p| p as f32);
+    let origin = frame.origin;
+    let reference = attribute && menu_slot(host, 0).is_some();
+    with_open(attribute, |o| {
+        if o.reference != reference {
+            o.reference = reference;
+            o.option = 0;
+        }
+        draw(host, draw_cx, o, origin, mouse);
+    });
+}
+
+/// The buttons (`IconButton.onClick`): an active one takes the press.
+fn screen_click(
+    host: &dyn ClientHost,
+    attribute: bool,
+    frame: mod_api::MenuScreenFrame<'_>,
+    right: bool,
+) -> Option<i32> {
+    if right {
+        return None;
+    }
+    let at = frame.at;
+    with_open(attribute, |o| {
+        let (b, _) = buttons(o, [0.0, 0.0])
+            .into_iter()
+            .find(|(b, r)| inside(*r, at) && active(o, *b))?;
+        click_sound(host);
+        press(o, b);
+        Some(0)
+    })
+}
+
+/// The buttons' tooltips (`handleTooltips`), the selector's, and the selected attributes
+/// over their slot (`AttributeFilterScreen.renderTooltip`).
+fn screen_tooltip(
+    host: &dyn ClientHost,
+    attribute: bool,
+    frame: mod_api::MenuScreenFrame<'_>,
+    slot: Option<u32>,
+    out: &mut Vec<(mod_api::Text, u32)>,
+) {
+    let at = frame.at;
+    let lines = with_open(attribute, |o| {
+        if attribute && slot == Some(1) && !out.is_empty() {
+            return Some(selected_attributes(host, o));
+        }
+        if slot.is_some() {
+            return None;
+        }
+        button_tip(host, o, at).or_else(|| {
+            let r = SELECTOR;
+            let reference = menu_slot(host, 0)?;
+            (attribute && inside(r, at)).then(|| {
+                selector_tip(
+                    host,
+                    host.hover_name(&reference).unwrap_or_default(),
+                    o.options(),
+                    o.option,
+                )
+            })
+        })
+    });
+    if let Some(lines) = lines {
+        *out = lines.into_iter().map(|t| (t, 0xFFFF_FFFF)).collect();
+    }
+}
+
+/// The filters' menus: their ghost slots.
 pub(crate) struct FilterScreen;
 
 #[mod_api::sunrise_part]
 impl MenuPart for FilterScreen {
-    /// `AbstractFilterScreen.init`: the window (`setWindowSize`, moved by `setWindowOffset`,
-    /// which a centred screen gets by growing twice the offset), the ghost slots and the
-    /// player's inventory where the menu puts them.
-    fn screen(&self, _host: &dyn Host, event: &mut mod_api::ScreenEvent<'_>) -> Option<Screen> {
-        let attribute = attribute_menu(event.menu)?;
-        OPEN.with_borrow_mut(|o| *o = None);
-        let l = layout(attribute);
-        let w = l.window();
-        let slots: Vec<[f32; 2]> = if attribute {
-            vec![REFERENCE_SLOT, SELECTED_SLOT]
-        } else {
-            (0..LIST_SLOTS).map(|i| list_slot([0.0, 0.0], i)).collect()
-        };
-        Some(Screen {
-            width: w[0] - 2.0 * l.offset[0],
-            height: w[1] - 2.0 * l.offset[1],
-            slots: slots
-                .into_iter()
-                .map(|position| {
-                    Some(mod_api::ScreenSlot {
-                        position,
-                        no_item_icon: None,
-                    })
-                })
-                .collect(),
-            inventory_x: l.inventory[0],
-            inventory_y: l.inventory[1],
-            own_labels: true,
-            own_background: true,
-            ..Default::default()
-        })
-    }
-
-    fn screen_draw(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
-        let Some(attribute) = attribute_menu(event.menu) else {
-            return;
-        };
-        let mouse = event.pointer.map(|p| p as f32);
-        let origin = event.origin;
-        let reference = attribute && menu_slot(host, 0).is_some();
-        with_open(host, attribute, |o| {
-            if o.reference != reference {
-                o.reference = reference;
-                o.option = 0;
-            }
-            draw(host, event.draw, o, origin, mouse);
-        });
-    }
-
-    /// The buttons (`IconButton.onClick`): an active one takes the press.
-    fn screen_click(
+    /// `HeldItemGhostItemMenu.stillValid`: the filter it opened from is still in that hand
+    /// (the selected slot is checked each tick, `filters::player_tick`).
+    fn menu_still_valid(
         &self,
-        host: &dyn ClientHost,
-        event: &mut mod_api::ScreenClickEvent<'_>,
-    ) -> Option<i32> {
-        let attribute = attribute_menu(event.menu)?;
-        if event.right {
-            return None;
+        _context: &dyn mod_api::LoopContext,
+        event: &mut mod_api::MenuStillValidEvent<'_>,
+    ) {
+        if let Some(opened) = &event.opening_item {
+            event.valid &= opened.stack_matches;
         }
-        let at = event.at;
-        with_open(host, attribute, |o| {
-            let (b, _) = buttons(o, [0.0, 0.0])
-                .into_iter()
-                .find(|(b, r)| inside(*r, at) && active(o, *b))?;
-            click_sound(host);
-            press(o, b);
-            Some(0)
-        })
     }
 
-    /// The buttons' tooltips (`handleTooltips`), the selector's, and the selected attributes
-    /// over their slot (`AttributeFilterScreen.renderTooltip`).
-    fn screen_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenTooltipEvent<'_>) {
-        let Some(attribute) = attribute_menu(event.menu) else {
-            return;
-        };
-        let at = event.at;
-        let lines = with_open(host, attribute, |o| {
-            if attribute && event.slot == Some(1) && !event.lines.is_empty() {
-                return Some(selected_attributes(host, o));
-            }
-            if event.slot.is_some() {
-                return None;
-            }
-            button_tip(host, o, at).or_else(|| {
-                let r = SELECTOR;
-                let reference = menu_slot(host, 0)?;
-                (attribute && inside(r, at)).then(|| {
-                    selector_tip(
-                        host,
-                        host.hover_name(&reference).unwrap_or_default(),
-                        o.options(),
-                        o.option,
-                    )
-                })
-            })
-        });
-        if let Some(lines) = lines {
-            *event.lines = lines.into_iter().map(|t| (t, 0xFFFF_FFFF)).collect();
-        }
+    fn menu_clicked(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::MenuClickedEvent<'_>,
+    ) -> mod_api::Flow {
+        super::filters::menu_clicked(host, event)
     }
 
     /// The ghost slots take nothing from the cursor and give nothing up: the server's clicks
@@ -622,10 +657,7 @@ fn button_tip(host: &dyn ClientHost, o: &Open, at: [f32; 2]) -> Option<Vec<Text>
         );
         if host.modifiers().shift() {
             let desc = tr(host, desc);
-            for line in cut(
-                |t| host.text_width(&Text::literal(t)).map_or(0.0, |w| w as f32),
-                &desc,
-            ) {
+            for line in cut(|t| host.text_width(&Text::literal(t)) as f32, &desc) {
                 lines.push(styled(line, "gray", false));
             }
         }
@@ -654,11 +686,11 @@ pub(crate) fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRender
 }
 
 pub(crate) fn screen_mouse_pressed(
-    host: &dyn ClientHost,
+    _host: &dyn ClientHost,
     event: &mut ScreenMouseButtonPressedPreEvent<'_>,
 ) -> Flow {
     if let Some(attribute) = ours(event.screen.menu) {
-        with_open(host, attribute, |o| o.pressed = event.button == 0);
+        with_open(attribute, |o| o.pressed = event.button == 0);
     }
     Flow::Continue
 }
@@ -697,7 +729,7 @@ pub(crate) fn screen_mouse_scrolled(
         return Flow::Continue;
     }
     let up = event.scroll[1] > 0.0;
-    let stepped = with_open(host, true, |o| {
+    let stepped = with_open(true, |o| {
         let n = o.options().len();
         if n == 0 {
             return None;

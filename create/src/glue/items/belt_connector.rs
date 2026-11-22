@@ -8,6 +8,7 @@ use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::world::with_world;
 use super::{creative, custom, held, set_custom, set_held, sneaking};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::belt_connector::{self as bc, FIRST_SHAFT_KEY};
 use create_engine::kinetics::Axis;
@@ -172,7 +173,7 @@ pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32;
     let water = |lv: &ServerLevel<'_>, s: BlockState| {
         lv.host
             .state_fluid_state(s)
-            .is_some_and(|f| f.is_source() && f.fluid.id(&*lv.host) == "minecraft:water")
+            .is_some_and(|f| f.is_source() && f.fluid.name(&*lv.host) == "minecraft:water")
     };
     let mut failed = false;
     for (pos, seg) in &layout {

@@ -5,7 +5,7 @@
 //! cannon's ticks; its buttons are menu buttons (`ConfigureSchematicannonPacket`).
 
 use create_engine::schematicannon::{Cannon, Configure, SHOTS_PER_GUNPOWDER, State, Status};
-use mod_api::{ClientHost, DrawContext, Screen, Text, text::TextStyle};
+use mod_api::{ClientHost, DrawContext, MenuScreenLayout, Text, text::TextStyle};
 use std::cell::Cell;
 
 const TEX: &str = "create:gui/schematics_2";
@@ -35,8 +35,8 @@ pub(super) fn cannon_data(c: &Cannon) -> Vec<i32> {
 
 /// `SchematicannonMenu`: its five slots, the player's inventory at (37, 161), in a window of
 /// `SCHEMATICANNON_TOP` and `_BOTTOM` with the inventory under them.
-pub(super) fn cannon_screen() -> Screen {
-    Screen {
+pub(super) fn cannon_screen() -> MenuScreenLayout {
+    MenuScreenLayout {
         width: 213.0,
         height: 251.0,
         slots: vec![
@@ -65,7 +65,7 @@ pub(super) fn cannon_screen() -> Screen {
         inventory_x: 37.0,
         own_labels: true,
         own_background: true,
-        ..Screen::default()
+        ..MenuScreenLayout::default()
     }
 }
 
@@ -415,8 +415,8 @@ pub(super) fn configure(id: i32, data: &[i32]) -> Option<Configure> {
 
 /// `SchematicTableMenu`: the input and output slots (as the hopper's first and last), the
 /// player's inventory at (38, 107), under `SCHEMATIC_TABLE`.
-pub(super) fn table_screen() -> Screen {
-    Screen {
+pub(super) fn table_screen() -> MenuScreenLayout {
+    MenuScreenLayout {
         width: 214.0,
         height: 197.0,
         slots: vec![
@@ -436,7 +436,7 @@ pub(super) fn table_screen() -> Screen {
         inventory_x: 38.0,
         own_labels: true,
         own_background: true,
-        ..Screen::default()
+        ..MenuScreenLayout::default()
     }
 }
 

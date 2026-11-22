@@ -9,12 +9,13 @@
 //! particles and `SOUL_ESCAPE` a quarter of the ticks.
 //!
 //! Create's client runs the pulses where its packet arrives; here the server runs them and sends
-//! the souls to the players within 32 blocks. Left out (`API_GAPS.md`, Client): the souls are
-//! drawn facing the camera, where Create turns a soul only about the vertical and lays its base
-//! flat on the ground (`CustomRotationParticle.getCustomRotation`), and a soul that the light
-//! reaches is not taken away (`SoulParticle.tick` reading the client level's light).
+//! the souls to the players within 32 blocks. A soul turns only about the vertical and its base
+//! lies flat (`CustomRotationParticle.getCustomRotation`); either goes once light reaches it
+//! (`SoulParticle.tick`).
 
 use super::super::server::ServerLevel;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::soul::{self, Pulse, SoulAnimation};
 use mod_api::{
     BlockFace, Hand, LightLayer, ModParticle, ParticleKey, ParticleOptions, ParticleProvider,
@@ -27,14 +28,14 @@ use std::sync::OnceLock;
 pub(super) const SOUL: &str = "create:soul";
 pub(super) const SOUL_BASE: &str = "create:soul_base";
 
-static KEYS: OnceLock<[ParticleKey; 3]> = OnceLock::new();
+static VANILLA_SOUL: OnceLock<ParticleKey> = OnceLock::new();
+pub(super) static TYPES: OnceLock<[mod_api::ParticleType<()>; 2]> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
-    let _ = KEYS.set([
-        r.particle_key(SOUL),
-        r.particle_key(SOUL_BASE),
-        r.particle_key("minecraft:soul"),
-    ]);
+    let soul = crate::glue::particle_type(r, SOUL);
+    let base = crate::glue::particle_type(r, SOUL_BASE);
+    let _ = TYPES.set([soul, base]);
+    let _ = VANILLA_SOUL.set(r.particle_key("minecraft:soul"));
 }
 
 #[derive(Default)]
@@ -75,7 +76,7 @@ pub(super) fn player_tick(host: &mut dyn ServerHost, player: PlayerRef) {
     let holding = [Hand::Main, Hand::Off].into_iter().any(|h| {
         living
             .hand_item(&*host, h)
-            .is_some_and(|s| s.item().id(&*host) == "create:haunted_bell")
+            .is_some_and(|s| s.item().name(&*host) == "create:haunted_bell")
     });
     if !holding || player.game_mode(&*host) == Some(mod_api::GameMode::Spectator) {
         return;
@@ -165,16 +166,10 @@ fn soul_fits(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         .is_some_and(|b| b.is_empty())
 }
 
-fn send(lv: &mut ServerLevel<'_>, key: ParticleKey, at: [f64; 3], v: [f64; 3]) {
-    let _ = lv.level.send_particles(
-        &mut *lv.host,
-        &ParticleOptions::simple(key),
-        None,
-        at,
-        v,
-        1.0,
-        0,
-    );
+fn send(lv: &mut ServerLevel<'_>, options: &ParticleOptions, at: [f64; 3], v: [f64; 3]) {
+    let _ = lv
+        .level
+        .send_particles(&mut *lv.host, options, None, at, v, 1.0, 0);
 }
 
 /// The level's tick: the bells' souls after a ring, then each pulse's ring
@@ -184,7 +179,8 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
     let Some(mut level) = LEVELS.with_borrow_mut(|l| l.remove(&dim)) else {
         return;
     };
-    let Some(&[soul_key, base_key, vanilla_soul]) = KEYS.get() else {
+    let (Some(&[soul_type, base_type]), Some(&vanilla_soul)) = (TYPES.get(), VANILLA_SOUL.get())
+    else {
         return;
     };
     // `HauntedBellBlockEntity.tick`.
@@ -208,7 +204,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
         ];
         send(
             lv,
-            vanilla_soul,
+            &ParticleOptions::simple(vanilla_soul),
             at,
             [r[3] * 0.04 - 0.02, 0.1, r[4] * 0.04 - 0.02],
         );
@@ -241,8 +237,18 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
                     f64::from(p[1]),
                     f64::from(p[2]) + 0.5,
                 ];
-                send(lv, soul_key, [c[0], c[1] + 0.5, c[2]], [0.0; 3]);
-                send(lv, base_key, [c[0], c[1] + 0.01, c[2]], [0.0; 3]);
+                send(
+                    lv,
+                    &soul_type.options(()),
+                    [c[0], c[1] + 0.5, c[2]],
+                    [0.0; 3],
+                );
+                send(
+                    lv,
+                    &base_type.options(()),
+                    [c[0], c[1] + 0.01, c[2]],
+                    [0.0; 3],
+                );
             }
         }
     }
@@ -268,66 +274,89 @@ fn random(p: &ModParticle, salt: u64) -> f32 {
     (h % 10_000) as f32 / 10_000.0
 }
 
+/// `SoulPulseEffect.isDark`: no block light where the particle is.
+fn dark_at(level: &dyn mod_api::ParticleLevelView, p: &mod_api::ModParticle) -> bool {
+    let at = p.position.map(|v| v.floor() as i32);
+    level.brightness(mod_api::LightLayer::Block, at) < 1
+}
+
 /// `SoulParticle` (not a perimeter one): 0.5 big, still, its 53 frames in their start, loop
-/// and end stages, two ticks a frame.
+/// and end stages, two ticks a frame, turned to the camera's yaw (`getCustomRotation`), gone
+/// once lit.
 pub(super) struct Soul;
 
 impl ParticleProvider for Soul {
-    fn tick(&self, p: &mut ModParticle) {
-        let mut a = if p.state[0] == 0.0 {
-            p.size = 0.5;
-            p.lifetime = i32::MAX;
-            p.velocity = [0.0; 3];
-            SoulAnimation {
-                stage: 1,
-                ticks: 0,
-                loops: 0,
-                // `startFrames + (int) (random.nextFloat() * 5f - 4f)` and the like.
-                start_ticks: (17 + (random(p, 1) * 5.0 - 4.0) as i32) as u32,
-                end_ticks: (20 + (random(p, 2) * 5.0 - 4.0) as i32) as u32,
-                num_loops: (1.0 + random(p, 3) * 2.0) as u32,
+    fn tick(&self, particles: &mut mod_api::ParticleBatch, level: &dyn mod_api::ParticleLevelView) {
+        let one = |p: &mut mod_api::ModParticle| {
+            let mut a = if p.state[0] == 0.0 {
+                p.size = 0.5;
+                p.lifetime = i32::MAX;
+                p.velocity = [0.0; 3];
+                p.facing = mod_api::ParticleFacing::AroundY;
+                SoulAnimation {
+                    stage: 1,
+                    ticks: 0,
+                    loops: 0,
+                    // `startFrames + (int) (random.nextFloat() * 5f - 4f)` and the like.
+                    start_ticks: (17 + (random(p, 1) * 5.0 - 4.0) as i32) as u32,
+                    end_ticks: (20 + (random(p, 2) * 5.0 - 4.0) as i32) as u32,
+                    num_loops: (1.0 + random(p, 3) * 2.0) as u32,
+                }
+            } else {
+                let s = p.state;
+                SoulAnimation {
+                    stage: s[0] as u8,
+                    ticks: s[1] as u32,
+                    loops: s[2] as u32,
+                    start_ticks: (s[3] as u32) & 0xFF,
+                    end_ticks: ((s[3] as u32) >> 8) & 0xFF,
+                    num_loops: (s[3] as u32) >> 16,
+                }
+            };
+            let frame = a.tick();
+            if a.stage == 0 {
+                p.removed = true;
+                return;
             }
-        } else {
-            let s = p.state;
-            SoulAnimation {
-                stage: s[0] as u8,
-                ticks: s[1] as u32,
-                loops: s[2] as u32,
-                start_ticks: (s[3] as u32) & 0xFF,
-                end_ticks: ((s[3] as u32) >> 8) & 0xFF,
-                num_loops: (s[3] as u32) >> 16,
+            // `animatedSprite.get(frame, 53)`.
+            p.frame = frame * 52 / 53;
+            p.state = [
+                f64::from(a.stage),
+                f64::from(a.ticks),
+                f64::from(a.loops),
+                f64::from(a.start_ticks | a.end_ticks << 8 | a.num_loops << 16),
+            ];
+            if !dark_at(level, p) {
+                p.removed = true;
             }
         };
-        let frame = a.tick();
-        if a.stage == 0 {
-            p.removed = true;
-            return;
-        }
-        // `animatedSprite.get(frame, 53)`.
-        p.frame = frame * 52 / 53;
-        p.state = [
-            f64::from(a.stage),
-            f64::from(a.ticks),
-            f64::from(a.loops),
-            f64::from(a.start_ticks | a.end_ticks << 8 | a.num_loops << 16),
-        ];
+        particles.iter_mut().for_each(one);
     }
 }
 
-/// `SoulBaseParticle`: 0.5 big, still, 90 to 140 ticks, its 8 frames looping every 16 ticks.
+/// `SoulBaseParticle`: 0.5 big, still, 90 to 140 ticks, its 8 frames looping every 16 ticks,
+/// turned 90° about x (`getCustomRotation`), gone once lit.
 pub(super) struct SoulBase;
 
 impl ParticleProvider for SoulBase {
-    fn tick(&self, p: &mut ModParticle) {
-        if p.state[0] == 0.0 {
-            p.size = 0.5;
-            p.velocity = [0.0; 3];
-            p.lifetime = (90.0 / (random(p, 4) * 0.36 + 0.64)) as i32;
-            let loop_length = 16 + (random(p, 5) * 2.0 - 1.0) as i32;
-            p.state[0] = f64::from(loop_length);
-        }
-        let loop_length = (p.state[0] as i32).max(1);
-        // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
-        p.frame = ((p.age % loop_length) * 7 / loop_length) as u32;
+    fn tick(&self, particles: &mut mod_api::ParticleBatch, level: &dyn mod_api::ParticleLevelView) {
+        let one = |p: &mut mod_api::ModParticle| {
+            if p.state[0] == 0.0 {
+                let half = std::f32::consts::FRAC_PI_4;
+                p.facing = mod_api::ParticleFacing::Fixed([half.sin(), 0.0, 0.0, half.cos()]);
+                p.size = 0.5;
+                p.velocity = [0.0; 3];
+                p.lifetime = (90.0 / (random(p, 4) * 0.36 + 0.64)) as i32;
+                let loop_length = 16 + (random(p, 5) * 2.0 - 1.0) as i32;
+                p.state[0] = f64::from(loop_length);
+            }
+            let loop_length = (p.state[0] as i32).max(1);
+            // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
+            p.frame = ((p.age % loop_length) * 7 / loop_length) as u32;
+            if !dark_at(level, p) {
+                p.removed = true;
+            }
+        };
+        particles.iter_mut().for_each(one);
     }
 }

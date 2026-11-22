@@ -12,6 +12,9 @@ use super::depot::depot_items;
 use super::funnel::funnel_at;
 use super::items::{self, face};
 use super::tunnel::tunnel_state;
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::belt;
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{BlockFace, HostBlockStates, ItemStack, PlayerRef, StateConstraint, SupportType};
@@ -1205,9 +1208,10 @@ impl BeltSide<'_, '_> {
     }
 }
 
-/// An entity noted on a belt this tick: its level, the block, its id, and whether it stepped
-/// on that block (`stepped_on`) rather than being inside a segment.
-type Passenger = (usize, [i32; 3], u32, bool);
+/// An entity noted on a belt this tick: its level (None when noted by `step_on`, which names
+/// none: the entity's own level then), the block, its id, and whether it stepped on that block
+/// (`stepped_on`) rather than being inside a segment.
+type Passenger = (Option<usize>, [i32; 3], u32, bool);
 
 thread_local! {
     /// Entities inside a belt segment this tick (`BeltBlock.entityInside`), by level: noted in
@@ -1219,15 +1223,15 @@ thread_local! {
 /// `BeltBlock.entityInside` for an entity that is not an item (items land on the belt): noted
 /// to be carried.
 pub fn passenger_inside(dim: usize, pos: [i32; 3], entity: u32) {
-    PASSENGERS.with_borrow_mut(|p| p.push((dim, pos, entity, false)));
+    PASSENGERS.with_borrow_mut(|p| p.push((Some(dim), pos, entity, false)));
 }
 
-/// `BeltBlock.updateEntityAfterFallOn` (`block_step_on`, the block under an entity on the
-/// ground): noted to be carried by the segment at its feet or the one below them, found at the
-/// end of the tick. On a slope the segment holding it up reaches above its own block, where
+/// `BeltBlock.updateEntityAfterFallOn` (`step_on`, the block under an entity on the ground):
+/// noted to be carried by the segment at its feet or the one below them, found at the end of
+/// the tick. On a slope the segment holding it up reaches above its own block, where
 /// `entity_inside` can't see it.
-pub fn stepped_on(dim: usize, on: [i32; 3], entity: u32) {
-    PASSENGERS.with_borrow_mut(|p| p.push((dim, on, entity, true)));
+pub fn stepped_on(on: [i32; 3], entity: u32) {
+    PASSENGERS.with_borrow_mut(|p| p.push((None, on, entity, true)));
 }
 
 /// `BeltMovementHandler.transportEntity` for the entities other than players on this level's
@@ -1242,13 +1246,14 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
         if p.is_empty() {
             return Vec::new();
         }
-        let mine = p
-            .iter()
-            .filter(|e| e.0 == dim)
-            .map(|e| (e.1, e.2, e.3))
+        let (mine, rest) = std::mem::take(p)
+            .into_iter()
+            .partition::<Vec<_>, _>(|e| super::noted_here(lv, e.0, e.2) == Some(true));
+        *p = rest
+            .into_iter()
+            .filter(|e| super::noted_here(lv, e.0, e.2).is_some())
             .collect();
-        p.retain(|e| e.0 != dim);
-        mine
+        mine.into_iter().map(|e| (e.1, e.2, e.3)).collect()
     });
     if mine.is_empty() {
         return;
@@ -1265,7 +1270,7 @@ pub fn transport_passengers(lv: &mut ServerLevel<'_>) {
         // (`carry_local_player`), which move them.
         let kind = e
             .kind(&*lv.host)
-            .map(|k| k.id(&*lv.host))
+            .map(|k| k.name(&*lv.host))
             .unwrap_or_default();
         if kind == "minecraft:item" || kind == "minecraft:player" {
             continue;
@@ -1425,6 +1430,22 @@ fn belt_support(
     (segment.slope == belt::Slope::Horizontal).then_some((hit.block, segment))
 }
 
+/// `BeltMovementHandler.shouldIgnoreBlocking`: a hanging entity, one pistons ignore, or one
+/// riding `me`. None when the client cannot read `other`.
+fn ignores_blocking(
+    host: &dyn mod_api::Host,
+    me: mod_api::EntityRef,
+    other: mod_api::EntityRef,
+) -> Option<bool> {
+    if other.is_hanging(host).ok()? == Some(true) {
+        return Some(true);
+    }
+    if other.piston_push_reaction(host).ok()? == Some(mod_api::PushReaction::IgnoreEntity) {
+        return Some(true);
+    }
+    Some(other.vehicle(host).is_some() && other.root_vehicle(host) == Some(me))
+}
+
 /// `BeltMovementHandler.transportEntity` for the local player after travel, before its position
 /// report. Use one contact for either flat SELF movement or the legacy slope push.
 pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
@@ -1461,7 +1482,7 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
         return;
     }
     if e.is_shift_key_down(&*host) == Some(true)
-        && (!boots.is_some_and(|s| s.item().id(&*host) == "create:cardboard_boots")
+        && (!boots.is_some_and(|s| s.item().name(&*host) == "create:cardboard_boots")
             || !super::super::advancements::hiding_in_cardboard(&*host, player))
     {
         return;
@@ -1488,14 +1509,21 @@ pub fn carry_local_player(host: &mut dyn mod_api::ClientHost, player: PlayerRef)
         let ahead = motion.map(|v| v / length * 0.5);
         let from = std::array::from_fn(|i| lo[i] + ahead[i] + ahead[i].abs());
         let to = std::array::from_fn(|i| hi[i] + ahead[i] - ahead[i].abs());
-        // With no client push-reaction query we cannot decide whether any non-passenger
-        // in the forward probe blocks. Do not infer a block or zero its velocity.
-        if level.entities_in(&*host, from, to).is_none_or(|entities| {
+        let blocked = level.entities_in(&*host, from, to).and_then(|entities| {
             entities
                 .into_iter()
-                .any(|other| other != e && other.root_vehicle(&*host) != Some(e))
-        }) {
-            return;
+                .filter(|other| *other != e)
+                .map(|other| ignores_blocking(&*host, e, other).map(|ignored| !ignored))
+                .try_fold(false, |any, blocks| Some(any || blocks?))
+        });
+        match blocked {
+            // A body the client cannot read: neither move the player nor stop it.
+            None => return,
+            Some(true) => {
+                host.set_local_player_velocity([0.0; 3]);
+                return;
+            }
+            Some(false) => {}
         }
     }
     if !matches!(host.move_local_player_by(motion), Ok(Some(_))) {

@@ -5,10 +5,7 @@ use super::super::world::with_world;
 use create_engine::fluids::transport::Source;
 use create_engine::kinetics::Dir;
 use create_engine::tank::{Codes, Fluid};
-use mod_api::{
-    BlockEntitySubmitEvent, ClientHost, ModBlockEntity, ParticleKey, ParticleOptions, Registrar,
-    Tag,
-};
+use mod_api::{ClientHost, ModBlockEntity, ParticleKey, ParticleOptions, Registrar, Tag};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -124,7 +121,7 @@ pub(super) fn send(lv: &mut ServerLevel<'_>) {
 
 /// A flow as a client reads it from its pipe's block entity.
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Shown {
+pub(super) struct Shown {
     side: Dir,
     fluid: Fluid,
     inbound: bool,
@@ -147,11 +144,11 @@ impl Shown {
     }
 }
 
-fn shown(entity: &ModBlockEntity) -> Vec<Shown> {
-    let Some(Tag::IntArray(v)) = entity.nbt.get(&FLOW.into()) else {
+pub(super) fn shown(nbt: &mod_api::Compound) -> Vec<Shown> {
+    let Some(Tag::IntArray(v)) = nbt.get(&FLOW.into()) else {
         return Vec::new();
     };
-    let keys = super::fluid_keys(&entity.nbt, FLOW);
+    let keys = super::fluid_keys(nbt, FLOW);
     v.as_chunks::<PER_FLOW>()
         .0
         .iter()
@@ -191,7 +188,7 @@ pub(super) fn client_tick(host: &dyn ClientHost) {
 /// Whether a pipe's flows move this frame: one growing or yet to start or go.
 pub(super) fn animated(entity: &ModBlockEntity) -> bool {
     let now = CLIENT_NOW.get() as f64;
-    shown(entity).iter().any(|s| {
+    shown(&entity.nbt).iter().any(|s| {
         let grown = s.from + 1.0 / f64::from(s.speed);
         now <= grown + 1.0 || s.to.is_some()
     })
@@ -200,8 +197,8 @@ pub(super) fn animated(entity: &ModBlockEntity) -> bool {
 /// `TransparentStraightPipeRenderer`: the stream in a glass pipe, each flow from the side it
 /// comes in by to the middle, or from the middle out, as far as it got (`renderFluidStream`, 3/16
 /// of a block from the pipe's middle). Two whole halves along the axis are drawn as one.
-pub(super) fn draw(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-    let flows = shown(event.entity);
+pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
+    let flows = shown(&event.entity.nbt);
     if flows.is_empty() {
         return;
     }
@@ -254,7 +251,6 @@ fn axis_index(d: Dir) -> usize {
 /// The particle types the flows spawn.
 struct Keys {
     item: ParticleKey,
-    block: ParticleKey,
     dripping_water: ParticleKey,
     dripping_lava: ParticleKey,
 }
@@ -264,7 +260,6 @@ static KEYS: OnceLock<Keys> = OnceLock::new();
 pub(super) fn register(r: &mut dyn Registrar) {
     let _ = KEYS.set(Keys {
         item: r.particle_key("minecraft:item"),
-        block: r.particle_key("minecraft:block"),
         dripping_water: r.particle_key("minecraft:dripping_water"),
         dripping_lava: r.particle_key("minecraft:dripping_lava"),
     });
@@ -286,18 +281,17 @@ const IDLE_CHANCE: f64 = 1.0 / 1000.0;
 /// `PipeConnection.RIM_RADIUS`.
 const RIM_RADIUS: f64 = 1.0 / 4.0 + 1.0 / 64.0;
 
-/// `FluidFX.getFluidParticle`: Create's fluid particle (see the module's doc).
+/// `FluidFX.getFluidParticle`: `FluidStackParticle`, a crumb of the fluid's still sprite in
+/// 0.8 times its tint (`multiplyColor`).
 fn fluid_particle(keys: &Keys, fluid: Fluid) -> Option<ParticleOptions> {
     let tint = match fluid {
-        Fluid::Water => Some(0x3F_76E4),
-        Fluid::Potion(p) => Some(p.color()),
-        _ => None,
+        Fluid::Water => 0x3F_76E4,
+        Fluid::Potion(p) => p.color(),
+        _ => 0xFF_FFFF,
     };
+    let [r, g, b] = [16, 8, 0].map(|s| 0.8 * ((tint >> s) & 0xFF) as f32 / 255.0);
     let sprite = still_sprite(fluid);
-    Some(match tint {
-        Some(tint) => ParticleOptions::block(keys.block, sprite.into(), tint),
-        None => ParticleOptions::item(keys.item, vec![sprite.into()]),
-    })
+    Some(ParticleOptions::item(keys.item, vec![sprite.into()]).with_color([r, g, b, 1.0]))
 }
 
 /// The fluid's still sprite (`IClientFluidTypeExtensions.getStillTexture`).
@@ -325,8 +319,7 @@ fn dripping_particle(keys: &Keys, fluid: Fluid) -> Option<ParticleOptions> {
 /// A pipe's client tick (`tickFlowProgress` on the client): each flow there pours at an open end
 /// or now and then drips on its rim (`spawnParticles`), and splashes on its rim the tick it
 /// arrives (`spawnSplashOnRim`), within 20 blocks of the camera.
-pub(super) fn client_pipe_tick(host: &mut dyn ClientHost, pos: [i32; 3], entity: &ModBlockEntity) {
-    let flows = shown(entity);
+pub(super) fn client_pipe_tick(host: &mut dyn ClientHost, pos: [i32; 3], flows: Vec<Shown>) {
     if flows.is_empty() {
         return;
     }

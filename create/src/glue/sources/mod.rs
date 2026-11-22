@@ -13,12 +13,14 @@ pub mod waterwheels;
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use super::world::with_world;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::subsystem::Placed;
 use create_engine::Block;
 use create_engine::client::Draw;
 use create_engine::dye;
 use mod_api::{
-    ClientHost, Compound, EntityPlaceEvent, EquipmentSlot, Flow, HostSide, ModBlockEntity,
-    ParticleProviders, Registrar, RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
+    ClientHost, Compound, EquipmentSlot, Flow, HostSide, ModBlockEntity, ParticleProviders,
+    Registrar, RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
 };
 use std::cell::RefCell;
 use std::sync::Arc;
@@ -150,7 +152,7 @@ impl Subsystem for Sources {
     }
 
     fn animated(&self, block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
-        handles::animated(block, pos, entity)
+        handles::animated(block, pos, entity) || stress::flash_color(pos).is_some()
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
@@ -167,17 +169,19 @@ impl Subsystem for Sources {
     }
 
     fn particle_providers(&self, providers: &mut dyn ParticleProviders) {
-        providers.register(indicators::NAME.to_owned(), Arc::new(indicators::Indicator));
+        if let Some(&ty) = indicators::TYPE.get() {
+            providers.register_sprite_set(ty, Arc::new(indicators::Indicator));
+        }
     }
 
     /// `KineticBlock.setPlacedBy`: a kinetic block a player places shows its indicators.
-    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut Placed) -> Flow {
         let Some(placer) = event.placer else {
             return Flow::Continue;
         };
         let Some(dim) = placer
             .level(&*host)
-            .and_then(|l| l.dimension().id(&*host))
+            .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
             .and_then(|d| super::world::level_index(&d))
         else {
             return Flow::Continue;

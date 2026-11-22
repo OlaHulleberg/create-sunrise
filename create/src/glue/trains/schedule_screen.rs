@@ -14,7 +14,9 @@
 
 use super::gui::{Reader, click_sound, icon_button, inside, millis, put_i32, tooltip, tr};
 use crate::glue::items::filter_screen::{click_inventory, stack_bytes, stack_of};
+use crate::glue::names::Named as _;
 use crate::glue::net;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::schedule::{Condition, Entry, Instruction, Op, Schedule, Stack, TimeUnit};
 use mod_api::{
     ClientHost, Compound, DrawContext, Flow, Host, HostSide, InteractionResult, ItemPart,
@@ -228,7 +230,7 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
         .find(|(i, _)| *i == slot)
         .map(|(_, s)| s);
     if let Some(stack) = stack
-        && stack.item().id(&*host) == "create:schedule"
+        && stack.item().name(&*host) == "create:schedule"
     {
         let written = with_schedule(&stack, &schedule);
         if let Err(e) = player.set_inventory_slot(host, slot, Some(written)) {
@@ -627,9 +629,7 @@ fn column_widths(host: &dyn ClientHost, e: &Entry) -> Vec<f32> {
             g.iter()
                 .map(|c| {
                     let s = summary(host, &Field::Condition(c.clone()));
-                    let tw = host
-                        .text_width(&mod_api::Text::literal(s.1.as_str()))
-                        .unwrap_or(0) as f32;
+                    let tw = host.text_width(&mod_api::Text::literal(s.1.as_str())) as f32;
                     (tw + if s.0.is_some() { 20.0 } else { 0.0 } + 16.0).max(32.0)
                 })
                 .fold(0.0, f32::max)
@@ -1039,9 +1039,7 @@ fn action(
         let sum = summary(host, &Field::Instruction(e.instruction.clone()));
         // `getFieldSize(100, ...)` with a font: the draw context isn't here, so the width is
         // measured as the client's font does.
-        let text_w = host
-            .text_width(&mod_api::Text::literal(sum.1.as_str()))
-            .unwrap_or(0) as f32;
+        let text_w = host.text_width(&mod_api::Text::literal(sum.1.as_str())) as f32;
         let field = (text_w + 20.0 + 16.0).max(100.0);
         if x > 25.0 && x <= 25.0 + field && y > 4.0 && y <= 20.0 {
             push(Change::Edit(Target::Instruction(i)), 0);
@@ -1162,7 +1160,7 @@ fn title_lines(host: &dyn ClientHost, c: &Condition) -> Vec<String> {
         ghost(host, s).map_or_else(
             || tr(host, "create.schedule.condition.threshold.anything", &[]),
             |st| {
-                let id = st.item().id(host);
+                let id = st.item().name(host);
                 if matches!(
                     id.as_str(),
                     "create:filter" | "create:attribute_filter" | "create:package_filter"

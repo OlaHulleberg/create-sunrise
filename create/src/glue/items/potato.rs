@@ -10,7 +10,10 @@
 
 use super::super::equipment;
 use super::super::subsystem::Subsystem;
-use super::{creative, custom, held, set_custom};
+use super::{creative, custom, held};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::potato::{self, Type};
 use mod_api::{
     ActiveEffect, AttachmentCodec, AttachmentError, AttachmentType, BlockEntityDrawContext,
@@ -139,7 +142,6 @@ static FLIGHT: AttachmentType<Flight> = AttachmentType {
 };
 
 static ITEM_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
-static AIR_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 /// `AllDataComponents.SHAPER_SWAP`: the main hand's cannon lets the off hand's fire next.
 const SWAP: &str = "create:shaper_swap";
 
@@ -162,44 +164,52 @@ fn marked_for_swap(stack: &ItemStack) -> bool {
 /// The air particle (`AirParticle` with `AirParticleData(1, 1/4)`): from where it spawns to its
 /// velocity's end, twirling, 4 ticks a block (at most 60), a quarter visible.
 const AIR: &str = "create:air";
+static AIR_TYPE: std::sync::OnceLock<mod_api::ParticleType<()>> = std::sync::OnceLock::new();
 
 struct Air;
 
 impl mod_api::ParticleProvider for Air {
-    fn tick(&self, p: &mut mod_api::ModParticle) {
-        let velocity = p.velocity;
-        let h = |salt: u64| {
-            let mut x = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-            for v in velocity {
-                x = (x ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
+    fn tick(
+        &self,
+        particles: &mut mod_api::ParticleBatch,
+        _level: &dyn mod_api::ParticleLevelView,
+    ) {
+        let one = |p: &mut mod_api::ModParticle| {
+            let velocity = p.velocity;
+            let h = |salt: u64| {
+                let mut x = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+                for v in velocity {
+                    x = (x ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
+                }
+                ((x >> 11) % 10_000) as f64 / 10_000.0
+            };
+            if p.age <= 1 {
+                p.state[..3].copy_from_slice(&p.previous);
+                let len = p.velocity.iter().map(|v| v * v).sum::<f64>().sqrt();
+                p.lifetime = ((len / 0.25) as i32).min(60);
+                p.size *= 0.75;
+                p.rgba[3] = 0.25;
+                if len == 0.0 {
+                    p.removed = true;
+                    return;
+                }
             }
-            ((x >> 11) % 10_000) as f64 / 10_000.0
+            let life = f64::from(p.lifetime.max(1));
+            let progress = (f64::from(p.age) / life).powf(1.0);
+            let radius = h(1) / 6.0;
+            let angle = ((progress * 2.0 * 360.0 + h(2) * 360.0) % 360.0).to_radians();
+            let (sin, cos) = angle.sin_cos();
+            // `VecHelper.rotate((0, r, 0), angle, X or Z)`.
+            let twirl = if h(3) < 0.5 {
+                [0.0, radius * cos, radius * sin]
+            } else {
+                [-radius * sin, radius * cos, 0.0]
+            };
+            p.position = std::array::from_fn(|i| p.state[i] + p.velocity[i] * progress + twirl[i]);
+            // `setSpriteFromAge` over its 8 sprites.
+            p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
         };
-        if p.age <= 1 {
-            p.state[..3].copy_from_slice(&p.previous);
-            let len = p.velocity.iter().map(|v| v * v).sum::<f64>().sqrt();
-            p.lifetime = ((len / 0.25) as i32).min(60);
-            p.size *= 0.75;
-            p.rgba[3] = 0.25;
-            if len == 0.0 {
-                p.removed = true;
-                return;
-            }
-        }
-        let life = f64::from(p.lifetime.max(1));
-        let progress = (f64::from(p.age) / life).powf(1.0);
-        let radius = h(1) / 6.0;
-        let angle = ((progress * 2.0 * 360.0 + h(2) * 360.0) % 360.0).to_radians();
-        let (sin, cos) = angle.sin_cos();
-        // `VecHelper.rotate((0, r, 0), angle, X or Z)`.
-        let twirl = if h(3) < 0.5 {
-            [0.0, radius * cos, radius * sin]
-        } else {
-            [-radius * sin, radius * cos, 0.0]
-        };
-        p.position = std::array::from_fn(|i| p.state[i] + p.velocity[i] * progress + twirl[i]);
-        // `setSpriteFromAge` over its 8 sprites.
-        p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
+        particles.iter_mut().for_each(one);
     }
 }
 
@@ -208,7 +218,8 @@ pub struct PotatoCannon;
 impl Subsystem for PotatoCannon {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
         let _ = ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
-        let _ = AIR_PARTICLE.set(r.particle_key(AIR));
+        let air = crate::glue::particle_type(r, AIR);
+        let _ = AIR_TYPE.set(air);
         let key = r.item_key(CANNON);
         r.item_part(key, CannonPart);
         let _ = AMMO_KEYS.set(
@@ -264,6 +275,7 @@ impl Subsystem for PotatoCannon {
             GeneralSavePolicy::Save,
             false,
             false,
+            None,
             4,
             20,
             1,
@@ -295,7 +307,9 @@ impl Subsystem for PotatoCannon {
     }
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
-        providers.register(AIR.to_owned(), std::sync::Arc::new(Air));
+        if let Some(&ty) = AIR_TYPE.get() {
+            providers.register_sprite_set(ty, std::sync::Arc::new(Air));
+        }
     }
 }
 
@@ -303,12 +317,12 @@ struct Projectile;
 
 #[mod_api::sunrise_part]
 impl EntityPart for Projectile {
-    fn general_entity_tick(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut GeneralEntityTickEvent<'_>,
-    ) {
-        let e = event.entity;
+    fn general_entity_tick(&self, event: &mut GeneralEntityTickEvent<'_>) {
+        let Some(e) = event.subject.with_view(|v| v.handle()) else {
+            return;
+        };
+        let host = event.subject.host();
+
         if let Some(level) = e.level(host) {
             fly(host, level, e);
         }
@@ -406,7 +420,7 @@ enum Source {
 /// `Player.getProjectile` for the cannon: the off hand, the main hand, then the inventory's
 /// slots in order; the first stack Create has a projectile type for.
 fn ammo(host: &dyn Host, player: PlayerRef) -> Option<(Source, ItemStack, &'static Type)> {
-    let kind = |s: &ItemStack| potato::type_for(&s.item().id(host));
+    let kind = |s: &ItemStack| potato::type_for(&s.item().name(host));
     for hand in [Hand::Off, Hand::Main] {
         if let Some(stack) = held(host, player, hand)
             && let Some(t) = kind(&stack)
@@ -581,9 +595,9 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
             let mut matched = false;
             place
                 .edit(host, tx, |stack| {
-                    if stack == expected {
+                    if stack.original().project().as_ref() == Some(expected) {
                         matched = true;
-                        set_custom(stack, &[(SWAP, value)]);
+                        super::edit_custom(stack, &[(SWAP, value)]);
                     }
                 })
                 .map_err(|_| ())?;
@@ -639,9 +653,9 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
             let options = mod_api::ParticleOptions::item_stack(*key, shot_stack.clone());
             let _ = level.send_particles(host, &options, None, barrel, v, 1.0, 0);
         }
-        if let Some(key) = AIR_PARTICLE.get() {
+        if let Some(ty) = AIR_TYPE.get() {
             let v = [0, 1, 2].map(|i| look_n[i] * 2.0 + off(i + 3, 0.5));
-            let options = mod_api::ParticleOptions::simple(*key);
+            let options = ty.options(());
             let _ = level.send_particles(host, &options, None, barrel, v, 1.0, 0);
         }
     }
@@ -868,7 +882,7 @@ fn hit_entity(
     if !alive(host, target) {
         return Impact::Continue;
     }
-    let kind = target.kind(host).map(|k| k.id(host));
+    let kind = target.kind(host).map(|k| k.name(host));
     pop(host, level, ammo, at);
     // A powered wither (at half its health or less) takes nothing.
     if kind.as_deref() == Some("minecraft:wither")
@@ -990,7 +1004,7 @@ fn entity_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, target: E
             });
             let zombie = target
                 .kind(host)
-                .is_some_and(|k| k.id(host) == "minecraft:zombie_villager");
+                .is_some_and(|k| k.name(host) == "minecraft:zombie_villager");
             if zombie && weak {
                 return false;
             }
@@ -1049,7 +1063,7 @@ fn chorus(host: &mut dyn ServerHost, level: LevelRef, target: EntityRef, diamete
     let (Some(living), Some(at)) = (host.living(target), target.position(host)) else {
         return false;
     };
-    let fox = target.kind(host).map(|k| k.id(host)).as_deref() == Some("minecraft:fox");
+    let fox = target.kind(host).map(|k| k.name(host)).as_deref() == Some("minecraft:fox");
     let sound = if fox {
         "minecraft:entity.fox.teleport"
     } else {
@@ -1098,7 +1112,7 @@ fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipH
     let is_air = |host: &dyn Host, pos| {
         level.block(host, pos).is_none_or(|b| {
             matches!(
-                b.id(host).as_str(),
+                b.name(host).as_str(),
                 "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
             )
         })
@@ -1115,7 +1129,7 @@ fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipH
             }
             let farmland = level
                 .block(host, hit.block)
-                .is_some_and(|b| b.id(host) == "minecraft:farmland");
+                .is_some_and(|b| b.name(host) == "minecraft:farmland");
             if farmland && let Some(state) = host.block_state_id(block) {
                 let _ = level.set_block(host, place, state, super::super::server::update_all());
             }
@@ -1146,7 +1160,7 @@ fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipH
                     ("Time".into(), Tag::Int(1)),
                 ]);
                 let at = [f64::from(place[0]) + 0.5, y, f64::from(place[2]) + 0.5];
-                if let Some(dimension) = level.dimension().id(host) {
+                if let Some(dimension) = level.dimension().id(host).map(str::to_owned) {
                     host.summon(&dimension, "minecraft:falling_block", at, nbt);
                 }
             }
@@ -1182,7 +1196,6 @@ mod tests {
 
     #[test]
     fn saved_ammo_must_be_a_known_single_round() {
-        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
         let mut host = mod_api::testing::FakeHost::new();
         let id = Identifier::parse("minecraft:potato").unwrap();
         host.registries.resolve_items([id.clone()]).unwrap();

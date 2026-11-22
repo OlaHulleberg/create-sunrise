@@ -14,16 +14,29 @@
 use super::server::ServerLevel;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, CameraPoseEvent, ClientHost, Compound, EntityInteractEvent,
-    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, HostSide, InputKeyEvent,
+    EntityJoinLevelEvent, EntityMountEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelSaveEvent, MenuClickedEvent, MenuClosedEvent, MouseScrollingEvent,
-    MovementInputEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef,
-    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
-    RightClickBlockEvent, RightClickItemEvent, RunModCommandEvent, ScreenCharTypedPreEvent,
-    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
-    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost,
+    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent,
+    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent, Registrar,
+    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
+    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost,
 };
+
+/// A block about to be placed (`Hooks::entity_place`, or a placement the glue makes itself).
+pub struct Placed {
+    pub placer: Option<mod_api::EntityRef>,
+    pub pos: mod_api::BlockPos,
+    pub state: mod_api::BlockState,
+    pub cancelled: bool,
+}
+
+/// A command a subsystem registered, as its executor is given it.
+pub struct CommandCall<'a> {
+    pub source: &'a mod_api::CommandSource,
+    pub command: &'a mod_api::CommandInvocation,
+}
 
 pub trait Subsystem: Sync {
     /// Its registrations: parts, block entity types, payloads, commands. Once per game.
@@ -35,9 +48,9 @@ pub trait Subsystem: Sync {
     /// The world closed: drop everything kept for it.
     fn world_closed(&self) {}
 
-    /// `Hooks::tags_updated` on the server: its recipes and tags are published (first open and
+    /// `Hooks::tags_updated` for the server's data load: its recipes and tags are published (first open and
     /// each data reload). Caches of recipes are rebuilt here.
-    fn tags_updated(&self, _host: &mut dyn ServerHost) {}
+    fn tags_updated(&self, _cx: &dyn mod_api::ReloadContext) {}
 
     /// A committed block change in level `dim`, in engine ids (0 for any block not Create's).
     /// At least one of `old` and `new` is Create's. Runs inside the write: change the world from
@@ -129,7 +142,7 @@ pub trait Subsystem: Sync {
         &self,
         _host: &dyn ClientHost,
         _block: create_engine::Block,
-        _event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        _event: &mut crate::glue::Submit<'_>,
     ) {
     }
 
@@ -261,7 +274,7 @@ pub trait Subsystem: Sync {
     fn models_baked(&self, _host: &mut dyn ClientHost) {}
 
     /// `Hooks::entity_place`: a block is about to be placed.
-    fn entity_place(&self, _host: &mut dyn ServerHost, _event: &mut EntityPlaceEvent) -> Flow {
+    fn entity_place(&self, _host: &mut dyn ServerHost, _event: &mut Placed) -> Flow {
         Flow::Continue
     }
 
@@ -371,20 +384,13 @@ pub trait Subsystem: Sync {
     ) {
     }
 
-    /// `Hooks::register_commands`: push this subsystem's commands.
-    fn register_commands(
-        &self,
-        _host: &mut dyn ServerHost,
-        _event: &mut RegisterCommandsEvent<'_>,
-    ) {
+    /// `Hooks::register_commands`: this subsystem's usages, each run by its
+    /// [`run_mod_command`](Self::run_mod_command).
+    fn register_commands(&self, _host: &mut dyn ServerHost, _commands: &mut Vec<mod_api::Command>) {
     }
 
-    /// `Hooks::run_mod_command`: `Flow::Cancel` when the command was this subsystem's.
-    fn run_mod_command(
-        &self,
-        _host: &mut dyn ServerHost,
-        _event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    /// One of this subsystem's commands ran: `Flow::Cancel` when it handled it.
+    fn run_mod_command(&self, _host: &mut dyn ServerHost, _event: &mut CommandCall<'_>) -> Flow {
         Flow::Continue
     }
 
@@ -439,8 +445,8 @@ pub trait Subsystem: Sync {
         Flow::Continue
     }
 
-    /// `Hooks::movement_input`, on the client: the local player's movement keys.
-    fn movement_input(&self, _host: &dyn ClientHost, _event: &mut MovementInputEvent) {}
+    /// `Hooks::movement_input_update`, on the client: the local player's movement keys.
+    fn movement_input_update(&self, _host: &dyn ClientHost, _input: &mut mod_api::MovementInput) {}
     /// `Hooks::key_mapping_pre`, on the client: `Flow::Cancel` keeps the key from the game.
     fn key_mapping_pre(
         &self,
@@ -528,8 +534,6 @@ pub trait Subsystem: Sync {
         _event: &mut PlayerContainerCloseEvent<'_>,
     ) {
     }
-    /// `Hooks::menu_clicked`: a click in a menu a mod opened, heard raw.
-    fn menu_clicked(&self, _host: &mut dyn ServerHost, _event: &mut MenuClickedEvent) {}
     /// `Hooks::menu_closed`: a menu a mod opened (`open_menu`, `open_mod_menu`) closed.
     fn menu_closed(&self, _host: &mut dyn ServerHost, _event: &mut MenuClosedEvent) {}
 

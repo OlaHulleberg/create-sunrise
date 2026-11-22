@@ -11,6 +11,7 @@ use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
 use super::actor_draw::{self, Frame, Motion};
 use super::state_text;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::client::{self, Draw, Model};
 use create_engine::contraption::Turn;
@@ -18,9 +19,8 @@ use create_engine::elevator::{ColumnKey, Elevator};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
-    BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockEntityViewDistanceEvent,
-    BlockKey, BlockPart, ClientHost, Compound, Host, HostSide, LevelRef, Registrar,
-    RegistrationContext, Tag,
+    BlockEntityRenderBoundingBoxEvent, BlockEntityViewDistanceEvent, BlockKey, BlockPart,
+    ClientHost, Compound, Host, LevelRef, Registrar, RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -598,7 +598,8 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
 /// light where each block is now).
 #[derive(Clone, Copy)]
 enum Lighting {
-    /// Drawn spinning (`spin`): the game lights each quad where it turns to.
+    /// Drawn spinning (`spin`): the level lights each block where it turns to, each frame
+    /// (`level_light`).
     Host,
     /// Drawn where `WorldPose` puts it this frame: each block reads the light at its cell.
     Sampled(WorldPose),
@@ -776,6 +777,9 @@ fn draw_blocks(
     let level = matches!(lighting, Lighting::Sampled(_))
         .then(|| host.level(host.dimension()))
         .flatten();
+    if let Lighting::Host = lighting {
+        draw.level_light();
+    }
     for b in blocks {
         let props: Vec<(&str, &str)> = b
             .props
@@ -816,7 +820,7 @@ fn draw_blocks(
         } else {
             draw_entity_block(host, draw, b.block, &props);
             if let Some(entity) = &b.entity {
-                let id = b.block.id(host);
+                let id = b.block.name(host);
                 if super::vanilla_draw::draws(&id) {
                     super::vanilla_draw::draw(host, draw, &id, &props, &entity.nbt);
                 }
@@ -857,7 +861,7 @@ fn draw_entity_block(
     block: BlockKey,
     props: &[(&str, &str)],
 ) {
-    let id = block.id(host);
+    let id = block.name(host);
     let drawn = matches!(
         id.as_str(),
         "minecraft:chest" | "minecraft:trapped_chest" | "minecraft:ender_chest"
@@ -938,7 +942,7 @@ fn draw_carried(
     ];
     let name = format!("create:{}", block.name());
     let mut inner = Unkept(draw, false);
-    let mut event = mod_api::BlockEntitySubmitEvent {
+    let mut event = crate::glue::Submit {
         pos,
         block: &name,
         state: b.state,
@@ -999,6 +1003,9 @@ impl BlockEntityDrawContext for Unkept<'_> {
     fn set_light(&mut self, light: u32) {
         self.0.set_light(light);
     }
+    fn level_light(&mut self) {
+        self.0.level_light();
+    }
     fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
         self.0.quad(sprite, corners, uv, tint)
     }
@@ -1057,7 +1064,7 @@ impl BlockEntityDrawContext for Unkept<'_> {
     ) -> Result<f32, mod_api::TextFormError> {
         self.0.text(text, at, color, glowing, outline)
     }
-    fn text_width(&self, text: &mod_api::Text) -> Result<f32, mod_api::TextFormError> {
+    fn text_width(&self, text: &mod_api::Text) -> f32 {
         self.0.text_width(text)
     }
     fn model_part(&mut self, part: &mod_api::ModelPart, sprite: &str, tint: u32) -> bool {
@@ -1148,7 +1155,7 @@ fn draw_bearing_top(draw: &mut dyn BlockEntityDrawContext, top: Option<(Block, M
 /// Draws the anchor's structure and its bearing top, if it has one.
 fn submit(
     host: &dyn ClientHost,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
     c: &Compound,
     top: Option<(Block, Model)>,
 ) {
@@ -1710,7 +1717,7 @@ fn draw_hanging(
 }
 
 /// A rope or elevator pulley at rest draws what hangs from it (`PULLEY_REST`).
-fn draw_resting(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+fn draw_resting(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
     let elevator = match event.block {
         "create:rope_pulley" => false,
         "create:elevator_pulley" => true,
@@ -1758,11 +1765,10 @@ impl BlockPart for StructurePart {}
 #[mod_api::sunrise_part]
 impl BlockEntityPart for StructurePart {
     /// An anchor came back with a structure in its data: the level tick looks whether it runs.
-    fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
-        let HostSide::Server(host) = host else {
+    fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
+        let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) else {
             return;
         };
-        let entity = event.entity;
         let Some(data) = entity.data(&*host) else {
             return;
         };
@@ -1772,13 +1778,23 @@ impl BlockEntityPart for StructurePart {
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
             return;
         };
-        let Some(dim) = level.dimension().id(&*host).and_then(|d| level_index(&d)) else {
+        let Some(dim) = level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .and_then(|d| level_index(&d))
+        else {
             return;
         };
         LOADED.with_borrow_mut(|l| l.push((dim, pos)));
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let top = match event.block {
             "create:mechanical_bearing"
             | "create:windmill_bearing"

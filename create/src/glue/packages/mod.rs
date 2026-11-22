@@ -40,6 +40,9 @@ use super::states;
 use super::subsystem::Subsystem;
 use super::world::{level_index, with_world};
 use super::{net, persist, stock};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::chain_conveyor::{self as chain, Drawn, Parcel};
 use create_engine::kinetics::Dir;
@@ -47,11 +50,11 @@ use create_engine::package;
 use create_engine::port::{Out, Packaging, Target};
 use inv::Inv;
 use mod_api::{
-    AnalogOutputEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent,
-    BlockPart, ClientHost, Command, CommandArgumentValue, CommandSource, Compound, Direction, Flow,
-    Hand, HasAnalogOutputEvent, InteractionResult, ItemDisplayContext, ItemKey, ItemStack,
-    LevelHost, NeighbourUpdate, PlayerRef, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RunModCommandEvent, ServerHost, SoundSource, Tag, Text, UseItemOnEvent,
+    AnalogOutputEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart, ClientHost,
+    Command, CommandArgumentValue, CommandSource, Compound, Direction, Flow, Hand,
+    HasAnalogOutputEvent, InteractionResult, ItemDisplayContext, ItemKey, ItemStack, LevelHost,
+    NeighbourUpdate, PlayerRef, Registrar, RegistrationContext, ServerHost, SoundSource, Tag, Text,
+    UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -287,7 +290,7 @@ impl Subsystem for Packages {
         event: &mut mod_api::RightClickBlockEvent<'_>,
     ) -> Flow {
         let click = event.click;
-        let id = |h: &dyn mod_api::Host| click.stack.map(|s| s.item().id(h));
+        let id = |h: &dyn mod_api::Host| click.stack.map(|s| s.item().name(h));
         let chains = match &host {
             mod_api::HostSide::Client(h) => id(&**h),
             mod_api::HostSide::Server(h) => id(&**h),
@@ -608,7 +611,7 @@ impl Subsystem for Packages {
     fn entity_place(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut mod_api::EntityPlaceEvent,
+        event: &mut crate::glue::subsystem::Placed,
     ) -> Flow {
         let block = states::id(event.state).and_then(block_of);
         // `flushSettings` for a postbox: the station chosen, or nothing chosen.
@@ -656,7 +659,7 @@ impl Subsystem for Packages {
 
     /// Our debug commands, standing in for the clipboard (`address`; signs are read), the frogport
     /// item's selection (`frogport`) and the chain item (`chain`, `unchain`).
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
         for usage in [
             "create_debug address <pos:block_pos> <address:text>",
             "create_debug frogport <pos:block_pos> <target:text>",
@@ -664,15 +667,11 @@ impl Subsystem for Packages {
             "create_debug unchain <from:block_pos> <to:block_pos>",
             "create_debug packages <pos:block_pos>",
         ] {
-            event.commands.push(Command::op(usage, 2));
+            commands.push(Command::op(usage, 2));
         }
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         let Some(verb) = debug_verb(
             event,
             &["address", "frogport", "chain", "unchain", "packages"],
@@ -680,7 +679,7 @@ impl Subsystem for Packages {
             return Flow::Continue;
         };
         let here = event.command.position;
-        let Some(dimension) = event.command.dimension.id(&*host) else {
+        let Some(dimension) = event.command.dimension.id(&*host).map(str::to_owned) else {
             return Flow::Cancel;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -716,18 +715,17 @@ impl Subsystem for Packages {
 
 /// The `ITEMS` handler of the packager `side` asks, if it is one (`automation`).
 pub(crate) fn packager_items(
-    host: &mut dyn ServerHost,
     side: mod_api::BlockSide,
     dim: usize,
 ) -> Option<Box<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
     if !present() {
         return None;
     }
-    automation::provide(host, side, dim)
+    automation::provide(side, dim)
 }
 
 /// The verb of a `create_debug` command when it is one of `verbs`.
-pub fn debug_verb(event: &RunModCommandEvent<'_>, verbs: &[&'static str]) -> Option<&'static str> {
+pub fn debug_verb(event: &CommandCall<'_>, verbs: &[&'static str]) -> Option<&'static str> {
     let l = &event.command.literals;
     if l.first().map(String::as_str) != Some("create_debug") {
         return None;
@@ -1784,7 +1782,7 @@ pub(crate) fn use_port(
 /// on it, and the screen does not open. False without a clipboard.
 pub(crate) fn port_clipboard(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) -> bool {
     let held = super::items::held(&*lv.host, player, Hand::Main);
-    let Some(clip) = held.filter(|s| s.item().id(&*lv.host) == "create:clipboard") else {
+    let Some(clip) = held.filter(|s| s.item().name(&*lv.host) == "create:clipboard") else {
         return false;
     };
     let filter = with(lv.dim, |pk| pk.ports.get(&pos).map(|p| p.filter.clone()));
@@ -1848,7 +1846,13 @@ impl BlockPart for PackageBlock {
         host: &mut dyn ServerHost,
         event: &mut mod_api::ContentsChangedEvent,
     ) {
-        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
+        let Some(dimension) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .map(|d| d.to_string())
+        else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1875,7 +1879,7 @@ impl BlockPart for PackageBlock {
     ) -> Option<InteractionResult> {
         let b = block_of(states::id(event.state)?)?;
         if b == Block::PackageFrogport {
-            let held = event.click.stack.map(|s| s.item().id(&*host));
+            let held = event.click.stack.map(|s| s.item().name(&*host));
             // The wrench and the frogport's own item (choosing a target) pass.
             if matches!(
                 held.as_deref(),
@@ -2010,7 +2014,7 @@ fn chains_held(lv: &ServerLevel<'_>, player: PlayerRef) -> u32 {
         .inventory_slots(&*lv.host)
         .unwrap_or_default()
         .iter()
-        .filter(|(_, s)| s.item().id(&*lv.host) == "minecraft:iron_chain")
+        .filter(|(_, s)| s.item().name(&*lv.host) == "minecraft:iron_chain")
         .map(|(_, s)| s.count())
         .sum()
 }
@@ -2022,7 +2026,7 @@ fn take_chains(lv: &mut ServerLevel<'_>, player: PlayerRef, mut cost: u32) {
         if cost == 0 {
             break;
         }
-        if s.item().id(&*lv.host) != "minecraft:iron_chain" {
+        if s.item().name(&*lv.host) != "minecraft:iron_chain" {
             continue;
         }
         let n = s.count().min(cost);
@@ -2260,7 +2264,7 @@ fn send_chains(
         return;
     }
     for &pos in conveyors {
-        let drawn = with(dim, |pk| pk.chains.drawn(pos, |s| s.item().id(&*host)));
+        let drawn = with(dim, |pk| pk.chains.drawn(pos, |s| s.item().name(&*host)));
         let data = chain::encode(pos, &drawn);
         net::send_to_players(host, players, chain::CHANNEL, &data);
     }
@@ -2525,7 +2529,12 @@ impl BlockPart for ConveyorDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for ConveyorDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         if event.block != "create:chain_conveyor" {
             return;
         }

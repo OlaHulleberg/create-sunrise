@@ -1,0 +1,17 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:creative_fluid_tank"
+  ],
+  "sprites": [
+    "create:block/creative_casing"
+  ],
+  "faces": [
+    "up",
+    "down"
+  ],
+  "connect": "block",
+  "sheet": "create:block/creative_casing_connected",
+  "table": "rectangle",
+  "connect_group": true
+}

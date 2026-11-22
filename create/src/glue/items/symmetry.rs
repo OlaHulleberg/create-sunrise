@@ -18,12 +18,16 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::symmetry_screen::{self as screen, Configure};
 use super::{Item, creative, custom, held, is, set_custom, set_held, sneaking};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::subsystem::Placed;
 use create_engine::symmetry::{self, ENABLE_KEY, Kind, MIRROR_KEY, Wand};
 use mod_api::{
-    BlockState, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Hand, Host,
-    HostBlockStates, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, LightCoords,
-    LightLayer, ModelInstance, ModelRef, Overlay, ParticleKey, ParticleOptions, PlayerRef,
-    RenderLevelStage, RenderLevelStageEvent, ServerHost, Tag, UseItemEvent, UseOnEvent,
+    BlockState, BreakBlockEvent, ClientHost, Compound, Hand, Host, HostBlockStates, HostSide,
+    Identifier, InteractionResult, ItemPart, ItemStack, LightCoords, LightLayer, ModelInstance,
+    ModelRef, Overlay, ParticleKey, ParticleOptions, PlayerRef, RenderLevelStage,
+    RenderLevelStageEvent, ServerHost, Tag, UseItemEvent, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -233,7 +237,7 @@ fn player_of(host: &mut dyn ServerHost, placer: Option<mod_api::EntityRef>) -> O
 /// `SymmetryHandler.onBlockPlaced` → `SymmetryWandItem.apply`: each enabled wand in the hotbar
 /// copies the placed state, turned, to its mirror images (creative: over anything; survival:
 /// only into replaceable, breakable blocks, paying one of the block's item each).
-pub(super) fn placed(host: &mut dyn ServerHost, event: &EntityPlaceEvent) -> Option<()> {
+pub(super) fn placed(host: &mut dyn ServerHost, event: &Placed) -> Option<()> {
     let player = player_of(host, event.placer)?;
     let wands = hotbar_wands(&*host, player);
     if wands.is_empty() {
@@ -295,7 +299,7 @@ pub(crate) fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3])
         .into_iter()
         .filter(|e| {
             !matches!(
-                e.kind(host).map(|k| k.id(host)).as_deref(),
+                e.kind(host).map(|k| k.name(host)).as_deref(),
                 Some("minecraft:item" | "minecraft:experience_orb")
             ) && e.spectator(host) != Some(true)
         })
@@ -313,7 +317,7 @@ pub(crate) fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3])
 /// Whether `state` is air (`BlockState.isAir`).
 fn is_air(host: &dyn Host, state: BlockState) -> bool {
     matches!(
-        state.block().id(host).as_str(),
+        state.block().name(host).as_str(),
         "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
     )
 }

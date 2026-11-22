@@ -11,6 +11,7 @@ use super::super::items::{self, Item};
 use super::super::redstone::detectors;
 use super::super::server::ServerLevel;
 use super::crank;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::dye;
 use create_engine::item_use_overrides::{self, ItemOn, invoke_use};
@@ -46,7 +47,7 @@ pub(super) fn right_click(host: &mut dyn ServerHost, event: &mut RightClickBlock
     let Some(player) = host.player(click.player) else {
         return Flow::Continue;
     };
-    let held = click.stack.map(|s| s.item().id(&*host));
+    let held = click.stack.map(|s| s.item().name(&*host));
     let dimension = click.dimension.key().id().to_owned();
     let Some(mut lv) = ServerLevel::new(host, &dimension) else {
         return Flow::Continue;

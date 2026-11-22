@@ -304,11 +304,9 @@ pub(super) fn contents_changed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 
 /// The handler `side` asks a packager or a port for.
 pub(crate) fn provide(
-    host: &mut dyn ServerHost,
     side: BlockSide,
     dim: usize,
 ) -> Option<Box<dyn ResourceHandler<ItemResource>>> {
-    host.block_entity(side.level, side.pos)?;
     let (packager, port) = with(dim, |pk| {
         (
             pk.packagers.contains_key(&side.pos),
@@ -357,14 +355,19 @@ impl ResourceHandler<ItemResource> for PortItems {
     fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
         self.slot(&*host, index).map_or(0, |s| s.count())
     }
-    fn capacity(&self, _host: &mut dyn ServerHost, _index: usize, _r: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        _host: &mut dyn ServerHost,
+        _index: usize,
+        _r: Option<&ItemResource>,
+    ) -> u32 {
         1
     }
     fn is_valid(&self, host: &mut dyn ServerHost, _index: usize, r: &ItemResource) -> bool {
         r.to_stack(1)
             .is_some_and(|s| package::is_package(&body::item_id(&*host, &s)))
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -399,7 +402,7 @@ impl ResourceHandler<ItemResource> for PortItems {
         }
         u32::from(ok)
     }
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -466,7 +469,12 @@ impl ResourceHandler<ItemResource> for PackagerItems {
     fn amount(&self, host: &mut dyn ServerHost, _index: usize) -> u32 {
         self.slot(&*host, HELD).map_or(0, |s| s.count())
     }
-    fn capacity(&self, _host: &mut dyn ServerHost, _index: usize, _r: &ItemResource) -> u32 {
+    fn capacity(
+        &self,
+        _host: &mut dyn ServerHost,
+        _index: usize,
+        _r: Option<&ItemResource>,
+    ) -> u32 {
         1
     }
     fn is_valid(&self, host: &mut dyn ServerHost, _index: usize, r: &ItemResource) -> bool {
@@ -474,7 +482,7 @@ impl ResourceHandler<ItemResource> for PackagerItems {
             .is_some_and(|s| package::is_package(&body::item_id(&*host, &s)))
     }
     /// `insertItem`: one package, while nothing is held or queued, its contents fitting behind.
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,
@@ -498,7 +506,13 @@ impl ResourceHandler<ItemResource> for PackagerItems {
         if !free || self.slot(&*host, HELD).is_some() || self.slot(&*host, INCOMING).is_some() {
             return 0;
         }
-        let Some(dimension) = self.level.dimension().id(&*host).map(|d| d.to_string()) else {
+        let Some(dimension) = self
+            .level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .map(|d| d.to_string())
+        else {
             return 0;
         };
         let fits = match ServerLevel::new(host, &dimension) {
@@ -516,7 +530,7 @@ impl ResourceHandler<ItemResource> for PackagerItems {
         }
     }
     /// `extractItem`: the held box, not while the tray moves.
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         tx: &Transaction,

@@ -24,8 +24,7 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use create_engine::psi::{self, ANIMATION, TIMEOUT};
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, ModBlockEntity, Tag,
+    BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, ModBlockEntity, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -579,7 +578,12 @@ impl BlockPart for PlacedActors {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for PlacedActors {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -1082,7 +1086,7 @@ fn draw_moving_controls(
     draw.translate([0.275 + 0.125, 1.0 + 2.0 / 16.0, 0.5]);
     draw.rotate_about(EAST, -67.5, [0.0; 3]);
     if !sel.short.trim().is_empty() && distance < 100.0 {
-        let actual = draw.text_width(&short).unwrap_or(0.0);
+        let actual = draw.text_width(&short);
         let width = actual.max(12.0);
         let scale = 1.0 / (5.0 * (width - 0.5));
         let centring = (width - 8.0) / 2.0;
@@ -1097,7 +1101,7 @@ fn draw_moving_controls(
     }
     let long_blank = !sel.unreachable && sel.long.trim().is_empty();
     if !long_blank && distance < 20.0 {
-        let actual = draw.text_width(&long).unwrap_or(0.0);
+        let actual = draw.text_width(&long);
         let width = actual.max(55.0);
         let scale = 1.0 / (3.0 * (width - 0.5));
         let centring = (width - 8.0) / 2.0;

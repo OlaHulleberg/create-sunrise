@@ -9,17 +9,19 @@
 //! server's stack ten ticks after the last change (`SchematicSyncPacket`); Print places it at
 //! once in creative (`SchematicPlacePacket`, `super::print_instantly`).
 //!
-//! The deployed schematic's blocks are not drawn (`SchematicRenderer`): no world draw takes a
-//! block state's model outside a block entity (`API_GAPS.md`). Its outline, checkered faces,
-//! the face looked at, the rotation axis and the mirror plane are drawn as Create's
-//! (`AABBOutline`, `LineOutline`); the checkered faces sample Create's checkerboard
-//! (`AllSpecialTextures.CHECKERED`) through the glue's `Checkered` pipeline (`pipelines`).
+//! The deployed schematic's blocks are not drawn yet (`SchematicRenderer`, `API_GAPS.md`). Its
+//! outline, checkered faces, the face looked at, the rotation axis and the mirror plane are
+//! drawn as Create's (`AABBOutline`, `LineOutline`); the checkered faces sample Create's
+//! checkerboard (`AllSpecialTextures.CHECKERED`) through the glue's `Checkered` pipeline
+//! (`pipelines`).
 
 use super::super::net;
 use super::super::pipelines::Textured;
 use super::body;
 use super::quill::CHANNEL;
 use super::transform::{Placing, trace_until};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::kinetics::Dir;
 use create_engine::schematic::{Mirror, Rotation, SchematicData};
 use mod_api::{
@@ -268,7 +270,7 @@ fn creative(host: &dyn ClientHost) -> bool {
 fn held(host: &dyn ClientHost) -> Option<(u8, ItemStack, SchematicData)> {
     let player = host.local_player()?;
     let stack = host.living(player.entity())?.hand_item(host, Hand::Main)?;
-    if stack.item().id(host) != super::SCHEMATIC {
+    if stack.item().name(host) != super::SCHEMATIC {
         return None;
     }
     let data = body::schematic_data(&stack);
@@ -452,9 +454,8 @@ pub(super) fn input_key(host: &mut dyn ClientHost, event: &mut InputKeyEvent<'_>
     if !host.playing() {
         return;
     }
-    let bound = host
-        .mod_key(MOD, TOOL_MENU)
-        .map_or_else(|| "key.keyboard.left.alt".to_owned(), |(k, _)| k);
+    let bound = crate::glue::keys::mod_binding(&*host, MOD, TOOL_MENU)
+        .unwrap_or_else(|| "key.keyboard.left.alt".to_owned());
     if event.key != bound {
         return;
     }
@@ -1080,9 +1081,8 @@ pub(super) fn render_gui_post(host: &dyn ClientHost, event: &mut mod_api::Render
         let hint = if focused {
             tr(host, "create.gui.toolmenu.cycle")
         } else {
-            let key = host
-                .mod_key(MOD, TOOL_MENU)
-                .map_or_else(|| "key.keyboard.left.alt".to_owned(), |(k, _)| k);
+            let key = crate::glue::keys::mod_binding(host, MOD, TOOL_MENU)
+                .unwrap_or_else(|| "key.keyboard.left.alt".to_owned());
             let name = tr(host, &key).to_uppercase();
             tr(host, "create.gui.toolmenu.focusKey")
                 .replace("%1$s", &name)

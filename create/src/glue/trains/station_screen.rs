@@ -400,7 +400,10 @@ pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8])
         WATCHING.with_borrow_mut(|w| w.retain(|(u, ..)| *u != uuid));
         return;
     }
-    let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+    let Some(dimension) = player
+        .level(&*host)
+        .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
+    else {
         return;
     };
     let near = player.entity().position(&*host).is_some_and(|p| {
@@ -1371,7 +1374,7 @@ pub fn screen_closing(host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>)
 /// with an empty condition list each).
 pub fn debug_command(
     host: &mut dyn mod_api::ServerHost,
-    event: &mut mod_api::RunModCommandEvent<'_>,
+    event: &mut crate::glue::subsystem::CommandCall<'_>,
 ) -> mod_api::Flow {
     let cmd = event.command;
     if cmd
@@ -1390,6 +1393,7 @@ pub fn debug_command(
     let dimension = cmd
         .dimension
         .id(&*host)
+        .map(str::to_owned)
         .map(|d| d.to_string())
         .unwrap_or_else(|| "minecraft:overworld".to_owned());
     let line = (|| {

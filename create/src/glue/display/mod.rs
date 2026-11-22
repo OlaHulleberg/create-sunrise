@@ -52,6 +52,8 @@ use super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::with_world;
+use crate::glue::names::Named as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::display::{
     self, Board, BoardState, Config, Face, Lang, Link, NixieState, Reading, Shown, Source, Stats,
@@ -60,9 +62,9 @@ use create_engine::display::{
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockPart, BlockState, ClientHost, Command, CommandArgumentValue, Compound, Flow,
-    Host, InteractionResult, ItemStack, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
-    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    Host, InteractionResult, ItemStack, PlayerRef, Registrar, RegistrationContext,
+    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StateForPlacementEvent, Tag,
     Text, UseItemOnEvent, UseWithoutItemEvent,
 };
@@ -126,7 +128,7 @@ impl Subsystem for Display {
         &self,
         host: &dyn ClientHost,
         block: Block,
-        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        event: &mut crate::glue::Submit<'_>,
     ) {
         client::draw_carried(host, block, event);
     }
@@ -318,23 +320,17 @@ impl Subsystem for Display {
         link_screen::reset();
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
         // A display link's target (the display link item's selection) and its screen's source
         // and settings, and what a link, nixie tube or display board holds, for tests.
-        event.commands.push(Command::op(
+        commands.push(Command::op(
             "create_debug display_link <pos:block_pos> <target:text>",
             2,
         ));
-        event
-            .commands
-            .push(Command::op("create_debug display_state <pos:block_pos>", 2));
+        commands.push(Command::op("create_debug display_state <pos:block_pos>", 2));
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         display_command(host, event)
     }
 }
@@ -347,7 +343,6 @@ pub(crate) fn with_language<T>(host: &dyn Host, f: impl FnOnce(&Lang<'_>) -> T) 
                 key,
                 args.iter().map(|&s| Text::literal(s)).collect(),
             ))
-            .unwrap_or_else(|_| key.to_owned())
         },
     })
 }
@@ -878,7 +873,7 @@ fn package_address(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
     let filter = with_world(|w| w.dims[dim].detectors.filter(pos).cloned()).flatten();
     let passes = |lv: &ServerLevel<'_>, stack: &ItemStack| {
         use create_engine::filter::Passes;
-        let id = stack.item().id(&*lv.host);
+        let id = stack.item().name(&*lv.host);
         create_engine::package::is_package(&id)
             && filters::Detector {
                 host: &*lv.host,
@@ -1743,7 +1738,7 @@ fn use_nixie(
     if player.entity().is_shift_key_down(&*host) == Some(true) {
         return None;
     }
-    let item = stack.map(|s| s.item().id(&*host));
+    let item = stack.map(|s| s.item().name(&*host));
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
     let pos = click.pos;
@@ -1938,7 +1933,7 @@ fn use_board(
     let dim = lv.dim;
     let pos = click.pos;
     if let Some(stack) = click.stack
-        && stack.item().id(&*lv.host) == "create:display_board"
+        && stack.item().name(&*lv.host) == "create:display_board"
     {
         return Some(place_board(&mut lv, player, click, stack));
     }
@@ -1956,12 +1951,12 @@ fn use_board(
         .flatten()
         .is_some_and(|s| s.abs() >= create_engine::gauge::MEDIUM_SPEED);
     let stack = click.stack;
-    let item = stack.map(|s| s.item().id(&*lv.host));
+    let item = stack.map(|s| s.item().name(&*lv.host));
     // Create answers on the client too, so the off hand is never tried after a main hand the
     // board took; this client can't know, and tries it.
     if click.hand == mod_api::Hand::Off {
         let main = super::items::held(&*lv.host, player, mod_api::Hand::Main);
-        let main_id = main.as_ref().map(|s| s.item().id(&*lv.host));
+        let main_id = main.as_ref().map(|s| s.item().name(&*lv.host));
         let took = match main_id.as_deref() {
             None => running,
             Some("minecraft:glow_ink_sac") => true,
@@ -2279,7 +2274,7 @@ const LINK_USAGE: &str = "usage: create_debug display_link <x y z> <x y z> [sour
 /// selection (`ClickToLinkBlockItem`, within `displayLinkRange` 64) and its screen's settings
 /// (`DisplayLinkConfigurationPacket`); `/create_debug display_state <pos>`: what a link, tube or
 /// board holds.
-fn display_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
+fn display_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
     let c = event.command;
     let literals: Vec<&str> = c.literals.iter().map(String::as_str).collect();
     let bind_link = match literals.as_slice() {
@@ -2301,7 +2296,12 @@ fn display_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>
         _ => String::new(),
     };
     let here = c.position;
-    let Some(dimension) = c.dimension.id(&*host).map(|d| d.to_string()) else {
+    let Some(dimension) = c
+        .dimension
+        .id(&*host)
+        .map(str::to_owned)
+        .map(|d| d.to_string())
+    else {
         return Flow::Cancel;
     };
     let line = match ServerLevel::new(host, &dimension) {

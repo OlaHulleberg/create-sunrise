@@ -10,6 +10,9 @@
 
 use super::super::net;
 use super::keeper::{Reader, put_str};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedInventory as _;
 use mod_api::{
     ClientHost, Flow, Hand, HostSide, InteractionResult, ItemPart, ItemStack, PlayerRef,
     ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
@@ -95,7 +98,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
     let Some(mut stack) = super::super::items::held(&*host, player, Hand::Main) else {
         return;
     };
-    if stack.item().id(&*host) != ITEM {
+    if stack.item().name(&*host) != ITEM {
         return;
     }
     let address: String = address.chars().take(25).collect();

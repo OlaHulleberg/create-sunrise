@@ -15,6 +15,8 @@ use super::super::states;
 use super::super::subsystem::Subsystem;
 use super::super::world::with_world;
 use super::client;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::train_controls::{
     self as tc, Driver, Driving, Frame, Inputs, Prompt, Target, ToClient, ToServer,
@@ -23,8 +25,8 @@ use create_engine::train_hud::{self as th, Hud};
 use mod_api::text::TextStyle;
 use mod_api::{
     BlockState, ClientHost, CrosshairTarget, Flow, GuiDraw, Hand, Host, InteractionKey,
-    InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, MovementInputEvent, PlayerRef,
-    RenderGuiPostEvent, ServerHost, Text,
+    InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, PlayerRef, RenderGuiPostEvent,
+    ServerHost, Text,
 };
 use std::cell::{Cell, RefCell};
 
@@ -130,19 +132,19 @@ impl Subsystem for TrainControls {
         interaction(host, event)
     }
 
-    fn movement_input(&self, _host: &dyn ClientHost, event: &mut MovementInputEvent) {
+    fn movement_input_update(&self, _host: &dyn ClientHost, input: &mut mod_api::MovementInput) {
         // Keep this tick's already sampled input from moving the player between clears.
         if !DRIVING.get() {
             return;
         }
-        event.forward = 0.0;
-        event.strafe = 0.0;
-        event.jump = false;
-        event.sneak = false;
-        event.forward_key = false;
-        event.backward_key = false;
-        event.left_key = false;
-        event.right_key = false;
+        input.move_vector = [0.0, 0.0];
+        let keys = &mut input.key_presses;
+        keys.jump = false;
+        keys.sneak = false;
+        keys.forward = false;
+        keys.backward = false;
+        keys.left = false;
+        keys.right = false;
     }
 
     fn mouse_scrolling(&self, _host: &mut dyn ClientHost, event: &mut MouseScrollingEvent) -> Flow {
@@ -221,7 +223,7 @@ fn interaction(host: &mut dyn ClientHost, event: &mut InteractionKeyMappingTrigg
     let wrench = player
         .selected_slot(&*host)
         .and_then(|slot| player.inventory(&*host)?.into_iter().nth(slot))
-        .is_some_and(|s| s.item().id(&*host) == "create:wrench");
+        .is_some_and(|s| s.item().name(&*host) == "create:wrench");
     let click = ToServer::Click { target: at, wrench };
     net::send_to_server(host, tc::CHANNEL, &click.encode());
     event.cancelled = true;
@@ -283,10 +285,8 @@ fn prompt_text(host: &dyn ClientHost, p: &Prompt) -> Option<(Text, bool)> {
         Prompt::Departing(name) => (station("create.train.departing_from", name), false),
         Prompt::Approach(name) => {
             // `Component.keybind("key.jump")`: the key the player bound.
-            let key = host.mapping("key.jump").ok().flatten().map_or_else(
-                || Text::translate("key.keyboard.space", Vec::new()),
-                |m| m.label,
-            );
+            let key = crate::glue::keys::label(host, "key.jump")
+                .unwrap_or_else(|| Text::translate("key.keyboard.space", Vec::new()));
             let line = Text::translate(
                 "create.contraption.controls.approach_station",
                 vec![key, Text::literal(name.as_str())],
@@ -328,7 +328,7 @@ fn client_tick(host: &mut dyn ClientHost) {
     // by the wheel goes to the server until it agrees.
     let width = PROMPT.with_borrow(|p| {
         p.as_ref()
-            .and_then(|(t, _)| host.text_width(t).ok())
+            .map(|(t, _)| host.text_width(t))
             .map(|w| w as f32)
     });
     let throttle = HUD.with_borrow_mut(|h| {
@@ -362,7 +362,7 @@ fn hud(host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
     let prompt = PROMPT.with_borrow(Clone::clone);
     let width = prompt
         .as_ref()
-        .and_then(|(t, _)| host.text_width(t).ok())
+        .map(|(t, _)| host.text_width(t))
         .map(|w| w as f32);
     let drawn = HUD.with_borrow(|h| th::layout(h, size, 1.0, width));
     for (src, dst) in &drawn.parts {
@@ -446,7 +446,7 @@ fn carriage_block(dim: usize, at: Target) -> Option<(u32, f64)> {
 /// or in creative.
 fn server_player(host: &dyn ServerHost, uuid: u128) -> Option<(usize, [f64; 3], bool, bool)> {
     let p = host.player(uuid)?;
-    let dimension = p.level(host)?.dimension().id(host)?;
+    let dimension = p.level(host)?.dimension().id(host).map(str::to_owned)?;
     let dim = super::super::world::level_index(&dimension)?;
     let at = p.entity().position(host)?;
     let (spectator, creative) = super::player_mode(host, p);
@@ -827,13 +827,28 @@ pub fn disassembled(lv: &mut ServerLevel<'_>, train: u32) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glue::contraptions::controller::Controller;
+    use mod_api::__private::game::{BackendRefOf, ClientBackendMutRefOf};
     use mod_api::prelude::*;
     use mod_api::testing::FakeHost;
+    use mod_api::wire::Reader;
     use mod_api::{
-        KeyMappingPreEvent, LevelReadError, MappingError, PayloadAccepted, PayloadBytes, PayloadId,
-        PayloadReader, PayloadSendError,
+        BackendRef, ClientBackendMutRef, ClientModifiers, MappingError, ModKeyMappingRef,
+        ModKeyRefusal, PayloadAccepted, PayloadBytes, PayloadId, PayloadSendError, Text,
+        VanillaKeyMappingRef,
     };
+
+    const NAMES: [&str; 6] = [
+        "key.forward",
+        "key.back",
+        "key.left",
+        "key.right",
+        "key.jump",
+        "key.sneak",
+    ];
+
+    fn name(mapping: VanillaKeyMappingRef) -> &'static str {
+        NAMES[mod_api::__private::vanilla_key_mapping_parts(mapping).1]
+    }
 
     const TARGET: Target = Target {
         train: 1,
@@ -856,8 +871,78 @@ mod tests {
 
     mod_api::__mod_api_impl_host_areas!(Client);
     mod_api::__mod_api_impl_client_host_areas!(Client, except(client_input, menus, payloads));
-    impl Host for Client {}
-    impl ClientHost for Client {}
+    mod_api::__mod_api_impl_backend_areas!(Client, except(client_input));
+    mod_api::__mod_api_impl_client_backend_mut_areas!(Client, except(client_input));
+    impl Host for Client {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(BackendRef::of(self))
+        }
+    }
+    impl ClientHost for Client {
+        fn client_backend_mut(&mut self) -> Option<ClientBackendMutRef<'_>> {
+            Some(ClientBackendMutRef::of(self))
+        }
+    }
+    impl mod_api::Backend for Client {}
+    impl mod_api::ClientBackendMut for Client {}
+    impl ClientInputClientBackend for Client {
+        fn vanilla_key_mapping_binding(
+            &self,
+            _: VanillaKeyMappingRef,
+        ) -> Result<&str, MappingError> {
+            Err(MappingError::Unavailable)
+        }
+        fn vanilla_key_mapping_is_down(
+            &self,
+            _: VanillaKeyMappingRef,
+        ) -> Result<bool, MappingError> {
+            Err(MappingError::Unavailable)
+        }
+        fn vanilla_key_mapping_physical_down(
+            &self,
+            mapping: VanillaKeyMappingRef,
+        ) -> Result<bool, MappingError> {
+            Ok(matches!(name(mapping), "key.forward" | "key.sneak"))
+        }
+        fn vanilla_key_mapping_translated_key_message(
+            &self,
+            _: VanillaKeyMappingRef,
+        ) -> Result<Text, MappingError> {
+            Err(MappingError::Unavailable)
+        }
+        fn mod_key_mapping_binding(
+            &self,
+            _: ModKeyMappingRef,
+        ) -> Result<(&str, ClientModifiers), ModKeyRefusal> {
+            Err(ModKeyRefusal::Unavailable)
+        }
+        fn mod_key_mapping_is_down(&self, _: ModKeyMappingRef) -> Result<bool, ModKeyRefusal> {
+            Err(ModKeyRefusal::Unavailable)
+        }
+        fn mod_key_mapping_translated_key_message(
+            &self,
+            _: ModKeyMappingRef,
+        ) -> Result<Text, MappingError> {
+            Err(MappingError::Unavailable)
+        }
+    }
+    impl ClientInputClientBackendMut for Client {
+        fn vanilla_key_mapping_set_down(
+            &mut self,
+            mapping: VanillaKeyMappingRef,
+            down: bool,
+        ) -> Result<(), MappingError> {
+            self.effects
+                .push(Effect::Mapping(name(mapping).to_owned(), down));
+            Ok(())
+        }
+        fn vanilla_key_mapping_click(
+            &mut self,
+            _: VanillaKeyMappingRef,
+        ) -> Result<(), MappingError> {
+            Err(MappingError::Unavailable)
+        }
+    }
     impl MenusClientHost for Client {
         fn local_player(&self) -> Option<PlayerRef> {
             self.player
@@ -867,12 +952,17 @@ mod tests {
         fn playing(&self) -> bool {
             self.playing
         }
-        fn mapping_physical_down(&self, name: &str) -> Result<Option<bool>, LevelReadError> {
-            Ok(Some(matches!(name, "key.forward" | "key.sneak")))
-        }
-        fn set_mapping_down(&mut self, key: &str, down: bool) -> Result<(), MappingError> {
-            self.effects.push(Effect::Mapping(key.to_owned(), down));
-            Ok(())
+        fn vanilla_key_mapping(&self, key: &str) -> Result<VanillaKeyMappingRef, MappingError> {
+            let slot = NAMES
+                .iter()
+                .position(|n| *n == key)
+                .ok_or(MappingError::Unknown {
+                    key: key.to_owned(),
+                })?;
+            Ok(mod_api::__private::vanilla_key_mapping_ref(
+                std::num::NonZeroU64::MIN,
+                slot,
+            ))
         }
     }
     impl PayloadsClientHost for Client {
@@ -882,10 +972,11 @@ mod tests {
             bytes: PayloadBytes,
         ) -> Result<PayloadAccepted, PayloadSendError> {
             assert_eq!(id.0, net::PAYLOAD);
-            let mut reader = PayloadReader::new(&bytes.0);
-            assert_eq!(reader.string().unwrap(), tc::CHANNEL);
-            let packet = ToServer::decode(reader.bytes(64).unwrap()).unwrap();
-            reader.finish().unwrap();
+            let mut reader = Reader::new(&bytes.0);
+            assert_eq!(reader.take::<String>().unwrap(), tc::CHANNEL);
+            let len = reader.take_len(1).unwrap();
+            let packet = ToServer::decode(reader.take_bytes(len).unwrap()).unwrap();
+            assert!(reader.rest().is_empty());
             self.effects.push(Effect::Packet(packet));
             Ok(PayloadAccepted::Queued)
         }
@@ -895,19 +986,13 @@ mod tests {
     fn a_train_captures_a_movement_press_but_allows_release() {
         let mut host = Client::default();
         net_from_server(&mut host, &ToClient::Start(TARGET).encode());
-        let mut event = KeyMappingPreEvent {
-            mapping: "key.forward",
-            pressed: true,
-            cancelled: false,
-        };
-        assert!(matches!(
-            Controller.key_mapping_pre(&mut host, &mut event),
-            Flow::Cancel
+        assert!(crate::glue::contraptions::controller::captures(
+            "key.forward",
+            true
         ));
-        event.pressed = false;
-        assert!(matches!(
-            Controller.key_mapping_pre(&mut host, &mut event),
-            Flow::Continue
+        assert!(!crate::glue::contraptions::controller::captures(
+            "key.forward",
+            false
         ));
         TrainControls.client_reset();
     }

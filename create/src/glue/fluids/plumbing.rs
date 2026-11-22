@@ -6,6 +6,7 @@ use super::super::world::with_world;
 use super::pipes::{connect_pipe, pipe_sides_at, pipe_sides_of};
 use super::{HOSE, all, flag, info_at, offset, property, state_with, world_fluid};
 use crate::glue::kinetics::dir_name;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::fluids::{Cell, Gate, SmartFilter};
 use create_engine::kinetics::{Axis, Dir};
@@ -186,7 +187,7 @@ impl create_engine::hose::Level for HoseLevel<'_, '_> {
         let Some(state) = lv.block_state(p) else {
             return Space::Solid;
         };
-        let name = state.block().id(&*lv.host);
+        let name = state.block().name(&*lv.host);
         if matches!(
             name.as_str(),
             "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"

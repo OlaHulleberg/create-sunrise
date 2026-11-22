@@ -11,6 +11,7 @@ use super::super::subsystem::Subsystem;
 use super::super::world::with_world;
 use super::super::{kinetics, persist, states};
 use super::{assembly, riding, saved, tracks, visuals};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::trains::{CURVE_UPDATE_TICKS, Event, Run};
 use mod_api::{
@@ -377,7 +378,10 @@ impl Subsystem for Trains {
     }
 
     fn player_joined(&self, host: &mut dyn ServerHost, player: PlayerRef) {
-        let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+        let Some(dimension) = player
+            .level(&*host)
+            .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
+        else {
             return;
         };
         let Some(lv) = ServerLevel::new(host, &dimension) else {
@@ -830,7 +834,7 @@ fn use_observer(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Int
         return None;
     }
     // `canShortInteract`: a wrench or a mechanical arm is used on the block instead.
-    let held = click.stack.map(|s| s.item().id(&*host));
+    let held = click.stack.map(|s| s.item().name(&*host));
     if held
         .as_deref()
         .is_some_and(|h| matches!(h, "create:wrench" | "create:mechanical_arm"))

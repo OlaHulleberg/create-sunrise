@@ -31,7 +31,6 @@ const DENSITY: f32 = 0.5;
 
 /// The particle types the current spawns.
 pub(super) struct Keys {
-    pub air_flow: ParticleKey,
     pub flame: ParticleKey,
     pub block: ParticleKey,
     pub soul_fire_flame: ParticleKey,
@@ -45,10 +44,12 @@ pub(super) struct Keys {
 }
 
 pub(super) static KEYS: OnceLock<Keys> = OnceLock::new();
+pub(super) static AIR_FLOW_TYPE: OnceLock<mod_api::ParticleType<()>> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
+    let air_flow = crate::glue::particle_type(r, AIR_FLOW);
+    let _ = AIR_FLOW_TYPE.set(air_flow);
     let _ = KEYS.set(Keys {
-        air_flow: r.particle_key(AIR_FLOW),
         flame: r.particle_key("minecraft:flame"),
         block: r.particle_key("minecraft:block"),
         soul_fire_flame: r.particle_key("minecraft:soul_fire_flame"),
@@ -270,7 +271,9 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
         };
         host.add_particle(&options, at, v);
     }
-    let options = ParticleOptions::simple(keys.air_flow);
+    let Some(options) = AIR_FLOW_TYPE.get().map(|t| t.options(())) else {
+        return;
+    };
     for f in &fans {
         if f.current.max <= 0.0 || random() >= DENSITY {
             continue;
@@ -325,109 +328,116 @@ fn plain(p: &mut ModParticle) {
 pub(super) struct AirFlow;
 
 impl ParticleProvider for AirFlow {
-    fn tick(&self, p: &mut ModParticle) {
-        if p.state[3] == 0.0 {
-            // The spawn: its fan, from where `tick` put it.
-            let Some(fan) = shared(|s| {
-                let i = s.spawned.iter().position(|(at, _)| *at == p.position)?;
-                Some(s.spawned.swap_remove(i).1)
-            }) else {
+    fn tick(
+        &self,
+        particles: &mut mod_api::ParticleBatch,
+        _level: &dyn mod_api::ParticleLevelView,
+    ) {
+        let one = |p: &mut mod_api::ModParticle| {
+            if p.state[3] == 0.0 {
+                // The spawn: its fan, from where `tick` put it.
+                let Some(fan) = shared(|s| {
+                    let i = s.spawned.iter().position(|(at, _)| *at == p.position)?;
+                    Some(s.spawned.swap_remove(i).1)
+                }) else {
+                    p.removed = true;
+                    return;
+                };
+                p.state = [f64::from(fan[0]), f64::from(fan[1]), f64::from(fan[2]), 1.0];
+                // `quadSize *= 0.75` of `Particle`'s `0.1 * (random * .5 + .5) * 2`.
+                p.size = 0.1 * (roll(p, 1) * 0.5 + 0.5) * 2.0 * 0.75;
+                p.lifetime = 40;
+                p.velocity = [0.0; 3];
+                plain(p);
+                // `selectSprite(7)`: `sprites.get(7, 8)` of the 8.
+                p.frame = 7 * 7 / 8;
+            }
+            let fan = [p.state[0] as i32, p.state[1] as i32, p.state[2] as i32];
+            let Some(seen) = shared(|s| s.fans.iter().find(|f| f.pos == fan).cloned()) else {
                 p.removed = true;
                 return;
             };
-            p.state = [f64::from(fan[0]), f64::from(fan[1]), f64::from(fan[2]), 1.0];
-            // `quadSize *= 0.75` of `Particle`'s `0.1 * (random * .5 + .5) * 2`.
-            p.size = 0.1 * (roll(p, 1) * 0.5 + 0.5) * 2.0 * 0.75;
-            p.lifetime = 40;
-            p.velocity = [0.0; 3];
-            plain(p);
-            // `selectSprite(7)`: `sprites.get(7, 8)` of the 8.
-            p.frame = 7 * 7 / 8;
-        }
-        let fan = [p.state[0] as i32, p.state[1] as i32, p.state[2] as i32];
-        let Some(seen) = shared(|s| s.fans.iter().find(|f| f.pos == fan).cloned()) else {
-            p.removed = true;
-            return;
-        };
-        let Some((motion, kind)) = seen.particle_step(p.position) else {
-            p.removed = true;
-            return;
-        };
-        let pick = |p: &ModParticle, salt| roll(p, salt);
-        match kind {
-            None => {
-                plain(p);
-                let max = f64::from(seen.current.max).max(1e-3);
-                let o = seen.facing.offset();
-                let distance = (0..3)
-                    .map(|a| {
-                        ((p.position[a] - (f64::from(fan[a]) + 0.5)) * f64::from(o[a])).powi(2)
-                    })
-                    .sum::<f64>()
-                    .sqrt()
-                    - 0.5;
-                let i = ((distance / max) * 8.0 + f64::from((pick(p, 2) * 4.0) as i32))
-                    .clamp(0.0, 7.0) as u32;
-                p.frame = i * 7 / 8;
-            }
-            Some(kind) => {
-                let t = pick(p, 3);
-                let mut extra = Vec::new();
-                let speed = |m: f64| motion.map(|v| v * m);
-                match kind {
-                    Kind::Blasting => {
-                        mix(p, 0xFF4400, 0xFF8855, t);
-                        p.rgba[3] = 0.5;
-                        if pick(p, 4) < 1.0 / 32.0 {
-                            extra.push((Extra::Flame, speed(0.25)));
+            let Some((motion, kind)) = seen.particle_step(p.position) else {
+                p.removed = true;
+                return;
+            };
+            let pick = |p: &ModParticle, salt| roll(p, salt);
+            match kind {
+                None => {
+                    plain(p);
+                    let max = f64::from(seen.current.max).max(1e-3);
+                    let o = seen.facing.offset();
+                    let distance = (0..3)
+                        .map(|a| {
+                            ((p.position[a] - (f64::from(fan[a]) + 0.5)) * f64::from(o[a])).powi(2)
+                        })
+                        .sum::<f64>()
+                        .sqrt()
+                        - 0.5;
+                    let i = ((distance / max) * 8.0 + f64::from((pick(p, 2) * 4.0) as i32))
+                        .clamp(0.0, 7.0) as u32;
+                    p.frame = i * 7 / 8;
+                }
+                Some(kind) => {
+                    let t = pick(p, 3);
+                    let mut extra = Vec::new();
+                    let speed = |m: f64| motion.map(|v| v * m);
+                    match kind {
+                        Kind::Blasting => {
+                            mix(p, 0xFF4400, 0xFF8855, t);
+                            p.rgba[3] = 0.5;
+                            if pick(p, 4) < 1.0 / 32.0 {
+                                extra.push((Extra::Flame, speed(0.25)));
+                            }
+                            if pick(p, 5) < 1.0 / 16.0 {
+                                extra.push((Extra::Lava, speed(0.25)));
+                            }
                         }
-                        if pick(p, 5) < 1.0 / 16.0 {
-                            extra.push((Extra::Lava, speed(0.25)));
+                        Kind::Haunting => {
+                            mix(p, 0x0, 0x126568, t);
+                            p.rgba[3] = 1.0;
+                            if pick(p, 4) < 1.0 / 128.0 {
+                                extra.push((Extra::SoulFireFlame, speed(0.125)));
+                            }
+                            if pick(p, 5) < 1.0 / 32.0 {
+                                extra.push((Extra::Smoke, speed(0.125)));
+                            }
                         }
-                    }
-                    Kind::Haunting => {
-                        mix(p, 0x0, 0x126568, t);
-                        p.rgba[3] = 1.0;
-                        if pick(p, 4) < 1.0 / 128.0 {
-                            extra.push((Extra::SoulFireFlame, speed(0.125)));
+                        Kind::Smoking => {
+                            mix(p, 0x0, 0x555555, t);
+                            p.rgba[3] = 1.0;
+                            if pick(p, 4) < 1.0 / 32.0 {
+                                extra.push((Extra::Smoke, speed(0.125)));
+                            }
+                            if pick(p, 5) < 1.0 / 32.0 {
+                                extra.push((Extra::LargeSmoke, speed(0.125)));
+                            }
                         }
-                        if pick(p, 5) < 1.0 / 32.0 {
-                            extra.push((Extra::Smoke, speed(0.125)));
-                        }
-                    }
-                    Kind::Smoking => {
-                        mix(p, 0x0, 0x555555, t);
-                        p.rgba[3] = 1.0;
-                        if pick(p, 4) < 1.0 / 32.0 {
-                            extra.push((Extra::Smoke, speed(0.125)));
-                        }
-                        if pick(p, 5) < 1.0 / 32.0 {
-                            extra.push((Extra::LargeSmoke, speed(0.125)));
+                        Kind::Splashing => {
+                            mix(p, 0x4499FF, 0x2277FF, t);
+                            p.rgba[3] = 1.0;
+                            if pick(p, 4) < 1.0 / 32.0 {
+                                extra.push((Extra::Bubble, speed(0.125)));
+                            }
+                            if pick(p, 5) < 1.0 / 32.0 {
+                                extra.push((Extra::BubblePop, speed(0.125)));
+                            }
                         }
                     }
-                    Kind::Splashing => {
-                        mix(p, 0x4499FF, 0x2277FF, t);
-                        p.rgba[3] = 1.0;
-                        if pick(p, 4) < 1.0 / 32.0 {
-                            extra.push((Extra::Bubble, speed(0.125)));
-                        }
-                        if pick(p, 5) < 1.0 / 32.0 {
-                            extra.push((Extra::BubblePop, speed(0.125)));
-                        }
+                    // `selectSprite(random.nextInt(3))`.
+                    p.frame = ((pick(p, 6) * 3.0) as u32).min(2) * 7 / 8;
+                    if !extra.is_empty() {
+                        let at = p.position;
+                        shared(|s| s.extra.extend(extra.into_iter().map(|(e, v)| (e, at, v))));
                     }
                 }
-                // `selectSprite(random.nextInt(3))`.
-                p.frame = ((pick(p, 6) * 3.0) as u32).min(2) * 7 / 8;
-                if !extra.is_empty() {
-                    let at = p.position;
-                    shared(|s| s.extra.extend(extra.into_iter().map(|(e, v)| (e, at, v))));
-                }
             }
-        }
-        // `move(xd, yd, zd)` without physics.
-        p.velocity = motion;
-        for (v, m) in p.position.iter_mut().zip(motion) {
-            *v += m;
-        }
+            // `move(xd, yd, zd)` without physics.
+            p.velocity = motion;
+            for (v, m) in p.position.iter_mut().zip(motion) {
+                *v += m;
+            }
+        };
+        particles.iter_mut().for_each(one);
     }
 }

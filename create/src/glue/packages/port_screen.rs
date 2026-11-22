@@ -11,6 +11,7 @@ use super::super::net;
 use super::super::server::ServerLevel;
 use super::super::stock::keeper::{Reader, put_i32, put_stack, put_str};
 use super::{body, mark_unsaved, parcel, with};
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::package;
 use create_engine::port::SLOTS;
 use mod_api::{

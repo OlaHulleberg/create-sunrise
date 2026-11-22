@@ -93,24 +93,24 @@ impl BlockEntityPart for SavedFields {
         write_record(SUBSYSTEMS, event.level, event.pos, block, event.tag);
     }
 
-    fn block_entity_load_additional(
-        &self,
-        level: &dyn LevelHost,
-        event: &mut BlockEntityLoadAdditionalEvent<'_>,
-    ) {
-        let Some(block) = level
-            .block_state(event.pos)
-            .and_then(|s| states::level_block(level, s))
+    fn block_entity_load_additional(&self, event: &mut BlockEntityLoadAdditionalEvent<'_>) {
+        let Some((at, pos, state)) = event
+            .subject
+            .with_view(|v| (v.level(), v.position(), v.state()))
         else {
             return;
         };
-        let known = RECORDS.with_borrow(|r| r.contains_key(&(event.level, event.pos)));
+        let level = event.subject.host();
+        let Some(block) = states::level_block(level, state) else {
+            return;
+        };
+        let known = RECORDS.with_borrow(|r| r.contains_key(&(at, pos)));
         let Some((fields, sure)) = loaded(SUBSYSTEMS, block, event.tag, known) else {
             return;
         };
         PENDING.with_borrow_mut(|p| {
-            p.retain(|(l, q, _, _)| (*l, *q) != (event.level, event.pos));
-            p.push((event.level, event.pos, Record { block, fields }, sure));
+            p.retain(|(l, q, _, _)| (*l, *q) != (at, pos));
+            p.push((at, pos, Record { block, fields }, sure));
         });
     }
 }

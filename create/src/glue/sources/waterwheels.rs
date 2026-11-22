@@ -12,14 +12,15 @@ use super::super::kinetics::{self, axis_vector};
 use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::client::{Draw, Model};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockPart, BlockState, CanSurviveEvent, ClientHost,
-    Compound, Flow, Hand, HostBlockStates, InteractionResult, Registrar, RightClickBlockEvent,
-    ServerHost, Tag, UseItemOnEvent,
+    BlockEntityPart, BlockPart, BlockState, CanSurviveEvent, ClientHost, Compound, Flow, Hand,
+    HostBlockStates, InteractionResult, Registrar, RightClickBlockEvent, ServerHost, Tag,
+    UseItemOnEvent,
 };
 
 /// The key of a wheel's material in its block entity data (`WaterWheelBlockEntity.write`).
@@ -111,7 +112,7 @@ pub(super) fn predict(host: &mut dyn ClientHost, event: &mut RightClickBlockEven
     }
     let Some(wood) = click
         .stack
-        .and_then(|s| wood_of_planks(&s.item().id(&*host)))
+        .and_then(|s| wood_of_planks(&s.item().name(&*host)))
     else {
         return Flow::Continue;
     };
@@ -190,7 +191,7 @@ impl BlockPart for Wheel {
     ) -> Option<InteractionResult> {
         let click = event.click;
         let dimension = click.dimension.key().id().to_owned();
-        let item = click.stack.map(|s| s.item().id(&*host));
+        let item = click.stack.map(|s| s.item().name(&*host));
         let mut lv = ServerLevel::new(host, &dimension)?;
         let dim = lv.dim;
         let state = lv.block(click.pos);
@@ -258,7 +259,12 @@ impl BlockPart for Drawn {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Drawn {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };

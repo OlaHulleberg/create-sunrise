@@ -1,7 +1,6 @@
 //! What clients see of a network's stress changing (`KineticEffectHandler`): two ticks after a
-//! turning block's network becomes overstressed, smoke puffs out of it; when it recovers, a little
-//! cloud. Create also flashes the turning parts red or green (`overStressedEffect`), which needs
-//! a colour on a block model drawn by a block entity (see `API_GAPS.md`).
+//! turning block's network becomes overstressed, smoke puffs out of it and its turning parts
+//! flash red; when it recovers, a little cloud and a green flash (`overStressedEffect`).
 
 use super::super::kinetics;
 use create_engine::processing::Rng;
@@ -23,6 +22,9 @@ struct Client {
     /// Effects to play: the block, whether it is overstressed, ticks left
     /// (`overStressedTime`).
     pending: Vec<([i32; 3], bool, u8)>,
+    /// `overStressedEffect` of each block flashing: 1 (red) or -1 (green), fading by a tenth a
+    /// tick.
+    flash: HashMap<[i32; 3], f32>,
     rng: Option<Rng>,
 }
 
@@ -49,9 +51,6 @@ pub(super) fn client_reset() {
 /// (`spawnEffect`: smoke, 5 at up to .2 a tick; a cloud, 2 at up to .075).
 pub(super) fn client_tick(host: &mut dyn ClientHost) {
     let due: Vec<([i32; 3], bool)> = CLIENT.with_borrow_mut(|c| {
-        if c.pending.is_empty() {
-            return Vec::new();
-        }
         let mut due = Vec::new();
         c.pending.retain_mut(|(pos, over, left)| {
             *left -= 1;
@@ -59,6 +58,13 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
                 due.push((*pos, *over));
             }
             *left > 0
+        });
+        for &(pos, over) in &due {
+            c.flash.insert(pos, if over { 1.0 } else { -1.0 });
+        }
+        c.flash.retain(|_, e| {
+            *e -= *e * 0.1;
+            e.abs() >= 1.0 / 128.0
         });
         due
     });
@@ -92,15 +98,11 @@ impl BlockPart for Effects {}
 impl BlockEntityPart for Effects {
     /// `KineticBlockEntity.read` on the client: an update that turns the overstress on or off
     /// while the block should turn (`speed != 0`) triggers its effect.
-    fn block_entity_data_received(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut BlockEntityDataReceivedEvent<'_>,
-    ) {
+    fn block_entity_data_received(&self, event: &mut BlockEntityDataReceivedEvent<'_>) {
         let Some(Tag::Byte(over)) = event.tag.get(&kinetics::OVER.into()) else {
             return;
         };
-        let Some(pos) = event.entity.position(host) else {
+        let Some(pos) = event.subject.with_view(|v| v.position()) else {
             return;
         };
         let over = *over != 0;
@@ -126,7 +128,21 @@ impl BlockEntityPart for Effects {
         if let HostSide::Client(_) = host {
             CLIENT.with_borrow_mut(|c| {
                 c.over.remove(&event.pos);
+                c.flash.remove(&event.pos);
             });
         }
     }
+}
+
+/// `KineticBlockEntityRenderer.kineticRotationTransform`'s colour for the block at `pos`: white
+/// mixed toward red (overstressed) or spring green (recovered) by the fading effect.
+pub fn flash_color(pos: [i32; 3]) -> Option<u32> {
+    let e = CLIENT.with_borrow(|c| c.flash.get(&pos).copied())?;
+    let (to, weight) = if e > 0.0 {
+        ([255.0, 0.0, 0.0], e)
+    } else {
+        ([0.0, 255.0, 187.0], -e)
+    };
+    let [r, g, b] = to.map(|c: f32| (255.0 + (c - 255.0) * weight) as u32);
+    Some(0xFF00_0000 | r << 16 | g << 8 | b)
 }

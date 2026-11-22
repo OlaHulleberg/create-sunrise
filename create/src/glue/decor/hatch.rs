@@ -5,8 +5,8 @@
 use super::dir_named;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, ClientHost,
-    Compound, HostBlockStates, ItemDisplayContext, ItemStack, Registrar, Tag,
+    BlockEntityPart, BlockEntityUpdateTagEvent, BlockPart, ClientHost, Compound, HostBlockStates,
+    ItemDisplayContext, ItemStack, Registrar, Tag,
 };
 
 /// The hatch's block entity type.
@@ -45,7 +45,12 @@ impl BlockEntityPart for HatchEntity {
     /// 9.5)` turned by the hatch's `horizontalAngle` about y, turned the same way and 45° back,
     /// at 0.965 of the value box's scale (`ValueBoxRenderer.renderItemIntoValueBox`: a flat item
     /// at half that, pushed back .15).
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(Tag::Compound(item)) = event.entity.nbt.get(&FILTER.into()) else {
             return;
         };

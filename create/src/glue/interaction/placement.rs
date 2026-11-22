@@ -14,6 +14,8 @@
 
 use super::super::net;
 use super::super::server::ServerLevel;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use mod_api::{
     ClientHost, DrawContext, Hand, Host, HostBlockStates, ItemKey, PlayerRef, ServerHost,
 };
@@ -64,7 +66,7 @@ fn target(host: &mut dyn ServerHost, player: PlayerRef) -> Option<Sent> {
     let stacks: Vec<_> = [Hand::Main, Hand::Off]
         .into_iter()
         .filter_map(|h| living.hand_item(&*host, h))
-        .filter(|s| helped(&s.item().id(&*host)))
+        .filter(|s| helped(&s.item().name(&*host)))
         .collect();
     if stacks.is_empty() {
         return None;
@@ -85,7 +87,7 @@ fn target(host: &mut dyn ServerHost, player: PlayerRef) -> Option<Sent> {
     let (pos, point) = (hit.block, hit.location);
     stacks.iter().find_map(|s| {
         let item = s.item();
-        let id = item.id(&*lv.host);
+        let id = item.name(&*lv.host);
         let (at, props) = super::super::transmission::helper_target(&lv, pos, point, &id)
             .or_else(|| super::super::copycat::helper_target(&lv, pos, point, &id))
             .or_else(|| super::super::display::helper_target(&lv, pos, point, &id))
