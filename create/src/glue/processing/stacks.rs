@@ -65,7 +65,11 @@ const CUSTOM_DATA: &str = "minecraft:custom_data";
 
 /// The sequenced assembly a stack is part way through: the recipe and the step it is at.
 pub fn sequenced_progress(stack: &ItemStack) -> Option<create_engine::sequenced::Progress> {
-    let nbt = stack.components()?.as_nbt();
+    sequenced_of_components(stack.components()?.as_nbt())
+}
+
+/// [`sequenced_progress`] of a stack's components, as saved with it.
+pub fn sequenced_of_components(nbt: &Compound) -> Option<create_engine::sequenced::Progress> {
     let Some(Tag::Compound(custom)) = nbt.get(&CUSTOM_DATA.into()) else {
         return None;
     };
@@ -85,10 +89,7 @@ pub fn sequenced_progress(stack: &ItemStack) -> Option<create_engine::sequenced:
 
 /// The stack marked with assembly `id` at `step` (`progress` the fraction of all its steps).
 pub fn set_sequenced_progress(stack: &mut ItemStack, id: &str, step: u32, progress: f32) {
-    let mut c = Compound::new();
-    c.insert("id".into(), Tag::String(id.into()));
-    c.insert("step".into(), Tag::Int(step as i32));
-    c.insert("progress".into(), Tag::Float(progress.to_bits()));
+    let c = sequenced_component(id, step, progress);
     let mut custom = stack
         .components()
         .and_then(|c| match c.as_nbt().get(&CUSTOM_DATA.into()) {
@@ -99,6 +100,25 @@ pub fn set_sequenced_progress(stack: &mut ItemStack, id: &str, step: u32, progre
     custom.insert(SEQUENCED_KEY.into(), Tag::Compound(c));
     let patch = Compound::from([(CUSTOM_DATA.into(), Tag::Compound(custom))]);
     let _ = stack.apply_components(&patch);
+}
+
+/// `SequencedAssemblyRecipe`'s mark of assembly `id` at `step` (`progress` the fraction of all
+/// its steps).
+fn sequenced_component(id: &str, step: u32, progress: f32) -> Compound {
+    Compound::from([
+        ("id".into(), Tag::String(id.into())),
+        ("step".into(), Tag::Int(step as i32)),
+        ("progress".into(), Tag::Float(progress.to_bits())),
+    ])
+}
+
+/// The components of a stack marked as [`set_sequenced_progress`] marks it, as saved with it.
+pub fn sequenced_components(id: &str, step: u32, progress: f32) -> Compound {
+    let custom = Compound::from([(
+        SEQUENCED_KEY.into(),
+        Tag::Compound(sequenced_component(id, step, progress)),
+    )]);
+    Compound::from([(CUSTOM_DATA.into(), Tag::Compound(custom))])
 }
 
 impl ServerLevel<'_> {

@@ -331,6 +331,10 @@ impl Run {
         };
         let item = s.slots.first().map(|x| x.0.clone()).unwrap_or_default();
         let step = s.tick(speed);
+        // `saw_turn`: a saw whose turn did something has its column written.
+        if step != saw::Step::Wait {
+            self.w.mark_unsaved(0, pos);
+        }
         match step {
             saw::Step::Wait => {}
             saw::Step::Start => {
@@ -454,6 +458,7 @@ impl Run {
             self.saw_duration.insert(pos, s.remaining);
         }
         self.w.dims[0].saws.insert(pos, s);
+        self.w.mark_unsaved(0, pos);
         true
     }
 

@@ -1,0 +1,116 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 40,
+  "checkpoints": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:iron_ingot",
+          "count": 5
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 25,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": null,
+        "extract": 3,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": null,
+        "extract": 2,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 32,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:gold_ingot",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    }
+  ]
+}

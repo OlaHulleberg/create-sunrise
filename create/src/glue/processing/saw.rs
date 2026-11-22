@@ -252,7 +252,10 @@ pub fn saw_put(
     if up {
         SAW_DURATION.with_borrow_mut(|m| m.insert((dim, pos), s.remaining));
     }
-    with_world(|w| w.dims[dim].saws.insert(pos, s));
+    with_world(|w| {
+        w.dims[dim].saws.insert(pos, s);
+        w.mark_unsaved(dim, pos);
+    });
     show_saw(lv, pos);
     true
 }
@@ -380,6 +383,8 @@ pub fn saw_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     }
     if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {
+        let dim = lv.dim;
+        with_world(|w| w.mark_unsaved(dim, pos));
         show_saw(lv, pos);
     }
 }
@@ -632,6 +637,172 @@ fn show_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     super::basin::set_shown(lv, pos, &[(SAW_KEY, value)]);
 }
 
+/// `SawBlockEntity.write`'s keys: its `ProcessingInventory` and `recipeIndex`.
+pub(super) const INVENTORY: &str = "Inventory";
+pub(super) const RECIPE_INDEX: &str = "RecipeIndex";
+
+/// `ProcessingInventory.serializeNBT` of `s`: its stacks by slot (the input in 0, the results
+/// from 1 once cut), the time left and its duration, and whether it has cut them.
+fn inventory_tag(s: &saw::Saw, duration: f32) -> Compound {
+    let first = usize::from(s.applied);
+    let transitional = s.progress.as_ref().and_then(super::transitional_of);
+    let items = s
+        .slots
+        .iter()
+        .enumerate()
+        .map(|(i, (id, n))| {
+            let mut c = Compound::from([
+                ("Slot".into(), Tag::Int((first + i) as i32)),
+                ("id".into(), Tag::String(id.as_str().into())),
+                ("count".into(), Tag::Int(i32::from(*n))),
+            ]);
+            // The stack in assembly carries its progress: the input before its step, the
+            // transitional item after.
+            let carries = match &transitional {
+                Some((t, _, _)) if s.applied => t == id,
+                _ => i == 0 && !s.applied,
+            };
+            if let Some(p) = s.progress.as_ref().filter(|_| carries) {
+                let fraction = transitional.as_ref().map_or(0.0, |t| t.2);
+                let components = stacks::sequenced_components(&p.id, p.step, fraction);
+                c.insert("components".into(), Tag::Compound(components));
+            }
+            Tag::Compound(c)
+        })
+        .collect();
+    Compound::from([
+        ("Items".into(), Tag::List(items)),
+        ("Size".into(), Tag::Int(32)),
+        ("ProcessingTime".into(), Tag::Float(s.remaining.to_bits())),
+        ("RecipeTime".into(), Tag::Float(duration.to_bits())),
+        ("AppliedRecipe".into(), Tag::Byte(i8::from(s.applied))),
+    ])
+}
+
+/// `SawBlockEntity.write` of the saws of column `chunk` holding items or keeping a recipe
+/// index: `Inventory` and `RecipeIndex`.
+pub(super) fn save_saws(dim: usize, chunk: [i32; 2], out: &mut crate::glue::entity_data::Entities) {
+    let mine = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] == chunk;
+    let saws: Vec<([i32; 3], saw::Saw)> = with_world(|w| {
+        w.dims[dim]
+            .saws
+            .iter()
+            .filter(|(p, _)| mine(p))
+            .map(|(p, s)| (*p, s.clone()))
+            .collect()
+    })
+    .unwrap_or_default();
+    SAW_INDEX.with_borrow(|m| {
+        for ((d, p), i) in m {
+            if *d == dim && mine(p) && *i != 0 {
+                out.entry(*p)
+                    .or_default()
+                    .insert(RECIPE_INDEX.into(), Tag::Int(*i as i32));
+            }
+        }
+    });
+    for (p, s) in saws {
+        let duration = recipe_duration(dim, p, &s);
+        let e = out.entry(p).or_default();
+        e.insert(INVENTORY.into(), Tag::Compound(inventory_tag(&s, duration)));
+        e.insert(RECIPE_INDEX.into(), Tag::Int(s.index as i32));
+    }
+}
+
+/// The saw's `recipeDuration`: 20 once cut, nothing while it waits to start.
+fn recipe_duration(dim: usize, pos: [i32; 3], s: &saw::Saw) -> f32 {
+    if s.applied {
+        20.0
+    } else if s.remaining < 0.0 {
+        0.0
+    } else {
+        SAW_DURATION.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0.0))
+    }
+}
+
+/// The saw at `pos`'s time left (`remainingTime`), which counts down without a change of its
+/// own, over its record's `Inventory`.
+pub(super) fn live_saw(dim: usize, pos: [i32; 3], fields: &mut Compound) {
+    let remaining = with_world(|w| w.dims[dim].saws.get(&pos).map(|s| s.remaining)).flatten();
+    if let Some(r) = remaining {
+        crate::glue::entity_data::patch(
+            fields,
+            INVENTORY,
+            "ProcessingTime",
+            Tag::Float(r.to_bits()),
+        );
+    }
+}
+
+/// `SawBlockEntity.read` of saved fields `tag`: the saw, when it holds stacks, its
+/// `recipeIndex` and its `recipeDuration`.
+fn saw_of(tag: &Compound) -> (Option<saw::Saw>, usize, f32) {
+    let index = match tag.get(&RECIPE_INDEX.into()) {
+        Some(Tag::Int(i)) => (*i).max(0) as usize,
+        _ => 0,
+    };
+    let Some(Tag::Compound(inventory)) = tag.get(&INVENTORY.into()) else {
+        return (None, index, 0.0);
+    };
+    let float = |k: &str| match inventory.get(&k.into()) {
+        Some(Tag::Float(b)) => f32::from_bits(*b),
+        _ => 0.0,
+    };
+    let mut items: Vec<(i32, String, u8, Option<sequenced::Progress>)> =
+        match inventory.get(&"Items".into()) {
+            Some(Tag::List(l)) => l
+                .iter()
+                .filter_map(|t| {
+                    let Tag::Compound(c) = t else { return None };
+                    let (Some(Tag::String(id)), Some(Tag::Int(n))) =
+                        (c.get(&"id".into()), c.get(&"count".into()))
+                    else {
+                        return None;
+                    };
+                    let slot = match c.get(&"Slot".into()) {
+                        Some(Tag::Int(s)) => *s,
+                        _ => 0,
+                    };
+                    let progress = match c.get(&"components".into()) {
+                        Some(Tag::Compound(c)) => stacks::sequenced_of_components(c),
+                        _ => None,
+                    };
+                    let n = (*n).clamp(1, 255) as u8;
+                    Some((slot, id.to_string_lossy(), n, progress))
+                })
+                .collect(),
+            _ => Vec::new(),
+        };
+    items.sort_by_key(|i| i.0);
+    let duration = float("RecipeTime");
+    if items.is_empty() {
+        return (None, index, duration);
+    }
+    let progress = items.iter().find_map(|i| i.3.clone());
+    let s = saw::Saw {
+        slots: items.into_iter().map(|(_, id, n, _)| (id, n)).collect(),
+        remaining: float("ProcessingTime"),
+        applied: matches!(inventory.get(&"AppliedRecipe".into()), Some(Tag::Byte(b)) if *b != 0),
+        index,
+        progress,
+    };
+    (Some(s), index, duration)
+}
+
+/// `SawBlockEntity.read`: the saw's stacks, times and recipe index from its saved fields.
+pub(super) fn load_saw(dim: usize, pos: [i32; 3], tag: &Compound) {
+    let (s, index, duration) = saw_of(tag);
+    SAW_INDEX.with_borrow_mut(|m| m.insert((dim, pos), index));
+    SAW_DURATION.with_borrow_mut(|m| m.insert((dim, pos), duration));
+    with_world(|w| {
+        let saws = &mut w.dims[dim].saws;
+        match s {
+            Some(s) => saws.insert(pos, s),
+            None => saws.remove(&pos),
+        }
+    });
+}
+
 /// The saw and the drill as blocks: what walks into their blades.
 pub struct Blades;
 
@@ -684,5 +855,57 @@ pub fn hurt_inside(lv: &mut ServerLevel<'_>) {
         if drill::inside(pos, min, max) {
             let _ = entity.hurt(&mut *lv.host, damage_type, drill::damage(speed), None, None);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `SawBlockEntity.write` then `read`: a saw part way through cutting, and one that has cut
+    /// its input into results (slots from 1), come back as they were.
+    #[test]
+    fn a_saved_saw_reads_back_as_it_was() {
+        let cutting = saw::Saw {
+            slots: vec![("minecraft:oak_log".into(), 1)],
+            remaining: 37.0,
+            applied: false,
+            index: 2,
+            progress: Some(sequenced::Progress {
+                id: "create:precision_mechanism".into(),
+                step: 3,
+            }),
+        };
+        let cut = saw::Saw {
+            slots: vec![
+                ("minecraft:oak_planks".into(), 6),
+                ("minecraft:stick".into(), 2),
+            ],
+            remaining: 12.0,
+            applied: true,
+            index: 1,
+            progress: None,
+        };
+        for (s, duration) in [(cutting, 50.0), (cut, 20.0)] {
+            let tag = Compound::from([
+                (INVENTORY.into(), Tag::Compound(inventory_tag(&s, duration))),
+                (RECIPE_INDEX.into(), Tag::Int(s.index as i32)),
+            ]);
+            let first = match tag.get(&INVENTORY.into()) {
+                Some(Tag::Compound(c)) => match c.get(&"Items".into()) {
+                    Some(Tag::List(l)) => match l.first() {
+                        Some(Tag::Compound(i)) => i.get(&"Slot".into()).cloned(),
+                        _ => None,
+                    },
+                    _ => None,
+                },
+                _ => None,
+            };
+            assert_eq!(first, Some(Tag::Int(i32::from(s.applied))));
+            assert_eq!(saw_of(&tag), (Some(s.clone()), s.index, duration));
+        }
+        // An empty saw keeps only its recipe index.
+        let index = Compound::from([(RECIPE_INDEX.into(), Tag::Int(4))]);
+        assert_eq!(saw_of(&index), (None, 4, 0.0));
     }
 }

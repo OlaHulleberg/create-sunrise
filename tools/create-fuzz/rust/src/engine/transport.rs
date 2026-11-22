@@ -199,8 +199,8 @@ impl Run {
         }
     }
     /// `DepotItems.insert` into the held slot of the depot at `p`: only while every slot is
-    /// empty, up to the stack limit; the held stack arrives at the edge
-    /// (`depot_contents_changed`). What is left of `s`.
+    /// empty, up to the stack limit; the held stack arrives at the edge (`DepotItems.arrived`).
+    /// What is left of `s`.
     pub(super) fn depot_insert(&mut self, p: Pos, s: &Stack, simulate: bool) -> Option<Stack> {
         let empty = !self.depot_stacks.contains_key(&p)
             && self.depot_outputs.get(&p).is_none_or(|o| o.is_empty());

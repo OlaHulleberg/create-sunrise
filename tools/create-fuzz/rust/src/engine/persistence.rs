@@ -198,6 +198,13 @@ impl Run {
                     (cx, cz),
                     now,
                 ));
+            crate::persistence::entities::save_saws(
+                &self.w,
+                &self.saw_index,
+                &self.saw_duration,
+                (cx, cz),
+                &mut self.persisted.records,
+            );
         }
         // decor/saved.rs `BracketState` and packages' `ChainConveyor` (its connections; the
         // packages it carries are not modelled here).
@@ -227,6 +234,7 @@ impl Run {
         let now = u64::from(self.now);
         let mut at: Vec<Pos> = self.persisted.records.keys().copied().collect();
         at.extend(self.w.dims[0].funnels.keys().copied());
+        at.extend(self.w.dims[0].millstones.keys().copied());
         at.sort();
         at.dedup();
         for p in at {
@@ -372,6 +380,16 @@ impl Run {
         for &(p, s) in &blocks {
             if let (Some(tag), Some((block, _))) = (records.get(&p), self.w.table.get(s)) {
                 crate::persistence::entities::load(&mut self.w, p, block, tag, u64::from(self.now));
+                // glue/processing/saw.rs `load_saw`.
+                if block == create_engine::Block::MechanicalSaw {
+                    let (saw, index, duration) = crate::persistence::entities::saw_of(tag);
+                    self.saw_index.insert(p, index);
+                    self.saw_duration.insert(p, duration);
+                    match saw {
+                        Some(s) => self.w.dims[0].saws.insert(p, s),
+                        None => self.w.dims[0].saws.remove(&p),
+                    };
+                }
             }
         }
         let chains: HashMap<_, _> = chains.into_iter().collect();

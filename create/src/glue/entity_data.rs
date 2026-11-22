@@ -396,4 +396,23 @@ mod tests {
         let marked = Compound::from([(MARKER.into(), Tag::Byte(1))]);
         assert!(loaded(SUBSYSTEMS, Block::BrassFunnel, &marked, false).is_none());
     }
+
+    /// `MillstoneBlockEntity.write` saves its `Timer`, so a millstone's milling goes on after a
+    /// reload: the field is its block entity's own, read back with the rest.
+    #[test]
+    fn a_millstone_reads_back_its_timer() {
+        let saved = Compound::from([
+            ("id".into(), Tag::String("create:kinetic".into())),
+            ("Timer".into(), Tag::Int(87)),
+            (MARKER.into(), Tag::Byte(1)),
+        ]);
+        let (fields, sure) = loaded(SUBSYSTEMS, Block::Millstone, &saved, false).unwrap();
+        assert!(sure);
+        assert_eq!(fields.get(&"Timer".into()), Some(&Tag::Int(87)));
+        // Not another block's.
+        assert!(
+            loaded(SUBSYSTEMS, Block::Basin, &saved, false)
+                .is_none_or(|(f, _)| !f.contains_key(&"Timer".into()))
+        );
+    }
 }

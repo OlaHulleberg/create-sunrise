@@ -4,7 +4,7 @@ use super::codec::{self, Compound, Tag};
 use crate::scenario::Pos;
 use create_engine::Block;
 use create_engine::world::CreateWorld;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 /// glue `Subsystem::live_fields` (`entity_data::write_record`): the countdowns of the record at
 /// `p`, from the live world at the last publication's game time `now`.
@@ -25,8 +25,121 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
             None => {}
         },
         Some(Block::ItemDrain) => super::fluids::live_drain(w, p, fields),
+        // glue/processing/saw.rs `live_saw`.
+        Some(Block::MechanicalSaw) => {
+            if let Some(s) = w.dims[0].saws.get(&p)
+                && let Some(Tag::Compound(c)) = fields.get_mut(SAW_INVENTORY)
+            {
+                c.insert("ProcessingTime".into(), Tag::Float(s.remaining.to_bits()));
+            }
+        }
+        // glue/processing/persist.rs `live_fields`: the millstone's `Timer`.
+        Some(Block::Millstone) => {
+            if let Some(m) = w.dims[0].millstones.get(&p) {
+                fields.insert("Timer".into(), Tag::Int(m.timer));
+            }
+        }
         _ => {}
     }
+}
+
+const SAW_INVENTORY: &str = "Inventory";
+const RECIPE_INDEX: &str = "RecipeIndex";
+
+/// glue/processing/saw.rs `save_saws`: `Inventory` and `RecipeIndex` of the saws of `column`
+/// holding items or keeping a recipe index (`index`, their `recipeDuration` in `duration`).
+pub fn save_saws(
+    w: &CreateWorld,
+    index: &HashMap<Pos, usize>,
+    duration: &HashMap<Pos, f32>,
+    column: (i32, i32),
+    out: &mut BTreeMap<Pos, Compound>,
+) {
+    let here = |p: &Pos| (p[0] >> 4, p[2] >> 4) == column;
+    for (p, i) in index.iter().filter(|(p, i)| here(p) && **i != 0) {
+        out.entry(*p)
+            .or_default()
+            .insert(RECIPE_INDEX.into(), Tag::Int(*i as i32));
+    }
+    for (p, s) in w.dims[0].saws.iter().filter(|(p, _)| here(p)) {
+        let time = if s.applied {
+            20.0
+        } else if s.remaining < 0.0 {
+            0.0
+        } else {
+            duration.get(p).copied().unwrap_or(0.0)
+        };
+        let first = usize::from(s.applied);
+        let items = s
+            .slots
+            .iter()
+            .enumerate()
+            .map(|(i, (id, n))| {
+                Tag::Compound(Compound::from([
+                    ("Slot".into(), Tag::Int((first + i) as i32)),
+                    ("id".into(), Tag::String(id.clone())),
+                    ("count".into(), Tag::Int(i32::from(*n))),
+                ]))
+            })
+            .collect();
+        let inventory = Compound::from([
+            ("Items".into(), Tag::List(items)),
+            ("Size".into(), Tag::Int(32)),
+            ("ProcessingTime".into(), Tag::Float(s.remaining.to_bits())),
+            ("RecipeTime".into(), Tag::Float(time.to_bits())),
+            ("AppliedRecipe".into(), Tag::Byte(i8::from(s.applied))),
+        ]);
+        let e = out.entry(*p).or_default();
+        e.insert(SAW_INVENTORY.into(), Tag::Compound(inventory));
+        e.insert(RECIPE_INDEX.into(), Tag::Int(s.index as i32));
+    }
+}
+
+/// glue/processing/saw.rs `saw_of`: the saw saved in `tag` when it holds stacks, its
+/// `recipeIndex` and its `recipeDuration`.
+pub fn saw_of(tag: &Compound) -> (Option<create_engine::saw::Saw>, usize, f32) {
+    let index = match tag.get(RECIPE_INDEX) {
+        Some(Tag::Int(i)) => (*i).max(0) as usize,
+        _ => 0,
+    };
+    let Some(Tag::Compound(inventory)) = tag.get(SAW_INVENTORY) else {
+        return (None, index, 0.0);
+    };
+    let float = |k: &str| match inventory.get(k) {
+        Some(Tag::Float(b)) => f32::from_bits(*b),
+        _ => 0.0,
+    };
+    let mut items: Vec<(i32, String, u8)> = match inventory.get("Items") {
+        Some(Tag::List(l)) => l
+            .iter()
+            .filter_map(|t| {
+                let Tag::Compound(c) = t else { return None };
+                let (Some(Tag::String(id)), Some(Tag::Int(n))) = (c.get("id"), c.get("count"))
+                else {
+                    return None;
+                };
+                let slot = match c.get("Slot") {
+                    Some(Tag::Int(s)) => *s,
+                    _ => 0,
+                };
+                Some((slot, id.clone(), (*n).clamp(1, 255) as u8))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+    items.sort_by_key(|i| i.0);
+    let duration = float("RecipeTime");
+    if items.is_empty() {
+        return (None, index, duration);
+    }
+    let s = create_engine::saw::Saw {
+        slots: items.into_iter().map(|(_, id, n)| (id, n)).collect(),
+        remaining: float("ProcessingTime"),
+        applied: matches!(inventory.get("AppliedRecipe"), Some(Tag::Byte(b)) if *b != 0),
+        index,
+        progress: None,
+    };
+    (Some(s), index, duration)
 }
 
 pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Pos, Compound> {
@@ -56,6 +169,14 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
         out.entry(p)
             .or_default()
             .insert("TransferCooldown".into(), Tag::Int(cooldown as i32));
+    }
+    // glue/processing/persist.rs `save_entities`: the millstone's `Timer`.
+    for (p, m) in w.dims[0].millstones.iter() {
+        if (p[0] >> 4, p[2] >> 4) == column {
+            out.entry(*p)
+                .or_default()
+                .insert("Timer".into(), Tag::Int(m.timer));
+        }
     }
     super::fluids::save_entities(w, column, &mut out);
     out
@@ -97,6 +218,13 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
                 let cooldown = (*cooldown).max(0) as u32;
                 w.read_funnel(0, p, cooldown, now);
             }
+        }
+        Block::Millstone => {
+            let timer = match tag.get("Timer") {
+                Some(Tag::Int(t)) => *t,
+                _ => 0,
+            };
+            w.dims[0].millstones.entry(p).or_default().timer = timer;
         }
         _ => {}
     }
