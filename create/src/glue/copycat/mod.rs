@@ -10,8 +10,9 @@
 //! A copycat item clicked on its kind places the next one beside it (`CopycatPanelBlock` and
 //! `CopycatStepBlock`'s placement helpers). A copycat sounds as its material (`sound.rs`).
 //!
-//! It glows and slides as its material (`CopycatBlock.getLightEmission`, `getFriction`), read
-//! from what its block entity shows, on either side. A client asks a cell's light once, so it
+//! It glows and slides as its material (`CopycatBlock.getLightEmission`, `getFriction`), on
+//! either side: its light from what its block entity shows, its friction from what each side
+//! shows (`shown.rs`). A client asks a cell's light once, so it
 //! shows a new material's light only once it is sent the chunk again (`API_GAPS.md`).
 //!
 //! A copycat's block model is not drawn (`render_shape` `ENTITYBLOCK_ANIMATED` in its
@@ -22,6 +23,7 @@
 
 mod body;
 mod parts;
+mod shown;
 mod sound;
 pub(crate) use parts::helper_target;
 
@@ -234,10 +236,12 @@ impl Subsystem for Copycats {
     fn world_closed(&self) {
         COPYCATS.with_borrow_mut(HashMap::clear);
         sound::reset_server();
+        shown::reset_server();
     }
 
     fn client_reset(&self) {
         sound::reset_client();
+        shown::reset_client();
     }
 
     /// One state lookup for each Create block changed.
@@ -380,6 +384,7 @@ fn tick(lv: &mut ServerLevel<'_>) {
         let (was, is) = (block(old), block(new));
         if was.is_some() && was != is {
             sound::set_server(dim, pos, None);
+            shown::set_server(dim, pos, None);
             let item = with(dim, |d| d.copycats.remove(&pos)).and_then(|c| c.item);
             if let Some(item) = item {
                 let [x, y, z] = center(pos);
@@ -413,6 +418,7 @@ fn show(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     // `getSoundType`: the material's.
     let sound = material.and_then(|m| lv.host.block_states().sound(m));
     sound::set_server(lv.dim, pos, sound);
+    shown::set_server(lv.dim, pos, material);
     let (text, special) = match material {
         Some(m) => {
             let special = match body::candidate(lv, m, pos).as_ref().map(Special::of) {
