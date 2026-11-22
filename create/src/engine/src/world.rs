@@ -4005,7 +4005,8 @@ impl CreateWorld {
         *live = crate::crusher::Crusher { entity, ..saved };
     }
 
-    /// `BlazeBurnerBlockEntity.read`: a placed burner's fuel at once.
+    /// `BlazeBurnerBlockEntity.read`: a placed burner's fuel at once, and its block shows the
+    /// heat it gives at its next tick (`tick` → `updateBlockState`).
     pub fn read_burner(&mut self, dim: usize, pos: [i32; 3], saved: crate::burner::Burner) {
         let d = &mut self.dims[dim];
         let Some(live) = d.burners.get_mut(&pos) else {
@@ -4016,6 +4017,7 @@ impl CreateWorld {
         if live.burning() && !d.burning.contains(&pos) {
             d.burning.push(pos);
         }
+        d.burner_checks.push(pos);
     }
 
     /// Items saved with belts in a column (`chunk_data_save`), for when their chains form.
@@ -6606,9 +6608,11 @@ mod tests {
             remaining: 400,
             creative: None,
         };
+        w.dims[0].burner_checks.clear();
         w.read_burner(0, burner, fed);
         assert_eq!(w.dims[0].burners[&burner].remaining, 400);
         assert!(w.dims[0].burning.contains(&burner));
+        assert_eq!(w.dims[0].burner_checks, vec![burner]);
         w.apply_block_change(0, deployer, 0, 13, false);
         let saved = crate::deployer::Deployer {
             timer: 120,

@@ -58,14 +58,15 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
         let pose = create_engine::collider::Pose { centre, turns };
         let owner = colliders::Owner::Carriage(*train, *car);
         let carrier = colliders::Carrier::Own(colliders::CARRIAGE);
-        colliders::place(lv, owner, carrier, pose, hash, || {
+        let blocks = || {
             with_world(|w| {
                 let t = w.dims[dim].railway.trains.iter().find(|t| t.id == *train)?;
                 t.cars.get(*car).cloned()
             })
             .flatten()
             .unwrap_or_default()
-        });
+        };
+        colliders::place(lv, owner, carrier, pose, hash, blocks, super::car_state);
     }
     CARRIED.with_borrow_mut(|m| {
         m.retain(|k, _| k.0 != dim || poses.iter().any(|(t, c, _)| (*t, *c) == (k.1, k.2)));
@@ -91,7 +92,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
                 })
                 .flatten()
                 .unwrap_or_default();
-                let mut carried = actors::bearing_actors(&*lv.host, &blocks);
+                let mut carried = actors::structure_actors(&*lv.host, &blocks, super::car_state);
                 // A carriage's interfaces never stall it (`onCarriage`): `cargo` runs them.
                 carried
                     .actors

@@ -93,6 +93,70 @@ fn multiply(a: [f64; 4], b: [f64; 4]) -> [f64; 4] {
     ]
 }
 
+/// A carrier's frame: where it stands, its unit quaternion `[x, y, z, w]`, and how far its boxes
+/// are shifted from the structure's own frame ([`Pose::shift_from`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Frame {
+    pub at: [f64; 3],
+    pub rotation: [f64; 4],
+    pub shift: [f64; 3],
+}
+
+/// How far below a box's top the feet of a body standing on it may be seen: the carrier and the
+/// body it carries are a tick apart at most, one tick of a structure's fastest move.
+const SUNK: f64 = 0.5;
+/// How far above a box's top they may be: a body that left the surface within a tick or two
+/// still counts (`collidingEntities` keeps a body for 3 ticks after its last contact).
+const LIFTED: f64 = 0.25;
+
+/// `AbstractContraptionEntity.moveCollidedEntitiesOnDisassembly`: where a body whose box is
+/// `body` (world) goes as the structure carried at `frame`, its boxes `boxes` in the carrier's
+/// frame, is placed at `placed`: the point under its feet, in the structure, is put where the
+/// placed blocks have it, 1/16 above (`transform.apply(localVec)`, `+ 1 / 16f`). Only a body on
+/// a box's top is moved (`registerColliding` on a surface collision), and one seen sunk into it
+/// stands on its surface first, as the collision that tick resolves it. None for a body not on
+/// the structure.
+pub fn placed_rider(boxes: &[Aabb], frame: Frame, body: Aabb, placed: &Pose) -> Option<[f64; 3]> {
+    let feet = [
+        (body[0] + body[3]) / 2.0,
+        body[1],
+        (body[2] + body[5]) / 2.0,
+    ];
+    let half = [(body[3] - body[0]) / 2.0, (body[5] - body[2]) / 2.0];
+    let inverse = [
+        -frame.rotation[0],
+        -frame.rotation[1],
+        -frame.rotation[2],
+        frame.rotation[3],
+    ];
+    let mut local = rotate(inverse, [0, 1, 2].map(|i| feet[i] - frame.at[i]));
+    let top = boxes
+        .iter()
+        .filter(|b| {
+            local[0] > b[0] - half[0]
+                && local[0] < b[3] + half[0]
+                && local[2] > b[2] - half[1]
+                && local[2] < b[5] + half[1]
+                && local[1] >= b[4] - SUNK
+                && local[1] <= b[4] + LIFTED
+        })
+        .map(|b| b[4])
+        .reduce(f64::max)?;
+    local[1] = local[1].max(top);
+    let structure = [0, 1, 2].map(|i| local[i] - frame.shift[i] + 0.5);
+    let mut to = placed.to_world(structure);
+    to[1] += 1.0 / 16.0;
+    Some(to)
+}
+
+/// `v` turned by the unit quaternion `q`.
+fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
+    let p = [v[0], v[1], v[2], 0.0];
+    let inv = [-q[0], -q[1], -q[2], q[3]];
+    let r = multiply(multiply(q, p), inv);
+    [r[0], r[1], r[2]]
+}
+
 /// `Contraption.getSimplifiedEntityColliders` (`gatherBBsOffThread`: the union of the blocks'
 /// collision shapes, `optimize().toAabbs()`): each block's boxes (block-local) moved by its
 /// offset, relative to the centre of block `[0, 0, 0]`, then boxes that meet face to face with
@@ -151,13 +215,6 @@ mod tests {
 
     const CUBE: [Aabb; 1] = [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]];
     const SLAB: [Aabb; 1] = [[0.0, 0.0, 0.0, 1.0, 0.5, 1.0]];
-
-    fn rotate(q: [f64; 4], v: [f64; 3]) -> [f64; 3] {
-        let p = [v[0], v[1], v[2], 0.0];
-        let inv = [-q[0], -q[1], -q[2], q[3]];
-        let r = multiply(multiply(q, p), inv);
-        [r[0], r[1], r[2]]
-    }
 
     fn close(a: [f64; 3], b: [f64; 3]) -> bool {
         (0..3).all(|i| (a[i] - b[i]).abs() < 1e-9)
@@ -248,5 +305,58 @@ mod tests {
         let pose = Pose::translated([3.0, 70.25, -8.0]);
         assert_eq!(pose.rotation(), [0.0, 0.0, 0.0, 1.0]);
         assert!(close(pose.to_world([0.0; 3]), [3.0, 70.25, -8.0]));
+    }
+
+    #[test]
+    fn a_rider_on_a_stopped_lift_stands_on_its_placed_blocks() {
+        // A plank lifted along y, its carrier lagging an eighth: placed at whole offset 3.
+        let pose = Pose::translated([6.0, 151.875, 6.0]);
+        let at = pose.centre;
+        let frame = Frame {
+            at,
+            rotation: [0.0, 0.0, 0.0, 1.0],
+            shift: pose.shift_from(at),
+        };
+        let boxes = simplified([([0, 0, 0], &CUBE[..])])
+            .into_iter()
+            .map(|b| [b[0], b[1], b[2], b[3], b[4], b[5]])
+            .collect::<Vec<_>>();
+        let placed = Pose::translated([6.0, 153.0, 6.0]);
+        let body = |y: f64| [6.2, y, 6.2, 6.8, y + 1.8, 6.8];
+        let to = placed_rider(&boxes, frame, body(152.875), &placed).unwrap();
+        assert!(close(to, [6.5, 154.0 + 1.0 / 16.0, 6.5]));
+        // Seen half a tick behind, sunk into the plank, it still stands on top.
+        let to = placed_rider(&boxes, frame, body(152.6), &placed).unwrap();
+        assert!(close(to, [6.5, 154.0 + 1.0 / 16.0, 6.5]));
+        // Beside the plank, or well above it, it is left where it is.
+        let beside = [7.5, 152.875, 6.2, 8.1, 154.675, 6.8];
+        assert_eq!(placed_rider(&boxes, frame, beside, &placed), None);
+        assert_eq!(placed_rider(&boxes, frame, body(153.5), &placed), None);
+    }
+
+    #[test]
+    fn a_rider_on_a_turned_structure_goes_where_its_block_is_placed() {
+        // A bearing's arm a block east, turned 85° and placed turned 90°: the arm goes north.
+        let turned = Pose::turned([0, 64, 0], Axis::Y, 85.0);
+        let at = turned.centre;
+        let q = turned.rotation();
+        let frame = Frame {
+            at,
+            rotation: q,
+            shift: turned.shift_from(at),
+        };
+        let boxes = vec![[0.5, -0.5, -0.5, 1.5, 0.5, 0.5]];
+        let feet = turned.to_world([1.5, 1.0, 0.5]);
+        let body = [
+            feet[0] - 0.3,
+            feet[1],
+            feet[2] - 0.3,
+            feet[0] + 0.3,
+            feet[1] + 1.8,
+            feet[2] + 0.3,
+        ];
+        let placed = Pose::turned([0, 64, 0], Axis::Y, 90.0);
+        let to = placed_rider(&boxes, frame, body, &placed).unwrap();
+        assert!(close(to, [0.5, 65.0 + 1.0 / 16.0, -0.5]));
     }
 }

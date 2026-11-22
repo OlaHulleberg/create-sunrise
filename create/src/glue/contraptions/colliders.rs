@@ -16,11 +16,11 @@ use super::super::subsystem::Subsystem;
 use super::super::world::level_index;
 use super::super::world::with_world;
 use super::create_info;
-use create_engine::collider::{self, Aabb, Pose};
+use create_engine::collider::{self, Aabb, Frame, Pose};
 use create_engine::kinetics::Dir;
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, Collider, ColliderBox,
-    Compound, EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, Flow,
+    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, BlockState, Collider,
+    ColliderBox, Compound, EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, Flow,
     GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Registrar,
     RegistrationContext, RemovalReason, ServerHost, SpawnBody, Tag,
 };
@@ -275,6 +275,47 @@ pub fn apply_to(host: &mut dyn ServerHost, entity: EntityRef) {
     }
 }
 
+/// `AbstractContraptionEntity.moveCollidedEntitiesOnDisassembly`: as structure `owner`'s blocks
+/// go back into the world at `placed`, the bodies standing on its boxes go onto them.
+pub fn lift_riders(lv: &mut ServerLevel<'_>, owner: Owner, placed: Pose) {
+    let Some((carrier, frame)) = PLACED.with_borrow(|m| {
+        let p = m.get(&(lv.dim, owner))?;
+        let frame = Frame {
+            at: p.at,
+            rotation: p.rotation.map(f64::from),
+            shift: p.shift,
+        };
+        Some((p.entity, frame))
+    }) else {
+        return;
+    };
+    let Some(collider) = carrier.collider(&*lv.host) else {
+        return;
+    };
+    let boxes: Vec<Aabb> = collider
+        .boxes
+        .iter()
+        .map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
+        .collect();
+    let reach = boxes.iter().flatten().fold(0.0_f64, |r, v| r.max(v.abs())) * 3.0_f64.sqrt() + 2.0;
+    let lo = frame.at.map(|v| v - reach);
+    let hi = frame.at.map(|v| v + reach);
+    let around = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
+    let carriers: Vec<u32> = CARRIERS.with_borrow(|c| c.keys().copied().collect());
+    for e in around {
+        if carriers.contains(&e.id()) || e.is_passenger(&*lv.host) == Some(true) {
+            continue;
+        }
+        let Some([min, max]) = e.bounding_box(&*lv.host) else {
+            continue;
+        };
+        let body = [min[0], min[1], min[2], max[0], max[1], max[2]];
+        if let Some(to) = collider::placed_rider(&boxes, frame, body, &placed) {
+            e.teleport_to(&mut *lv.host, to, None);
+        }
+    }
+}
+
 fn take_away(lv: &mut ServerLevel<'_>, p: &Placed) {
     CARRIERS.with_borrow_mut(|c| c.remove(&p.entity.id()));
     if p.own {
@@ -362,9 +403,15 @@ fn place_anchored(lv: &mut ServerLevel<'_>) {
     })
     .unwrap_or_default();
     for (owner, kind, pose, hash) in standing {
-        place(lv, owner, Carrier::Own(kind), pose, hash, || {
-            anchored_blocks(dim, owner)
-        });
+        place(
+            lv,
+            owner,
+            Carrier::Own(kind),
+            pose,
+            hash,
+            || anchored_blocks(dim, owner),
+            super::unnum,
+        );
     }
 }
 
@@ -399,8 +446,9 @@ fn anchored_blocks(dim: usize, owner: Owner) -> Vec<([i32; 3], u32)> {
 }
 
 /// The structure `owner` stands at `pose` now, its blocks hashing to `hash` (made by `blocks`
-/// only when they changed): its carrier's boxes follow it (`apply_to`). A structure not placed in a
-/// level's tick is gone from it by the end of the tick.
+/// only when they changed, their states numbered as `state` reads them): its carrier's boxes
+/// follow it (`apply_to`). A structure not placed in a level's tick is gone from it by the end of
+/// the tick.
 pub fn place(
     lv: &mut ServerLevel<'_>,
     owner: Owner,
@@ -408,6 +456,7 @@ pub fn place(
     pose: Pose,
     hash: u64,
     blocks: impl FnOnce() -> Vec<([i32; 3], u32)>,
+    state: fn(u32) -> Option<BlockState>,
 ) {
     let key = (lv.dim, owner);
     let now = lv.game_time();
@@ -455,7 +504,7 @@ pub fn place(
         .as_ref()
         .is_some_and(|p| p.blocks == hash && (0..3).all(|i| (p.shift[i] - shift[i]).abs() < 1e-6));
     if !same_boxes {
-        let boxes = boxes(lv, &blocks(), pose, shift);
+        let boxes = boxes(lv, &blocks(), state, pose, shift);
         let collider = Collider {
             boxes,
             rotation: was_turned,
@@ -505,6 +554,7 @@ fn unit(q: [f64; 4]) -> [f32; 4] {
 fn boxes(
     lv: &ServerLevel<'_>,
     blocks: &[([i32; 3], u32)],
+    state: fn(u32) -> Option<BlockState>,
     pose: Pose,
     shift: [f64; 3],
 ) -> Vec<ColliderBox> {
@@ -514,7 +564,7 @@ fn boxes(
             let cell = pose
                 .to_world(o.map(|v| f64::from(v) + 0.5))
                 .map(|v| v.floor() as i32);
-            let shape = super::unnum(*s)
+            let shape = state(*s)
                 .and_then(|state| {
                     lv.level
                         .block_shape(&*lv.host, state, cell, BlockShapeKind::Collision)

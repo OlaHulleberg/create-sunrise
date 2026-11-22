@@ -277,15 +277,17 @@ impl BlockPart for CopycatBlock {
         Some(Some(state))
     }
 
-    /// `CopycatBlock.getFriction`: the material's, at the copycat's position.
+    /// `CopycatBlock.getFriction`: the material's, at the copycat's position (`getMaterial`:
+    /// air without a block entity, the copycat base without a material).
     fn friction(&self, level: mod_api::LevelSide<'_>, event: &mut FrictionEvent<'_>) {
-        let (level, _) = states::level_view(level);
+        let (level, server) = states::level_view(level);
         let pos = [event.pos.x, event.pos.y, event.pos.z];
-        let material = level
-            .block_entity(pos)
-            .and_then(|be| level.block_entity_data(be))
-            .map_or_else(|| AIR.to_owned(), |nbt| shown_material(&nbt));
-        let material = level.block_state_id(&material);
+        let material = match level.block_entity(pos) {
+            None => level.block_state_id(AIR),
+            Some(_) => {
+                super::shown::material(server, pos).or_else(|| level.block_state_id(cc::BASE))
+            }
+        };
         if let Some(f) = material.and_then(|m| level.friction(pos, m, event.entity)) {
             event.friction = f;
         }
@@ -486,6 +488,7 @@ impl BlockEntityPart for CopycatEntity {
         } else {
             host.block_state_id(&text)
         };
+        super::shown::set_client(event.pos, material.filter(|_| !text.is_empty()));
         // `getSoundType` on this client: the material's.
         super::sound::set_client(event.pos, &text, || {
             material.and_then(|m| mod_api::HostBlockStates::block_states(host).sound(m))

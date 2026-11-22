@@ -3,12 +3,14 @@
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::world::with_world;
+use super::colliders::{self, Owner};
 use super::{
     actors, add, axis_of, clicker, dir_name, dir_of, draw, flag, found, in_click_level, prop,
     put_back_blocks, state_of_text, state_text, state_with, take_blocks, turned_state,
 };
 use create_engine::Block;
 use create_engine::actors::Carried;
+use create_engine::collider::Pose;
 use create_engine::contraption::{self, Turn};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{BlockPart, Compound, InteractionResult, Registrar, ServerHost, Tag, UseItemOnEvent};
@@ -287,6 +289,8 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
         .collect();
     actors::expect_back(lv, bearing, |o| add(bearing, o));
     put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+    let placed = Pose::translated(bearing.map(f64::from));
+    colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
     actors::release_storage(lv, bearing, |o| add(bearing, o));
     actors::release_extras(lv, &mut w.extras.clone(), |o| add(bearing, o));
 }
@@ -758,6 +762,8 @@ fn put_back_turned(
     };
     actors::expect_back(lv, bearing, turn);
     put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+    let placed = Pose::turned(bearing, axis, f64::from(quarter));
+    colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
     actors::release_storage(lv, bearing, turn);
     actors::release_extras(lv, &mut w.extras.clone(), turn);
 }
@@ -935,6 +941,8 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     .collect();
                 actors::expect_back(lv, g.start, |o| add(at, o));
                 put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+                let placed = Pose::translated(at.map(f64::from));
+                colliders::lift_riders(lv, Owner::Gantry(g.start), placed);
                 actors::release(lv, g.start, at, &mut g.carried);
                 show_gantry(lv, &g, true);
                 super::super::persist::mark_pos_unsaved(dim, g.start);
@@ -1342,6 +1350,8 @@ fn put_back_piston(
     let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
     actors::expect_back(lv, pos, |l| add(origin, l));
     put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
+    let placed = Pose::translated(origin.map(f64::from));
+    colliders::lift_riders(lv, Owner::Anchor(pos, 0), placed);
     if own {
         let rpm = speed(lv.dim, pos);
         let now = lv.game_time();
