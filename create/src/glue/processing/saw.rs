@@ -224,7 +224,8 @@ pub fn saw_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<Item
 }
 
 /// One `item` (a sequenced assembly's `progress` with it) into the saw at `pos` while it holds
-/// nothing (`ProcessingInventory.insertItem` into slot 0). Whether it took it.
+/// nothing (`ProcessingInventory.insertItem` into slot 0), its cut started at once (`start`, the
+/// inventory's callback). Whether it took it.
 pub fn saw_put(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -232,24 +233,28 @@ pub fn saw_put(
     progress: Option<create_engine::sequenced::Progress>,
 ) -> bool {
     let dim = lv.dim;
-    let took = with_world(|w| {
-        let s = w.dims[dim].saws.entry(pos).or_default();
-        if !s.slots.is_empty() {
-            return false;
-        }
-        s.slots = vec![(item.to_owned(), 1)];
-        s.remaining = -1.0;
-        s.applied = false;
-        // `recipeIndex` stays with the saw between items.
-        s.index = SAW_INDEX.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0));
-        s.progress = progress;
-        true
-    })
-    .unwrap_or(false);
-    if took {
-        show_saw(lv, pos);
+    let mut s = with_world(|w| w.dims[dim].saws.get(&pos).cloned())
+        .flatten()
+        .unwrap_or_default();
+    if !s.slots.is_empty() {
+        return false;
     }
-    took
+    // `recipeIndex` stays with the saw between items.
+    s.index = SAW_INDEX.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0));
+    s.progress = progress;
+    let up = lv.info(pos).and_then(|(_, i)| i.facing) == Some(Dir::Up);
+    let list = if up {
+        cuts(lv, pos, &s, item)
+    } else {
+        Vec::new()
+    };
+    s.insert(0, item, &list.iter().collect::<Vec<_>>(), up);
+    if up {
+        SAW_DURATION.with_borrow_mut(|m| m.insert((dim, pos), s.remaining));
+    }
+    with_world(|w| w.dims[dim].saws.insert(pos, s));
+    show_saw(lv, pos);
+    true
 }
 
 /// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
@@ -286,36 +291,8 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
         match step {
             Step::Wait => {}
             Step::Start => {
-                let filter = super::filtering::filter_at(dim, pos);
-                let host = &*lv.host;
-                recipes::with(|r| {
-                    // A sequenced assembly's cutting step alone, when the item is at one
-                    // (`getRecipes`), for its processing time.
-                    if let Some((_, step)) = sequenced::step_for(
-                        &r.sequenced,
-                        &item,
-                        saw.progress.as_ref(),
-                        "create:cutting",
-                    ) {
-                        let time = Recipe {
-                            id: String::new(),
-                            ingredients: Vec::new(),
-                            results: Vec::new(),
-                            time: step.time,
-                        };
-                        saw.start(&[&time]);
-                        return;
-                    }
-                    // `outputMatchesFilter`.
-                    let list: Vec<&Recipe> = r
-                        .cutting
-                        .matching(&item)
-                        .into_iter()
-                        .map(|i| r.cutting.get(i))
-                        .filter(|x| passes(host, filter.as_ref(), x))
-                        .collect();
-                    saw.start(&list);
-                });
+                let list = cuts(lv, pos, &saw, &item);
+                saw.start(&list.iter().collect::<Vec<_>>());
             }
             Step::Apply => {
                 let mut rng = Rng::new(lv.seed_at(pos));
@@ -472,6 +449,34 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
         });
         Some(step)
     }
+}
+
+/// `getRecipes` for `item` in the saw at `pos`: a sequenced assembly's cutting step alone, when
+/// the item is at one, for its processing time; else its cutting recipes whose first result
+/// passes the saw's filter (`outputMatchesFilter`).
+fn cuts(lv: &ServerLevel<'_>, pos: [i32; 3], saw: &saw::Saw, item: &str) -> Vec<Recipe> {
+    let filter = super::filtering::filter_at(lv.dim, pos);
+    let host = &*lv.host;
+    recipes::with(|r| {
+        if let Some((_, step)) =
+            sequenced::step_for(&r.sequenced, item, saw.progress.as_ref(), "create:cutting")
+        {
+            return vec![Recipe {
+                id: String::new(),
+                ingredients: Vec::new(),
+                results: Vec::new(),
+                time: step.time,
+            }];
+        }
+        r.cutting
+            .matching(item)
+            .into_iter()
+            .map(|i| r.cutting.get(i))
+            .filter(|x| passes(host, filter.as_ref(), x))
+            .cloned()
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// `RecipeConditions.outputMatchesFilter`: the saw's filter on a recipe's first result.
