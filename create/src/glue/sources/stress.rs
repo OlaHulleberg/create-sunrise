@@ -92,15 +92,11 @@ impl BlockPart for Effects {}
 impl BlockEntityPart for Effects {
     /// `KineticBlockEntity.read` on the client: an update that turns the overstress on or off
     /// while the block should turn (`speed != 0`) triggers its effect.
-    fn block_entity_data_received(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut BlockEntityDataReceivedEvent<'_>,
-    ) {
+    fn block_entity_data_received(&self, event: &mut BlockEntityDataReceivedEvent<'_>) {
         let Some(Tag::Byte(over)) = event.tag.get(&kinetics::OVER.into()) else {
             return;
         };
-        let Some(pos) = event.entity.position(host) else {
+        let Some(pos) = event.subject.with_view(|v| v.position()) else {
             return;
         };
         let over = *over != 0;

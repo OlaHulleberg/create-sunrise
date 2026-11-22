@@ -28,6 +28,8 @@ use super::depot::depot_items;
 use super::funnel::funnel_at;
 use super::info_at;
 use super::items::{self, face, random_angle, stack_limit, upright};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use create_engine::Block;
 use create_engine::arm::{self, Kind, Point, Stack};
 use create_engine::depot;
@@ -203,7 +205,7 @@ impl Subsystem for Arms {
     fn entity_place(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut mod_api::EntityPlaceEvent,
+        event: &mut crate::glue::subsystem::Placed,
     ) -> mod_api::Flow {
         arm_placed(host, event);
         ejector_placed(host, event);
@@ -250,7 +252,7 @@ impl Subsystem for Arms {
         let Some(level) = player.level(&*host) else {
             return;
         };
-        let Some(dimension) = level.dimension().id(&*host) else {
+        let Some(dimension) = level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1482,15 +1484,15 @@ pub(super) fn flush_ejectors(lv: &mut ServerLevel<'_>) {
 }
 
 thread_local! {
-    /// Entities that stood on an ejector this tick (`block_step_on`): level, ejector, entity.
-    static STEPPED: std::cell::RefCell<Vec<(usize, [i32; 3], u32)>> =
+    /// Entities that stood on an ejector this tick (`step_on`): ejector, entity.
+    static STEPPED: std::cell::RefCell<Vec<([i32; 3], u32)>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
 
 /// `Block.stepOn` of an ejector by something but an item or a player (whose own client asks,
 /// `trigger_ejector`): noted for `entities_on_ejectors`.
-pub fn ejector_stepped_on(dim: usize, pos: [i32; 3], entity: u32) {
-    STEPPED.with_borrow_mut(|s| s.push((dim, pos, entity)));
+pub fn ejector_stepped_on(pos: [i32; 3], entity: u32) {
+    STEPPED.with_borrow_mut(|s| s.push((pos, entity)));
 }
 
 /// `EjectorBlock.updateEntityAfterFallOn` for what stood on an ejector this tick: a charged,
@@ -1499,12 +1501,16 @@ pub fn ejector_stepped_on(dim: usize, pos: [i32; 3], entity: u32) {
 fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mut stepped: Vec<([i32; 3], u32)> = STEPPED.with_borrow_mut(|s| {
-        let mine = s
-            .iter()
-            .filter(|e| e.0 == dim)
-            .map(|e| (e.1, e.2))
+        if s.is_empty() {
+            return Vec::new();
+        }
+        let (mine, rest) = std::mem::take(s)
+            .into_iter()
+            .partition::<Vec<_>, _>(|e| super::noted_here(lv, None, e.1) == Some(true));
+        *s = rest
+            .into_iter()
+            .filter(|e| super::noted_here(lv, None, e.1).is_some())
             .collect();
-        s.retain(|e| e.0 != dim);
         mine
     });
     stepped.sort();
@@ -1585,7 +1591,7 @@ fn nudge_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     for e in lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default() {
         let kind = e
             .kind(&*lv.host)
-            .map(|k| k.id(&*lv.host))
+            .map(|k| k.name(&*lv.host))
             .unwrap_or_default();
         if kind.as_str() == "minecraft:player" {
             continue;
@@ -1615,7 +1621,7 @@ fn launch_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3], motion: [f64; 3]) {
     for e in found {
         let kind = e
             .kind(&*lv.host)
-            .map(|k| k.id(&*lv.host))
+            .map(|k| k.name(&*lv.host))
             .unwrap_or_default();
         if matches!(
             kind.as_str(),
@@ -1988,7 +1994,7 @@ fn put_on_goggles(
         mod_api::HostSide::Client(h) => {
             let goggles = click
                 .stack
-                .is_some_and(|s| s.item().id(&**h) == "create:goggles");
+                .is_some_and(|s| s.item().id(&**h) == Some("create:goggles"));
             let arm = h
                 .level(h.dimension())
                 .and_then(|l| l.block_state(&**h, click.pos))
@@ -2002,7 +2008,7 @@ fn put_on_goggles(
         mod_api::HostSide::Server(h) => {
             if !click
                 .stack
-                .is_some_and(|s| s.item().id(&**h) == "create:goggles")
+                .is_some_and(|s| s.item().id(&**h) == Some("create:goggles"))
             {
                 return false;
             }
@@ -2116,7 +2122,7 @@ fn coloured(text: mod_api::Text, color: &str) -> mod_api::Text {
 /// `ArmInteractionPointHandler.flushSettings` and `ArmPlacementPacket`: an arm a player places
 /// takes the points they chose that lie within its range; the action bar counts them, or says
 /// how many were out of range. The arm is saved for its block, which `Arms::placed` finds.
-pub fn arm_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) {
+pub fn arm_placed(host: &mut dyn ServerHost, event: &crate::glue::subsystem::Placed) {
     let Some(placer) = event.placer else {
         return;
     };
@@ -2178,7 +2184,7 @@ pub fn arm_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) 
     }
     let Some(dim) = placer
         .level(&*host)
-        .and_then(|l| l.dimension().id(&*host))
+        .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
         .and_then(|d| super::super::world::level_index(&d))
     else {
         return;
@@ -2309,7 +2315,7 @@ fn ejector_direction(pos: [i32; 3], target: [i32; 3]) -> Option<Dir> {
 /// `EjectorTargetHandler.flushSettings` and `EjectorPlacementPacket`: an ejector a player
 /// places throws at the target they chose (it turns to face it) when that lies straight along
 /// x or z within range; the action bar says where, or why not.
-pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEvent) {
+pub fn ejector_placed(host: &mut dyn ServerHost, event: &crate::glue::subsystem::Placed) {
     let Some(placer) = event.placer else {
         return;
     };
@@ -2355,7 +2361,7 @@ pub fn ejector_placed(host: &mut dyn ServerHost, event: &mod_api::EntityPlaceEve
     let _ = player.action_bar(host, line);
     let Some(dim) = placer
         .level(&*host)
-        .and_then(|l| l.dimension().id(&*host))
+        .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
         .and_then(|d| super::super::world::level_index(&d))
     else {
         return;

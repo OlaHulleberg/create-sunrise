@@ -15,6 +15,8 @@
 //! reaches is not taken away (`SoulParticle.tick` reading the client level's light).
 
 use super::super::server::ServerLevel;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::soul::{self, Pulse, SoulAnimation};
 use mod_api::{
     BlockFace, Hand, LightLayer, ModParticle, ParticleKey, ParticleOptions, ParticleProvider,
@@ -28,13 +30,13 @@ pub(super) const SOUL: &str = "create:soul";
 pub(super) const SOUL_BASE: &str = "create:soul_base";
 
 static KEYS: OnceLock<[ParticleKey; 3]> = OnceLock::new();
+pub(super) static TYPES: OnceLock<[mod_api::ParticleType<()>; 2]> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
-    let _ = KEYS.set([
-        r.particle_key(SOUL),
-        r.particle_key(SOUL_BASE),
-        r.particle_key("minecraft:soul"),
-    ]);
+    let soul = crate::glue::particle_type(r, SOUL);
+    let base = crate::glue::particle_type(r, SOUL_BASE);
+    let _ = TYPES.set([soul, base]);
+    let _ = KEYS.set([soul.key(), base.key(), r.particle_key("minecraft:soul")]);
 }
 
 #[derive(Default)]
@@ -75,7 +77,7 @@ pub(super) fn player_tick(host: &mut dyn ServerHost, player: PlayerRef) {
     let holding = [Hand::Main, Hand::Off].into_iter().any(|h| {
         living
             .hand_item(&*host, h)
-            .is_some_and(|s| s.item().id(&*host) == "create:haunted_bell")
+            .is_some_and(|s| s.item().name(&*host) == "create:haunted_bell")
     });
     if !holding || player.game_mode(&*host) == Some(mod_api::GameMode::Spectator) {
         return;
@@ -273,44 +275,51 @@ fn random(p: &ModParticle, salt: u64) -> f32 {
 pub(super) struct Soul;
 
 impl ParticleProvider for Soul {
-    fn tick(&self, p: &mut ModParticle) {
-        let mut a = if p.state[0] == 0.0 {
-            p.size = 0.5;
-            p.lifetime = i32::MAX;
-            p.velocity = [0.0; 3];
-            SoulAnimation {
-                stage: 1,
-                ticks: 0,
-                loops: 0,
-                // `startFrames + (int) (random.nextFloat() * 5f - 4f)` and the like.
-                start_ticks: (17 + (random(p, 1) * 5.0 - 4.0) as i32) as u32,
-                end_ticks: (20 + (random(p, 2) * 5.0 - 4.0) as i32) as u32,
-                num_loops: (1.0 + random(p, 3) * 2.0) as u32,
+    fn tick(
+        &self,
+        particles: &mut mod_api::ParticleBatch,
+        _level: &dyn mod_api::ParticleLevelView,
+    ) {
+        let one = |p: &mut mod_api::ModParticle| {
+            let mut a = if p.state[0] == 0.0 {
+                p.size = 0.5;
+                p.lifetime = i32::MAX;
+                p.velocity = [0.0; 3];
+                SoulAnimation {
+                    stage: 1,
+                    ticks: 0,
+                    loops: 0,
+                    // `startFrames + (int) (random.nextFloat() * 5f - 4f)` and the like.
+                    start_ticks: (17 + (random(p, 1) * 5.0 - 4.0) as i32) as u32,
+                    end_ticks: (20 + (random(p, 2) * 5.0 - 4.0) as i32) as u32,
+                    num_loops: (1.0 + random(p, 3) * 2.0) as u32,
+                }
+            } else {
+                let s = p.state;
+                SoulAnimation {
+                    stage: s[0] as u8,
+                    ticks: s[1] as u32,
+                    loops: s[2] as u32,
+                    start_ticks: (s[3] as u32) & 0xFF,
+                    end_ticks: ((s[3] as u32) >> 8) & 0xFF,
+                    num_loops: (s[3] as u32) >> 16,
+                }
+            };
+            let frame = a.tick();
+            if a.stage == 0 {
+                p.removed = true;
+                return;
             }
-        } else {
-            let s = p.state;
-            SoulAnimation {
-                stage: s[0] as u8,
-                ticks: s[1] as u32,
-                loops: s[2] as u32,
-                start_ticks: (s[3] as u32) & 0xFF,
-                end_ticks: ((s[3] as u32) >> 8) & 0xFF,
-                num_loops: (s[3] as u32) >> 16,
-            }
+            // `animatedSprite.get(frame, 53)`.
+            p.frame = frame * 52 / 53;
+            p.state = [
+                f64::from(a.stage),
+                f64::from(a.ticks),
+                f64::from(a.loops),
+                f64::from(a.start_ticks | a.end_ticks << 8 | a.num_loops << 16),
+            ];
         };
-        let frame = a.tick();
-        if a.stage == 0 {
-            p.removed = true;
-            return;
-        }
-        // `animatedSprite.get(frame, 53)`.
-        p.frame = frame * 52 / 53;
-        p.state = [
-            f64::from(a.stage),
-            f64::from(a.ticks),
-            f64::from(a.loops),
-            f64::from(a.start_ticks | a.end_ticks << 8 | a.num_loops << 16),
-        ];
+        particles.iter_mut().for_each(one);
     }
 }
 
@@ -318,16 +327,23 @@ impl ParticleProvider for Soul {
 pub(super) struct SoulBase;
 
 impl ParticleProvider for SoulBase {
-    fn tick(&self, p: &mut ModParticle) {
-        if p.state[0] == 0.0 {
-            p.size = 0.5;
-            p.velocity = [0.0; 3];
-            p.lifetime = (90.0 / (random(p, 4) * 0.36 + 0.64)) as i32;
-            let loop_length = 16 + (random(p, 5) * 2.0 - 1.0) as i32;
-            p.state[0] = f64::from(loop_length);
-        }
-        let loop_length = (p.state[0] as i32).max(1);
-        // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
-        p.frame = ((p.age % loop_length) * 7 / loop_length) as u32;
+    fn tick(
+        &self,
+        particles: &mut mod_api::ParticleBatch,
+        _level: &dyn mod_api::ParticleLevelView,
+    ) {
+        let one = |p: &mut mod_api::ModParticle| {
+            if p.state[0] == 0.0 {
+                p.size = 0.5;
+                p.velocity = [0.0; 3];
+                p.lifetime = (90.0 / (random(p, 4) * 0.36 + 0.64)) as i32;
+                let loop_length = 16 + (random(p, 5) * 2.0 - 1.0) as i32;
+                p.state[0] = f64::from(loop_length);
+            }
+            let loop_length = (p.state[0] as i32).max(1);
+            // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
+            p.frame = ((p.age % loop_length) * 7 / loop_length) as u32;
+        };
+        particles.iter_mut().for_each(one);
     }
 }

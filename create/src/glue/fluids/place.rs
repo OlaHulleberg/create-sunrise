@@ -272,7 +272,7 @@ impl mod_api::ItemPart for TankItem {
         // The accepted placement can be followed immediately by a save. Publish
         // FluidTankBlockEntity.write state, including pending updateConnectivity,
         // before any optional layer placement is queued.
-        if let Some(dimension) = event.level.dimension().id(&*host) {
+        if let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) {
             let dimension = dimension.to_string();
             if let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) {
                 super::super::persist::publish(&mut lv);
@@ -290,6 +290,7 @@ impl mod_api::ItemPart for TankItem {
             .level
             .dimension()
             .id(&*host)
+            .map(str::to_owned)
             .and_then(|d| level_index(&d.to_string()))
         else {
             return;

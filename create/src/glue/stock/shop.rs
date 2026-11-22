@@ -20,13 +20,15 @@ use super::super::items;
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::{Key, body, keeper, network_at, network_stock, with};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::stock::{self as st, Order, RequestType, Summary};
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, ClientHost,
-    Compound, Hand, Host, InteractionResult, ItemDisplayContext, ItemStack, PlayerRef, SoundSource,
-    SupportType, Tag, Text,
+    BlockEntityPart, BlockEntityUpdateTagEvent, BlockPart, ClientHost, Compound, Hand, Host,
+    InteractionResult, ItemDisplayContext, ItemStack, PlayerRef, SoundSource, SupportType, Tag,
+    Text,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -684,7 +686,7 @@ fn list_stack(host: &dyn Host, list: &List, address: &str) -> Option<ItemStack> 
 }
 
 fn is_list(host: &dyn Host, s: &ItemStack) -> bool {
-    s.item().id(host) == "create:shopping_list"
+    s.item().name(host) == "create:shopping_list"
 }
 
 /// The ticker the shop sells from, with a keeper present (`isKeeperPresent`): its network.
@@ -1106,14 +1108,20 @@ pub(super) fn placed(
 
 /// `TableClothBlock.getDrops`: a shop's cloth drops programmed again
 /// (`AutoRequestData.writeToItem`), glinting.
-pub(super) fn drops(dim: usize, pos: [i32; 3], drops: &mut [mod_api::ItemDrop]) {
+pub(super) fn drops(dim: usize, pos: [i32; 3], drops: &mut mod_api::PreparedBlockDrops<'_>) {
     let Some(shop) = cloths(dim, |m| m.get(&pos).and_then(|c| c.shop.clone())) else {
         return;
     };
     // A cloth drops itself alone (what lay on it drops when it goes).
-    let Some(d) = drops.first_mut() else { return };
-    items::set_custom(&mut d.stack, &[(super::AUTO_REQUEST, Some(shop.item_data))]);
-    let _ = d.stack.set(&super::Glint, true);
+    let Some(mut d) = drops.get_mut(0) else {
+        return;
+    };
+    let Some(mut stack) = d.stack().and_then(|s| s.project()) else {
+        return;
+    };
+    items::set_custom(&mut stack, &[(super::AUTO_REQUEST, Some(shop.item_data))]);
+    let _ = stack.set(&super::Glint, true);
+    let _ = d.set_stack(stack);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1129,7 +1137,7 @@ pub(crate) fn price_of(dim: usize, pos: [i32; 3]) -> Option<ItemStack> {
 fn set_price(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: Option<ItemStack>) -> bool {
     let host = &*lv.host;
     if let Some(s) = &stack {
-        let id = s.item().id(host);
+        let id = s.item().name(host);
         if create_engine::filter::FilterItem::of(&id).is_some() || is_list(host, s) {
             return false;
         }
@@ -1186,7 +1194,7 @@ pub(crate) fn value_settings(
     }
     if short {
         let held = items::held(&*lv.host, player, Hand::Main);
-        let id = held.as_ref().map(|s| s.item().id(&*lv.host));
+        let id = held.as_ref().map(|s| s.item().name(&*lv.host));
         if !matches!(
             id.as_deref(),
             Some("create:wrench" | "create:mechanical_arm")
@@ -1293,7 +1301,12 @@ impl BlockEntityPart for ClothEntity {
     /// shop's first four of its order, else those set down): one in the middle, more round it,
     /// 5 px out; flat items turned to face the way the cloth does. The tag's payment item and
     /// amount sit on its value box (`FilteringRenderer`).
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(Tag::Compound(c)) = event.entity.nbt.get(&DATA.into()) else {
             return;
         };
@@ -1431,7 +1444,13 @@ impl mod_api::ItemPart for ClothItem {
         event: &mut mod_api::OnBlockPlacedByEvent<'_>,
     ) {
         let Some(player) = event.placer else { return };
-        let Some(dimension) = event.level.dimension().id(&*host).map(|d| d.to_string()) else {
+        let Some(dimension) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .map(|d| d.to_string())
+        else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -1624,7 +1643,7 @@ pub(super) fn render_overlay(host: &dyn ClientHost, draw: &mut dyn mod_api::Draw
     let held = items::held(host, player, Hand::Main);
     if held
         .as_ref()
-        .is_some_and(|s| s.item().id(host) == "create:clipboard")
+        .is_some_and(|s| s.item().name(host) == "create:clipboard")
     {
         return;
     }
@@ -1785,7 +1804,7 @@ fn checkout_overlay(
     if !keeper
         .root_vehicle(host)
         .is_some_and(|root| root != keeper && super::keeper::seat_vehicle(host, root))
-        || keeper.kind(host).map(|k| k.id(host)).as_deref() == Some("create:package")
+        || keeper.kind(host).map(|k| k.name(host)).as_deref() == Some("create:package")
     {
         return;
     }

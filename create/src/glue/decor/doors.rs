@@ -8,8 +8,8 @@
 use create_engine::door::{FoldStep, fold_pose, slide_offset};
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent,
-    BlockEntitySubmitEvent, BlockKey, BlockPart, ClientHost, HostBlockStates, Registrar,
+    BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockKey,
+    BlockPart, ClientHost, HostBlockStates, Registrar,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -102,7 +102,12 @@ impl BlockEntityPart for DoorEntity {
         *event.bounds = [-1.0, -1.0, -1.0, 2.0, 3.0, 2.0];
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let facts = host.block_states();
         let prop = |k: &str| {
             event

@@ -10,6 +10,8 @@
 //! The client has no action bar of its own here: its status messages go by the server.
 
 use super::super::net;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::kinetics::Dir;
 use mod_api::{
     ClientHost, DrawContext, Flow, Hand, Identifier, InteractionKey,
@@ -92,7 +94,7 @@ fn holding(host: &dyn ClientHost) -> bool {
     };
     host.living(player.entity())
         .and_then(|l| l.hand_item(host, Hand::Main))
-        .is_some_and(|s| s.item().id(host) == super::QUILL)
+        .is_some_and(|s| s.item().name(host) == super::QUILL)
 }
 
 /// The eye and the unit vector of the view.
@@ -678,7 +680,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             let Some(mut lv) = super::ServerLevel::new(host, &dimension) else {
                 return;
             };
-            let who = player.name(&*lv.host).unwrap_or_default();
+            let who = player.name(&*lv.host).unwrap_or_default().to_owned();
             let lines = super::save(&mut lv, Some(player), &who, a, b, &file, convert);
             // `schematicAndQuill.saved` (or `failed`), as the status Create shows.
             let line = match lines.first() {

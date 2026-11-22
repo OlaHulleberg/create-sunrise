@@ -1,6 +1,10 @@
 //! Item stacks as the engine's rules see them (an item id and a count), and the reads and
 //! writes of block entity slots, item entities and players' hands they need.
 
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::owned::OwnedStack as _;
 use crate::glue::server::ServerLevel;
 use create_engine::processing::Slot;
 use mod_api::{
@@ -15,7 +19,7 @@ pub fn key(host: &dyn Host, id: &str) -> Option<ItemKey> {
 
 /// The id of a stack's item.
 pub fn id(host: &dyn Host, stack: &ItemStack) -> String {
-    stack.item().id(host)
+    stack.item().name(host)
 }
 
 /// A plain stack of `count` of `id` (no components); None for an unknown item or none.

@@ -11,7 +11,7 @@ use create_engine::Block;
 use create_engine::fluids::{self, Piped, Rim, RimPiece};
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
-use mod_api::{BlockEntitySubmitEvent, Compound, Tag};
+use mod_api::{Compound, Tag};
 use std::cell::RefCell;
 
 /// The key of a pipe's pieces in its block entity data: an attachment (`Rim` ordinal) for each
@@ -111,7 +111,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
 
 /// Draws the pieces a pipe's block entity data shows (`PipeAttachmentModel.addQuads`), kept
 /// with the rest of the block entity's drawing as the kinetic renderer decides.
-pub(super) fn draw(event: &mut BlockEntitySubmitEvent<'_>) {
+pub(super) fn draw(event: &mut crate::glue::Submit<'_>) {
     let Some(Tag::IntArray(v)) = event.entity.nbt.get(&RIMS.into()) else {
         return;
     };

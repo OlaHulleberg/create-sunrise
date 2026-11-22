@@ -4,6 +4,7 @@
 
 use super::super::items::{self, Item};
 use super::board::{self, block_at};
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::kinetics::Dir;
 use mod_api::{ClientHost, CrosshairTarget, DrawContext, EquipmentSlot};
 

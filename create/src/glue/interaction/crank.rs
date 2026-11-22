@@ -9,6 +9,7 @@ use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::world::with_world;
 use super::item_use_overrides;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use mod_api::{BlockPart, InteractionResult, PlayerRef, Registrar, ServerHost, UseItemOnEvent};
 
@@ -29,7 +30,7 @@ impl BlockPart for Crank {
     ) -> Option<InteractionResult> {
         let click = event.click;
         let player = host.player(click.player)?;
-        let held = click.stack.map(|s| s.item().id(&*host));
+        let held = click.stack.map(|s| s.item().name(&*host));
         let mut lv = ServerLevel::new(host, click.dimension.key().id())?;
         use_crank(&mut lv, player, click.pos, held.as_deref())
     }

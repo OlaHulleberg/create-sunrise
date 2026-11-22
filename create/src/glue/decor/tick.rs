@@ -10,6 +10,7 @@ use super::{
     DECOR, Timer, add, block_of, bracketed, brackets, clicks, flag, girders, placard, stack_of,
     with,
 };
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::decor;
 use create_engine::kinetics::Dir;
@@ -227,7 +228,7 @@ fn haunt_bell(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
     let below = lv
         .block_state([pos[0], pos[1] - 1, pos[2]])
-        .map(|s| s.block().id(&*lv.host))
+        .map(|s| s.block().name(&*lv.host))
         .unwrap_or_default();
     if !decor::haunts(&below) {
         return;

@@ -5,6 +5,8 @@
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::{add, creative, give, player_dimension, stack_of, state_with, use_one};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use create_engine::Block;
 use create_engine::decor;
 use create_engine::kinetics::{Axis, Dir};
@@ -31,7 +33,7 @@ impl ItemPart for PlacingItem {
         let player = host.player(event.player)?;
         let dimension = player_dimension(&*host, player)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
-        let item = event.stack.item().id(&*lv.host);
+        let item = event.stack.item().name(&*lv.host);
         // `BlazeBurnerBlockItem.useOn`: on a spawner of a capturable mob, the burner catches it.
         if item == "create:empty_blaze_burner" && spawns_capturable(&lv, event.pos) {
             give_burner(
@@ -60,7 +62,7 @@ impl ItemPart for PlacingItem {
         if event.kind != "minecraft:blaze" {
             return None;
         }
-        if event.stack.item().id(&*host) != "create:empty_blaze_burner" {
+        if event.stack.item().name(&*host) != "create:empty_blaze_burner" {
             return None;
         }
         let player = host.players().acting_player()?;
@@ -94,7 +96,7 @@ fn spawns_capturable(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     };
     if lv
         .block_state(pos)
-        .map(|s| s.block().id(&*lv.host))
+        .map(|s| s.block().name(&*lv.host))
         .as_deref()
         != Some("minecraft:spawner")
     {
@@ -192,7 +194,7 @@ fn obstructed(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         })
         .any(|e| {
             host.living(e).is_some()
-                || e.kind(host).map(|k| k.id(host)).is_some_and(|k| {
+                || e.kind(host).map(|k| k.name(host)).is_some_and(|k| {
                     k.ends_with("minecart")
                         || k.ends_with("boat")
                         || k.ends_with("raft")

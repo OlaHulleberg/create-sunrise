@@ -20,6 +20,7 @@
 
 use super::super::server::ServerLevel;
 use super::super::states;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::math::{Mat4, Vec3};
 use mod_api::{Compound, Tag};
@@ -207,7 +208,7 @@ impl mod_api::BlockEntityDrawContext for Recorder<'_> {
     fn block(&mut self, block: mod_api::BlockKey, properties: &[(&str, &str)]) -> bool {
         let mut state = Compound::from([(
             "Name".into(),
-            Tag::String(block.id(self.host).as_str().into()),
+            Tag::String(block.name(self.host).as_str().into()),
         )]);
         if !properties.is_empty() {
             let props = properties
@@ -279,8 +280,8 @@ impl mod_api::BlockEntityDrawContext for Recorder<'_> {
     ) -> Result<f32, mod_api::TextFormError> {
         Ok(0.0)
     }
-    fn text_width(&self, _: &mod_api::Text) -> Result<f32, mod_api::TextFormError> {
-        Ok(0.0)
+    fn text_width(&self, _: &mod_api::Text) -> f32 {
+        0.0
     }
     fn model_part(&mut self, _: &mod_api::ModelPart, _: &str, _: u32) -> bool {
         false

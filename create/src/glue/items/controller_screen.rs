@@ -15,6 +15,9 @@
 
 use super::super::net;
 use super::filter_screen::{click_ghost, click_inventory, stack_bytes, stack_of};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedInventory as _;
 use mod_api::{
     ClientHost, DrawContext, Flow, Hand, Host, ItemKey, ItemStack, PlayerRef, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
@@ -408,14 +411,9 @@ fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f32
                 if let Some((_, s)) = s {
                     lines.push(host.hover_name(s).unwrap_or_default());
                 }
-                let key = host
-                    .mapping(MAPPINGS[i / 2])
-                    .ok()
-                    .flatten()
-                    .map(|m| m.label)
-                    .unwrap_or_else(|| {
-                        Text::translate(create_engine::controller::KEYS[i / 2], Vec::new())
-                    });
+                let key = crate::glue::keys::label(host, MAPPINGS[i / 2]).unwrap_or_else(|| {
+                    Text::translate(create_engine::controller::KEYS[i / 2], Vec::new())
+                });
                 let mut style = mod_api::text::TextStyle::default();
                 style.color = Some("gold".to_owned());
                 lines.push(
@@ -473,7 +471,7 @@ fn click(host: &dyn ClientHost, o: &mut Open, mouse: [f32; 2], button: i32, shif
                 && slot != o.selected
                 && let Some(free) = o.slots.iter_mut().find(|s| s.is_none())
             {
-                *free = Some((s.item().id(host), ItemStack::of(s.item())));
+                *free = Some((s.item().name(host), ItemStack::of(s.item())));
             }
         } else {
             o.cursor = click_inventory(o.cursor, slot, stack.is_some(), o.selected);
@@ -483,7 +481,7 @@ fn click(host: &dyn ClientHost, o: &mut Open, mouse: [f32; 2], button: i32, shif
     let carried = o
         .cursor
         .and_then(|slot| o.stack(slot))
-        .map(|s| (s.item().id(host), ItemStack::of(s.item())));
+        .map(|s| (s.item().name(host), ItemStack::of(s.item())));
     for i in 0..SLOTS {
         let r = slot_at(i);
         if over_slot([c[0] + r[0], c[1] + r[1]], mouse) {

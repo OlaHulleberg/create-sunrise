@@ -513,9 +513,17 @@ fn compile(create: &Path, repo: &Path) {
         );
     }
 
-    // AllMenuTypes' menus opened with no block, as many slots as their ghost inventories
-    // (`ListFilterItem.getFilterItemHandler`, `AttributeFilterMenu.createGhostInventory`).
-    for (name, slots) in [("filter", 18), ("attribute_filter", 2)] {
+    // AllMenuTypes' menus: those opened with no block, as many slots as their ghost inventories
+    // (`ListFilterItem.getFilterItemHandler`, `AttributeFilterMenu.createGhostInventory`), and
+    // those of the blocks the port gives a container of its own (a hopper's five slots for the
+    // schematicannon and table, a 9x4 chest's for the toolbox).
+    for (name, slots) in [
+        ("filter", 18),
+        ("attribute_filter", 2),
+        ("schematicannon", 5),
+        ("schematic_table", 5),
+        ("toolbox", 36),
+    ] {
         write(
             &decl_dir.join(format!("menu/{name}.json")),
             &pretty(&json!({ "slots": slots })),

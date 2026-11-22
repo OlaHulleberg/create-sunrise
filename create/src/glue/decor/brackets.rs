@@ -10,12 +10,13 @@ use super::{
     BRACKET, block_of, bracketed, creative, girders, give, player_dimension, prop, sneaking,
     use_one, with,
 };
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::decor::{self, BracketKind};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost, HostSide, InteractionResult,
-    ItemPart, PlayerRef, Registrar, ServerHost, Tag, UseItemOnEvent, UseOnEvent,
+    BlockEntityPart, BlockPart, ClientHost, HostSide, InteractionResult, ItemPart, PlayerRef,
+    Registrar, ServerHost, Tag, UseItemOnEvent, UseOnEvent,
 };
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -74,7 +75,7 @@ impl ItemPart for BracketItem {
         let player = host.player(event.player)?;
         let dimension = player_dimension(&*host, player)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
-        let wooden = event.stack.item().id(&*lv.host) == "create:wooden_bracket";
+        let wooden = event.stack.item().name(&*lv.host) == "create:wooden_bracket";
         use_bracket(&mut lv, player, event, wooden);
         Some(InteractionResult::Success)
     }
@@ -175,7 +176,7 @@ impl BlockPart for Bracketed {
     ) -> Option<InteractionResult> {
         let click = event.click;
         let stack = click.stack?;
-        if stack.item().id(&*host) != "create:wrench" {
+        if stack.item().name(&*host) != "create:wrench" {
             return None;
         }
         let player = host.player(click.player)?;
@@ -197,7 +198,17 @@ impl BlockPart for BracketEntity {}
 #[mod_api::sunrise_part]
 impl BlockEntityPart for BracketEntity {
     /// `BracketedKineticBlockEntityRenderer`: the bracket block's model, still.
-    fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        self.submit(host, &mut crate::glue::Submit::of(event));
+    }
+}
+
+impl BracketEntity {
+    fn submit(&self, _host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
         let Some(Tag::String(text)) = event.entity.nbt.get(&BRACKET.into()) else {
             return;
         };
@@ -229,6 +240,6 @@ pub(super) fn shown_text(b: Option<decor::Bracket>) -> String {
 }
 
 /// A shaft, cog or pipe riding a moving structure: its bracket as it was taken.
-pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-    BracketEntity.block_entity_submit(host, event);
+pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
+    BracketEntity.submit(host, event);
 }

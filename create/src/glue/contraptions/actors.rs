@@ -15,6 +15,9 @@ use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
 use super::super::states::{self, key};
 use super::super::world::with_world;
 use super::{AIRS, add, center, create_info, dir_of, flag, found, prop};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::actors::{self, Actor, Carried, Effect, Kind};
 use create_engine::glue::{self, Glue};
@@ -22,8 +25,8 @@ use create_engine::kinetics::Dir;
 use mod_api::{
     BlockHit, BlockPart, BlockShapeKind, Command, CommandArgumentValue, CommandSource, Compound,
     Flow, Hand, Host, HostBlockStates, HostTransaction, Identifier, InteractionResult, ItemKey,
-    ItemStack, PlayerAction, PlayerActionSetup, RegisterCommandsEvent, Registrar,
-    RunModCommandEvent, ServerHost, SetPlacedByEvent, SoundSource, Tag, UseItemOnEvent,
+    ItemStack, PlayerAction, PlayerActionSetup, Registrar, ServerHost, SetPlacedByEvent,
+    SoundSource, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -285,7 +288,7 @@ fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
         let mut out: Stored = Vec::with_capacity(size);
         for (i, slot) in view.iter().enumerate() {
             out.push(slot.as_ref().and_then(|(r, n)| {
-                let got = items.extract(host, tx, i, r, *n);
+                let got = items.extract_at(host, tx, i, r, *n);
                 r.to_stack(got)
             }));
         }
@@ -325,9 +328,9 @@ pub(crate) fn restore_storage(
                 };
                 let resource = mod_api::ItemResource::of(stack);
                 let n = stack.count();
-                let mut went = items.insert(host, tx, i, &resource, n);
+                let mut went = items.insert_at(host, tx, i, &resource, n);
                 if went < n {
-                    went += items.insert_any(host, tx, &resource, n - went);
+                    went += items.insert(host, tx, &resource, n - went).unwrap_or(0);
                 }
                 if went < n
                     && let Some(rest) = resource.to_stack(n - went)
@@ -350,7 +353,7 @@ fn same_stack(a: &ItemStack, b: &ItemStack) -> bool {
 }
 
 fn item_id(lv: &ServerLevel<'_>, stack: &ItemStack) -> String {
-    stack.item().id(&*lv.host)
+    stack.item().name(&*lv.host)
 }
 
 fn item_key_of(lv: &ServerLevel<'_>, id: &str) -> Option<ItemKey> {
@@ -1053,7 +1056,7 @@ pub(crate) fn release_cart_held(
 /// its declared slots), not another's whose saved data rides.
 fn create_entity(lv: &ServerLevel<'_>, e: mod_api::BlockEntityRef) -> bool {
     e.kind(&*lv.host)
-        .is_some_and(|k| k.id(&*lv.host).starts_with("create:"))
+        .is_some_and(|k| k.name(&*lv.host).starts_with("create:"))
 }
 
 /// What the block entity at `pos` held, taken out of it and the engine's tables before its
@@ -2286,7 +2289,7 @@ fn hit_entities(
         }
         let kind = e
             .kind(host)
-            .map(|k| k.id(host).to_string())
+            .map(|k| k.name(host).to_string())
             .unwrap_or_default();
         if drawing_entity(&kind) {
             continue;
@@ -2296,7 +2299,7 @@ fn hit_entities(
         if root != e
             && root
                 .kind(host)
-                .is_some_and(|k| drawing_entity(&k.id(host).to_string()))
+                .is_some_and(|k| drawing_entity(&k.name(host).to_string()))
         {
             continue;
         }
@@ -2624,7 +2627,7 @@ fn pave(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, p: [i32; 3]) {
                 let Some(stack) = slot.as_ref() else {
                     continue;
                 };
-                if filter.is_some_and(|f| stack.item().id(host) != f) {
+                if filter.is_some_and(|f| stack.item().name(host) != f) {
                     continue;
                 }
                 *slot = slot.take().and_then(|s| s.shrink(1));
@@ -3269,7 +3272,7 @@ struct RollerPlacement;
 #[mod_api::sunrise_part]
 impl BlockPart for RollerPlacement {
     fn set_placed_by(&self, host: &mut dyn ServerHost, event: &mut SetPlacedByEvent<'_>) {
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         if let Some(dim) = super::super::world::level_index(&dimension) {
@@ -3674,19 +3677,19 @@ fn debug_carried(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> String {
     line
 }
 
-pub(super) fn register_commands(event: &mut RegisterCommandsEvent<'_>) {
+pub(super) fn register_commands(commands: &mut Vec<mod_api::Command>) {
     for usage in [
         "create_debug glue <from:block_pos> <to:block_pos>",
         "create_debug roller <pos:block_pos> <mode:word>",
         "create_debug controls <pos:block_pos> <filter:text>",
         "create_debug carried <pos:block_pos>",
     ] {
-        event.commands.push(Command::op(usage, 2));
+        commands.push(Command::op(usage, 2));
     }
 }
 
 /// Create's contraption debug commands (`glue`, `controls`, `roller`).
-pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
+pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
     let cmd = event.command;
     let lits: Vec<&str> = cmd.literals.iter().map(String::as_str).collect();
     let sub = match lits.as_slice() {
@@ -3705,7 +3708,7 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut RunModCommandEv
         CommandSource::Player { player, .. } => Some(*player),
         _ => None,
     };
-    let Some(dimension) = cmd.dimension.id(&*host) else {
+    let Some(dimension) = cmd.dimension.id(&*host).map(str::to_owned) else {
         return Flow::Cancel;
     };
     let line = {

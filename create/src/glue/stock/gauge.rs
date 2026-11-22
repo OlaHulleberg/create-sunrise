@@ -36,6 +36,7 @@ use super::{
     perform, restocked, sources, with,
 };
 use crate::glue::interaction::values::may_use_value_box;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::factory::{self as fx, SLOTS};
 use create_engine::kinetics::Dir;
@@ -656,7 +657,7 @@ pub(super) fn use_item_on(
 ) -> Option<InteractionResult> {
     let player = host.player(click.player)?;
     let stack = click.stack?.clone();
-    if stack.item().id(&*host) != "create:factory_gauge" {
+    if stack.item().name(&*host) != "create:factory_gauge" {
         return Some(InteractionResult::Success);
     }
     let dimension = player.dimension(&*host)?.to_string();
@@ -819,7 +820,7 @@ pub(super) fn short_interact(
             return;
         };
         // `FilteringBehaviour.onShortInteract` (`canShortInteract`: anything) and `setFilter`.
-        let id = stack.item().id(&*lv.host);
+        let id = stack.item().name(&*lv.host);
         if id == "create:filter" || id == "create:attribute_filter" || id == "create:package_filter"
         {
             say(lv.host, player, "create.logistics.filter.invalid_item");
@@ -836,7 +837,7 @@ pub(super) fn short_interact(
     }
     // A linking item takes the panel's network.
     if let Some(stack) = held
-        && super::linked_item(&stack.item().id(&*lv.host))
+        && super::linked_item(&stack.item().name(&*lv.host))
     {
         tune_to(lv.host, player, hand, stack, panel.network);
     }
@@ -1169,7 +1170,7 @@ pub(super) fn relocate(lv: &mut ServerLevel<'_>, player: PlayerRef, from: PanelP
         return;
     };
     let gauge = orientation(lv, to.0).is_some();
-    let air = existing.block().id(&*lv.host) == "minecraft:air";
+    let air = existing.block().name(&*lv.host) == "minecraft:air";
     if !air && !gauge || gauge && existing != state {
         return;
     }

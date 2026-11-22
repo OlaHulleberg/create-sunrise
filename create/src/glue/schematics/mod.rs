@@ -48,6 +48,10 @@ use super::server::ServerLevel;
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::level_index;
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::schematic::{
     self as sch, Class, Mirror, Need, PaletteState, Rotation, SchematicData, Structure,
@@ -57,17 +61,16 @@ use create_engine::schematicannon::{
     Requirement, Spot,
 };
 use mod_api::{
-    BlockEntityOnLoadEvent, BlockEntityPart, BlockEntityRef, BlockEntitySubmitEvent,
-    BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, BlockShapeKind, BlockState,
-    BlockUpdateFlags, ClientHost, Command, CommandArgumentValue, Compound, ContentsChangedEvent,
-    Direction, Flow, Host, HostBlockStates, HostSide, HostTransaction, ITEMS, ItemPart,
-    ItemResource, ItemStack, MenuPart, ModContainer, OnBlockPlacedByEvent, PlayerRef,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, Screen, ScreenEvent,
+    BlockEntityOnLoadEvent, BlockEntityPart, BlockEntityRef, BlockEntityTypeKey,
+    BlockEntityUpdateTagEvent, BlockKey, BlockPart, BlockShapeKind, BlockState, BlockUpdateFlags,
+    ClientHost, Command, CommandArgumentValue, Compound, ContentsChangedEvent, Direction, Flow,
+    Host, HostBlockStates, HostTransaction, ITEMS, ItemPart, ItemResource, ItemStack, MenuPart,
+    MenuScreen, ModContainer, OnBlockPlacedByEvent, PlayerRef, Registrar, RegistrationContext,
     ServerHost, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 const KEY: &str = "create_schematics";
 /// The column list an older version kept and the block entity key its entries are now.
@@ -78,7 +81,8 @@ const QUILL: &str = "create:schematic_and_quill";
 const GUNPOWDER: &str = "minecraft:gunpowder";
 /// `SchematicannonInventory`: schematic in, schematic out, book in, book out, gunpowder.
 const CANNON_SLOTS: usize = 5;
-const MENU: &str = "minecraft:hopper";
+const CANNON_MENU: &str = "create:schematicannon";
+const TABLE_MENU: &str = "create:schematic_table";
 /// The key in a cannon's block entity data under which clients find where its barrel aims:
 /// `[has a target, x, y, z, resting yaw's bits]`.
 const AIM: &str = "Aim";
@@ -360,8 +364,11 @@ impl Subsystem for Schematics {
         super::entity_data::attach(r, &table);
         let _ = KINDS.set((cannon, table));
         // Their slots: Create gives them no item handler, so no face reaches them; their menus
-        // are a hopper's five slots (the table's screen shows its two).
-        for b in [Block::Schematicannon, Block::SchematicTable] {
+        // have a hopper's five slots (the table's screen shows its two).
+        for (b, menu) in [
+            (Block::Schematicannon, CANNON_MENU),
+            (Block::SchematicTable, TABLE_MENU),
+        ] {
             r.block_container(
                 &states::key(b),
                 ModContainer {
@@ -370,11 +377,22 @@ impl Subsystem for Schematics {
                     faces: std::array::from_fn(|_| Vec::new()),
                     inputs: Vec::new(),
                     outputs: Vec::new(),
-                    menu: Some(MENU.into()),
+                    menu: Some(menu.into()),
                 },
             );
+            r.menu_part(menu, SchematicMenus);
         }
-        r.menu_part(MENU, SchematicScreens);
+        for (menu, factory) in [
+            (
+                CANNON_MENU,
+                Arc::new(cannon_screen) as Arc<dyn mod_api::MenuScreenFactory>,
+            ),
+            (TABLE_MENU, Arc::new(table_screen)),
+        ] {
+            if let Err(e) = r.register_menu_screen(menu, factory) {
+                crate::create_log!("[create] the {menu} screen was refused: {e}");
+            }
+        }
         for kind in [cannon, table] {
             if let Err(e) = r.block_entity_part(&kind, SchematicEntity) {
                 crate::create_log!(
@@ -480,7 +498,7 @@ impl Subsystem for Schematics {
         });
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
         for usage in [
             // The schematic and quill's two corners and its prompt (`instant`: the creative
             // convert button).
@@ -492,20 +510,16 @@ impl Subsystem for Schematics {
             // A cannon's state and its screen's options.
             "create_debug schematicannon <pos:block_pos> [option:text]",
         ] {
-            event.commands.push(Command::op(usage, 2));
+            commands.push(Command::op(usage, 2));
         }
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         let Some(verb) = debug_verb(event, &["schematic", "schematicannon"]) else {
             return Flow::Continue;
         };
         let player = packages::command_player(event.source);
-        let Some(dimension) = event.command.dimension.id(&*host) else {
+        let Some(dimension) = event.command.dimension.id(&*host).map(str::to_owned) else {
             return Flow::Cancel;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -520,7 +534,9 @@ impl Subsystem for Schematics {
             Some(CommandArgumentValue::String(s)) => Some(s.clone()),
             _ => None,
         };
-        let name = player.and_then(|p| p.name(&*lv.host)).unwrap_or_default();
+        let name = player
+            .and_then(|p| p.name(&*lv.host).map(str::to_owned))
+            .unwrap_or_default();
         let lines = match (verb, cmd.literals.get(2).map(String::as_str)) {
             ("schematicannon", _) => match pos("pos") {
                 Some(p) => {
@@ -688,7 +704,7 @@ impl World<'_, '_> {
         let mut matching = Vec::new();
         for index in 0..inv.size(host) {
             if let Some(r) = inv.resource(host, index)
-                && r.item().id(&*host) == item
+                && r.item().name(&*host) == item
             {
                 matching.push((index, r, inv.amount(host, index)));
             }
@@ -703,7 +719,7 @@ impl World<'_, '_> {
                 if got >= max {
                     break;
                 }
-                got += inv.extract(h, tx, *index, r, max - got);
+                got += inv.extract_at(h, tx, *index, r, max - got);
             }
             Ok::<u32, ()>(got)
         })
@@ -855,7 +871,7 @@ impl CannonWorld for World<'_, '_> {
                 if let Some(r) = inv.resource(host, index) {
                     let n = inv.amount(host, index);
                     if n > 0 {
-                        out.push((r.item().id(&*host), n));
+                        out.push((r.item().name(&*host), n));
                     }
                 }
             }
@@ -1046,7 +1062,7 @@ fn full_cube(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
 /// Whether `state` is air (`isAir`: air, cave air, void air).
 fn is_air(host: &dyn Host, state: BlockState) -> bool {
     matches!(
-        state.block().id(host).as_str(),
+        state.block().name(host).as_str(),
         "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
     )
 }
@@ -1290,8 +1306,7 @@ fn send_screen_data(lv: &mut ServerLevel<'_>, c: &Cannon) {
 /// The table's upload button (`SchematicUploadPacket`): the schematic chosen, by its place
 /// among the saved ones, uploaded at the level's next tick (the table's block entity is out of
 /// the world while its button is handled).
-fn table_button(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
-    let context = event.context;
+fn table_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
     let Some(index) = usize::try_from(context.id - screens::UPLOAD).ok() else {
         return;
     };
@@ -1307,8 +1322,11 @@ fn table_button(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<
     let Some(file) = body::local_files(&*host).into_iter().nth(index) else {
         return;
     };
-    let name = player.name(&*host).unwrap_or_default();
-    UPLOADS.with_borrow_mut(|u| u.push((dim, name, context.pos, file)));
+    let Some(pos) = context.pos else {
+        return;
+    };
+    let name = player.name(&*host).unwrap_or_default().to_owned();
+    UPLOADS.with_borrow_mut(|u| u.push((dim, name, pos, file)));
 }
 
 /// The uploads asked for in `dim` since its last tick.
@@ -1326,8 +1344,7 @@ fn run_uploads(lv: &mut ServerLevel<'_>) {
 }
 
 /// `ConfigureSchematicannonPacket` from the cannon's screen, and its confirm button.
-fn cannon_button(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
-    let context = event.context;
+fn cannon_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
     if context.id == screens::CONFIRM {
         host.close_menu(context.player);
         return;
@@ -1341,7 +1358,9 @@ fn cannon_button(host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent
     let Some(dim) = level_index(&dimension) else {
         return;
     };
-    let pos = context.pos;
+    let Some(pos) = context.pos else {
+        return;
+    };
     let data = with(dim, |d| d.sent_data.get(&pos).cloned()).unwrap_or_default();
     let Some(option) = screens::configure(context.id, &data) else {
         return;
@@ -1472,15 +1491,14 @@ impl BlockPart for SchematicEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for SchematicEntity {
-    fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
-        let HostSide::Server(host) = host else {
+    fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
+        let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) else {
             return;
         };
-        let entity = event.entity;
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
             return;
         };
-        let Some(dimension) = level.dimension().id(&*host) else {
+        let Some(dimension) = level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
@@ -1494,7 +1512,12 @@ impl BlockEntityPart for SchematicEntity {
         Some(Compound::from([(AIM.into(), aim)]))
     }
 
-    fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         if event.block != "create:schematicannon" {
             return;
         }
@@ -1522,32 +1545,24 @@ impl BlockEntityPart for SchematicEntity {
         draw.keep();
     }
 
-    fn menu_button(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuButtonEvent<'_>) {
-        match event.entity.id() {
-            "create:schematicannon" => cannon_button(host, event),
-            "create:schematic_table" => table_button(host, event),
-            _ => {}
-        }
-    }
-
     /// `SchematicannonMenu.quickMoveStack` and `SchematicTableMenu`'s: from the player's
     /// inventory a schematic goes to the schematic slot, a book or clipboard to the checklist's,
     /// gunpowder to the fuel slot (`SchematicannonInventory.isItemValid`); the table takes blank
     /// schematics, quills and schematics in its input. The game's own routing (the first slot
     /// with room) is replaced by the destination order of Create’s menu, including whole stacks.
-    fn menu_quick_move(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut mod_api::MenuQuickMoveEvent<'_>,
-    ) -> Flow {
+    fn menu_quick_move(&self, event: &mut mod_api::MenuQuickMoveEvent<'_>) -> Flow {
         if event.slot < event.container_slots {
             return Flow::Continue;
         }
         let Some(stack) = event.stack.as_ref().cloned() else {
             return Flow::Continue;
         };
+        let Some(kind) = event.subject.with_view(|v| v.id().to_owned()) else {
+            return Flow::Continue;
+        };
+        let host = event.subject.host();
         let id = packages::body::item_id(&*host, &stack);
-        let to = match (event.entity.id(), id.as_str()) {
+        let to = match (kind.as_str(), id.as_str()) {
             ("create:schematicannon", SCHEMATIC) => 0,
             ("create:schematicannon", "minecraft:book" | "minecraft:written_book")
             | ("create:schematicannon", "create:clipboard") => 2,
@@ -1561,69 +1576,77 @@ impl BlockEntityPart for SchematicEntity {
             Some(t) if t.is_stackable_with(&stack) => max.saturating_sub(t.count()),
             Some(_) => 0,
         };
-        let items = &mut event.entity.items;
-        if items.len() <= to {
-            return Flow::Cancel;
+        let moved = event.subject.with_view(|mut v| {
+            if v.item_slots() <= to {
+                return None;
+            }
+            let held = v.item_slot(to as u32).and_then(|s| s.to_owned());
+            let n = room(&held).min(stack.count());
+            if n == 0 {
+                return None;
+            }
+            let there = held.as_ref().map_or(0, ItemStack::count);
+            v.set_item_slot(to as u32, packages::body::with_count(&stack, there + n))
+                .ok()
+                .filter(|set| *set)
+                .map(|_| n)
+        });
+        if let Some(Some(n)) = moved {
+            *event.stack = packages::body::with_count(&stack, stack.count() - n);
         }
-        let n = room(&items[to]).min(stack.count());
-        if n == 0 {
-            return Flow::Cancel;
-        }
-        let there = items[to].as_ref().map_or(0, ItemStack::count);
-        items[to] = packages::body::with_count(&stack, there + n);
-        *event.stack = packages::body::with_count(&stack, stack.count() - n);
         Flow::Cancel
     }
 }
 
-/// The cannon and table share the hopper menu type, with a different screen layout for each block.
-struct SchematicScreens;
+/// The cannon's screen (`SchematicannonScreen`), over its menu's data slots.
+fn cannon_screen(_host: &dyn ClientHost, open: mod_api::MenuScreenOpen<'_>) -> Option<MenuScreen> {
+    (open.block == Some("create:schematicannon")).then_some(())?;
+    Some(
+        MenuScreen::new(screens::cannon_screen())
+            .with_draw(|host, frame, draw| {
+                screens::draw_cannon(host, draw, frame.data, frame.origin);
+            })
+            .with_click(|host, frame, right| {
+                (!right).then(|| screens::click_cannon(host, frame.data, frame.at))?
+            })
+            .with_tooltip(|_host, frame, _slot, lines| {
+                screens::tooltip_cannon(frame.data, frame.at, lines);
+            }),
+    )
+}
+
+/// The table's screen (`SchematicTableScreen`): its input and output slots.
+fn table_screen(_host: &dyn ClientHost, open: mod_api::MenuScreenOpen<'_>) -> Option<MenuScreen> {
+    (open.block == Some("create:schematic_table")).then_some(())?;
+    Some(
+        MenuScreen::new(screens::table_screen())
+            .with_draw(|host, frame, draw| {
+                TABLE_OPEN.set(true);
+                screens::draw_table(host, draw, frame.data, frame.origin);
+            })
+            .with_click(|host, frame, right| {
+                (!right).then(|| screens::click_table(host, frame.at))?
+            })
+            .with_tooltip(|host, frame, _slot, lines| {
+                screens::tooltip_table(host, frame.at, lines);
+            }),
+    )
+}
+
+/// The cannon's and the table's menu buttons.
+struct SchematicMenus;
 
 #[mod_api::sunrise_part]
-impl MenuPart for SchematicScreens {
-    fn screen(&self, _host: &dyn Host, event: &mut ScreenEvent<'_>) -> Option<Screen> {
-        match event.block {
-            Some("create:schematicannon") => Some(screens::cannon_screen()),
-            Some("create:schematic_table") => Some(screens::table_screen()),
-            _ => None,
-        }
-    }
-
-    /// `SchematicTableMenu`: the input and output slots, as the hopper's first and last.
-    fn screen_draw(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenDrawEvent<'_>) {
-        match event.block {
-            Some("create:schematicannon") => {
-                screens::draw_cannon(host, event.draw, event.data, event.origin);
-            }
-            Some("create:schematic_table") => {
-                TABLE_OPEN.set(true);
-                screens::draw_table(host, event.draw, event.data, event.origin);
-            }
-            _ => {}
-        }
-    }
-
-    fn screen_click(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut mod_api::ScreenClickEvent<'_>,
-    ) -> Option<i32> {
-        if event.right {
-            return None;
-        }
-        match event.block {
-            Some("create:schematicannon") => screens::click_cannon(host, event.data, event.at),
-            Some("create:schematic_table") => screens::click_table(host, event.at),
-            _ => None,
-        }
-    }
-
-    fn screen_tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::ScreenTooltipEvent<'_>) {
-        match event.block {
-            Some("create:schematicannon") => {
-                screens::tooltip_cannon(event.data, event.at, event.lines);
-            }
-            Some("create:schematic_table") => screens::tooltip_table(host, event.at, event.lines),
+impl MenuPart for SchematicMenus {
+    fn menu_button(&self, event: &mut mod_api::MenuButtonEvent<'_>) {
+        let context = event.context;
+        let Some(kind) = event.subject.with_view(|v| v.id().to_owned()) else {
+            return;
+        };
+        let host = event.subject.host();
+        match kind.as_str() {
+            "create:schematicannon" => cannon_button(host, context),
+            "create:schematic_table" => table_button(host, context),
             _ => {}
         }
     }
@@ -1642,6 +1665,7 @@ impl BlockPart for CannonBlock {
             .level
             .dimension()
             .id(&*host)
+            .map(str::to_owned)
             .and_then(|d| level_index(&d))
         else {
             return;
@@ -1672,6 +1696,7 @@ impl ItemPart for CannonItem {
             .level
             .dimension()
             .id(&*host)
+            .map(str::to_owned)
             .and_then(|d| level_index(&d.to_string()))
         else {
             return;
@@ -1744,7 +1769,7 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
             continue;
         };
         let mut data = data;
-        data.insert("id".into(), Tag::String(kind.id(host).as_str().into()));
+        data.insert("id".into(), Tag::String(kind.name(host).as_str().into()));
         b.nbt = Some(body::to_engine(&Tag::Compound(data)));
     }
     structure.entities = export_entities(lv, min, max);
@@ -1761,7 +1786,7 @@ fn export_entities(lv: &mut ServerLevel<'_>, min: [i32; 3], max: [i32; 3]) -> Ve
     let mut out = Vec::new();
     for e in found {
         let host: &dyn Host = &*lv.host;
-        let Some(kind) = e.kind(host).map(|k| k.id(host)) else {
+        let Some(kind) = e.kind(host).map(|k| k.name(host)) else {
             continue;
         };
         if kind == "minecraft:player" || e.is_passenger(host) == Some(true) {

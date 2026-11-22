@@ -4,15 +4,22 @@
 use crate::glue::pipelines::Pose;
 use create_engine::equipment::ToolSpin;
 use mod_api::{
-    ClientHost, ItemStack, SpecialModelContext, SpecialModelPart, SpecialModelPolicy,
-    SpecialModelRenderer, SpecialModelRenderers, Tag,
+    ClientHost, Identifier, SpecialModelBakeContext, SpecialModelCollector, SpecialModelContext,
+    SpecialModelFactory, SpecialModelGeometry, SpecialModelRenderer, SpecialModelRenderers,
+    SpecialModelStack, SpecialModelTints,
 };
-use std::sync::Arc;
 
+#[derive(Clone, Copy)]
 struct Spinner {
     spin: ToolSpin,
     fixed: &'static [&'static str],
     moving: &'static str,
+}
+
+struct Spinning {
+    spin: ToolSpin,
+    fixed: Vec<SpecialModelGeometry>,
+    moving: SpecialModelGeometry,
 }
 
 pub(super) fn register(renderers: &mut dyn SpecialModelRenderers) {
@@ -46,27 +53,45 @@ pub(super) fn register(renderers: &mut dyn SpecialModelRenderers) {
             },
         ),
     ] {
-        renderers.register(id.into(), SpecialModelPolicy::Frame, Arc::new(renderer));
+        let id = Identifier::parse(id).expect("valid identifier");
+        let factory = SpecialModelFactory::new(
+            |_| Ok(()),
+            move |(), bake: &dyn SpecialModelBakeContext| {
+                Ok(Spinning {
+                    spin: renderer.spin,
+                    fixed: renderer
+                        .fixed
+                        .iter()
+                        .map(|m| bake.bake_model(m))
+                        .collect::<Result<_, _>>()?,
+                    moving: bake.bake_model(renderer.moving)?,
+                })
+            },
+        );
+        renderers.register(id, factory);
     }
 }
 
-impl SpecialModelRenderer for Spinner {
-    fn extract(
+impl SpecialModelRenderer for Spinning {
+    type Argument = f64;
+
+    fn extract_argument(&self, host: &dyn ClientHost, _stack: &SpecialModelStack<'_>) -> f64 {
+        host.millis() as f64 / 1000.0
+    }
+
+    fn submit(
         &self,
-        host: &dyn ClientHost,
-        _stack: &ItemStack,
-        _config: &Tag,
+        seconds: &f64,
         _context: &SpecialModelContext,
-    ) -> Result<Vec<SpecialModelPart>, String> {
-        let (degrees, axis, pivot) = self.spin.pose(host.millis() as f64 / 1000.0);
+        collector: &mut SpecialModelCollector<'_>,
+    ) -> Result<(), String> {
+        for part in &self.fixed {
+            collector.submit_geometry(part, SpecialModelTints::Untinted)?;
+        }
+        let (degrees, axis, pivot) = self.spin.pose(*seconds);
         let pose = Pose::at([0.0; 3]).rotate(axis, degrees, pivot);
-        let mut parts: Vec<_> = self
-            .fixed
-            .iter()
-            .copied()
-            .map(SpecialModelPart::new)
-            .collect();
-        parts.push(SpecialModelPart::new(self.moving).with_transform(pose.affine()));
-        Ok(parts)
+        collector.with_pose(pose.affine(), |c| {
+            c.submit_geometry(&self.moving, SpecialModelTints::Untinted)
+        })
     }
 }

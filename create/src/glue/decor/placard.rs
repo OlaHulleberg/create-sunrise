@@ -5,8 +5,8 @@ use super::dir_named;
 use create_engine::decor;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockEntityUpdateTagEvent, BlockPart, ClientHost,
-    Compound, HostBlockStates, ItemDisplayContext, ItemStack, Registrar, Tag,
+    BlockEntityPart, BlockEntityUpdateTagEvent, BlockPart, ClientHost, Compound, HostBlockStates,
+    ItemDisplayContext, ItemStack, Registrar, Tag,
 };
 
 /// The placard's block entity type.
@@ -44,7 +44,17 @@ impl BlockEntityPart for PlacardEntity {
 
     /// `PlacardRenderer`: the item turned to the placard's face and facing, 4.5 px out, a block
     /// item at half size, others at three eighths (`FIXED` display).
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        self.submit(host, &mut crate::glue::Submit::of(event));
+    }
+}
+
+impl PlacardEntity {
+    fn submit(&self, host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
         let Some(Tag::Compound(item)) = event.entity.nbt.get(&ITEM.into()) else {
             return;
         };
@@ -92,6 +102,6 @@ impl BlockEntityPart for PlacardEntity {
 }
 
 /// A placard riding a moving structure: its item as it was taken (`PlacardRenderer`).
-pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
-    PlacardEntity.block_entity_submit(host, event);
+pub(super) fn draw_carried(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
+    PlacardEntity.submit(host, event);
 }

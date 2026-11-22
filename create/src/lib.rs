@@ -14,12 +14,11 @@ use mod_api::{
     EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks,
     HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent, InteractionResult,
     KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
-    LevelTickPostEvent, LevelTicksHost, MenuClickedEvent, MenuClosedEvent, MouseScrollingEvent,
-    MovementInputEvent, NeighborChangedEvent, PlayerContainerCloseEvent, PlayerContainerOpenEvent,
-    PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerTickPostEvent, RegisterCommandsEvent,
-    Registrar, RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
-    RunModCommandEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, NeighborChangedEvent,
+    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent,
+    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    RightClickBlockEvent, RightClickItemEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StandaloneModelsEvent,
     TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
 };
@@ -46,8 +45,12 @@ impl Hooks for Create {
     }
 
     fn standalone_models(&self, _cx: &RegistrationContext, event: &mut StandaloneModelsEvent<'_>) {
+        let mut models = Vec::new();
         for s in SUBSYSTEMS {
-            s.standalone_models(event.models);
+            s.standalone_models(&mut models);
+        }
+        for model in models {
+            event.register_model(model);
         }
     }
 
@@ -89,7 +92,12 @@ impl Hooks for Create {
                 s.world_opened(host);
             }
         }
-        world::level_index(event.dimension);
+        if let (Some(dim), Some(level)) = (
+            world::level_index(event.dimension),
+            host.level(event.dimension),
+        ) {
+            world::note_level(level, dim);
+        }
     }
 
     fn server_tick(&self, host: &mut dyn ServerHost, event: &mut mod_api::ServerTickEvent<'_>) {
@@ -101,12 +109,12 @@ impl Hooks for Create {
         }
     }
 
-    fn tags_updated(&self, host: HostSide, _event: &mut TagsUpdatedEvent) {
-        let HostSide::Server(host) = host else {
+    fn tags_updated(&self, cx: &dyn mod_api::ReloadContext, event: &mut TagsUpdatedEvent) {
+        if !matches!(event.cause, mod_api::TagsUpdateCause::ServerDataLoad { .. }) {
             return;
-        };
+        }
         for s in SUBSYSTEMS {
-            s.tags_updated(host);
+            s.tags_updated(cx);
         }
     }
 
@@ -125,11 +133,6 @@ impl Hooks for Create {
         for s in SUBSYSTEMS {
             s.chunk_unload(dim, event.chunk);
         }
-    }
-
-    /// Hot: an entity on the ground over one of Create's blocks, each tick it moves.
-    fn block_step_on(&self, event: &mut mod_api::BlockStepOnEvent<'_>) {
-        glue::logistics::block_step_on(event);
     }
 
     /// Every committed server block change: vanilla changes notify adjacent
@@ -164,7 +167,7 @@ impl Hooks for Create {
         let HostSide::Server(host) = host else {
             return;
         };
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -182,7 +185,7 @@ impl Hooks for Create {
         let HostSide::Server(host) = host else {
             return;
         };
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         glue::net::flush(host);
@@ -241,7 +244,15 @@ impl Hooks for Create {
     }
 
     fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
-        until_cancel(|s| s.entity_place(host, event))
+        let mut placed = glue::subsystem::Placed {
+            placer: event.placer,
+            pos: event.pos,
+            state: event.state,
+            cancelled: event.cancelled,
+        };
+        let flow = until_cancel(|s| s.entity_place(host, &mut placed));
+        event.cancelled = placed.cancelled;
+        flow
     }
 
     fn register_particle_providers(
@@ -279,15 +290,7 @@ impl Hooks for Create {
         _context: &RegistrationContext,
         event: &mut mod_api::RegisterItemModelsEvent<'_>,
     ) {
-        event.models.push(glue::equipment::GRIP_POSE.into());
-    }
-
-    fn item_model_update(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut mod_api::ItemModelUpdateEvent<'_>,
-    ) {
-        glue::equipment::grip_pose(host, event);
+        glue::equipment::register_grip_pose(event);
     }
 
     fn render_frame_pre(
@@ -407,11 +410,7 @@ impl Hooks for Create {
         }
     }
 
-    fn living_breathe(
-        &self,
-        _context: &dyn mod_api::LoopContext,
-        event: &mut mod_api::LivingBreatheEvent<'_>,
-    ) {
+    fn living_breathe(&self, _host: &mut dyn ServerHost, event: &mut mod_api::LivingBreatheEvent) {
         glue::equipment::living_breathe(event);
     }
 
@@ -440,18 +439,25 @@ impl Hooks for Create {
         }
     }
 
+    /// Each subsystem's usages, run by that subsystem.
     fn register_commands(&self, host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        for s in SUBSYSTEMS {
-            s.register_commands(host, event);
+        for (i, s) in SUBSYSTEMS.iter().enumerate() {
+            let mut usages = Vec::new();
+            s.register_commands(host, &mut usages);
+            for usage in usages {
+                event
+                    .commands
+                    .push(usage.executes(move |host, source, command| {
+                        let mut call = glue::subsystem::CommandCall { source, command };
+                        match SUBSYSTEMS[i].run_mod_command(host, &mut call) {
+                            Flow::Cancel => Ok(1),
+                            _ => Err(Box::new(mod_api::Text::literal(
+                                "create_debug: unknown arguments",
+                            ))),
+                        }
+                    }));
+            }
         }
-    }
-
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
-        until_cancel(|s| s.run_mod_command(host, event))
     }
 
     fn level_save(&self, host: &mut dyn ServerHost, event: &mut LevelSaveEvent<'_>) {
@@ -505,11 +511,15 @@ impl Hooks for Create {
         until_cancel(|s| s.interaction_key(host, event))
     }
 
-    fn movement_input(&self, host: &dyn ClientHost, event: &mut MovementInputEvent) {
+    fn movement_input_update(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::MovementInputUpdateEvent<'_>,
+    ) {
         for s in SUBSYSTEMS {
-            s.movement_input(host, event);
+            s.movement_input_update(host, event.input);
         }
-        glue::equipment::sample_movement(event);
+        glue::equipment::sample_movement(event.input);
     }
 
     fn data_pack_files(
@@ -593,12 +603,6 @@ impl Hooks for Create {
         }
     }
 
-    fn menu_clicked(&self, host: &mut dyn ServerHost, event: &mut MenuClickedEvent) {
-        for s in SUBSYSTEMS {
-            s.menu_clicked(host, event);
-        }
-    }
-
     fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
         for s in SUBSYSTEMS {
             s.menu_closed(host, event);
@@ -607,7 +611,7 @@ impl Hooks for Create {
 
     fn add_server_reload_listeners(
         &self,
-        _host: &dyn mod_api::Host,
+        _cx: &dyn mod_api::ReloadContext,
         event: &mut mod_api::AddServerReloadListenersEvent<'_>,
     ) {
         glue::items::add_reload_listeners(event.listeners);
@@ -698,18 +702,22 @@ impl Hooks for Create {
         glue::client_reset(host);
     }
 
-    fn client_setup(&self, host: &mut dyn ClientHost, _event: &mut mod_api::ClientSetupEvent) {
-        glue::pipelines::bind_steam_jets(host);
+    fn client_setup(
+        &self,
+        cx: &mut dyn mod_api::ClientSetupContext,
+        _event: &mut mod_api::ClientSetupEvent,
+    ) {
+        glue::pipelines::bind_steam_jets(cx.render_assets());
     }
 
     /// Refresh handles and models after a new resource generation is published.
     fn client_resources_reloaded(
         &self,
-        host: &mut dyn ClientHost,
+        cx: &dyn mod_api::ClientReloadHost,
         _event: &mut mod_api::ClientResourcesReloadedEvent,
     ) {
         glue::models::forget();
-        glue::pipelines::bind_steam_jets(host);
+        glue::pipelines::bind_steam_jets(cx.render_assets());
     }
 }
 

@@ -26,6 +26,9 @@
 use super::super::net;
 use super::super::server::ServerLevel;
 use super::{Key, broadcast, network_at, network_stock, with};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::stock::{INF, Order, RequestType};
 use mod_api::text::TextStyle;
@@ -170,7 +173,7 @@ fn keeper_entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<mod_api::EntityR
 pub(super) fn seat_vehicle(host: &dyn Host, entity: mod_api::EntityRef) -> bool {
     entity
         .kind(host)
-        .is_some_and(|kind| kind.id(host) == super::super::contraptions::seats::ENTITY_TYPE)
+        .is_some_and(|kind| kind.name(host) == super::super::contraptions::seats::ENTITY_TYPE)
 }
 
 /// `getStockTickerPosition`: the one stock ticker beside a seated entity, or above that.
@@ -197,7 +200,7 @@ pub(super) fn ticker_beside(lv: &ServerLevel<'_>, entity: mod_api::EntityRef) ->
 /// (`interactWithShop`); else the request screen opens.
 pub(super) fn interact(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
     let held = super::super::items::held(&*lv.host, player, mod_api::Hand::Main);
-    if held.is_some_and(|s| s.item().id(&*lv.host) == "create:shopping_list") {
+    if held.is_some_and(|s| s.item().name(&*lv.host) == "create:shopping_list") {
         super::shop::checkout(lv, player, pos);
         return;
     }
@@ -227,7 +230,7 @@ pub(super) fn open(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3]) {
         return;
     };
     let held = super::super::items::held(&*lv.host, player, mod_api::Hand::Main);
-    let held_id = held.as_ref().map(|s| s.item().id(&*lv.host));
+    let held_id = held.as_ref().map(|s| s.item().name(&*lv.host));
     // `encodeRequester`: a redstone requester or a table cloth in hand is programmed.
     let encode = held_id.as_deref().is_some_and(|i| {
         i == "create:redstone_requester"
@@ -920,7 +923,7 @@ fn matches(host: &dyn ClientHost, e: &Entry, search: &str) -> bool {
         (false, false, search)
     };
     let value = value.to_lowercase();
-    let id = e.stack.item().id(host);
+    let id = e.stack.item().name(host);
     let (namespace, path) = id.split_once(':').unwrap_or(("minecraft", id.as_str()));
     if mods {
         return namespace.contains(&value);
@@ -1750,7 +1753,7 @@ pub(super) fn addresses(host: &dyn ClientHost) -> Vec<String> {
     };
     let mut out: Vec<String> = Vec::new();
     for stack in player.inventory(host).unwrap_or_default() {
-        if stack.item().id(host) != "create:clipboard" {
+        if stack.item().name(host) != "create:clipboard" {
             continue;
         }
         for a in clipboard_addresses(&stack) {

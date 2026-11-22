@@ -7,6 +7,7 @@ use super::ticks::{
     diode_of, lamp_of, latch_of, link_of, rail_of, set_latch, toggle_diode, toggle_link,
 };
 use super::{block_at, info, offset};
+use crate::glue::names::Named as _;
 use crate::glue::server::{ServerLevel, update_all};
 use crate::glue::states;
 use crate::glue::world::{level_index, try_with_world, with_world};
@@ -84,7 +85,13 @@ impl BlockPart for WatchedContainer {
         if watched != Some(true) {
             return;
         }
-        let Some(dim) = event.level.dimension().id(&*host).and_then(|d| dim_of(&d)) else {
+        let Some(dim) = event
+            .level
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)
+            .and_then(|d| dim_of(&d))
+        else {
             return;
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
@@ -177,7 +184,7 @@ impl BlockPart for RedstoneBlock {
         host: &mut dyn ServerHost,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
-        let held = event.click.stack.map(|s| s.item().id(&*host));
+        let held = event.click.stack.map(|s| s.item().name(&*host));
         if held.is_none() {
             // `useWithoutItem` takes an empty hand.
             return Some(InteractionResult::TryWithEmptyHand);

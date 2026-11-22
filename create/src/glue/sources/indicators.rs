@@ -14,7 +14,7 @@ use super::super::world::with_world;
 use create_engine::Block;
 use create_engine::gauge::SpeedLevel;
 use create_engine::kinetics::Axis;
-use mod_api::{ModParticle, ParticleKey, ParticleOptions, ParticleProvider, Registrar};
+use mod_api::{ParticleKey, ParticleOptions, ParticleProvider, Registrar};
 use std::cell::RefCell;
 use std::sync::OnceLock;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -34,8 +34,12 @@ thread_local! {
 static TICKS: AtomicI64 = AtomicI64::new(0);
 static GOGGLES: AtomicBool = AtomicBool::new(false);
 
+pub(super) static TYPE: std::sync::OnceLock<mod_api::ParticleType<()>> = std::sync::OnceLock::new();
+
 pub(super) fn register(r: &mut dyn Registrar) {
-    let _ = KEY.set(r.particle_key(NAME));
+    let ty = crate::glue::particle_type(r, NAME);
+    let _ = TYPE.set(ty);
+    let _ = KEY.set(ty.key());
 }
 
 /// `queueRotationIndicators`: the block at `pos` shows its indicators in two ticks.
@@ -208,61 +212,68 @@ fn rotate(v: [f64; 3], deg: f64, axis: Axis) -> [f64; 3] {
 pub struct Indicator;
 
 impl ParticleProvider for Indicator {
-    fn tick(&self, p: &mut ModParticle) {
-        if p.state[3] == 0.0 {
-            if !GOGGLES.load(Ordering::Relaxed) {
-                p.removed = true;
-                return;
+    fn tick(
+        &self,
+        particles: &mut mod_api::ParticleBatch,
+        _level: &dyn mod_api::ParticleLevelView,
+    ) {
+        let one = |p: &mut mod_api::ModParticle| {
+            if p.state[3] == 0.0 {
+                if !GOGGLES.load(Ordering::Relaxed) {
+                    p.removed = true;
+                    return;
+                }
+                let s = decode(p.velocity);
+                // `lifeSpan + random.nextInt(32)`: the spawn's random size picks the 32.
+                let random = p.size.to_bits() % 32;
+                p.lifetime = 10 + random as i32;
+                p.size *= 0.75;
+                let white = create_engine::gauge::mix_colors(s.color, 0xFF_FFFF, 0.5);
+                p.rgba = [
+                    ((white >> 16) & 0xFF) as f32 / 255.0,
+                    ((white >> 8) & 0xFF) as f32 / 255.0,
+                    (white & 0xFF) as f32 / 255.0,
+                    1.0,
+                ];
+                p.state = [
+                    p.position[0],
+                    p.position[1],
+                    p.position[2],
+                    pack(p.velocity),
+                ];
+                p.velocity = [0.0; 3];
             }
-            let s = decode(p.velocity);
-            // `lifeSpan + random.nextInt(32)`: the spawn's random size picks the 32.
-            let random = p.size.to_bits() % 32;
-            p.lifetime = 10 + random as i32;
-            p.size *= 0.75;
-            let white = create_engine::gauge::mix_colors(s.color, 0xFF_FFFF, 0.5);
-            p.rgba = [
-                ((white >> 16) & 0xFF) as f32 / 255.0,
-                ((white >> 8) & 0xFF) as f32 / 255.0,
-                (white & 0xFF) as f32 / 255.0,
-                1.0,
-            ];
-            p.state = [
-                p.position[0],
-                p.position[1],
-                p.position[2],
-                pack(p.velocity),
-            ];
-            p.velocity = [0.0; 3];
-        }
-        let s = decode(unpack(p.state[3]));
-        let age = f64::from(p.age);
-        let lifetime = f64::from(p.lifetime.max(1));
-        // `radius += (radius2 - radius) * .1` after each move, from radius1.
-        let radius = s.r2 + (s.r1 - s.r2) * 0.9f64.powi(p.age - 1);
-        let time = TICKS.load(Ordering::Relaxed) as f64;
-        let speed = f64::from(s.speed);
-        let mut angle = (time * speed) % 360.0 - speed / 2.0 * age * (age / lifetime);
-        if s.speed < 0 && s.axis == Axis::Y {
-            angle += 180.0;
-        }
-        let offset = if s.axis == Axis::Y {
-            [radius, 0.0, 0.0]
-        } else {
-            [0.0, radius, 0.0]
+            let s = decode(unpack(p.state[3]));
+            let age = f64::from(p.age);
+            let lifetime = f64::from(p.lifetime.max(1));
+            // `radius += (radius2 - radius) * .1` after each move, from radius1.
+            let radius = s.r2 + (s.r1 - s.r2) * 0.9f64.powi(p.age - 1);
+            let time = TICKS.load(Ordering::Relaxed) as f64;
+            let speed = f64::from(s.speed);
+            let mut angle = (time * speed) % 360.0 - speed / 2.0 * age * (age / lifetime);
+            if s.speed < 0 && s.axis == Axis::Y {
+                angle += 180.0;
+            }
+            let offset = if s.axis == Axis::Y {
+                [radius, 0.0, 0.0]
+            } else {
+                [0.0, radius, 0.0]
+            };
+            let r = rotate(offset, angle, s.axis);
+            p.position = [p.state[0] + r[0], p.state[1] + r[1], p.state[2] + r[2]];
+            // `setSpriteFromAge` over the eight glitter sprites.
+            p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
+            let half = p.lifetime / 2;
+            if p.age > half {
+                p.rgba[3] = 1.0 - (p.age - half) as f32 / p.lifetime as f32;
+                // `setFadeColor`: a fifth of the way to the level's colour each tick.
+                let fade = [16, 8, 0].map(|sh| ((s.color >> sh) & 0xFF) as f32 / 255.0);
+                for (c, f) in p.rgba.iter_mut().zip(fade) {
+                    *c += (f - *c) * 0.2;
+                }
+            }
         };
-        let r = rotate(offset, angle, s.axis);
-        p.position = [p.state[0] + r[0], p.state[1] + r[1], p.state[2] + r[2]];
-        // `setSpriteFromAge` over the eight glitter sprites.
-        p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
-        let half = p.lifetime / 2;
-        if p.age > half {
-            p.rgba[3] = 1.0 - (p.age - half) as f32 / p.lifetime as f32;
-            // `setFadeColor`: a fifth of the way to the level's colour each tick.
-            let fade = [16, 8, 0].map(|sh| ((s.color >> sh) & 0xFF) as f32 / 255.0);
-            for (c, f) in p.rgba.iter_mut().zip(fade) {
-                *c += (f - *c) * 0.2;
-            }
-        }
+        particles.iter_mut().for_each(one);
     }
 }
 

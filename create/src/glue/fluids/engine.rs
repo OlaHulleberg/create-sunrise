@@ -12,7 +12,7 @@ use super::super::states;
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
-use mod_api::{BlockEntitySubmitEvent, ClientHost, Compound, ModBlockEntity, Tag};
+use mod_api::{ClientHost, Compound, ModBlockEntity, Tag};
 
 /// The key of the speed of an engine's shaft in the engine's block entity data, for its
 /// clients (the engine's drawing follows the shaft).
@@ -156,8 +156,8 @@ pub(crate) fn engine_sourced(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
 }
 
 /// The shaft speed an engine's data shows.
-fn shown_speed(entity: &ModBlockEntity) -> f32 {
-    match entity.nbt.get(&ENGINE_SPEED.into()) {
+pub(super) fn shown_speed(nbt: &Compound) -> f32 {
+    match nbt.get(&ENGINE_SPEED.into()) {
         Some(Tag::Float(b)) => f32::from_bits(*b),
         _ => 0.0,
     }
@@ -179,7 +179,7 @@ fn shaft(host: &dyn ClientHost, pos: [i32; 3], info: &StateInfo) -> Option<(Dir,
 
 /// Whether an engine moves this frame (its shaft turns).
 pub(super) fn animated(entity: &ModBlockEntity) -> bool {
-    shown_speed(entity) != 0.0
+    shown_speed(&entity.nbt) != 0.0
 }
 
 /// `AngleHelper.horizontalAngle`.
@@ -202,15 +202,11 @@ fn vertical_angle(d: Dir) -> f32 {
     }
 }
 
-pub(super) fn draw(
-    host: &dyn ClientHost,
-    event: &mut BlockEntitySubmitEvent<'_>,
-    info: &StateInfo,
-) {
+pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     let Some((facing, at, axis)) = shaft(host, event.pos, info) else {
         return;
     };
-    let speed = shown_speed(event.entity);
+    let speed = shown_speed(&event.entity.nbt);
     // `getTargetAngle`: the shaft's turn (`getAngleForBe`).
     if axis == facing.axis() {
         return;
@@ -456,17 +452,12 @@ fn play_pools(host: &mut dyn ClientHost, now: i64) {
 /// on the boiler's side and a jet of steam leaves the engine (`spawnParticles`).
 pub(super) fn client_tick(
     host: &mut dyn ClientHost,
-    event: &mut mod_api::BlockEntityClientTickEvent<'_>,
+    now: i64,
+    pos: [i32; 3],
+    speed: f32,
     info: &StateInfo,
 ) {
-    let now = event
-        .block_entity
-        .level(&*host)
-        .and_then(|l| l.game_time(&*host))
-        .unwrap_or(0);
     play_pools(host, now);
-    let pos = event.pos;
-    let speed = shown_speed(event.entity);
     let Some((facing, at, axis)) = shaft(&*host, pos, info) else {
         return;
     };

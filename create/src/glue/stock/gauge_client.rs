@@ -9,14 +9,15 @@ use super::super::states;
 use super::gauge::PANELS;
 use super::gauge_screen::{self, CHANNEL};
 use super::keeper::put_i32;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::factory::{self as fx, SLOTS};
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
 use create_engine::stock::PanelPos;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, Host, ItemDisplayContext, ItemStack, Tag, TerrainModelOptions,
+    BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, Host,
+    ItemDisplayContext, ItemStack, Tag, TerrainModelOptions,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -327,7 +328,7 @@ pub(crate) fn short_click(host: &mut dyn ClientHost, pos: [i32; 3], slot: u8, wr
     let held = host
         .local_player()
         .and_then(|p| super::super::items::held(host, p, mod_api::Hand::Main))
-        .map(|s| s.item().id(host));
+        .map(|s| s.item().name(host));
     let feeds = panel(host, pp).is_some_and(|p| p.feeds);
     let mut m = vec![b'H'];
     put_pp(&mut m, pp);
@@ -882,7 +883,12 @@ impl BlockPart for GaugeDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for GaugeDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         if event.block != "create:factory_gauge" {
             return;
         }

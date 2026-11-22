@@ -46,12 +46,17 @@ pub(crate) mod wrench;
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::subsystem::CommandCall;
+use crate::glue::subsystem::Placed;
 use mod_api::{
-    AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityPlaceEvent, Flow, Hand, Host,
-    ItemKey, ItemStack, LeftClickBlockEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RenderLevelStageEvent, RunModCommandEvent, ScreenClosingEvent,
-    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
-    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, Tag, Text,
+    AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, Flow, Hand, Host, ItemKey, ItemStack,
+    LeftClickBlockEvent, PlayerRef, Registrar, RegistrationContext, RenderLevelStageEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost, Tag, Text,
 };
 use std::sync::OnceLock;
 
@@ -226,6 +231,29 @@ pub(crate) fn set_custom(stack: &mut ItemStack, entries: &[(&str, Option<Tag>)])
     }
 }
 
+/// [`set_custom`] on a stack being edited in place.
+pub(crate) fn edit_custom(
+    stack: &mut mod_api::ItemComponentEditor<'_>,
+    entries: &[(&str, Option<Tag>)],
+) {
+    let mut c = stack.get(&CustomData).unwrap_or_default();
+    for (key, value) in entries {
+        match value {
+            Some(v) => {
+                c.insert((*key).into(), v.clone());
+            }
+            None => {
+                c.remove(&(*key).into());
+            }
+        }
+    }
+    if c.is_empty() {
+        stack.remove(&CustomData);
+    } else {
+        let _ = stack.set(&CustomData, c);
+    }
+}
+
 pub struct Items;
 
 impl Subsystem for Items {
@@ -252,6 +280,11 @@ impl Subsystem for Items {
         }
         for menu in [filter_screen::FILTER_MENU, filter_screen::ATTRIBUTE_MENU] {
             r.menu_part(menu, filter_screen::FilterScreen);
+            if let Err(e) =
+                r.register_menu_screen(menu, std::sync::Arc::new(filter_screen::open_screen))
+            {
+                crate::create_log!("[create] the {menu} screen was refused: {e}");
+            }
         }
         for id in sandpaper::IDS {
             let key = r.item_key(id);
@@ -264,7 +297,7 @@ impl Subsystem for Items {
     }
 
     /// `SymmetryHandler.onBlockPlaced`.
-    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut Placed) -> Flow {
         let _ = symmetry::placed(host, event);
         Flow::Continue
     }
@@ -307,10 +340,6 @@ impl Subsystem for Items {
         }
     }
 
-    fn menu_clicked(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClickedEvent) {
-        filters::menu_clicked(host, event);
-    }
-
     fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClosedEvent) {
         filters::menu_closed(host, event);
     }
@@ -325,7 +354,7 @@ impl Subsystem for Items {
         symmetry::world_closed();
     }
 
-    fn tags_updated(&self, _host: &mut dyn ServerHost) {
+    fn tags_updated(&self, _cx: &dyn mod_api::ReloadContext) {
         // Keep the last catalog while the next server tick builds the new generation.
         filters::invalidate_item_groups();
     }
@@ -494,15 +523,11 @@ impl Subsystem for Items {
         sandpaper::use_tick(host, event.stack, event.entity, event.duration);
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        filters::register_commands(event.commands);
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        filters::register_commands(commands);
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         let command = event.command;
         let line = match command.literals.get(1).map(String::as_str) {
             Some("filter") if command.literals[0] == "create_debug" => {
@@ -570,7 +595,7 @@ fn wrench_hits_minecart(host: &mut dyn ServerHost, event: &AttackEntityEvent<'_>
     let wrench = host
         .living(player.entity())
         .and_then(|l| l.hand_item(&*host, Hand::Main))
-        .is_some_and(|s| s.item().id(&*host) == "create:wrench");
+        .is_some_and(|s| s.item().name(&*host) == "create:wrench");
     if !wrench {
         return;
     }

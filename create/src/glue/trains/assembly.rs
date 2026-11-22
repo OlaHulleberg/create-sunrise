@@ -9,6 +9,7 @@ use super::super::states;
 use super::super::world::with_world;
 use super::railway::{railway_ready, send_train_clear, send_trains};
 use super::structure::{found_carrying, turned_state};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::schedule::Runtime;
@@ -46,7 +47,7 @@ fn click_station(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<In
         return None;
     }
     if let Some(stack) = click.stack {
-        let id = stack.item().id(&*host);
+        let id = stack.item().name(&*host);
         if id == "create:wrench" || id == "minecraft:filled_map" {
             return None;
         }
@@ -107,7 +108,7 @@ impl BlockPart for Station {
         let Some(stack) = event.stack.as_ref() else {
             return mod_api::Flow::Continue;
         };
-        if stack.item().id(&*host) != "create:schedule" {
+        if stack.item().name(&*host) != "create:schedule" {
             return mod_api::Flow::Continue;
         }
         let schedule = super::schedule_screen::schedule_of(stack).unwrap_or_default();
@@ -735,7 +736,7 @@ fn bogey_clicked(
         return false;
     }
     let creative = player.is_creative(&*lv.host) == Some(true);
-    let casing = stack.is_some_and(|s| s.item().id(&*lv.host) == "create:railway_casing");
+    let casing = stack.is_some_and(|s| s.item().name(&*lv.host) == "create:railway_casing");
     if !creative && !casing {
         super::action_bar(
             lv.host,

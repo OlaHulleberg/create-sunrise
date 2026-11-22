@@ -80,6 +80,7 @@ use super::server::ServerLevel;
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
@@ -129,7 +130,7 @@ impl Subsystem for Logistics {
         &self,
         host: &dyn mod_api::ClientHost,
         block: create_engine::Block,
-        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        event: &mut crate::glue::Submit<'_>,
     ) {
         client::draw_carried(host, block, event);
     }
@@ -393,7 +394,7 @@ impl Subsystem for Logistics {
         let Some(level) = player.level(&*host) else {
             return;
         };
-        let Some(dimension) = level.dimension().id(&*host) else {
+        let Some(dimension) = level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -430,8 +431,8 @@ impl Subsystem for Logistics {
         // `FunnelItem.funnelItemAlwaysPlacesWhenUsed`: a funnel is placed, never the clicked
         // block used (a chest opened).
         let id = match &host {
-            mod_api::HostSide::Client(h) => event.click.stack.map(|s| s.item().id(&**h)),
-            mod_api::HostSide::Server(h) => event.click.stack.map(|s| s.item().id(&**h)),
+            mod_api::HostSide::Client(h) => event.click.stack.map(|s| s.item().name(&**h)),
+            mod_api::HostSide::Server(h) => event.click.stack.map(|s| s.item().name(&**h)),
         };
         if matches!(
             id.as_deref(),
@@ -586,7 +587,7 @@ impl Subsystem for Entities {
             crate::create_log!("[create] no kinetic block entity type: logistics has no renderer");
             return;
         };
-        r.block_entity_capability_before_game(&ITEMS, &kind, handlers::provide);
+        r.block_entity_capability_before_game(&ITEMS, &kind, handlers::offer);
         if let Err(e) = r.block_entity_part(&kind, client::LogisticsEntity) {
             crate::create_log!("[create] the logistics block entity part was refused: {e:?}");
         }
@@ -596,25 +597,37 @@ impl Subsystem for Entities {
 /// The Create block at `pos` of `lv` and its state's facts.
 /// `BeltBlock.updateEntityAfterFallOn`: an entity other than an item on the ground over a belt
 /// is noted to be carried (`belt::stepped_on`).
-pub fn block_step_on(event: &mut mod_api::BlockStepOnEvent<'_>) {
+/// `updateEntityAfterFallOn` of a belt or an ejector, from the server's `step_on` of the block
+/// under a grounded entity.
+fn step_on(event: &mod_api::StepOnEvent<'_>) {
     if event.kind == "minecraft:item" {
         return;
     }
     let block = states::id(event.state)
         .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b)))
         .flatten();
-    let Some(dim) = super::world::level_index(event.dimension) else {
-        return;
-    };
+    let pos = [event.pos.x, event.pos.y, event.pos.z];
     match block {
-        Some(Block::Belt) => belt::stepped_on(dim, event.position, event.entity as u32),
+        Some(Block::Belt) => belt::stepped_on(pos, event.entity as u32),
         // `EjectorBlock.updateEntityAfterFallOn`: a player's own client triggers it.
         Some(Block::WeightedEjector)
             if !matches!(event.kind, "minecraft:player" | "minecraft:experience_orb") =>
         {
-            arms::ejector_stepped_on(dim, event.position, event.entity as u32)
+            arms::ejector_stepped_on(pos, event.entity as u32)
         }
         _ => {}
+    }
+}
+
+/// Whether an entity noted in level `dim` (or, for None, wherever it is now) belongs to `lv`:
+/// None once a note without a level names no entity.
+fn noted_here(lv: &ServerLevel<'_>, dim: Option<usize>, entity: u32) -> Option<bool> {
+    match dim {
+        Some(dim) => Some(dim == lv.dim),
+        None => {
+            let e = lv.host.entity(entity)?;
+            Some(e.level(&*lv.host) == Some(lv.level))
+        }
     }
 }
 
@@ -714,6 +727,13 @@ fn use_block(
 
 #[mod_api::sunrise_part]
 impl BlockPart for LogisticsBlock {
+    /// Hot: an entity on the ground over a belt or ejector, each tick it moves.
+    fn step_on(&self, level: mod_api::LevelRandomSide<'_>, event: &mut mod_api::StepOnEvent<'_>) {
+        if let mod_api::LevelRandomSide::Server(_) = level {
+            step_on(event);
+        }
+    }
+
     fn use_item_on(
         &self,
         host: &mut dyn ServerHost,
@@ -818,7 +838,7 @@ impl BlockPart for LogisticsBlock {
     }
 
     fn contents_changed(&self, host: &mut dyn ServerHost, event: &mut ContentsChangedEvent) {
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(lv) = level_of(host, &dimension) else {

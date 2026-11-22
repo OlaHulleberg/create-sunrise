@@ -50,14 +50,15 @@ pub(crate) use ticks::show_diode;
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use super::world::{try_with_world, with_world};
+use crate::glue::names::Named as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockState, ClientHost, Compound, Direction, Flow, HostBlockStates, PlayerRef,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RunModCommandEvent, ScreenClosingEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost,
+    BlockState, ClientHost, Compound, Direction, Flow, HostBlockStates, PlayerRef, Registrar,
+    RegistrationContext, ScreenClosingEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost,
 };
 
 /// `FactoryPanelSupportBehaviour.notifyLink` of a redstone link (`updateTransmittedSignal`): a
@@ -90,7 +91,7 @@ fn link_use_predicted(host: &dyn ClientHost, event: &mod_api::RightClickBlockEve
     let Some(stack) = click.stack else {
         return false;
     };
-    let id = stack.item().id(host);
+    let id = stack.item().name(host);
     if matches!(id.as_str(), "create:wrench" | "create:linked_controller") {
         return false;
     }
@@ -134,7 +135,7 @@ pub(crate) fn frequency_key(
     let Some(stack) = stack else {
         return String::new();
     };
-    let id = stack.item().id(host);
+    let id = stack.item().name(host);
     let dyed = stack
         .components()
         .and_then(|c| c.as_nbt().get(&DYED_COLOR.into()).cloned());
@@ -412,15 +413,11 @@ impl Subsystem for Redstone {
         switch_screen::screen_closing(host, event);
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        detectors::register_commands(event);
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        detectors::register_commands(commands);
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         detectors::run_command(host, event)
     }
 }

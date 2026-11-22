@@ -13,6 +13,9 @@
 //! scatters 20 (`spawnParticles`).
 
 use super::{custom, held, set_custom, set_held};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedStack as _;
 use mod_api::{
     BlockState, ClientHost, Hand, Host, HostBlockStates, HostSide, InteractionResult, ItemPart,
     ItemStack, PlayerRef, ReleaseUsingEvent, ServerHost, Tag, UseAnimation, UseAnimationEvent,
@@ -41,7 +44,7 @@ fn polishing(host: &dyn mod_api::Host, stack: &ItemStack) -> Option<ItemStack> {
 
 /// `SandPaperPolishingRecipe.applyPolish`'s result for `item`.
 fn polished(host: &dyn mod_api::Host, item: &ItemStack) -> Option<ItemStack> {
-    let id = item.item().id(host);
+    let id = item.item().name(host);
     let (out, n) = crate::glue::processing::recipes::with(|r| {
         let i = r.polishing.find_single(&id)?;
         let o = r.polishing.recipes[i as usize].results.first()?;
@@ -126,7 +129,7 @@ pub(super) fn use_tick(
     entity: Option<i32>,
     remaining: i32,
 ) {
-    if !IDS.contains(&stack.item().id(&*host).as_str()) {
+    if !IDS.contains(&stack.item().name(&*host).as_str()) {
         return;
     }
     let Some(item) = polishing(&*host, stack) else {
@@ -262,7 +265,7 @@ fn user(host: &dyn ServerHost, entity: Option<i32>) -> Option<PlayerRef> {
 fn give_back(host: &mut dyn ServerHost, player: PlayerRef, finished: bool) -> Option<ItemStack> {
     let (hand, paper) = [Hand::Main, Hand::Off].into_iter().find_map(|h| {
         let s = held(&*host, player, h)?;
-        IDS.contains(&s.item().id(&*host).as_str())
+        IDS.contains(&s.item().name(&*host).as_str())
             .then_some((h, s))
             .filter(|(_, s)| polishing(&*host, s).is_some())
     })?;
@@ -299,7 +302,7 @@ pub(super) fn finished(
     host: &mut dyn ServerHost,
     event: &mut mod_api::LivingEntityUseItemFinishEvent<'_>,
 ) {
-    if !IDS.contains(&event.stack.item().id(&*host).as_str()) {
+    if !IDS.contains(&event.stack.item().name(&*host).as_str()) {
         return;
     }
     if polishing(&*host, event.stack).is_none() {

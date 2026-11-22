@@ -9,6 +9,7 @@
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::railway::{railway_ready, send_trains};
+use crate::glue::names::Named as _;
 use mod_api::{PlayerRef, ServerHost, Text};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -56,7 +57,7 @@ pub fn client_tick(host: &mut dyn mod_api::ClientHost) {
     let wrench = host
         .local_player()
         .and_then(|p| crate::glue::items::held(&*host, p, mod_api::Hand::Main))
-        .is_some_and(|s| s.item().id(&*host) == "create:wrench");
+        .is_some_and(|s| s.item().name(&*host) == "create:wrench");
     let track = match host.crosshair_target() {
         Some(mod_api::CrosshairTarget::Block { pos, state, .. }) if wrench => {
             let id = super::super::states::id(state);
@@ -129,7 +130,7 @@ pub fn preview(lv: &mut ServerLevel<'_>) {
         };
         let host = &*lv.host;
         let wrench = crate::glue::items::held(host, player, mod_api::Hand::Main)
-            .is_some_and(|s| s.item().id(host) == "create:wrench");
+            .is_some_and(|s| s.item().name(host) == "create:wrench");
         let entity = player.entity();
         let hovered = HOVERS.with_borrow(|h| h.get(&uuid).copied());
         let aimed = wrench
@@ -320,7 +321,7 @@ pub fn track_clicked(lv: &mut ServerLevel<'_>, player: PlayerRef, pos: [i32; 3])
     };
     let host = &mut *lv.host;
     let wrench = crate::glue::items::held(&*host, player, mod_api::Hand::Main)
-        .is_some_and(|s| s.item().id(&*host) == "create:wrench");
+        .is_some_and(|s| s.item().name(&*host) == "create:wrench");
     if crate::glue::items::sneaking(&*host, player) || !wrench || pick.dim != lv.dim {
         PICKS.with_borrow_mut(|p| p.remove(&player.uuid()));
         say(

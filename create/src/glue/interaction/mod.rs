@@ -27,9 +27,10 @@ pub(crate) mod value_text;
 pub(crate) mod values;
 
 use super::subsystem::Subsystem;
+use crate::glue::subsystem::CommandCall;
 use mod_api::{
-    ClientHost, Flow, HostSide, MouseScrollingEvent, PlayerRef, RegisterCommandsEvent, Registrar,
-    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RunModCommandEvent, ServerHost,
+    ClientHost, Flow, HostSide, MouseScrollingEvent, PlayerRef, Registrar, RegistrationContext,
+    RenderGuiPostEvent, RightClickBlockEvent, ServerHost,
 };
 use values::VALUE;
 
@@ -159,15 +160,11 @@ impl Subsystem for Interaction {
         placement::draw_ghost(host, event);
     }
 
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        commands::register(event.commands);
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        commands::register(commands);
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         commands::run(host, event)
     }
 }

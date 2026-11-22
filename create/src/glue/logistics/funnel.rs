@@ -8,6 +8,7 @@ use super::super::world::with_world;
 use super::belt::{belt_segment, insert_into_from};
 use super::info_at;
 use super::items::{self, face, random_angle, upright};
+use crate::glue::owned::OwnedStack as _;
 use create_engine::Block;
 use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::{Axis, Dir};

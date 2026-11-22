@@ -6,6 +6,8 @@
 
 use super::super::server::ServerLevel;
 use super::{all, property, state_with};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use create_engine::open_end::{self, Effect};
 use create_engine::tank::Fluid;
 use mod_api::{ActiveEffect, EntityRef, HostBlockStates, SoundSource, Tag};
@@ -81,10 +83,13 @@ pub(super) fn apply(lv: &mut ServerLevel<'_>, out: [i32; 3], down: bool, fluid: 
                 return;
             }
             for e in affected(lv, &entities) {
-                let inverted = e.kind(&*lv.host).map(|k| k.id(&*lv.host)).is_some_and(|k| {
-                    lv.host
-                        .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
-                });
+                let inverted = e
+                    .kind(&*lv.host)
+                    .map(|k| k.name(&*lv.host))
+                    .is_some_and(|k| {
+                        lv.host
+                            .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
+                    });
                 for given in &effects {
                     match open_end::instant(&given.id, given.amplifier, inverted) {
                         Some(h) if h > 0.0 => {
@@ -111,10 +116,13 @@ pub(crate) fn drink_potion(
     e: EntityRef,
     contents: &create_engine::potion::Contents,
 ) {
-    let inverted = e.kind(&*lv.host).map(|k| k.id(&*lv.host)).is_some_and(|k| {
-        lv.host
-            .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
-    });
+    let inverted = e
+        .kind(&*lv.host)
+        .map(|k| k.name(&*lv.host))
+        .is_some_and(|k| {
+            lv.host
+                .entity_type_in_tag(&k, "minecraft:inverted_healing_and_harm")
+        });
     for given in &potion_effects(contents) {
         match open_end::instant_at(&given.id, given.amplifier, inverted, 1.0) {
             Some(h) if h > 0.0 => {
@@ -207,7 +215,7 @@ fn affected(lv: &ServerLevel<'_>, entities: &[EntityRef]) -> Vec<EntityRef> {
             if living.alive(&*lv.host) != Some(true) {
                 return false;
             }
-            if e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
+            if e.kind(&*lv.host).map(|k| k.name(&*lv.host)).as_deref()
                 == Some("minecraft:armor_stand")
             {
                 return false;

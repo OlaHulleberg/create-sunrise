@@ -13,6 +13,7 @@ use super::super::world::with_world;
 use super::pipes::pipe_sides_of;
 use super::{flag, info_at, state_with};
 use crate::glue::kinetics::dir_name;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::drain::Emptying;
 use create_engine::kinetics::Dir;
@@ -58,7 +59,7 @@ impl BlockPart for Clicks {
             Block::ItemDrain => use_drain(&mut lv, click.pos, player, click.hand, held.as_ref()),
             Block::FluidPipe | Block::GlassFluidPipe => {
                 let held = held.as_ref()?;
-                (held.item().id(&*lv.host) == "create:copper_casing")
+                (held.item().name(&*lv.host) == "create:copper_casing")
                     .then(|| encase(&mut lv, click.pos, block))
                     .is_some()
             }
@@ -67,7 +68,7 @@ impl BlockPart for Clicks {
             }
             Block::SteamWhistle | Block::SteamWhistleExtension => {
                 let held = held.as_ref()?;
-                held.item().id(&*lv.host) == "create:steam_whistle"
+                held.item().name(&*lv.host) == "create:steam_whistle"
                     && super::plumbing::grow_whistle_at(&mut lv, click.pos, block)
             }
             _ => false,
@@ -449,7 +450,7 @@ pub(super) fn predict(host: &mut dyn ClientHost, event: &mut RightClickBlockEven
     let id = click
         .stack
         .filter(|s| s.count() > 0)
-        .map(|s| s.item().id(&*host));
+        .map(|s| s.item().name(&*host));
     let fluid_item = id.as_deref().is_some_and(holds_fluid);
     let answers = match block {
         Block::CreativeFluidTank => fluid_item,

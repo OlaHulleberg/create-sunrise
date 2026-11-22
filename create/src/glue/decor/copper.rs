@@ -68,12 +68,8 @@ impl mod_api::BlockPart for Copper {
         let Some(age) = level.block_states().weathering_age(event.state) else {
             return Flow::Continue;
         };
-        let Some(mut random) = level.random() else {
-            return Flow::Continue;
-        };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
-        let grown = change_over_time(&*level, &mut random, pos, age);
-        level.set_random(random);
+        let grown = change_over_time(level, pos, age);
         if grown && let Some(to) = as_block_on(&*level, event.state, next) {
             level.set_block(pos, to, super::super::server::update_all());
         }
@@ -98,16 +94,31 @@ impl mod_api::BlockPart for Copper {
     }
 }
 
-/// The chance draws of `changeOverTime` for a block of age `own` at `pos`: whether it ages.
-fn change_over_time(
-    level: &dyn LevelHost,
-    random: &mut dyn mod_api::RandomSource,
-    pos: [i32; 3],
-    own: WeatheringAge,
-) -> bool {
-    if random.next_float() >= 0.056_888_89 {
+/// The chance draws of `changeOverTime` for a block of age `own` at `pos`, from the level's own
+/// stream: whether it ages.
+fn change_over_time(level: &mut dyn LevelWriteHost, pos: [i32; 3], own: WeatheringAge) -> bool {
+    if level
+        .with_random(|r| r.next_float())
+        .is_none_or(|f| f >= 0.056_888_89)
+    {
         return false;
     }
+    let Some(chance) = neighbour_chance(&*level, pos, own) else {
+        return false;
+    };
+    let modifier = if own == WeatheringAge::Unaffected {
+        0.75
+    } else {
+        1.0
+    };
+    level
+        .with_random(|r| r.next_float())
+        .is_some_and(|f| f < chance * chance * modifier)
+}
+
+/// `getNextState`'s look round `pos`: None when a younger block is near, else the share of older
+/// ones.
+fn neighbour_chance(level: &dyn LevelHost, pos: [i32; 3], own: WeatheringAge) -> Option<f32> {
     let facts = level.block_states();
     let (mut same, mut older) = (0u32, 0u32);
     for x in -4i32..=4 {
@@ -121,20 +132,14 @@ fn change_over_time(
                     continue;
                 };
                 match age.cmp(&own) {
-                    std::cmp::Ordering::Less => return false,
+                    std::cmp::Ordering::Less => return None,
                     std::cmp::Ordering::Greater => older += 1,
                     std::cmp::Ordering::Equal => same += 1,
                 }
             }
         }
     }
-    let chance = (older + 1) as f32 / (older + same + 1) as f32;
-    let modifier = if own == WeatheringAge::Unaffected {
-        0.75
-    } else {
-        1.0
-    };
-    random.next_float() < chance * chance * modifier
+    Some((older + 1) as f32 / (older + same + 1) as f32)
 }
 
 /// Honeycomb on Create's copper: `HoneycombItem.useOn`.

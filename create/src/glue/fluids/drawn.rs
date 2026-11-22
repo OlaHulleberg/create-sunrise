@@ -8,9 +8,7 @@ use super::TANK;
 use super::client::fluid_box;
 use create_engine::kinetics::Dir;
 use create_engine::tank::Codes;
-use mod_api::{
-    BlockEntitySubmitEvent, ClientHost, Compound, ItemDisplayContext, ModBlockEntity, Tag,
-};
+use mod_api::{ClientHost, Compound, ItemDisplayContext, ModBlockEntity, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -103,7 +101,7 @@ pub(super) fn animated(entity: &ModBlockEntity) -> bool {
 }
 
 /// `ItemDrainRenderer.renderFluid` (the basin's fluid) and `renderItem`.
-pub(super) fn draw(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
     if let Some(Tag::IntArray(v)) = event.entity.nbt.get(&TANK.into()).cloned()
         && let &[fluid, amount, capacity] = v.as_slice()
         && let Some(fluid) = Codes::fluid(&super::fluid_keys(&event.entity.nbt, TANK), fluid)

@@ -7,6 +7,7 @@
 
 use super::super::states;
 use super::super::world::{level_index, with_world};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::place::Neighbours;
@@ -383,6 +384,7 @@ impl mod_api::ItemPart for VaultItem {
             .level
             .dimension()
             .id(&*host)
+            .map(str::to_owned)
             .and_then(|d| level_index(&d.to_string()))
         else {
             return;
@@ -504,7 +506,7 @@ pub fn tick_vault_layers(lv: &mut super::super::server::ServerLevel<'_>) {
             }
             if !creative {
                 let has = player_items::held(&*lv.host, player, hand)
-                    .is_some_and(|s| s.item().id(&*lv.host) == "create:item_vault");
+                    .is_some_and(|s| s.item().name(&*lv.host) == "create:item_vault");
                 if !has {
                     break;
                 }

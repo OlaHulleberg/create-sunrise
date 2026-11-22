@@ -6,6 +6,7 @@ use super::super::server::{ServerLevel, UPDATE_CLIENTS};
 use super::super::world::with_world;
 use super::{all, flag, info_at, plumbing, replaceable, state_with};
 use crate::glue::kinetics::dir_name;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::fluids::{self, Cell};
 use create_engine::kinetics::Dir;
@@ -34,7 +35,7 @@ pub(super) fn pipe_cell_toward(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option
     }
     if lv.block_state(p).is_some_and(|state| {
         fluids::vanilla_target(
-            &state.block().id(&*lv.host),
+            &state.block().name(&*lv.host),
             super::property(lv, p, "honey_level").is_some(),
         )
     }) {
@@ -54,7 +55,7 @@ fn open_end(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option<Dir>) -> bool {
     let Some(state) = lv.block_state(p) else {
         return false;
     };
-    let name = state.block().id(&*lv.host);
+    let name = state.block().name(&*lv.host);
     if fluids::vanilla_target(&name, super::property(lv, p, "honey_level").is_some()) {
         return true;
     }

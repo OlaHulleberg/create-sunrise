@@ -12,8 +12,8 @@ use create_engine::cuckoo::{self, Animation};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::steam::Face;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, ItemDisplayContext, ParticleKey, ParticleOptions, Registrar, SoundPlay, Tag,
+    BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, ItemDisplayContext,
+    ParticleKey, ParticleOptions, Registrar, SoundPlay, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -239,7 +239,8 @@ fn tick_clock(host: &mut dyn ClientHost, pos: [i32; 3], turning: bool) {
     let Some(level) = host.local_player().and_then(|p| p.level(&*host)) else {
         return;
     };
-    let natural = level.dimension().id(&*host).as_deref() == Some("minecraft:overworld");
+    let natural =
+        level.dimension().id(&*host).map(str::to_owned).as_deref() == Some("minecraft:overworld");
     let Some(day_time) = level.day_time(&*host) else {
         return;
     };
@@ -299,26 +300,28 @@ impl BlockEntityPart for RedstoneEntity {
         }
     }
 
-    fn block_entity_client_tick(
-        &self,
-        host: &mut dyn ClientHost,
-        event: &mut mod_api::BlockEntityClientTickEvent<'_>,
-    ) {
-        let Some(id) = states::id(event.state) else {
+    fn block_entity_client_tick(&self, event: &mut mod_api::BlockEntityClientTickEvent<'_>) {
+        let Some((state, pos, speed)) = event
+            .subject
+            .with_view(|v| (v.state(), v.position(), speed_of(v.nbt())))
+        else {
+            return;
+        };
+        let host = event.subject.host();
+        let Some(id) = states::id(state) else {
             return;
         };
         let block = client_table(&*host, |t| t.get(id).map(|(b, _)| b)).flatten();
         match block {
             Some(Block::CuckooClock | Block::MysteriousCuckooClock) => {
-                let turning = speed_of(&event.entity.nbt) != 0.0;
-                tick_clock(host, event.pos, turning);
+                tick_clock(host, pos, speed != 0.0);
             }
             // `clientState.chase(state, .2, EXP)`, `tickChaser`.
             Some(Block::AnalogLever) => CLIENT.with_borrow_mut(|c| {
-                let Some(&(state, ..)) = c.levers.get(&event.pos) else {
+                let Some(&(state, ..)) = c.levers.get(&pos) else {
                     return;
                 };
-                let v = c.lever_shown.entry(event.pos).or_default();
+                let v = c.lever_shown.entry(pos).or_default();
                 v.0 = v.1;
                 v.1 += (f32::from(state) - v.1) * 0.2;
             }),
@@ -326,7 +329,12 @@ impl BlockEntityPart for RedstoneEntity {
         }
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };

@@ -8,6 +8,7 @@ use super::super::states;
 use super::super::world::with_world;
 use super::belt::{belt_color, belt_segment, eject_item};
 use super::items;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::belt::{Inventory, Item, Part, Segment};
 use create_engine::belt_connector::MAX_LENGTH;

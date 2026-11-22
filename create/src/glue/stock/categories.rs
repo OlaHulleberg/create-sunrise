@@ -15,6 +15,8 @@ use super::super::net;
 use super::super::server::ServerLevel;
 use super::keeper::{Reader, put_i32, put_stack, put_str};
 use super::{may_interact_message, with};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
 use mod_api::{
     ClientHost, DrawContext, Flow, Host, ItemStack, PlayerRef, ScreenCharTypedPreEvent,
     ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
@@ -33,7 +35,7 @@ const NAME: &str = "minecraft:custom_name";
 /// `FilterItem`s: list, attribute and package filters.
 pub(crate) fn is_filter(host: &dyn Host, stack: &ItemStack) -> bool {
     matches!(
-        stack.item().id(host).as_str(),
+        stack.item().name(host).as_str(),
         "create:filter" | "create:attribute_filter" | "create:package_filter"
     )
 }

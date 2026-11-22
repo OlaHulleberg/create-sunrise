@@ -11,12 +11,13 @@
 use super::super::server::ServerLevel;
 use super::super::states;
 use super::{body, with};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::packager::CYCLE;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, ItemDisplayContext, SoundSource, Tag,
+    BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, ItemDisplayContext,
+    SoundSource, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -96,7 +97,7 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let now = lv.game_time();
     let host: &dyn mod_api::Host = &*lv.host;
-    let id = |s: &mod_api::ItemStack| s.item().id(host);
+    let id = |s: &mod_api::ItemStack| s.item().name(host);
     let trays: Vec<([i32; 3], u32, bool, Option<String>)> = with(dim, |pk| {
         pk.packagers
             .iter()
@@ -293,7 +294,12 @@ impl BlockPart for BoxDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for BoxDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -315,7 +321,7 @@ fn draw_packager(
     host: &dyn ClientHost,
     block: Block,
     facing: Option<Dir>,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
 ) {
     let pos = event.pos;
     let tray = tray_of(&event.entity.nbt);
@@ -402,7 +408,7 @@ fn draw_packager(
 
 /// `PostboxRenderer.renderSafe`: the flag turned to the postbox's facing and raised by
 /// `transformFlag`.
-fn draw_flag(facing: Option<Dir>, event: &mut BlockEntitySubmitEvent<'_>) {
+fn draw_flag(facing: Option<Dir>, event: &mut crate::glue::Submit<'_>) {
     let pos = event.pos;
     let flag = flag_of(&event.entity.nbt);
     let draw = &mut *event.draw;

@@ -163,7 +163,7 @@ pub(crate) fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
         else {
             continue;
         };
-        event.pipelines.push(
+        event.register(
             RenderPipeline::new(
                 id,
                 shader.clone(),

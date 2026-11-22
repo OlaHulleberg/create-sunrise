@@ -4,6 +4,8 @@
 
 use super::super::contraptions::actors;
 use super::super::server::ServerLevel;
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use create_engine::kinetics::Dir;
 use create_engine::potion::Contents;
 use mod_api::{
@@ -21,7 +23,7 @@ pub fn face(d: Dir) -> Direction {
 
 /// The id of `stack`'s item (`minecraft:stone`).
 pub fn id_of(host: &dyn Host, stack: &ItemStack) -> String {
-    stack.item().id(host)
+    stack.item().name(host)
 }
 
 /// `stack` as the engine's belts, arms and ejectors name it (`create_engine::arm::item_id`):
@@ -326,11 +328,11 @@ fn insert_stacked(
         .collect();
     let mut went = 0;
     for (i, n) in create_engine::vault::insert_stacked(&view, count, limit) {
-        went += to.insert(host, tx, i, resource, n);
+        went += to.insert_at(host, tx, i, resource, n);
     }
     // An index the plan counted on refused: the rest goes wherever it goes.
     if went < count {
-        went += to.insert_any(host, tx, resource, count - went);
+        went += to.insert(host, tx, resource, count - went).unwrap_or(0);
     }
     went.min(count)
 }
@@ -435,7 +437,7 @@ pub fn extract_matching(
                 return None;
             }
             let n = from.amount(host, i);
-            let id = r.item().id(&*host);
+            let id = r.item().name(&*host);
             let max = u32::from(stack_limit(&*host, &id));
             (n > 0).then_some((r, n, max))
         });
@@ -448,7 +450,7 @@ pub fn extract_matching(
         .transaction(|host, tx| {
             let mut n = 0;
             for &(i, want) in &plan {
-                n += from.extract(host, tx, i, &resource, want);
+                n += from.extract_at(host, tx, i, &resource, want);
             }
             if n == 0 { Err(()) } else { Ok(n) }
         })
@@ -515,7 +517,9 @@ pub fn items_in(lv: &ServerLevel<'_>, min: [f64; 3], max: [f64; 3]) -> Vec<Entit
         .entities_in(&*lv.host, min, max)
         .unwrap_or_default()
         .into_iter()
-        .filter(|e| e.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref() == Some("minecraft:item"))
+        .filter(|e| {
+            e.kind(&*lv.host).map(|k| k.name(&*lv.host)).as_deref() == Some("minecraft:item")
+        })
         .collect()
 }
 

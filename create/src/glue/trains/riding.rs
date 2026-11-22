@@ -9,6 +9,7 @@
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
+use crate::glue::owned::LevelLists as _;
 use create_engine::train_controls::{Frame, Target};
 use mod_api::{Compound, EntityRef, ServerHost, Tag};
 use std::cell::RefCell;
@@ -178,7 +179,10 @@ pub fn sit_entity(host: &mut dyn ServerHost, dim: usize, rider: EntityRef, at: T
     let Some(f) = frame(dim, at) else {
         return false;
     };
-    let Some(dimension) = rider.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+    let Some(dimension) = rider
+        .level(&*host)
+        .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
+    else {
         return false;
     };
     if rider.vehicle(&*host).is_some() {

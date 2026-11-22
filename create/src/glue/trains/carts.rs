@@ -27,6 +27,10 @@ use super::structure::turned_state;
 use crate::glue::contraptions::actors::{restore_storage, take_storage_at};
 use crate::glue::contraptions::colliders;
 use crate::glue::contraptions::found;
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::cart::{self, Assembler, RailType};
 use create_engine::coupling::{self, Body, Couplings};
@@ -189,7 +193,7 @@ struct Cart {
 
 impl Cart {
     fn read(host: &mut dyn ServerHost, entity: EntityRef) -> Option<Cart> {
-        let kind = entity.kind(host).map(|k| k.id(host))?;
+        let kind = entity.kind(host).map(|k| k.name(host))?;
         if !kind.ends_with("minecart") {
             return None;
         }
@@ -322,7 +326,7 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, nc: &Cart, on: &mut OnCart) {
                     };
                     if added > 0 {
                         let r = mod_api::ItemResource::of(now);
-                        items.insert(h, tx, i, &r, added);
+                        items.insert_at(h, tx, i, &r, added);
                     }
                 }
                 Ok::<(), ()>(())
@@ -435,6 +439,7 @@ impl Subsystem for Carts {
             GeneralSavePolicy::Save,
             false,
             false,
+            Some(mod_api::PushReaction::IgnoreEntity),
             5,
             3,
             1,
@@ -473,23 +478,15 @@ impl Subsystem for Carts {
         RAILS.with_borrow_mut(HashMap::clear);
     }
 
-    fn register_commands(
-        &self,
-        _host: &mut dyn ServerHost,
-        event: &mut mod_api::RegisterCommandsEvent<'_>,
-    ) {
-        event
-            .commands
-            .push(mod_api::Command::op("create_debug carts <args:text>", 2));
-        event
-            .commands
-            .push(mod_api::Command::op("create_debug station <args:text>", 2));
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        commands.push(mod_api::Command::op("create_debug carts <args:text>", 2));
+        commands.push(mod_api::Command::op("create_debug station <args:text>", 2));
     }
 
     fn run_mod_command(
         &self,
         host: &mut dyn ServerHost,
-        event: &mut mod_api::RunModCommandEvent<'_>,
+        event: &mut crate::glue::subsystem::CommandCall<'_>,
     ) -> Flow {
         if super::station_screen::debug_command(host, event) == Flow::Cancel {
             return Flow::Cancel;
@@ -696,7 +693,10 @@ fn wrench_controller_rail(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// `create_debug carts list` (the contraptions on carts, couplings and assembler modes) and
 /// `create_debug carts mode <x> <y> <z> <0|1|2>` (an assembler's mode, as its board sets it), for
 /// tests.
-fn debug_command(host: &mut dyn ServerHost, event: &mut mod_api::RunModCommandEvent<'_>) -> Flow {
+fn debug_command(
+    host: &mut dyn ServerHost,
+    event: &mut crate::glue::subsystem::CommandCall<'_>,
+) -> Flow {
     let cmd = event.command;
     if cmd
         .literals
@@ -884,7 +884,7 @@ impl BlockPart for AssemblerBlock {
     /// `onMinecartPass`: a cart Create may load (`canAssembleTo`) is handled at its next tick
     /// (`assembleNextTick`: the first cart to pass since then).
     fn minecart_pass(&self, host: &mut dyn ServerHost, event: &mut MinecartPassEvent) {
-        let Some(kind) = event.entity.kind(&*host).map(|k| k.id(&*host)) else {
+        let Some(kind) = event.entity.kind(&*host).map(|k| k.name(&*host)) else {
             return;
         };
         if !cart::can_assemble_to(&kind) {
@@ -893,7 +893,7 @@ impl BlockPart for AssemblerBlock {
         let Some(dim) = event
             .entity
             .level(&*host)
-            .and_then(|l| l.dimension().id(&*host))
+            .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
             .and_then(|d| level_index(&d))
         else {
             return;
@@ -919,7 +919,7 @@ impl BlockPart for AssemblerBlock {
     ) -> Option<InteractionResult> {
         let click = event.click;
         let stack = click.stack?;
-        let item = stack.item().id(&*host);
+        let item = stack.item().name(&*host);
         let player = host.player(click.player)?;
         let dimension = click.dimension.key().id().to_owned();
         let mut lv = ServerLevel::new(host, &dimension)?;
@@ -1007,7 +1007,11 @@ impl ItemPart for AssemblerItem {
             return None;
         };
         let player = host.player(event.player)?;
-        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let dimension = player
+            .level(&*host)?
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
         place_assembler(&mut lv, player, event.pos);
         Some(InteractionResult::SuccessServer)
@@ -1525,16 +1529,16 @@ struct ContraptionRider;
 
 #[mod_api::sunrise_part]
 impl EntityPart for ContraptionRider {
-    fn general_entity_tick(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut GeneralEntityTickEvent<'_>,
-    ) {
-        let rider = event.entity;
+    fn general_entity_tick(&self, event: &mut GeneralEntityTickEvent<'_>) {
+        let Some(rider) = event.subject.with_view(|v| v.handle()) else {
+            return;
+        };
+        let host = event.subject.host();
+
         colliders::apply_to(host, rider);
         let Some(dimension) = rider
             .level(host)
-            .and_then(|level| level.dimension().id(host))
+            .and_then(|level| level.dimension().id(host).map(str::to_owned))
         else {
             return;
         };
@@ -1713,14 +1717,21 @@ fn deliver_drops(lv: &mut ServerLevel<'_>) {
     let Ok(query) = lv.host.query(&RIDER_DROPS) else {
         return;
     };
-    for row in query.iter().flatten() {
-        let AttachmentHolder::Entity(rider) = row.holder else {
-            continue;
-        };
+    let mut rows = Vec::new();
+    let mut iter = query.iter();
+    while let Ok(Some(row)) = iter.try_next() {
+        if let AttachmentHolder::Entity(rider) = row.holder
+            && let Ok(scope) = lv.host.attachment_read_scope()
+            && let Ok(drops) = row.with_value(scope, Vec::clone)
+        {
+            rows.push((rider, drops));
+        }
+    }
+    for (rider, drops) in rows {
         if rider.level(&*lv.host) != Some(lv.level) {
             continue;
         }
-        let drops = row.value;
+        let drops = &drops;
         let refused = unjoined_drops(drops, |drop| {
             let [x, y, z] = drop.pos.map(|v| f64::from(v) + 0.5);
             let Some(stack) = ItemStack::from_nbt(&*lv.host, &drop.stack) else {
@@ -2008,9 +2019,13 @@ impl ItemPart for ContraptionItem {
             return None;
         };
         let player = host.player(event.player)?;
-        let dimension = player.level(&*host)?.dimension().id(&*host)?;
+        let dimension = player
+            .level(&*host)?
+            .dimension()
+            .id(&*host)
+            .map(str::to_owned)?;
         let mut lv = ServerLevel::new(host, &dimension)?;
-        let item = event.stack.item().id(&*lv.host);
+        let item = event.stack.item().name(&*lv.host);
         let kind = cart::item_cart(&item)?;
         let Some((shape, ..)) = rail_at(&lv, event.pos) else {
             return Some(InteractionResult::Fail);
@@ -2090,13 +2105,17 @@ fn interact_entity(
     if !event.kind.ends_with("minecart") {
         return None;
     }
-    let item = event.stack?.item().id(&*host);
+    let item = event.stack?.item().name(&*host);
     let coupling = item == "create:minecart_coupling";
     if !coupling && item != "create:wrench" {
         return None;
     }
     let player = host.players().acting_player()?;
-    let dimension = player.level(&*host)?.dimension().id(&*host)?;
+    let dimension = player
+        .level(&*host)?
+        .dimension()
+        .id(&*host)
+        .map(str::to_owned)?;
     let mut lv = ServerLevel::new(host, &dimension)?;
     let entity = lv.host.entity(event.entity as u32)?;
     let nc = Cart::read(lv.host, entity)?;
@@ -2243,7 +2262,7 @@ fn tick_selected(lv: &mut ServerLevel<'_>) {
             .into_iter()
             .any(|h| {
                 crate::glue::items::held(&*lv.host, player, h)
-                    .is_some_and(|s| s.item().id(&*lv.host) == "create:minecart_coupling")
+                    .is_some_and(|s| s.item().name(&*lv.host) == "create:minecart_coupling")
             });
         if !holds || cart.position(&*lv.host).is_none() {
             CARTS.with_borrow_mut(|c| c.selected.remove(&uuid));
@@ -2521,7 +2540,7 @@ fn fuel_furnace(lv: &mut ServerLevel<'_>, cart: &Cart, on: &mut OnCart) {
             }
             for slot in slots.iter_mut() {
                 let Some(stack) = slot else { continue };
-                let id = stack.item().id(host);
+                let id = stack.item().name(host);
                 if id != "minecraft:coal" && id != "minecraft:charcoal" {
                     continue;
                 }
@@ -2804,7 +2823,6 @@ mod tests {
 
     #[test]
     fn rider_structure_keeps_the_blocks_storage_and_owned_link_without_motion() {
-        let _phase = mod_api::__private::PhaseOwner::scope(mod_api::__private::ModPhase::World);
         let mut host = FakeHost::new();
         let id = Identifier::parse("minecraft:diamond").unwrap();
         host.registries.resolve_items([id.clone()]).unwrap();

@@ -14,6 +14,7 @@
 use super::super::net;
 use super::super::server::ServerLevel;
 use super::{chain, with};
+use crate::glue::names::Named as _;
 use create_engine::port::Target;
 use mod_api::{ClientHost, PlayerRef, ServerHost, Text};
 use std::cell::RefCell;
@@ -112,7 +113,10 @@ fn animate_connection(
 /// frogport held with a point chosen shows where it would go and whether it reaches.
 fn selection_tick(host: &mut dyn ClientHost, player: PlayerRef) {
     let held = super::super::items::held(host, player, mod_api::Hand::Main);
-    let id = held.as_ref().map(|s| s.item().id(host)).unwrap_or_default();
+    let id = held
+        .as_ref()
+        .map(|s| s.item().name(host))
+        .unwrap_or_default();
     let wrench = id == "create:wrench";
     let ticks = CLIENT.with_borrow_mut(|c| {
         c.ticks += 1;
@@ -364,7 +368,7 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
         return;
     };
     let holding = super::super::items::held(host, player, mod_api::Hand::Main)
-        .is_some_and(|s| s.item().id(host) == "create:package_frogport");
+        .is_some_and(|s| s.item().name(host) == "create:package_frogport");
     // Conveyors no longer there are forgotten.
     let level = host.level(host.dimension());
     CLIENT.with_borrow_mut(|c| {
@@ -512,7 +516,7 @@ pub(super) fn render_level_stage(
     let held = host
         .local_player()
         .and_then(|p| super::super::items::held(host, p, mod_api::Hand::Main))
-        .map(|s| s.item().id(host));
+        .map(|s| s.item().name(host));
     let postbox = CLIENT.with_borrow(|c| c.postbox);
     let holding = match held.as_deref() {
         Some(id) if postbox => id.starts_with("create:") && id.ends_with("_postbox"),

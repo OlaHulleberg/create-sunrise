@@ -9,6 +9,7 @@ use super::super::net;
 use super::super::server::ServerLevel;
 use super::keeper::{Reader, put_i32, put_stack, put_str};
 use super::{Key, with};
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::stock::Order;
 use mod_api::{
     ClientHost, DrawContext, Flow, ItemStack, PlayerRef, ScreenCharTypedPreEvent,

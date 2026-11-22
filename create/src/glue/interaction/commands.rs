@@ -2,7 +2,8 @@
 //! for players who want the number (operators only).
 
 use super::super::world::{level_index, with_world};
-use mod_api::{CommandArgumentValue, Flow, RunModCommandEvent, ServerHost, Text};
+use crate::glue::subsystem::CommandCall;
+use mod_api::{CommandArgumentValue, Flow, ServerHost, Text};
 
 pub(super) fn register(commands: &mut Vec<mod_api::Command>) {
     commands.push(mod_api::Command::op(
@@ -11,7 +12,7 @@ pub(super) fn register(commands: &mut Vec<mod_api::Command>) {
     ));
 }
 
-pub(super) fn run(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>) -> Flow {
+pub(super) fn run(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
     let command = event.command;
     if command.literals != ["create_debug", "speed"] {
         return Flow::Continue;
@@ -22,6 +23,7 @@ pub(super) fn run(host: &mut dyn ServerHost, event: &mut RunModCommandEvent<'_>)
     let dim = command
         .dimension
         .id(&*host)
+        .map(str::to_owned)
         .and_then(|d| level_index(&d))
         .unwrap_or(0);
     let found = with_world(|w| {

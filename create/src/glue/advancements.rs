@@ -14,10 +14,14 @@ use super::persist;
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
 use super::world::{level_index, try_with_world};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedStack as _;
+use crate::glue::subsystem::Placed;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    Compound, CriterionContext, CriterionTest, CriterionTestError, EntityPlaceEvent, Flow,
-    Identifier, PlayerRef, ServerHost, Tag,
+    Compound, CriterionContext, CriterionTest, CriterionTestError, Flow, Identifier, PlayerRef,
+    ServerHost, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -254,7 +258,7 @@ pub(crate) fn water_wheel(
         .filter_map(|o| lv.level.fluid_state(host, [0, 1, 2].map(|i| pos[i] + o[i])))
         .any(|f| {
             matches!(
-                &*f.fluid.id(host),
+                &*f.fluid.name(host),
                 "minecraft:lava" | "minecraft:flowing_lava"
             )
         });
@@ -542,7 +546,7 @@ pub(crate) fn hiding_in_cardboard(host: &dyn mod_api::Host, player: PlayerRef) -
         .all(|(slot, piece)| {
             living
                 .equipment(host, slot)
-                .is_some_and(|s| s.item().id(host) == format!("create:cardboard_{piece}"))
+                .is_some_and(|s| s.item().name(host) == format!("create:cardboard_{piece}"))
         })
 }
 
@@ -551,7 +555,7 @@ pub(crate) fn item_smithed(
     host: &mut dyn ServerHost,
     event: &mut mod_api::PlayerItemSmithedEvent<'_>,
 ) {
-    let id = event.result.item().id(&*host);
+    let id = event.result.item().name(&*host);
     let cardboard = ["helmet", "chestplate", "leggings", "boots"]
         .iter()
         .any(|p| id == format!("create:cardboard_{p}"));
@@ -726,10 +730,8 @@ pub(crate) fn seated(host: &mut dyn ServerHost, rider: u128) {
     let Some(at) = player.entity().position(&*host) else {
         return;
     };
-    let mut data = player.persistent_data(&*host).unwrap_or_default();
     let list = at.iter().map(|v| Tag::Double(v.to_bits())).collect();
-    data.insert(MOUNT_LOCATION.into(), Tag::List(list));
-    let _ = player.set_persistent_data(host, data);
+    let _ = player.set_persistent_data_key(host, &MOUNT_LOCATION.into(), Some(&Tag::List(list)));
 }
 
 /// `getDismountLocationForPassenger`: a player let off at `at`, 5000 blocks or more from where
@@ -738,13 +740,13 @@ pub(crate) fn let_off(host: &mut dyn ServerHost, rider: u128, at: [f64; 3]) {
     let Some(player) = host.player(rider) else {
         return;
     };
-    let Some(mut data) = player.persistent_data(&*host) else {
+    let Some(Tag::List(from)) = player
+        .persistent_data(&*host)
+        .and_then(|data| data.get(&MOUNT_LOCATION.into()).cloned())
+    else {
         return;
     };
-    let Some(Tag::List(from)) = data.remove(&MOUNT_LOCATION.into()) else {
-        return;
-    };
-    let _ = player.set_persistent_data(host, data);
+    let _ = player.set_persistent_data_key(host, &MOUNT_LOCATION.into(), None);
     let from: Vec<f64> = from
         .iter()
         .filter_map(|t| match t {
@@ -824,7 +826,7 @@ pub(crate) fn item_tossed(host: &mut dyn ServerHost, event: &mut mod_api::ItemTo
     let package = event
         .item
         .stack(&*host)
-        .is_some_and(|s| create_engine::package::is_package(&s.item().id(&*host)));
+        .is_some_and(|s| create_engine::package::is_package(&s.item().name(&*host)));
     if package {
         TOSSED.with_borrow_mut(|t| {
             if t.len() >= 256 {
@@ -902,7 +904,7 @@ impl Subsystem for Owners {
     }
 
     /// `AdvancementBehaviour.setPlacedBy`: a player places a block (taken when it is written).
-    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut Placed) -> Flow {
         if event.cancelled {
             return Flow::Continue;
         }

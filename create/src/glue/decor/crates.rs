@@ -4,6 +4,7 @@
 use super::super::server::ServerLevel;
 use super::super::states;
 use super::{crate_supply, stack_of};
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::decor;
 use mod_api::{
@@ -11,9 +12,13 @@ use mod_api::{
 };
 
 pub(super) fn register(r: &mut dyn Registrar) {
-    r.block_capability(&ITEMS, &states::key(Block::CreativeCrate), |_, at, _, _| {
-        Some(Box::new(Bottomless(at)) as Box<dyn ResourceHandler<ItemResource>>)
-    });
+    r.block_capability(
+        &ITEMS,
+        &states::key(Block::CreativeCrate),
+        |_, at, _, _, offer| {
+            offer.offer(|| Box::new(Bottomless(at)) as Box<dyn ResourceHandler<ItemResource>>);
+        },
+    );
 }
 
 struct Bottomless(BlockSide);
@@ -21,7 +26,7 @@ struct Bottomless(BlockSide);
 impl Bottomless {
     /// The supply, as one item, and the most of it a stack holds.
     fn supply(&self, host: &mut dyn ServerHost) -> Option<(ItemResource, u32)> {
-        let dimension = self.0.level.dimension().id(&*host)?;
+        let dimension = self.0.level.dimension().id(&*host).map(str::to_owned)?;
         let lv = ServerLevel::new(host, &dimension)?;
         let id = crate_supply(&lv, self.0.pos)??;
         let one = stack_of(&*lv.host, &id, 1)?;
@@ -49,12 +54,17 @@ impl ResourceHandler<ItemResource> for Bottomless {
         self.supply(host).map_or(0, |s| s.1)
     }
 
-    fn capacity(&self, host: &mut dyn ServerHost, _index: usize, resource: &ItemResource) -> u32 {
-        host.max_stack_size(resource.item()).unwrap_or(64)
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        _index: usize,
+        resource: Option<&ItemResource>,
+    ) -> u32 {
+        resource.map_or(64, |r| host.max_stack_size(r.item()).unwrap_or(64))
     }
 
     /// `insertItem`: everything is taken (and gone).
-    fn insert(
+    fn insert_at(
         &self,
         _host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -66,7 +76,7 @@ impl ResourceHandler<ItemResource> for Bottomless {
     }
 
     /// `extractItem`: the supply, up to a stack.
-    fn extract(
+    fn extract_at(
         &self,
         host: &mut dyn ServerHost,
         _tx: &Transaction,
@@ -83,7 +93,7 @@ impl ResourceHandler<ItemResource> for Bottomless {
         if supply.item() != resource.item() {
             return 0;
         }
-        let id = supply.item().id(&*host);
+        let id = supply.item().name(&*host);
         decor::crate_extract(Some(&id), amount, max).map_or(0, |(_, n)| n)
     }
 }

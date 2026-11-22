@@ -12,6 +12,8 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::worldshaper_screen::{self as screen, Configure};
 use super::{Item, action_bar, custom, held, is, set_custom, set_held, sneaking};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use crate::glue::pipelines::Textured;
 use create_engine::kinetics::Dir;
 use create_engine::worldshaper as ws;
@@ -187,7 +189,7 @@ fn clip_far(
 /// Whether `state` is air (`BlockState.isAir`).
 fn is_air(host: &dyn Host, state: BlockState) -> bool {
     matches!(
-        state.block().id(host).as_str(),
+        state.block().name(host).as_str(),
         "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
     )
 }
@@ -369,7 +371,7 @@ impl ws::FlattenWorld for Flattening<'_, '_> {
         let Some(f) = host.state_fluid_state(*state).filter(|f| !f.is_empty()) else {
             return self.air;
         };
-        let id = f.fluid.id(host);
+        let id = f.fluid.name(host);
         let block = id.replace("flowing_", "");
         let level = if f.is_source() {
             0

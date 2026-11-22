@@ -219,7 +219,7 @@ impl mod_api::ItemPart for TunnelItem {
         host: &mut dyn mod_api::ServerHost,
         event: &mut mod_api::OnBlockPlacedByEvent<'_>,
     ) {
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let dimension = dimension.to_string();

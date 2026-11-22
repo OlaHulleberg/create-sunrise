@@ -30,6 +30,10 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::filter_screen;
 use super::{creative, custom, give_back, held, set_custom, set_held, set_slot, slot_stack};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
+use crate::glue::owned::OwnedPlace as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::filter::{
     self, ATTRIBUTES_KEY, Attribute, BLACKLIST_KEY, Filter, ITEMS_KEY, LIST_SLOTS, MODE_KEY, Mode,
     Passes, Probe, RESPECT_NBT_KEY, Spec,
@@ -38,8 +42,8 @@ use create_engine::ghost_menu;
 use mod_api::HostTransaction;
 use mod_api::{
     CommandArgumentValue, CommandSource, Compound, CreativeModeTabs, CreativeTabPermissions, Hand,
-    Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef,
-    RunModCommandEvent, ServerHost, SoundSource, Tag, Text, UseItemEvent, UseOnEvent,
+    Host, HostSide, Identifier, InteractionResult, ItemPart, ItemStack, PlayerRef, ServerHost,
+    SoundSource, Tag, Text, UseItemEvent, UseOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::BTreeMap;
@@ -138,7 +142,7 @@ pub(crate) fn spec(host: &dyn Host, stack: &ItemStack) -> Spec {
     let c = custom(stack);
     let list = c.get(&ITEMS_KEY.into());
     Spec {
-        item: stack.item().id(host),
+        item: stack.item().name(host),
         components: components(stack),
         has_list: list.is_some(),
         list: decode_items(host, list, LIST_SLOTS)
@@ -175,7 +179,7 @@ pub(crate) fn spec(host: &dyn Host, stack: &ItemStack) -> Spec {
 /// keeping the stack for its save and its return.
 pub(crate) fn filter_of(host: &dyn Host, stack: &ItemStack) -> Filter {
     let mut s = stack.clone();
-    if filter::FilterItem::of(&s.item().id(host)).is_some() {
+    if filter::FilterItem::of(&s.item().name(host)).is_some() {
         let _ = s.set_count(1);
     }
     Filter::compile(&spec(host, &s)).with_source(Rc::new(s))
@@ -412,7 +416,7 @@ impl<'a> Looked<'a> {
         Looked {
             host,
             stack,
-            id: stack.item().id(host),
+            id: stack.item().name(host),
         }
     }
 }
@@ -670,7 +674,7 @@ pub(super) fn register_commands(commands: &mut Vec<mod_api::Command>) {
 
 /// `create_debug filter <slot> list <allow|deny> [nbt] <item>...`,
 /// `... attribute <any|all|none> <[!]type[=value]>...`, `... address <text>`.
-pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>) -> String {
+pub(super) fn command(host: &mut dyn ServerHost, event: &CommandCall<'_>) -> String {
     const USAGE: &str = "usage: create_debug filter <hand|offhand|slot> list <allow|deny> [nbt] \
                          <item>... | attribute <any|all|none> <[!]attribute[=value]>... | address <text>";
     let CommandSource::Player { player, .. } = event.source else {
@@ -698,7 +702,7 @@ pub(super) fn command(host: &mut dyn ServerHost, event: &RunModCommandEvent<'_>)
         "address" => filter::PACKAGE_FILTER,
         _ => return USAGE.into(),
     };
-    let id = stack.item().id(&*host);
+    let id = stack.item().name(&*host);
     if id != want {
         return format!("filter: {slot} holds {id}, not {want}");
     }
@@ -931,7 +935,7 @@ thread_local! {
 fn menu_key(host: &dyn Host, kind: ghost_menu::Kind) -> Option<mod_api::MenuKey> {
     let keys = MENU_KEYS.with_borrow_mut(|k| {
         if k.is_none() {
-            let find = |id: &str| host.menu_keys().into_iter().find(|m| m.id(host) == id);
+            let find = |id: &str| host.menu_keys().into_iter().find(|m| m.name(host) == id);
             *k = find(filter_screen::FILTER_MENU)
                 .zip(find(filter_screen::ATTRIBUTE_MENU))
                 .map(|(a, b)| [a, b]);
@@ -958,7 +962,7 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
     let Some(stack) = held(&*host, player, Hand::Main) else {
         return;
     };
-    let kind = match filter::FilterItem::of(&stack.item().id(&*host)) {
+    let kind = match filter::FilterItem::of(&stack.item().name(&*host)) {
         Some(filter::FilterItem::List) => ghost_menu::Kind::Filter,
         Some(filter::FilterItem::Attribute) => ghost_menu::Kind::AttributeFilter,
         _ => return,
@@ -997,14 +1001,11 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
         ghost_menu::Kind::AttributeFilter => "item.create.attribute_filter",
     };
     let title = Text::translate(title, Vec::new());
-    let Ok(Some(window)) = player.open_mod_menu(
-        host,
-        key,
-        title,
-        opened.encode(),
-        None,
-        mod_api::MenuReplace::InPlace,
-    ) else {
+    let mut request = mod_api::ModMenuOpen::new(key, title);
+    request.extra = opened.encode();
+    request.opening_hand = Some(Hand::Main);
+    request.replace = mod_api::MenuReplace::InPlace;
+    let Ok(Some(window)) = player.open_mod_menu(host, request) else {
         return;
     };
     let menu = ghost_menu::Menu::new(kind, ghost, Vec::new(), selected);
@@ -1096,20 +1097,23 @@ fn refresh(
     menu.creative = creative(host, player);
 }
 
-/// A click on an open filter menu (`AbstractContainerMenu.clicked`), done on the server's copy
-/// of the menu and written back: the inventory, the cursor and the ghost slots.
-pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClickedEvent) {
+/// A click on an open filter menu (`GhostItemMenu.clicked`), done on the server's copy of the
+/// menu and written back in place of the default: the inventory, the cursor and the ghost slots.
+pub(super) fn menu_clicked(
+    host: &mut dyn ServerHost,
+    event: &mod_api::MenuClickedEvent<'_>,
+) -> mod_api::Flow {
     let Some(mut session) =
         SESSIONS.with_borrow_mut(|m| m.remove(&event.uuid).filter(|s| s.window == event.window))
     else {
-        return;
+        return mod_api::Flow::Continue;
     };
     let uuid = event.uuid;
     let Some(player) = host.player(uuid) else {
-        return;
+        return mod_api::Flow::Cancel;
     };
     let Some(menu) = host.menu(uuid, session.window) else {
-        return;
+        return mod_api::Flow::Cancel;
     };
     let size = session.menu.ghost.len();
     let cursor = menu.carried(&*host).flatten();
@@ -1117,11 +1121,11 @@ pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClick
     if !still_valid(&*host, player, &session) {
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
         host.close_menu(uuid);
-        return;
+        return mod_api::Flow::Cancel;
     }
     let Some(click) = ghost_menu::Click::of(event.mode) else {
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
-        return;
+        return mod_api::Flow::Cancel;
     };
     // Create's menus number the player's slots first, Sunrise's the menu's own.
     let index = match usize::try_from(event.slot) {
@@ -1157,7 +1161,7 @@ pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClick
     if written.is_err() {
         session.menu = before;
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
-        return;
+        return mod_api::Flow::Cancel;
     }
     show_ghosts(host, uuid, &session, Some(&before.ghost));
     if let Some(living) = host.living(player.entity()) {
@@ -1171,6 +1175,7 @@ pub(super) fn menu_clicked(host: &mut dyn ServerHost, event: &mod_api::MenuClick
         reference_changed(host, player, &mut session);
     }
     SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
+    mod_api::Flow::Cancel
 }
 
 /// `AttributeFilterScreen.referenceItemChanged`: the reference item's attributes, read on the
@@ -1325,9 +1330,9 @@ impl mod_api::ServerReloadListener for ItemTagNames {
     fn prepare(
         &self,
         context: &mod_api::ServerReloadContext,
-    ) -> Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, mod_api::ReloadResourceError> {
         let names: Vec<String> = context.list().map(ToString::to_string).collect();
-        Ok(<dyn mod_api::ReloadApply>::new(move || {
+        Ok(Box::new(move || {
             if let Ok(mut tags) = ITEM_TAGS.lock() {
                 *tags = names;
             }
@@ -1347,7 +1352,7 @@ impl mod_api::ServerReloadListener for EnchantmentLevels {
     fn prepare(
         &self,
         context: &mod_api::ServerReloadContext,
-    ) -> Result<Box<dyn mod_api::ReloadApply>, mod_api::ReloadResourceError> {
+    ) -> Result<Box<dyn FnOnce() + Send + 'static>, mod_api::ReloadResourceError> {
         let levels: BTreeMap<String, i32> = context
             .list()
             .filter_map(|id| {
@@ -1355,7 +1360,7 @@ impl mod_api::ServerReloadListener for EnchantmentLevels {
                 Some((id.to_string(), max_level(text)?))
             })
             .collect();
-        Ok(<dyn mod_api::ReloadApply>::new(move || {
+        Ok(Box::new(move || {
             if let Ok(mut m) = ENCHANTMENT_MAX.lock() {
                 *m = levels;
             }
@@ -1620,7 +1625,6 @@ pub(super) fn menu_closed(host: &mut dyn ServerHost, event: &mod_api::MenuClosed
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::glue::subsystem::Subsystem;
     use mod_api::prelude::*;
     use mod_api::testing::FakeHost;
     use mod_api::{Backend, BackendRef, CreativeModeTabInfo, ItemKey};
@@ -1655,6 +1659,7 @@ mod tests {
         let tab = CreativeModeTabInfo::new(
             "create:base".into(),
             true,
+            Text::translate("itemGroup.create.base", Vec::new()),
             vec![stack.clone()],
             vec![stack.clone()],
         );
@@ -1670,7 +1675,7 @@ mod tests {
         };
         let predicate = Attribute::InItemGroup("create:base".into());
         assert!(probe.attribute(&predicate));
-        super::super::Items.tags_updated(&mut fixture);
+        invalidate_item_groups();
         assert!(ITEM_GROUPS_DIRTY.get());
         assert!(probe.attribute(&predicate));
         clear_item_groups();

@@ -7,6 +7,7 @@ use super::super::processing::{self, recipes};
 use super::super::redstone::analog_touched;
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
+use crate::glue::names::Named as _;
 use create_engine::spout::{self, Filling};
 use create_engine::tank::Fluid;
 use create_engine::{belt, sequenced};
@@ -23,7 +24,8 @@ pub(super) fn stack_of(host: &dyn ServerHost, item: &str, count: u32) -> Option<
 /// contents (`tank::potion_item`; its other components, a name or enchantments, aside, as
 /// `PotionFluidHandler.getFluidFromPotionItem` reads only the contents).
 pub(super) fn item_name(host: &dyn mod_api::Host, stack: &ItemStack) -> String {
-    crate::glue::logistics::items::potion_name(host, stack).unwrap_or_else(|| stack.item().id(host))
+    crate::glue::logistics::items::potion_name(host, stack)
+        .unwrap_or_else(|| stack.item().name(host))
 }
 
 /// A sequenced assembly's filling step for `item` at `progress`: the assembly, the step's

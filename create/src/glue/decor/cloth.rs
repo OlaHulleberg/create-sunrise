@@ -15,9 +15,7 @@ use super::super::states;
 use super::{add, face_of};
 use create_engine::Block;
 use create_engine::kinetics::Dir;
-use mod_api::{
-    BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost, Compound, SupportType, Tag,
-};
+use mod_api::{BlockEntityPart, BlockPart, ClientHost, Compound, SupportType, Tag};
 
 /// The culled sides of a table cloth in its block entity's data: a bit per side, south, west,
 /// north, east (`Direction.get2DDataValue`).
@@ -81,7 +79,12 @@ impl BlockPart for ClothDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for ClothDraw {
-    fn block_entity_submit(&self, _host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(kind) = event
             .block
             .strip_prefix("create:")

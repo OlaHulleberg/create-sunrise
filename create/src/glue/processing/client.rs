@@ -22,8 +22,8 @@ use create_engine::parts::StateInfo;
 use create_engine::tank::Fluid;
 use create_engine::{Block, deployer, press};
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockKey, BlockPart,
-    ClientHost, Compound, ItemDisplayContext, ModBlockEntity, Registrar, Tag,
+    BlockEntityDrawContext, BlockEntityPart, BlockKey, BlockPart, ClientHost, Compound,
+    ItemDisplayContext, ModBlockEntity, Registrar, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -433,7 +433,17 @@ impl BlockPart for MachineDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for MachineDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        self.submit(host, &mut crate::glue::Submit::of(event));
+    }
+}
+
+impl MachineDraw {
+    fn submit(&self, host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -1133,10 +1143,10 @@ fn draw_mixer_part(draw: &mut dyn BlockEntityDrawContext, d: &parts::Draw, offse
 pub(super) fn draw_carried(
     host: &dyn ClientHost,
     block: Block,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
 ) {
     if matches!(block, Block::Basin | Block::MechanicalCrafter) {
-        MachineDraw.block_entity_submit(host, event);
+        MachineDraw.submit(host, event);
     }
 }
 

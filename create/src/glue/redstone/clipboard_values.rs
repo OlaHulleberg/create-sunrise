@@ -25,6 +25,8 @@ use super::block_at;
 use crate::glue::display::clipboard;
 use crate::glue::interaction::values;
 use crate::glue::items::{self, filters};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
 use crate::glue::persist;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
@@ -232,7 +234,7 @@ fn set_filter(
 ) -> bool {
     let dim = lv.dim;
     let f = stack.as_ref().map(|s| filters::filter_of(&*lv.host, s));
-    let id = stack.as_ref().map(|s| s.item().id(&*lv.host));
+    let id = stack.as_ref().map(|s| s.item().name(&*lv.host));
     match slot {
         Slot::Shared => {
             let max = crate::glue::logistics::amount::filter_max(&*lv.host, f.as_ref());
@@ -317,7 +319,7 @@ fn set_filter(
 
 /// Whether the stack is a filter item (`instanceof FilterItem`).
 fn is_filter_item(host: &dyn mod_api::Host, stack: &ItemStack) -> bool {
-    FilterItem::of(&stack.item().id(host)).is_some()
+    FilterItem::of(&stack.item().name(host)).is_some()
 }
 
 /// `FilteringBehaviour.readFromClipboard`'s filter: outside creative, a filter item copied
@@ -364,7 +366,7 @@ fn paste_filter(
             let mut red = TextStyle::default();
             red.color = Some("red".into());
             let name = Text::translate(
-                format!("item.{}", kind.id(&*lv.host).replace(':', ".")),
+                format!("item.{}", kind.name(&*lv.host).replace(':', ".")),
                 Vec::new(),
             )
             .with_style(white);
@@ -678,12 +680,12 @@ pub(super) fn right_click_block(mut host: HostSide, event: &mut RightClickBlockE
     };
     let (is_clipboard, sneaking) = match &host {
         HostSide::Server(h) => (
-            stack.item().id(&**h) == "create:clipboard",
+            stack.item().id(&**h) == Some("create:clipboard"),
             h.player(click.player)
                 .is_some_and(|p| items::sneaking(&**h, p)),
         ),
         HostSide::Client(h) => (
-            stack.item().id(&**h) == "create:clipboard",
+            stack.item().id(&**h) == Some("create:clipboard"),
             h.local_player()
                 .is_some_and(|p| p.entity().is_shift_key_down(&**h) == Some(true)),
         ),
@@ -755,7 +757,7 @@ pub(super) fn interaction_key(
     let Some(stack) = items::held(&*host, player, Hand::Main) else {
         return Flow::Continue;
     };
-    if stack.item().id(&*host) != "create:clipboard" {
+    if stack.item().name(&*host) != "create:clipboard" {
         return Flow::Continue;
     }
     let Some(CrosshairTarget::Block { pos, hit, .. }) = host.crosshair_target() else {
@@ -818,7 +820,7 @@ pub(super) fn client_message(
     let Some(stack) = items::held(&*host, player, Hand::Main) else {
         return true;
     };
-    if !near || stack.item().id(&*host) != "create:clipboard" {
+    if !near || stack.item().name(&*host) != "create:clipboard" {
         return true;
     }
     let Some(mut lv) = ServerLevel::new(host, &dimension) else {
@@ -866,7 +868,7 @@ fn pastes(block: Block, tag: &Compound) -> bool {
 pub(crate) fn hover_tip(host: &dyn ClientHost) -> Option<([i32; 3], Vec<String>)> {
     let player = host.local_player()?;
     let stack = items::held(host, player, Hand::Main)?;
-    if stack.item().id(host) != "create:clipboard" {
+    if stack.item().name(host) != "create:clipboard" {
         return None;
     }
     let Some(CrosshairTarget::Block { pos, .. }) = host.crosshair_target() else {
@@ -880,7 +882,6 @@ pub(crate) fn hover_tip(host: &dyn ClientHost) -> Option<([i32; 3], Vec<String>)
             .map(|m| vec![Text::new(mod_api::text::TextContent::Keybind(m.into()))])
             .unwrap_or_default();
         host.text_string(&Text::translate(key, args))
-            .unwrap_or_else(|_| key.to_owned())
     };
     if block == Block::Clipboard {
         return Some((

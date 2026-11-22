@@ -10,6 +10,9 @@ use super::{
     Timer, add, block_of, dir, flag, girders, player_dimension, sneaking, stack_of, use_one, with,
     with_props,
 };
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
 use create_engine::decor;
 use create_engine::kinetics::Dir;
@@ -112,10 +115,10 @@ impl mod_api::BlockPart for DecorBlock {
             Block::MetalGirder => {
                 let stack = click.stack?;
                 // The placement helper (`GirderPlacementHelper`).
-                if stack.item().id(&*lv.host) == "create:metal_girder" {
+                if stack.item().name(&*lv.host) == "create:metal_girder" {
                     return girders::helper(&mut lv, player, click, stack);
                 }
-                if stack.item().id(&*lv.host) != "create:shaft" {
+                if stack.item().name(&*lv.host) != "create:shaft" {
                     return None;
                 }
                 let clicked = Dir::from_offset(click.hit.face).unwrap_or(Dir::Up);
@@ -284,7 +287,7 @@ fn may_use_value_box(lv: &ServerLevel<'_>, player: PlayerRef, click: &BlockClick
         && !sneaking(&*lv.host, player)
         && click
             .stack
-            .is_none_or(|s| s.item().id(&*lv.host) != "create:clipboard")
+            .is_none_or(|s| s.item().name(&*lv.host) != "create:clipboard")
 }
 
 /// `FilteringBehaviour` on the creative crate's top: an item sets its supply, an empty hand
@@ -299,7 +302,7 @@ fn use_crate(
     {
         return None;
     }
-    let held = click.stack.map(|s| s.item().id(&*lv.host));
+    let held = click.stack.map(|s| s.item().name(&*lv.host));
     if held.as_deref() == Some("create:wrench") {
         return None;
     }
@@ -323,7 +326,7 @@ fn use_hatch(
     facing: Dir,
     back: bool,
 ) -> Option<InteractionResult> {
-    let held = click.stack.map(|s| s.item().id(&*lv.host));
+    let held = click.stack.map(|s| s.item().name(&*lv.host));
     if back && held.as_deref() == Some("create:wrench") {
         return None;
     }
@@ -368,7 +371,7 @@ fn use_hatch(
         let Some((_, stack)) = slots.iter().find(|(i, _)| *i as usize == slot) else {
             continue;
         };
-        let id = stack.item().id(&*host);
+        let id = stack.item().name(&*host);
         // `canFitInsideContainerItems`: not shulker boxes, nor toolboxes
         // (`UncontainableBlockItem`).
         if id.ends_with("shulker_box")
@@ -380,7 +383,9 @@ fn use_hatch(
         let count = stack.count();
         let moved: u32 = host
             .transaction(|host, tx| {
-                let n = inventory.insert_any(host, tx, &ItemResource::of(stack), count);
+                let n = inventory
+                    .insert(host, tx, &ItemResource::of(stack), count)
+                    .unwrap_or(0);
                 if n == 0 {
                     return Err(());
                 }
@@ -518,7 +523,7 @@ fn use_cloth(
     }
     let has_entity = super::prop(&*lv.host, state, "entity").as_deref() == Some("true");
     let Some(stack) = click.stack.filter(|s| {
-        let id = s.item().id(&*lv.host);
+        let id = s.item().name(&*lv.host);
         id.starts_with("create:") && id.ends_with("_table_cloth")
     }) else {
         return crate::glue::stock::shop::use_cloth(&mut lv, player, click, has_entity);
@@ -626,7 +631,7 @@ impl mod_api::BlockPart for Sail {
         let click = event.click;
         let stack = click.stack?;
         let item = stack.item();
-        let id = item.id(&*host);
+        let id = item.name(&*host);
         let mut dimension = String::new();
         let (player, mut lv) = clicked(host, click, &mut dimension)?;
         let pos = click.pos;

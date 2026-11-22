@@ -7,6 +7,8 @@
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::{add, block_of, dir_named, prop, use_one, with_props};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
@@ -104,7 +106,7 @@ pub(super) fn gripping(lv: &ServerLevel<'_>, player: PlayerRef) -> bool {
     host.living(player.entity()).is_some_and(|l| {
         [Hand::Main, Hand::Off].into_iter().any(|h| {
             l.hand_item(host, h)
-                .is_some_and(|s| s.item().id(host) == "create:extendo_grip")
+                .is_some_and(|s| s.item().name(host) == "create:extendo_grip")
         })
     })
 }

@@ -41,11 +41,7 @@ pub fn reset() {
 /// `TrainHUD.tick`'s horn, while the player drives train `train`: the sprint key held asks for a
 /// honk every 5 ticks when the train has a whistle; let go, it says so once.
 pub fn driving_tick(host: &mut dyn ClientHost, train: u32) {
-    let pressed = host
-        .mapping("key.sprint")
-        .ok()
-        .flatten()
-        .is_some_and(|m| m.down);
+    let pressed = crate::glue::keys::down(&*host, "key.sprint");
     if pressed {
         let left = COOLDOWN.get();
         COOLDOWN.set(left - 1);

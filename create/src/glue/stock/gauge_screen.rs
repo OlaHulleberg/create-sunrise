@@ -17,6 +17,8 @@ use super::gauge::{self, Config};
 use super::gauge_client::{self, Shown};
 use super::keeper::{Reader, put_i32, put_stack, put_str};
 use super::{Key, with};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::factory as fx;
 use create_engine::stock::PanelPos;
 use mod_api::{
@@ -101,7 +103,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             let Some((stack, _)) = r.stack(&*lv.host) else {
                 return;
             };
-            let id = stack.item().id(&*lv.host);
+            let id = stack.item().name(&*lv.host);
             if matches!(
                 id.as_str(),
                 "create:filter" | "create:attribute_filter" | "create:package_filter"
@@ -380,7 +382,7 @@ fn connect(lv: &mut ServerLevel<'_>, player: PlayerRef, from: PanelPos, to: Pane
 
 /// An item's name key (`getDescriptionId`): `block.<ns>.<path>` for a block's item.
 fn name_key(host: &dyn mod_api::Host, stack: &ItemStack) -> String {
-    let id = stack.item().id(host);
+    let id = stack.item().name(host);
     let (ns, path) = id.split_once(':').unwrap_or(("minecraft", &id));
     let kind = if host.item_block(stack.item()).is_some() {
         "block"
@@ -500,12 +502,12 @@ fn find_recipe(
     output: &ItemStack,
     inputs: &[(PanelPos, Option<ItemStack>, u32)],
 ) -> Option<(Vec<Option<ItemStack>>, u32)> {
-    let out_id = output.item().id(host);
+    let out_id = output.item().name(host);
     let items: Vec<&ItemStack> = inputs.iter().filter_map(|i| i.1.as_ref()).collect();
     if items.is_empty() {
         return None;
     }
-    let mut distinct: Vec<String> = items.iter().map(|s| s.item().id(host)).collect();
+    let mut distinct: Vec<String> = items.iter().map(|s| s.item().name(host)).collect();
     distinct.sort();
     distinct.dedup();
     for kind in ["minecraft:crafting_shaped", "minecraft:crafting_shapeless"] {
@@ -513,7 +515,7 @@ fn find_recipe(
             let Some(result) = r.results.first() else {
                 continue;
             };
-            if result.item().id(host) != out_id {
+            if result.item().name(host) != out_id {
                 continue;
             }
             // Shaped recipes keep their grid: rows of the pattern, `ingredients` in order with
@@ -527,7 +529,7 @@ fn find_recipe(
                     None => grid.push(None),
                     Some(ing) => match items.iter().find(|s| ing.test(host, s)) {
                         Some(s) => {
-                            used.push(s.item().id(host));
+                            used.push(s.item().name(host));
                             grid.push(super::body::with_count(s, 1));
                         }
                         None => {

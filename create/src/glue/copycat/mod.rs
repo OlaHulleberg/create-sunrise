@@ -32,13 +32,14 @@ use super::server::ServerLevel;
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::level_index;
+use crate::glue::names::Named as _;
+use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
 use create_engine::copycat::{self as cc, Shape, Special};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockEntityTypeKey, BlockState, BreakBlockEvent, Command, CommandArgumentValue, Compound, Flow,
-    HostBlockStates, ItemStack, RegisterCommandsEvent, Registrar, RegistrationContext,
-    RunModCommandEvent, ServerHost, Tag, Text,
+    HostBlockStates, ItemStack, Registrar, RegistrationContext, ServerHost, Tag, Text,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -138,7 +139,7 @@ impl Subsystem for Copycats {
         &self,
         host: &dyn mod_api::ClientHost,
         block: Block,
-        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        event: &mut crate::glue::Submit<'_>,
     ) {
         if matches!(block, Block::CopycatPanel | Block::CopycatStep) {
             parts::draw_carried(host, event);
@@ -322,17 +323,11 @@ impl Subsystem for Copycats {
     }
 
     /// `create_debug copycat <x> <y> <z>`: what a copycat holds, for a headless proof.
-    fn register_commands(&self, _host: &mut dyn ServerHost, event: &mut RegisterCommandsEvent<'_>) {
-        event
-            .commands
-            .push(Command::op("create_debug copycat <pos:block_pos>", 2));
+    fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
+        commands.push(Command::op("create_debug copycat <pos:block_pos>", 2));
     }
 
-    fn run_mod_command(
-        &self,
-        host: &mut dyn ServerHost,
-        event: &mut RunModCommandEvent<'_>,
-    ) -> Flow {
+    fn run_mod_command(&self, host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         let c = event.command;
         if c.literals
             .iter()
@@ -344,7 +339,11 @@ impl Subsystem for Copycats {
         let Some(&CommandArgumentValue::BlockPos(pos)) = c.argument("pos") else {
             return Flow::Continue;
         };
-        let dim = c.dimension.id(&*host).and_then(|d| level_index(&d));
+        let dim = c
+            .dimension
+            .id(&*host)
+            .map(str::to_owned)
+            .and_then(|d| level_index(&d));
         let line = match dim.and_then(|dim| with(dim, |d| d.copycats.get(&pos).cloned())) {
             Some(cat) => format!(
                 "copycat at {} {} {}: {} ({})",
@@ -355,7 +354,7 @@ impl Subsystem for Copycats {
                     .and_then(|m| host.block_state_string(m))
                     .unwrap_or_else(|| cc::BASE.to_owned()),
                 cat.item
-                    .map_or_else(|| "no item".to_owned(), |s| s.item().id(&*host))
+                    .map_or_else(|| "no item".to_owned(), |s| s.item().name(&*host))
             ),
             None => format!("no copycat at {} {} {}", pos[0], pos[1], pos[2]),
         };
@@ -552,7 +551,7 @@ fn restore(lv: &mut ServerLevel<'_>, pos: [i32; 3], material: &str, item: Option
         (Some(m), Some(it)) => {
             let given = body::accepted(lv, pos, shape, it, None);
             let host = &*lv.host;
-            let name = |s: BlockState| s.block().id(host);
+            let name = |s: BlockState| s.block().name(host);
             cc::keeps_material(
                 given.map(|g| name(g.0)).as_deref(),
                 given.is_some(),

@@ -99,7 +99,7 @@ impl Subsystem for Processing {
         &self,
         host: &dyn mod_api::ClientHost,
         block: create_engine::Block,
-        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+        event: &mut crate::glue::Submit<'_>,
     ) {
         client::draw_carried(host, block, event);
     }
@@ -192,8 +192,8 @@ impl Subsystem for Processing {
         fist::clear();
     }
 
-    fn tags_updated(&self, host: &mut dyn ServerHost) {
-        recipes::publish(host);
+    fn tags_updated(&self, cx: &dyn mod_api::ReloadContext) {
+        recipes::publish(cx);
         basin::recipes_changed();
     }
 
@@ -348,7 +348,9 @@ impl Subsystem for Processing {
     }
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
-        providers.register(air::AIR_FLOW.to_owned(), std::sync::Arc::new(air::AirFlow));
+        if let Some(&ty) = air::AIR_FLOW_TYPE.get() {
+            providers.register_sprite_set(ty, std::sync::Arc::new(air::AirFlow));
+        }
     }
 
     fn client_reset(&self) {
@@ -486,7 +488,7 @@ impl BlockPart for ToolboxPart {
         let Some(stack) = event.stack else {
             return;
         };
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         if let Some(mut lv) = ServerLevel::new(host, &dimension) {
@@ -535,27 +537,41 @@ impl Subsystem for Tools {
 /// The `ITEMS` handlers of the processing machines of the kinetic type: a crafter's group's, a
 /// crushing wheel controller's and a saw's. None for the others, whose slots the game offers.
 fn provide_items(
-    host: &mut dyn ServerHost,
+    _level: &dyn mod_api::LevelHost,
     side: mod_api::BlockSide,
-) -> Option<Box<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
-    let dimension = side.level.dimension().id(&*host)?;
-    let (block, dim) = {
-        let lv = ServerLevel::new(host, &dimension)?;
-        (lv.info(side.pos)?.0, lv.dim)
+    state: mod_api::BlockState,
+    _entity: mod_api::BlockEntityRef,
+    offer: &mut mod_api::BlockCapabilityOffer<
+        '_,
+        dyn mod_api::ResourceHandler<mod_api::ItemResource>,
+    >,
+) {
+    let Some(block) = super::states::id(state)
+        .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten())
+    else {
+        return;
+    };
+    let Some(dim) = super::world::level_of(side.level) else {
+        return;
     };
     match block {
-        Block::MechanicalCrafter => crafter::provide_items(host, side),
+        Block::MechanicalCrafter => offer.offer(|| crafter::provide_items(side, dim)),
         Block::CrushingWheelController => {
-            Some(Box::new(crusher::CrusherItems { dim, pos: side.pos }))
+            offer.offer(|| Box::new(crusher::CrusherItems { dim, pos: side.pos }))
         }
         Block::MechanicalSaw if side.side != Some(mod_api::Direction::Down) => {
-            Some(Box::new(saw::SawItems {
-                dimension,
-                dim,
-                pos: side.pos,
-            }))
+            let Some(dimension) = super::world::level_id(dim) else {
+                return;
+            };
+            offer.offer(|| {
+                Box::new(saw::SawItems {
+                    dimension,
+                    dim,
+                    pos: side.pos,
+                })
+            })
         }
-        _ => None,
+        _ => {}
     }
 }
 

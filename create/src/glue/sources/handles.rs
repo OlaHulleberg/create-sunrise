@@ -19,9 +19,9 @@ use create_engine::dye;
 use create_engine::kinetics::Dir;
 use create_engine::valve;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntitySubmitEvent, BlockPart, CanSurviveEvent, ClientHost, Compound, HostSide,
-    ModBlockEntity, OnChunkUnloadedEvent, Registrar, SoundPlay, SoundSource, Tag,
+    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart, BlockPart,
+    CanSurviveEvent, ClientHost, Compound, HostSide, ModBlockEntity, OnChunkUnloadedEvent,
+    Registrar, SoundPlay, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -246,18 +246,20 @@ impl BlockEntityPart for Handles {
 
     /// `HandCrankBlockEntity.tick`: the handle's speed moves a quarter of the way to the
     /// crank's (`convertToAngular(getSpeed())`), and its angle by that speed.
-    fn block_entity_client_tick(
-        &self,
-        host: &mut dyn ClientHost,
-        event: &mut BlockEntityClientTickEvent<'_>,
-    ) {
-        if event.state.block() != states::key(Block::HandCrank) {
+    fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
+        let Some((state, pos, target, generating)) = event.subject.with_view(|v| {
+            let nbt = v.nbt();
+            let generating = super::generated_of(nbt).is_some_and(|g| g != 0.0);
+            (v.state(), v.position(), speeds_of(nbt)[0] * 0.3, generating)
+        }) else {
+            return;
+        };
+        if state.block() != states::key(Block::HandCrank) {
             return;
         }
-        let target = speeds_of(&event.entity.nbt)[0] * 0.3;
-        let generating = super::generated_of(&event.entity.nbt).is_some_and(|g| g != 0.0);
+        let host = event.subject.host();
         let in_use = CRANKS.with_borrow_mut(|c| {
-            let c = c.entry(event.pos).or_default();
+            let c = c.entry(pos).or_default();
             // Another player's crank: in use while it generates, at half its time.
             if c.in_use == 0 && generating {
                 c.in_use = 5;
@@ -269,7 +271,7 @@ impl BlockEntityPart for Handles {
         // `tickAudio`: every ten ticks while in use, the cranking sound (wood placed and a
         // wooden button let go), louder and lower the newer the turn.
         if in_use > 0 && NOW.get().rem_euclid(10) == 0 {
-            let center = event.pos.map(|v| f64::from(v) + 0.5);
+            let center = pos.map(|v| f64::from(v) + 0.5);
             let volume = f32::from(in_use) / 2.5;
             let pitch = 0.65 + f32::from(10 - in_use.min(10)) / 10.0;
             for (sound, v, p) in [
@@ -283,7 +285,7 @@ impl BlockEntityPart for Handles {
             }
         }
         CRANKS.with_borrow_mut(|c| {
-            let c = c.entry(event.pos).or_default();
+            let c = c.entry(pos).or_default();
             c.chase += (target - c.chase) / 4.0;
             c.angle = (c.angle + c.chase).rem_euclid(360.0);
             // Create chases for ever; a handle this slow no longer shows moving.
@@ -302,7 +304,12 @@ impl BlockEntityPart for Handles {
         }
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -333,7 +340,7 @@ impl BlockEntityPart for Handles {
 }
 
 /// `HandCrankVisual.rotateCrank`: the handle turned about its facing's positive axis.
-fn draw_crank(event: &mut BlockEntitySubmitEvent<'_>, facing: Dir) {
+fn draw_crank(event: &mut crate::glue::Submit<'_>, facing: Dir) {
     let Some(part) = states::partial("part_hand_crank_handle") else {
         return;
     };
@@ -364,7 +371,7 @@ fn draw_crank(event: &mut BlockEntitySubmitEvent<'_>, facing: Dir) {
 /// `ValveHandleVisual.rotateCrank`: the handle turning through its use, standing at its target
 /// after, or turning with the network something else drives.
 fn draw_valve(
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
     block: Block,
     own: &[(&str, &str)],
     facing: Dir,

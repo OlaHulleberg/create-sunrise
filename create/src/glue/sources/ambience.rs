@@ -249,15 +249,11 @@ impl BlockPart for Listen {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Listen {
-    fn block_entity_data_received(
-        &self,
-        host: &dyn ClientHost,
-        event: &mut BlockEntityDataReceivedEvent<'_>,
-    ) {
+    fn block_entity_data_received(&self, event: &mut BlockEntityDataReceivedEvent<'_>) {
         let Some(Tag::List(speeds)) = event.tag.get(&kinetics::SPEEDS.into()) else {
             return;
         };
-        let Some(pos) = event.entity.position(host) else {
+        let Some(pos) = event.subject.with_view(|v| v.position()) else {
             return;
         };
         let speed = match speeds.first() {

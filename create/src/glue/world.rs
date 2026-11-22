@@ -14,6 +14,9 @@ thread_local! {
     /// The levels this world has opened, by index: the vanilla three first, then mod
     /// dimensions in the order they opened.
     static LEVELS: RefCell<Vec<String>> = const { RefCell::new(Vec::new()) };
+    /// The level handles seen for each index, for the hooks that are given a handle but no host
+    /// to name its dimension with.
+    static HANDLES: RefCell<Vec<(mod_api::LevelRef, usize)>> = const { RefCell::new(Vec::new()) };
     /// Whether this server tick advances the world (`TickRateManager.runsNormally`): false
     /// under `/tick freeze`, except for a `/tick step`.
     static RUNNING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
@@ -63,6 +66,22 @@ pub fn close() {
     super::kinetics::forget_freeze();
     WORLD.with_borrow_mut(|w| *w = None);
     LEVELS.with_borrow_mut(Vec::clear);
+    HANDLES.with_borrow_mut(Vec::clear);
+}
+
+/// Remembers that `level` is the level of index `dim`.
+pub fn note_level(level: mod_api::LevelRef, dim: usize) {
+    HANDLES.with_borrow_mut(|h| {
+        if !h.iter().any(|(l, d)| *l == level && *d == dim) {
+            h.retain(|(l, _)| *l != level);
+            h.push((level, dim));
+        }
+    });
+}
+
+/// The index of the level `level` names, once a host has named it.
+pub fn level_of(level: mod_api::LevelRef) -> Option<usize> {
+    HANDLES.with_borrow(|h| h.iter().find(|(l, _)| *l == level).map(|(_, d)| *d))
 }
 
 /// Whether Create's world is open on this thread.

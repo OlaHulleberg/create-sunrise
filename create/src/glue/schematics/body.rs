@@ -7,6 +7,7 @@
 //! API reaches a mod's own folders only, not the game folder's `schematics/` where Create keeps
 //! them.
 
+use crate::glue::names::Named as _;
 use crate::glue::packages::body::{CustomData, set_custom};
 use create_engine::gzip;
 use create_engine::schematic::{Nbt, SchematicData, SchematicUpload, UploadRetention};
@@ -233,7 +234,7 @@ pub fn item_for_block(host: &dyn Host, block: &str) -> Option<String> {
     let item = |name: &str| {
         let key = host.block_key(name)?;
         let item = host.block_item(key)?;
-        let id = item.id(host);
+        let id = item.name(host);
         (id != "minecraft:air").then_some(id)
     };
     item(block).or_else(|| {

@@ -1,9 +1,9 @@
 # Validation
 
-Checked on 2026-11-22 at main `11c43ca` (Linux x86_64, Rust 1.99.1, a fresh clone), pinned to Sunrise
-`94256510f74e6843754e0a93fd9e4da7e45b1056` in `create/sunrise-mod.toml`.
-`cargo sunrise-mod` uses the signature-verified release tool and SDK from
-`sdk-94256510f74e6843754e0a93fd9e4da7e45b1056`, with the published release key.
+Checked on 2026-11-22 on branch `pin/dev-7cfdf81` (Linux x86_64, Rust 1.99.1, a fresh clone), pinned to the Sunrise
+Dev build `dev-2026-11-22-7cfdf81` (main at `7cfdf81463ebb4a19705768273909f7f3f03601d`) in `create/sunrise-mod.toml`.
+A Dev build is a test build with no stable mod API. `cargo sunrise-mod` uses the signature-verified release tool and
+SDK from `sdk-7cfdf81463ebb4a19705768273909f7f3f03601d`, with the published release key.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 

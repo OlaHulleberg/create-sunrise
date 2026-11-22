@@ -4,6 +4,7 @@
 
 use super::super::server::ServerLevel;
 use super::with_prop;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::copycat::{self as cc, Candidate, Shape, Special};
 use create_engine::kinetics::{Axis, Dir};
@@ -24,7 +25,7 @@ pub(super) fn candidate(
 ) -> Option<Candidate> {
     let host = &*lv.host;
     let block = state.block();
-    let id = block.id(host);
+    let id = block.name(host);
     let tagged = |t: &str| host.block_in_tag(block, t) == Some(true);
     let create = id.strip_prefix("create:").and_then(Block::from_name);
     // `getShape(level, pos).bounds()` is the whole block.
@@ -121,7 +122,8 @@ pub(super) fn cycle_of(host: &dyn Host, state: BlockState) -> Option<(&'static s
             .map(|h| h == "top"),
         open: flag("open"),
         lit: flag("lit"),
-        powering: flag("powering").filter(|_| state.block().id(host) == "create:rose_quartz_lamp"),
+        powering: flag("powering")
+            .filter(|_| state.block().name(host) == "create:rose_quartz_lamp"),
     };
     cc::cycle(&m)
 }
@@ -139,8 +141,8 @@ mod tests {
     use mod_api::prelude::*;
     use mod_api::testing::{FakeLevel, with_mods};
     use mod_api::{
-        Backend, BackendRef, BlockKey, BlockStateRecord, Hooks, LevelReadError, LevelRef, ModEntry,
-        Registrar, RegistrationContext, ServerHost,
+        Backend, BackendRef, BlockKey, Hooks, LevelReadError, LevelRef, ModEntry, Registrar,
+        RegistrationContext, ServerHost,
     };
 
     const PANE: &str = "create:oak_window_pane";
@@ -187,12 +189,8 @@ mod tests {
         }
     }
     impl KeysBackend for Materials {
-        fn block_key_id(&self, key: BlockKey) -> String {
-            [PANE, BARS]
-                .into_iter()
-                .find(|id| block_key(id) == key)
-                .expect("only the two registered fixture blocks are used")
-                .into()
+        fn block_key_id(&self, key: BlockKey) -> Option<&str> {
+            [PANE, BARS].into_iter().find(|id| block_key(id) == key)
         }
     }
     impl LevelCollisionBackend for Materials {
@@ -219,7 +217,7 @@ mod tests {
             };
             let panel = Shape::Panel(Dir::Up);
             for (id, accepted) in [(PANE, false), (BARS, true)] {
-                let state = BlockStateRecord::new(block_key(id), 0).into();
+                let state = mod_api::__private::block_state_from_ordinal(block_key(id), 0);
                 let facts = candidate(&lv, state, [0; 3]).unwrap();
                 assert_eq!(cc::accepts(panel, &facts), accepted, "{id}");
             }

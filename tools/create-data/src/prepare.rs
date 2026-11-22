@@ -76,7 +76,7 @@ fn custom_rendered(name: &str) -> Option<Value> {
         // `ExtendoGripItemRenderer`: its arms, hand and cog posed by the mod's special model
         // renderer (`create:extendo_grip`, `glue/equipment.rs`).
         // The glue's `create:extendo_grip_pose` node picks one by where it is drawn and the
-        // time (`item_model_update`): at rest away from a first-person hand, else as the swing
+        // time (its per-stack callback): at rest away from a first-person hand, else as the swing
         // left it; the cog turned to a 1/10 of its 45° repeat; the hand pointing, punching or
         // holding.
         "extendo_grip" => {

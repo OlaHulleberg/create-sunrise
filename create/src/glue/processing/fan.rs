@@ -11,7 +11,9 @@
 
 use super::{recipes, stacks};
 use crate::glue::logistics::{random_angle, upright};
+use crate::glue::names::Named as _;
 use crate::glue::net;
+use crate::glue::owned::LevelLists as _;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::fan::{self, Catalyst, Current, Heat, Kind, Way};
@@ -306,7 +308,7 @@ fn others_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Vec<Pushed
         if lv.host.item_entity(entity).is_some() {
             continue;
         }
-        let flying = if entity.kind(&*lv.host).map(|k| k.id(&*lv.host)).as_deref()
+        let flying = if entity.kind(&*lv.host).map(|k| k.name(&*lv.host)).as_deref()
             == Some("minecraft:player")
         {
             entity
@@ -655,7 +657,7 @@ fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
         // `SplashingType`: drowning hurts endermen, snow golems and blazes; a burning entity is
         // put out with the extinguish sound (0.7, 1.6 ± 0.4: `Entity.extinguishFire`'s).
         Kind::Splashing => {
-            let kind = entity.kind(&*host).map(|k| k.id(&*host));
+            let kind = entity.kind(&*host).map(|k| k.name(&*host));
             if matches!(
                 kind.as_deref(),
                 Some("minecraft:enderman" | "minecraft:snow_golem" | "minecraft:blaze")
@@ -718,7 +720,7 @@ impl EntityPartState for Haunted {
 /// the horse's saved data (its UUID left out) where it stood, its armour dropped, the horse gone.
 fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
     let host = &mut *lv.host;
-    if entity.kind(&*host).map(|k| k.id(&*host)).as_deref() != Some("minecraft:horse") {
+    if entity.kind(&*host).map(|k| k.name(&*host)).as_deref() != Some("minecraft:horse") {
         return;
     }
     let Some(at) = entity.position(&*host) else {
@@ -895,7 +897,7 @@ fn catalyst_at(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Kind> {
         .level
         .fluid_state(&*lv.host, p)
         .filter(|f| f.amount > 0)
-        .map(|f| f.fluid.id(&*lv.host));
+        .map(|f| f.fluid.name(&*lv.host));
     let mut c = Catalyst {
         water: matches!(
             fluid.as_deref(),

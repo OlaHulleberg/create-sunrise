@@ -16,7 +16,9 @@
 
 use super::takes_from_side;
 use super::{press, recipes, stacks};
+use crate::glue::names::Named as _;
 use crate::glue::net;
+use crate::glue::owned::LevelLists as _;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::Block;
@@ -928,7 +930,7 @@ fn entities_at(lv: &ServerLevel<'_>, at: [i32; 3]) -> Vec<mod_api::EntityRef> {
         .into_iter()
         .filter(|e| {
             e.kind(&*lv.host)
-                .map(|k| k.id(&*lv.host))
+                .map(|k| k.name(&*lv.host))
                 .is_none_or(|k| !(k.starts_with("create:") && k.ends_with("contraption")))
         })
         .collect()
@@ -1209,7 +1211,10 @@ fn send_deployers(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32;
 
 /// A player joined: every deployer of their level.
 pub fn player_joined(host: &mut dyn ServerHost, player: PlayerRef) {
-    let Some(dimension) = player.level(&*host).and_then(|l| l.dimension().id(&*host)) else {
+    let Some(dimension) = player
+        .level(&*host)
+        .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
+    else {
         return;
     };
     let Some(mut lv) = ServerLevel::new(host, &dimension) else {

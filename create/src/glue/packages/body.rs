@@ -4,6 +4,7 @@
 //! as NBT for the chunk save (`ItemStack.CODEC`, the API's NBT escape); and the item ids the
 //! engine's rules name items by.
 
+use crate::glue::names::Named as _;
 use create_engine::package::{ADDRESS_KEY, CONTENTS_KEY, SLOTS};
 use create_engine::stock::{Order, OrderData};
 use mod_api::{Component, Compound, Host, Identifier, ItemKey, ItemStack, Tag};
@@ -53,7 +54,7 @@ pub fn set_custom(stack: &mut ItemStack, key: &str, value: Option<Tag>) {
 
 /// The item's id (`minecraft:stone`).
 pub fn item_id(host: &dyn Host, stack: &ItemStack) -> String {
-    stack.item().id(host)
+    stack.item().name(host)
 }
 
 /// The item `id` names, when the game has it.

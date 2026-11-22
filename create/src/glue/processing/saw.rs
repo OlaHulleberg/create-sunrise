@@ -316,7 +316,7 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
         &self,
         _host: &mut dyn mod_api::ServerHost,
         _index: usize,
-        _resource: &mod_api::ItemResource,
+        _resource: Option<&mod_api::ItemResource>,
     ) -> u32 {
         1
     }
@@ -328,7 +328,7 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
     ) -> bool {
         index == 0 && self.empty()
     }
-    fn insert(
+    fn insert_at(
         &self,
         host: &mut dyn mod_api::ServerHost,
         _tx: &mod_api::Transaction,
@@ -351,7 +351,7 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
         };
         u32::from(saw_put(&mut lv, self.pos, &item, progress))
     }
-    fn extract(
+    fn extract_at(
         &self,
         _host: &mut dyn mod_api::ServerHost,
         _tx: &mod_api::Transaction,

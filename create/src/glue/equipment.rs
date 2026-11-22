@@ -31,16 +31,19 @@ use super::server::ServerLevel;
 use super::states;
 use super::subsystem::Subsystem;
 use super::world::{level_index, with_world};
+use crate::glue::names::Named as _;
+use crate::glue::owned::OwnedEquipment as _;
+use crate::glue::subsystem::Placed;
 use create_engine::Block;
 use create_engine::equipment::{
     self as eq, AIR_KEY, CAPACITY, DOUBLE_RANGE, Gear, MAX_AIR_SUPPLY, SINGLE_RANGE, Tank,
 };
 use mod_api::{
     AttributeModifier, AttributeOperation, BlockDropsEvent, BlockPart, BreakBlockEvent, Compound,
-    EntityPlaceEvent, EntityRef, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction,
-    Identifier, ItemKey, ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime,
-    PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SetPlacedByEvent,
-    SoundSource, StackError, Tag, Transaction,
+    EntityRef, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction, Identifier, ItemKey,
+    ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime, PlayerRef,
+    PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SetPlacedByEvent, SoundSource,
+    StackError, Tag, Transaction,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -114,8 +117,14 @@ thread_local! {
 }
 
 /// Share the final sampled movement input with the diving boots and belt travel.
-pub(crate) fn sample_movement(event: &mod_api::MovementInputEvent) {
-    INPUT.set((event.forward, event.strafe, event.jump, event.sneak));
+pub(crate) fn sample_movement(input: &mod_api::MovementInput) {
+    let keys = &input.key_presses;
+    INPUT.set((
+        input.move_vector[1],
+        input.move_vector[0],
+        keys.jump,
+        keys.sneak,
+    ));
 }
 
 /// The applied horizontal axes observed by the movement input hook this travel tick.
@@ -524,10 +533,13 @@ impl Subsystem for Equipment {
     }
 
     fn special_model_renderers(&self, renderers: &mut dyn mod_api::SpecialModelRenderers) {
+        let id = mod_api::Identifier::parse("create:extendo_grip").expect("valid identifier");
         renderers.register(
-            "create:extendo_grip".into(),
-            mod_api::SpecialModelPolicy::Stack,
-            std::sync::Arc::new(GripModel),
+            id,
+            mod_api::SpecialModelFactory::new(
+                |config| config.decode::<mod_api::serde_json::Value>(),
+                GripModel::bake,
+            ),
         );
     }
 
@@ -597,21 +609,26 @@ impl Subsystem for Equipment {
             return Flow::Continue;
         };
         let item = backtank_item(block);
-        if let Some(drop) = event
+        let found = event
             .drops
-            .iter_mut()
-            .find(|d| Some(d.stack.item()) == item)
+            .iter()
+            .position(|d| d.stack().map(|s| s.item()) == item);
+        if let Some(mut drop) = found.and_then(|i| event.drops.get_mut(i))
+            && let Some(mut stack) = drop.stack().and_then(|s| s.project())
         {
-            if let Err(error) = set_stack_air(&mut drop.stack, tank.air) {
+            if let Err(error) = set_stack_air(&mut stack, tank.air) {
                 crate::create_log!("[create] dropped backtank air could not be written: {error:?}");
             }
-            set_capacity(&mut drop.stack, tank.capacity);
+            set_capacity(&mut stack, tank.capacity);
+            if let Err(error) = drop.set_stack(stack) {
+                crate::create_log!("[create] the dropped backtank could not be written: {error:?}");
+            }
         }
         Flow::Continue
     }
 
-    /// Any placement wears a held grip (`EntityPlaceEvent`).
-    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut EntityPlaceEvent) -> Flow {
+    /// Any placement wears a held grip (`Placed`).
+    fn entity_place(&self, host: &mut dyn ServerHost, event: &mut Placed) -> Flow {
         if event.cancelled {
             return Flow::Continue;
         }
@@ -653,6 +670,7 @@ impl BlockPart for BacktankPlacement {
             .level
             .dimension()
             .id(&*host)
+            .map(str::to_owned)
             .and_then(|d| level_index(&d))
         else {
             return;
@@ -684,14 +702,14 @@ fn gear(host: &dyn ServerHost, stack: Option<ItemStack>) -> Gear {
     if let Some(g) = GEAR.with_borrow(|c| c.get(&key).copied()) {
         return g;
     }
-    let g = Gear::of(&key.id(host));
+    let g = Gear::of(&key.name(host));
     GEAR.with_borrow_mut(|c| c.insert(key, g));
     g
 }
 
 /// The gear a stack is, on either side.
 fn gear_of(host: &dyn mod_api::Host, stack: &ItemStack) -> Gear {
-    Gear::of(&stack.item().id(host))
+    Gear::of(&stack.item().name(host))
 }
 
 fn backtank_block(state: mod_api::BlockState) -> Option<(Block, bool)> {
@@ -730,6 +748,12 @@ fn stack_air(stack: &ItemStack) -> i32 {
 }
 
 fn set_stack_air(stack: &mut ItemStack, air: i32) -> Result<(), StackError> {
+    let patch = air_patch(stack, air);
+    stack.apply_components(&patch)
+}
+
+/// The component patch that gives `stack` `air`.
+fn air_patch(stack: &ItemStack, air: i32) -> Compound {
     let mut c = match stack
         .components()
         .and_then(|c| c.as_nbt().get(&"minecraft:custom_data".into()))
@@ -738,8 +762,7 @@ fn set_stack_air(stack: &mut ItemStack, air: i32) -> Result<(), StackError> {
         _ => Compound::new(),
     };
     c.insert(AIR_KEY.into(), Tag::Int(air));
-    let patch = Compound::from([("minecraft:custom_data".into(), Tag::Compound(c))]);
-    stack.apply_components(&patch)
+    Compound::from([("minecraft:custom_data".into(), Tag::Compound(c))])
 }
 
 /// The stack's Capacity enchantment level (`getEnchantmentLevel(CAPACITY)`).
@@ -803,7 +826,7 @@ fn full_netherite(host: &dyn mod_api::Host, player: PlayerRef) -> bool {
     let worn = ARMOR.map(|slot| living.equipment(host, slot));
     let is = |s: &Option<ItemStack>, ids: &[&str]| {
         s.as_ref()
-            .is_some_and(|s| ids.contains(&s.item().id(host).as_str()))
+            .is_some_and(|s| ids.contains(&s.item().name(host).as_str()))
     };
     is(&worn[0], &["create:netherite_diving_helmet"])
         && is(&worn[1], &["create:netherite_backtank"])
@@ -900,9 +923,9 @@ fn breathe(host: &mut dyn ServerHost, player: PlayerRef, fire_resistant: bool) -
 
 /// `LivingBreatheEvent` for a player the helmet gives breath this tick: `setCanBreathe(true)`,
 /// `setRefillAirAmount(getMaxAirSupply())`.
-pub(crate) fn living_breathe(event: &mut mod_api::LivingBreatheEvent<'_>) {
+pub(crate) fn living_breathe(event: &mut mod_api::LivingBreatheEvent) {
     if BREATHING.with_borrow_mut(|b| {
-        let at = b.iter().position(|e| *e == event.entity);
+        let at = b.iter().position(|e| *e == event.entity.entity().id());
         at.map(|i| b.swap_remove(i)).is_some()
     }) {
         event.can_breathe = true;
@@ -936,8 +959,11 @@ fn debit_air(
     let mut warnings = None;
     place
         .edit(host, tx, |stack| {
-            let (after, triggered) = eq::consume_air(stack_air(stack), capacity(stack), amount);
-            if set_stack_air(stack, after).is_ok() {
+            let Some(before) = stack.original().project() else {
+                return;
+            };
+            let (after, triggered) = eq::consume_air(stack_air(&before), capacity(&before), amount);
+            if stack.apply_components(&air_patch(&before, after)).is_ok() {
                 warnings = Some(triggered);
             }
         })
@@ -949,7 +975,7 @@ pub(crate) fn warn_air(host: &mut dyn ServerHost, player: PlayerRef, warnings: V
     if warnings.is_empty() {
         return;
     }
-    let Some(name) = player.name(&*host) else {
+    let Some(name) = player.name(&*host).map(str::to_owned) else {
         return;
     };
     for w in warnings {
@@ -1214,6 +1240,7 @@ impl mod_api::BlockEntityPart for BacktankCogs {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::BlockEntitySubmitEvent<'_>,
     ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -1276,11 +1303,9 @@ pub(crate) fn backtank_bar(host: &dyn mod_api::ClientHost) -> Option<(i32, u32)>
     })
 }
 
-/// `ExtendoGripItemRenderer` at rest (`animation` .25, as Create draws the grip anywhere but in
-/// a first-person hand): the grip, its scissor arms folded to their angle, the pointing deployer
-/// hand at their end and the cog. A special model is posed once per stack, so the cog does not
-/// turn and the arms do not reach out as the player swings.
-struct GripModel;
+/// `ExtendoGripItemRenderer` for one pose its node names: the grip, its scissor arms folded to
+/// their angle, the deployer hand at their end and the cog, each baked with its transform.
+struct GripModel(Vec<(mod_api::SpecialModelGeometry, [f32; 12])>);
 
 /// A 4×4 pose, row-major, multiplied on the right as `PoseStack` does.
 #[derive(Clone, Copy)]
@@ -1333,16 +1358,19 @@ impl Pose {
     }
     /// The part's 3×4 transform from the item's corner: Create's pose is about the item's
     /// middle, and draws each model from its own middle (`PartialItemModelRenderer`).
-    fn part(self, model: &str) -> mod_api::SpecialModelPart {
+    fn part(self, model: &str) -> (String, [f32; 12]) {
         let m = Pose::IDENTITY
             .translate([0.5; 3])
             .mul(self)
             .translate([-0.5; 3]);
         let t = m.0;
-        mod_api::SpecialModelPart::new(model).with_transform([
-            t[0][0], t[0][1], t[0][2], t[0][3], t[1][0], t[1][1], t[1][2], t[1][3], t[2][0],
-            t[2][1], t[2][2], t[2][3],
-        ])
+        (
+            model.to_owned(),
+            [
+                t[0][0], t[0][1], t[0][2], t[0][3], t[1][0], t[1][1], t[1][2], t[1][3], t[2][0],
+                t[2][1], t[2][2], t[2][3],
+            ],
+        )
     }
 }
 
@@ -1401,18 +1429,25 @@ impl GripRender {
     }
 }
 
-/// `item_model_update` for the grip's node: in a first-person hand, the swing's pose and the
-/// cog turned on by it; elsewhere at rest (`animation` 0.25); the cog at `renderTime * -2`.
-pub(crate) fn grip_pose(
+/// The grip's item model node: its posed children, picked per stack by [`grip_pose`].
+pub(crate) fn register_grip_pose(event: &mut mod_api::RegisterItemModelsEvent<'_>) {
+    let id = mod_api::Identifier::parse(GRIP_POSE).expect("valid identifier");
+    event.register(id, |_config, children| {
+        children.add_named_models()?;
+        Ok(grip_pose)
+    });
+}
+
+/// The grip's node: in a first-person hand, the swing's pose and the cog turned on by it;
+/// elsewhere at rest (`animation` 0.25); the cog at `renderTime * -2`.
+fn grip_pose(
     _host: &dyn mod_api::ClientHost,
-    event: &mut mod_api::ItemModelUpdateEvent<'_>,
+    input: &mod_api::ItemModelUpdateInput<'_>,
+    layers: &mut Vec<mod_api::ItemModelLayer>,
 ) {
-    if event.kind != GRIP_POSE {
-        return;
-    }
-    let time = event.level.map_or(0, |l| l.game_time);
+    let time = input.context.level.as_ref().map_or(0, |l| l.game_time);
     let hand = matches!(
-        event.display,
+        input.context.display,
         mod_api::ItemDisplayContext::FirstPersonLeftHand
             | mod_api::ItemDisplayContext::FirstPersonRightHand
     );
@@ -1424,7 +1459,7 @@ pub(crate) fn grip_pose(
         angle += 360.0 * shown.powi(3);
     }
     let cog = ((angle.rem_euclid(45.0) / 45.0 * GRIP_COG_STEPS as f32) as i64) % GRIP_COG_STEPS;
-    event.layers.push(mod_api::ItemModelLayer::new(if hand {
+    layers.push(mod_api::ItemModelLayer::new(if hand {
         let pose = if hold { "holding" } else { "punching" };
         format!("hand_{step}_{cog}_{pose}")
     } else {
@@ -1432,44 +1467,20 @@ pub(crate) fn grip_pose(
     }));
 }
 
-/// A number in a special model's config (its JSON converted to NBT).
-fn config_number(config: &Tag, key: &str) -> Option<f32> {
-    let Tag::Compound(c) = config else {
-        return None;
-    };
-    Some(match c.get(&key.into())? {
-        Tag::Double(v) => f64::from_bits(*v) as f32,
-        Tag::Float(v) => f32::from_bits(*v),
-        Tag::Int(v) => *v as f32,
-        Tag::Long(v) => *v as f32,
-        Tag::Short(v) => f32::from(*v),
-        Tag::Byte(v) => f32::from(*v),
-        _ => return None,
-    })
-}
-
-impl mod_api::SpecialModelRenderer for GripModel {
+impl GripModel {
     /// `ExtendoGripItemRenderer.render` for the pose its node names: `animation` (before it is
     /// cubed), the cog's turn `cog` and the hand.
-    fn extract(
-        &self,
-        _host: &dyn mod_api::ClientHost,
-        _stack: &ItemStack,
-        config: &Tag,
-        _context: &mod_api::SpecialModelContext,
-    ) -> Result<Vec<mod_api::SpecialModelPart>, String> {
+    fn bake(
+        config: mod_api::serde_json::Value,
+        bake: &dyn mod_api::SpecialModelBakeContext,
+    ) -> Result<GripModel, String> {
         const ROT: [f32; 3] = [0.0, 0.5, 0.5];
         const BACK: [f32; 3] = [0.0, -0.5, -0.5];
         let item = |m: &str| format!("create:item/extendo_grip/{m}");
-        let animation: f32 = config_number(config, "animation").unwrap_or(0.25).powi(3);
-        let cog = config_number(config, "cog").unwrap_or(0.0);
-        let hand = match config {
-            Tag::Compound(c) => match c.get(&"hand".into()) {
-                Some(Tag::String(s)) => s.to_string_lossy(),
-                _ => "pointing".to_owned(),
-            },
-            _ => "pointing".to_owned(),
-        };
+        let number = |key: &str| config[key].as_f64().map(|v| v as f32);
+        let animation: f32 = number("animation").unwrap_or(0.25).powi(3);
+        let cog = number("cog").unwrap_or(0.0);
+        let hand = config["hand"].as_str().unwrap_or("pointing");
         let extension = 24.0 + (156.0 - 24.0) * animation;
         let half = extension / 2.0;
         let opposite = 180.0 - extension;
@@ -1508,7 +1519,36 @@ impl mod_api::SpecialModelRenderer for GripModel {
             .rotate(2, cog)
             .translate([0.0, -1.0 / 16.0, 0.0]);
         parts.push(cog_pose.part(&item("cog")));
-        Ok(parts)
+        let parts = parts
+            .into_iter()
+            .map(|(model, pose)| Ok((bake.bake_model(&model)?, pose)))
+            .collect::<Result<_, String>>()?;
+        Ok(GripModel(parts))
+    }
+}
+
+impl mod_api::SpecialModelRenderer for GripModel {
+    type Argument = ();
+
+    fn extract_argument(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        _stack: &mod_api::SpecialModelStack<'_>,
+    ) {
+    }
+
+    fn submit(
+        &self,
+        _: &(),
+        _context: &mod_api::SpecialModelContext,
+        collector: &mut mod_api::SpecialModelCollector<'_>,
+    ) -> Result<(), String> {
+        for (geometry, pose) in &self.0 {
+            collector.with_pose(*pose, |c| {
+                c.submit_geometry(geometry, mod_api::SpecialModelTints::Untinted)
+            })?;
+        }
+        Ok(())
     }
 }
 

@@ -11,9 +11,10 @@
 
 use super::super::server::ServerLevel;
 use super::{body, chain, with};
+use crate::glue::names::Named as _;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    Compound, ItemDisplayContext, Tag, TerrainModelOptions,
+    BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, ItemDisplayContext,
+    Tag, TerrainModelOptions,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -190,7 +191,7 @@ pub(super) fn sync(lv: &mut ServerLevel<'_>) {
                         item: p
                             .animated
                             .as_ref()
-                            .map(|b| b.stack.item().id(host))
+                            .map(|b| b.stack.item().name(host))
                             .unwrap_or_default(),
                         goggles: p.goggles,
                         address: p.filter.clone(),
@@ -345,7 +346,7 @@ pub(super) fn put_on_goggles(lv: &mut ServerLevel<'_>, click: &mod_api::BlockCli
     if click.hand != mod_api::Hand::Main
         || click
             .stack
-            .is_none_or(|s| s.item().id(host) != "create:goggles")
+            .is_none_or(|s| s.item().name(host) != "create:goggles")
     {
         return false;
     }
@@ -412,7 +413,12 @@ impl BlockPart for FrogDraw {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for FrogDraw {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         if event.block != "create:package_frogport" {
             return;
         }
@@ -621,7 +627,7 @@ fn nameplate_hovered(
     draw.rotate_about([0.0, 1.0, 0.0], 180.0 - cam.yaw, [0.0; 3]);
     draw.rotate_about([1.0, 0.0, 0.0], -cam.pitch, [0.0; 3]);
     draw.scale([0.025, -0.025, 0.025]);
-    let width = draw.text_width(&text).unwrap_or(0.0);
+    let width = draw.text_width(&text);
     let _ = draw.text(&text, [-(width / 2.0).floor(), 0.0], 0xFF_FFFF, false, None);
     draw.pop();
     true

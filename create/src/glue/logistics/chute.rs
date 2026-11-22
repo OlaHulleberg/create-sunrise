@@ -9,6 +9,7 @@ use super::items;
 use super::{info_at, mark_touched};
 use crate::glue::contraptions::actors;
 use crate::glue::items::filters;
+use crate::glue::owned::OwnedStack as _;
 use create_engine::Block;
 use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::Dir;

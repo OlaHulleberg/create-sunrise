@@ -8,6 +8,7 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use super::arms::arms_touched;
 use super::items::{self, random_angle, upright};
+use crate::glue::owned::OwnedInventory as _;
 use create_engine::{Block, depot};
 use mod_api::PlayerRef;
 

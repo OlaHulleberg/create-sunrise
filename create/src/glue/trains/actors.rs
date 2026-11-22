@@ -9,6 +9,8 @@
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use crate::glue::contraptions::{actors, colliders};
+use crate::glue::names::Named as _;
+use crate::glue::owned::LevelLists as _;
 use create_engine::actors::Carried;
 use create_engine::train_controls::Frame;
 use std::cell::RefCell;
@@ -230,7 +232,7 @@ fn run_over(lv: &mut ServerLevel<'_>, train: u32, car: usize, frame: &Frame) {
             }
             let player = e
                 .kind(host)
-                .is_some_and(|k| k.id(host) == "minecraft:player");
+                .is_some_and(|k| k.name(host) == "minecraft:player");
             if player
                 && let Some(p) = e.uuid(&mut *lv.host).and_then(|u| lv.host.player(u))
                 && (crate::glue::items::creative(&*lv.host, p)

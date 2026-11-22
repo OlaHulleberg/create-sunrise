@@ -10,8 +10,8 @@ use create_engine::Block;
 use create_engine::display::{self, Board, Face, Shown};
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent,
-    BlockEntitySubmitEvent, BlockPart, ClientHost, Registrar, SoundPlay, Tag, Text,
+    BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart,
+    ClientHost, Registrar, SoundPlay, Tag, Text,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -260,7 +260,7 @@ fn speed_of(nbt: &mod_api::Compound) -> f32 {
 
 /// The width of `s` in font pixels.
 fn width(draw: &dyn BlockEntityDrawContext, s: &str) -> f32 {
-    draw.text_width(&Text::literal(s)).unwrap_or(0.0)
+    draw.text_width(&Text::literal(s))
 }
 
 /// Draws `text` at `pose` (font pixels from the block's corner), `rgb`, glowing or not.
@@ -291,7 +291,12 @@ impl BlockPart for DisplayEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for DisplayEntity {
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
@@ -693,7 +698,7 @@ fn draw_board(
 pub(super) fn draw_carried(
     host: &dyn ClientHost,
     block: Block,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
 ) {
     let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
     let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
@@ -736,7 +741,7 @@ pub(super) fn draw_carried(
 /// structure has no speed, so its flaps stand still).
 fn draw_carried_board(
     host: &dyn ClientHost,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
     c: &mod_api::Compound,
 ) {
     let Some(b) = super::carried::board_of(c) else {

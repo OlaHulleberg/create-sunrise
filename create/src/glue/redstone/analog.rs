@@ -253,7 +253,7 @@ impl BlockPart for ContentsBlock {
         let Some((block, _)) = states::id(event.state).and_then(info) else {
             return;
         };
-        let Some(dimension) = event.level.dimension().id(&*host) else {
+        let Some(dimension) = event.level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];

@@ -13,8 +13,8 @@ use create_engine::parts::StateInfo;
 use create_engine::tank::Fluid;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntityRenderBoundingBoxEvent, BlockEntitySubmitEvent, BlockPart, ClientHost,
-    FluidBoxOptions, FluidStack, ModBlockEntity, Registrar, Tag,
+    BlockEntityRenderBoundingBoxEvent, BlockPart, ClientHost, FluidBoxOptions, FluidStack,
+    ModBlockEntity, Registrar, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -95,7 +95,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
         Block::ItemDrain => super::drawn::animated(entity),
         Block::SteamEngine => super::engine::animated(entity),
         Block::Spout => super::spouted::animated(entity),
-        Block::SteamWhistle => whistle_blows(entity).is_some_and(|(on, _)| on),
+        Block::SteamWhistle => whistle_blows(&entity.nbt).is_some_and(|(on, _)| on),
         Block::FluidTank => GAUGES.with_borrow(|g| g.get(&pos).is_some_and(|g| !g.settled)),
         Block::GlassFluidPipe => super::flows::animated(entity),
         _ => false,
@@ -137,31 +137,47 @@ impl BlockEntityPart for FluidEntity {
 
     /// Each client tick: a valve's pointer sets off at a new speed and takes a step
     /// (`tickChaser`).
-    fn block_entity_client_tick(
-        &self,
-        host: &mut dyn ClientHost,
-        event: &mut BlockEntityClientTickEvent<'_>,
-    ) {
-        let info = match client_block(&*host, event.state) {
+    fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
+        let Some((state, pos, level)) = event
+            .subject
+            .with_view(|v| (v.state(), v.position(), v.level()))
+        else {
+            return;
+        };
+        let block = client_block(&*event.subject.host(), state);
+        let info = match block {
             Some((Block::SteamEngine, info)) => {
-                return super::engine::client_tick(host, event, &info);
+                let Some(speed) = event
+                    .subject
+                    .with_view(|v| super::engine::shown_speed(v.nbt()))
+                else {
+                    return;
+                };
+                let host = event.subject.host();
+                let now = level.game_time(&*host).unwrap_or(0);
+                return super::engine::client_tick(host, now, pos, speed, &info);
             }
             Some((Block::SteamWhistle, info)) => {
-                if let Some((true, since)) = whistle_blows(event.entity) {
-                    let now = event
-                        .block_entity
-                        .level(&*host)
-                        .and_then(|l| l.game_time(&*host))
-                        .unwrap_or(0);
+                let blows = event
+                    .subject
+                    .with_view(|v| whistle_blows(v.nbt()))
+                    .flatten();
+                if let Some((true, since)) = blows {
+                    let host = event.subject.host();
+                    let now = level.game_time(&*host).unwrap_or(0);
                     // `tickAudio`: a jet every 8 ticks, and as it starts.
                     if now % 8 == 0 || i64::from(now as i32) == since {
-                        super::engine::whistle_jet(host, event.pos, &info);
+                        super::engine::whistle_jet(host, pos, &info);
                     }
                 }
                 return;
             }
             Some((Block::FluidValve, info)) => {
-                super::flows::client_pipe_tick(host, event.pos, event.entity);
+                let flows = event
+                    .subject
+                    .with_view(|v| super::flows::shown(v.nbt()))
+                    .unwrap_or_default();
+                super::flows::client_pipe_tick(event.subject.host(), pos, flows);
                 info
             }
             Some((
@@ -172,13 +188,19 @@ impl BlockEntityPart for FluidEntity {
                 | Block::MechanicalPump,
                 _,
             )) => {
-                return super::flows::client_pipe_tick(host, event.pos, event.entity);
+                let flows = event
+                    .subject
+                    .with_view(|v| super::flows::shown(v.nbt()))
+                    .unwrap_or_default();
+                return super::flows::client_pipe_tick(event.subject.host(), pos, flows);
             }
             _ => return,
         };
-        let speed = speeds_of(&event.entity.nbt)[0];
+        let Some(speed) = event.subject.with_view(|v| speeds_of(v.nbt())[0]) else {
+            return;
+        };
         VALVES.with_borrow_mut(|v| {
-            let v = v.entry(event.pos).or_insert_with(|| Valve {
+            let v = v.entry(pos).or_insert_with(|| Valve {
                 pointer: Pointer::at(info.enabled),
                 prev: Pointer::at(info.enabled).angle(),
                 speed: 0.0,
@@ -216,7 +238,17 @@ impl BlockEntityPart for FluidEntity {
         }
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        self.submit(host, &mut crate::glue::Submit::of(event));
+    }
+}
+
+impl FluidEntity {
+    fn submit(&self, host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
         let Some((block, info)) = client_block(host, event.state) else {
             return;
         };
@@ -250,7 +282,7 @@ impl BlockEntityPart for FluidEntity {
 /// `FluidTankRenderer`: the fluid's box over the whole tank from its controller. Water and lava
 /// are drawn as the game draws a still fluid (water in its default colour); Create's own as their
 /// fluid's still texture on a block model stretched to the box.
-fn draw_tank(host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+fn draw_tank(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
     let Some(m) = shown_tank(event.entity) else {
         return;
     };
@@ -338,7 +370,7 @@ pub(crate) fn fluid_box(
 
 /// `AbstractPulleyRenderer`: the magnet (or its half near the top) at the hose's end, gliding
 /// while it moves, and the hose's pieces down to it.
-fn draw_hose(event: &mut BlockEntitySubmitEvent<'_>) {
+fn draw_hose(event: &mut crate::glue::Submit<'_>) {
     let Some((offset, per_tick, at)) = shown_hose(event.entity) else {
         return;
     };
@@ -372,7 +404,7 @@ fn draw_hose(event: &mut BlockEntitySubmitEvent<'_>) {
 /// `FluidValveRenderer`'s pointer: turned to the valve's facing (`horizontalAngle`, 90° down
 /// from up for a side, 180° for down) and its extra quarter turn, then about the facing by the
 /// pointer's angle, between its last two ticks while it moves.
-fn draw_pointer(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
+fn draw_pointer(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     let Some(facing) = info.facing else {
         return;
     };
@@ -427,11 +459,7 @@ fn draw_pointer(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
 /// `FilteringRenderer` on a smart pipe: the item in its filter slot (`SmartPipeFilterSlot`'s
 /// place, turn and tilt, the value box's scale), drawn as `ValueBoxRenderer
 /// .renderItemIntoValueBox` does: a block at its full size, a flat item at half pushed back.
-fn draw_pipe_filter(
-    host: &dyn ClientHost,
-    event: &mut BlockEntitySubmitEvent<'_>,
-    info: &StateInfo,
-) {
+fn draw_pipe_filter(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     let Some(Tag::String(id)) = event.entity.nbt.get(&super::plumbing::FILTER.into()) else {
         return;
     };
@@ -460,8 +488,8 @@ fn draw_pipe_filter(
 }
 
 /// Whether a whistle blows, and the game time it started or stopped (`plumbing::WHISTLE`).
-fn whistle_blows(entity: &ModBlockEntity) -> Option<(bool, i64)> {
-    let Some(Tag::IntArray(v)) = entity.nbt.get(&super::plumbing::WHISTLE.into()) else {
+fn whistle_blows(nbt: &mod_api::Compound) -> Option<(bool, i64)> {
+    let Some(Tag::IntArray(v)) = nbt.get(&super::plumbing::WHISTLE.into()) else {
         return None;
     };
     match v.as_slice() {
@@ -473,7 +501,7 @@ fn whistle_blows(entity: &ModBlockEntity) -> Option<(bool, i64)> {
 /// `WhistleRenderer`: the mouth for the whistle's size, turned to its facing, lifted by its
 /// `animation` (chasing 1 by half the way a tick while it blows, falling 0.4 a tick after) and,
 /// once more than half open, wiggling eight ticks a cycle times 4 less its size's ordinal.
-fn draw_whistle(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
+fn draw_whistle(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     use create_engine::whistle::Size;
     let size = info.size.unwrap_or_default();
     let name = match size {
@@ -489,7 +517,7 @@ fn draw_whistle(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
     };
     let draw = &mut *event.draw;
     let now = draw.game_time() as f32 + draw.partial();
-    let (on, at) = whistle_blows(event.entity).unwrap_or((false, 0));
+    let (on, at) = whistle_blows(&event.entity.nbt).unwrap_or((false, 0));
     let t = (now - at as f32).max(0.0);
     let mut offset = if on {
         1.0 - 0.5f32.powf(t)
@@ -521,7 +549,7 @@ fn draw_whistle(event: &mut BlockEntitySubmitEvent<'_>, info: &StateInfo) {
 /// `BoilerRenderer` for a controller without windows: its gauges and their dials, each dial
 /// swinging to the boiler's level (`gauge.chase(target, .125, EXP)` as the boiler's data comes).
 /// Whether it stands still (it may be kept).
-fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::Multi) -> bool {
+fn draw_boiler(event: &mut crate::glue::Submit<'_>, m: &create_engine::tank::Multi) -> bool {
     let Some(Tag::IntArray(v)) = event.entity.nbt.get(&super::BOILER.into()) else {
         GAUGES.with_borrow_mut(|g| g.remove(&event.pos));
         return true;
@@ -608,7 +636,7 @@ fn draw_boiler(event: &mut BlockEntitySubmitEvent<'_>, m: &create_engine::tank::
 pub(crate) fn draw_carried(
     host: &dyn ClientHost,
     block: Block,
-    event: &mut BlockEntitySubmitEvent<'_>,
+    event: &mut crate::glue::Submit<'_>,
 ) {
     if matches!(
         block,
@@ -618,6 +646,6 @@ pub(crate) fn draw_carried(
             | Block::ItemDrain
             | Block::SmartFluidPipe
     ) {
-        FluidEntity.block_entity_submit(host, event);
+        FluidEntity.submit(host, event);
     }
 }

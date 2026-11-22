@@ -12,13 +12,14 @@
 use super::super::items::{creative, obstructed, sneaking};
 use super::super::server::ServerLevel;
 use super::super::states;
+use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::belt::Slope;
 use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockState, ClientHost, EntityPlaceEvent, Flow, HostBlockStates, HostSide, InteractionResult,
-    ItemPart, Registrar, ServerHost, UseOnEvent,
+    BlockState, ClientHost, Flow, HostBlockStates, HostSide, InteractionResult, ItemPart,
+    Registrar, ServerHost, UseOnEvent,
 };
 
 /// The blocks whose items are `AssemblyOperatorBlockItem`s (`AllBlocks`).
@@ -111,7 +112,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     }
     let block = OPERATORS
         .into_iter()
-        .find(|b| event.stack.item().id(&*lv.host) == format!("create:{}", b.name()))?;
+        .find(|b| event.stack.item().name(&*lv.host) == format!("create:{}", b.name()))?;
     // `getPlacementState` with the click on the top face of the spot.
     let state = {
         let facts = lv.host.block_states();
@@ -153,13 +154,11 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
         return Some(InteractionResult::Fail);
     }
     // `BlockItem.placeBlock`, heard by the subsystems as the game's placement is.
-    let below = lv.block_state([up[0], up[1] - 1, up[2]])?;
-    let mut placed = EntityPlaceEvent {
+    lv.block_state([up[0], up[1] - 1, up[2]])?;
+    let mut placed = crate::glue::subsystem::Placed {
         placer: Some(player.entity()),
         pos: mod_api::BlockPos::new(up[0], up[1], up[2]),
         state,
-        placed_against: below,
-        placement: mod_api::Placement::Single,
         cancelled: false,
     };
     for s in super::super::SUBSYSTEMS {

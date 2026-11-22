@@ -16,9 +16,9 @@ use create_engine::kinetics::{
 use create_engine::world::keeps_state;
 use mod_api::HostBlockStates;
 use mod_api::{
-    BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntitySubmitEvent,
-    BlockEntityTypeKey, BlockEntityUpdateTagEvent, BlockKey, BlockPart, ClientHost, Compound,
-    HostSide, Registrar, RegistrationContext, Tag,
+    BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart, BlockEntityTypeKey,
+    BlockEntityUpdateTagEvent, BlockKey, BlockPart, ClientHost, Compound, Registrar,
+    RegistrationContext, Tag,
 };
 use std::sync::OnceLock;
 
@@ -866,15 +866,14 @@ impl BlockPart for KineticEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for KineticEntity {
-    fn block_entity_on_load(&self, host: HostSide, event: &mut BlockEntityOnLoadEvent) {
-        let HostSide::Server(host) = host else {
+    fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
+        let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) else {
             return;
         };
-        let entity = event.entity;
         let (Some(level), Some(pos)) = (entity.level(&*host), entity.position(&*host)) else {
             return;
         };
-        let Some(dimension) = level.dimension().id(&*host) else {
+        let Some(dimension) = level.dimension().id(&*host).map(str::to_owned) else {
             return;
         };
         let Some(dim) = level_index(&dimension) else {
@@ -1007,7 +1006,12 @@ impl BlockEntityPart for KineticEntity {
         (!shown.is_empty()).then_some(shown)
     }
 
-    fn block_entity_submit(&self, host: &dyn ClientHost, event: &mut BlockEntitySubmitEvent<'_>) {
+    fn block_entity_submit(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::BlockEntitySubmitEvent<'_>,
+    ) {
+        let event = &mut crate::glue::Submit::of(event);
         let Some(id) = states::id(event.state) else {
             return;
         };
