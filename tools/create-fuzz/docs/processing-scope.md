@@ -111,9 +111,10 @@ too, so a case whose input has a rolled recipe compares what chance decides by s
 (`processing::Rolls`): an item a rolled recipe makes for sure compares by presence, one it makes
 only by chance not at all, in machine slots, depots, thrown items and items given to a player.
 Depots' saved payloads are then not compared, nor the comparator of one holding such an item. Inputs, times and fixed recipes'
-results compare exactly. Where the rolls change what happens next (a depot taking one result
-stack but not two, so the next insert is refused) Java disagrees with itself and the case is
-reported unstable.
+results compare exactly. Where the rolls would change what happens next, the family does not
+go on: a depot below a controller takes one stack of the results, and how many more stay in the
+controller (so whether it takes the next insert) is chance's, so over a depot nothing is put in
+after a rolled input (seeds 5341 and 6109, where two Java runs disagreed on a later insert).
 
 ## Port differences found
 
@@ -129,22 +130,30 @@ Fixed, each with an engine test carrying Create's numbers and a case in `cases/`
 | `processing-crusher-removed` | A controller holding 8 cobblestone drops them when a wheel goes | Dropped nothing | `CrushingWheelControllerBlock.java:197` |
 | `processing-saw-depot-turn` | A depot placed after the saw moves the result 0.125 in the tick it arrives | Moved it a tick later (saws ticked after the transport walk) | `SawBlockEntity.java:170` in the level's block-entity order |
 
-Remaining (repro: `./run.sh fuzz gen <seed>` then `check`):
+The driver spilled a broken millstone's slots as `Block.popResource` does; the game spills a
+mod container as `Containers.dropContents` does, as Create's `destroy` (:144,
+`ItemHelper.dropContents`) does, so seeds 973 and 1485 differed whenever Java's items landed
+outside the narrower range.
+
+Documented API gaps (`rust/src/allow.rs`, rows in `API_GAPS.md`; repro: `./run.sh fuzz gen <seed>`
+then `check`):
 
 - Seed 2765 (`processing/millstone`): the millstone's handler takes 19 dirt into slot 0. Create's
   `MillstoneInventoryHandler.insertItem` (:236) refuses what it can't mill (`canProcess`, :211).
   The port's container has no per-item rule; the SDK's `can_place_item` hook sees the entity's
-  slots but not its block, so a millstone cannot be told from a basin there.
-- Seed 2269 (`processing/crushing`): results thrown out of a controller facing down appear at
-  y − 0.8, Create's at y − 0.55 (`outPos`, :130). Create tags them `BypassCrushingWheel` (:193) so
-  the controller's collision for items lets them through; the port has no such tag and starts
-  them clear of it (`crusher::output`).
+  slots but not its block, so a millstone cannot be told from a basin there. A case whose first
+  difference is this is counted as a documented API gap, not compared further.
+- Seeds 1757, 2269, 3805 and 5085 (`processing/crushing`): results thrown out of a controller
+  facing down appear at y − 0.8, Create's at y − 0.55 (`outPos`, :130). Create tags them
+  `BypassCrushingWheel` (:193) so the controller's collision for items lets them through; the
+  port has no such tag and starts them clear of it (`crusher::output`). Such a drop pairs with
+  Java's exactly and the rest of the case is compared.
 
 ## Not driven yet
 
 | Machine | Java | Why not yet |
 | --- | --- | --- |
-| Mixer over a basin | `kinetics/mixer/MechanicalMixerBlockEntity` (`tick`, :126: 40-tick cycle, `processingTicks` :157 from speed and the recipe's time), `processing/basin/*` (`BasinBlockEntity.tick` :344, `BasinRecipe.match` :39 and `apply` :61, heat from the block below :618, spout output :376) | The Java snapshot reports basins (inputs, outputs, tanks, filter) and mixers (`running`, `runningTicks`, `processingTicks`); the driver does not mirror `glue/processing/basin.rs` yet |
+| Mixer over a basin | `kinetics/mixer/MechanicalMixerBlockEntity` (`tick`, :126: 40-tick cycle, `processingTicks` :157 from speed and the recipe's time), `processing/basin/*` (`BasinBlockEntity.tick` :344, `BasinRecipe.match` :39 and `apply` :61, heat from the block below :618, spout output :376) | The Java snapshot reports basins (inputs, outputs, tanks, filter) and mixers (`running`, `runningTicks`, `processingTicks`). The driver reports the port's mixer cycle (idle: it cannot place a basin, the only thing that starts one) and does not mirror `glue/processing/basin.rs` yet |
 | Press over a basin | `MechanicalPressBlockEntity.tryProcessInBasin` (:83), `PressingBehaviour.tick` (`CYCLE` 240) | As the mixer: the basin |
 | Drill and sideways saw | `kinetics/base/BlockBreakingKineticBlockEntity` (`tick` :86, `lazyTick` :43), `saw/TreeCutter` | Block breaking with hardness, drops and tree felling |
 | Deployer | `kinetics/deployer/DeployerBlockEntity.tick` (:173), `DeployerHandler` | A fake player's item use |

@@ -495,10 +495,14 @@ pub fn crushing(seed: u64) -> Scenario {
         Some(if same { rpm } else { -rpm }),
     ));
     let controller = [0, 8, 0];
-    if r.chance(0.6) {
+    let depot = r.chance(0.6);
+    if depot {
         sc.blocks
             .push(placed([0, 7, 0], "create:depot[waterlogged=false]", None));
     }
+    // The depot takes one stack of the results; how many more stay in the controller, and so
+    // whether it takes the next insert, is `level.random`'s.
+    let mut rolled_left = false;
     let mut tick = 20;
     for _ in 0..2 + r.below(3) {
         if tick + 40 > sc.ticks {
@@ -506,11 +510,12 @@ pub fn crushing(seed: u64) -> Scenario {
         }
         let item = r.pick(inputs("crusher")).as_str();
         let count = 1 + r.below(if rolled(item) { 4 } else { 16 }) as u8;
-        sc.events.push(act(
-            tick,
-            controller,
-            insert(None, r.below(2) as u8, item, count),
-        ));
+        let slot = r.below(2) as u8;
+        if !rolled_left {
+            sc.events
+                .push(act(tick, controller, insert(None, slot, item, count)));
+            rolled_left = depot && slot == 0 && rolled(item);
+        }
         sc.checkpoints.extend(tick..tick + 3);
         tick += 40 + r.below(120);
         if r.chance(0.2) {
@@ -612,4 +617,44 @@ pub fn saw(seed: u64) -> Scenario {
     sc.checkpoints.sort_unstable();
     sc.checkpoints.dedup();
     sc
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn no_insert_follows_a_rolled_one_over_a_depot() {
+        let mut gated = 0;
+        for seed in (221..20_000).step_by(256) {
+            let sc = super::crushing(seed);
+            if !sc
+                .blocks
+                .iter()
+                .any(|b| b.state.starts_with("create:depot"))
+            {
+                continue;
+            }
+            let inserts: Vec<_> = sc
+                .events
+                .iter()
+                .filter_map(|e| match &e.action {
+                    Some(super::Action::Capability {
+                        insert: Some(s),
+                        slot,
+                        ..
+                    }) => Some((*slot, s.item.clone())),
+                    _ => None,
+                })
+                .collect();
+            if let Some(i) = inserts
+                .iter()
+                .position(|(slot, item)| *slot == 0 && super::rolled(item))
+            {
+                assert_eq!(i, inserts.len() - 1, "seed {seed}");
+                gated += 1;
+            }
+        }
+        assert!(gated > 0);
+        let sc = super::crushing(5341);
+        assert_eq!(sc.events.len(), 2);
+    }
 }
