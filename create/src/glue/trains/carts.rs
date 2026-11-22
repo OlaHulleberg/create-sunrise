@@ -2447,6 +2447,7 @@ fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) -> Vec<Ar
             pose,
             colliders::blocks_hash(&before.m.blocks),
             || before.m.blocks.clone(),
+            super::car_state,
         );
         let furnaces = fuel
             .into_iter()

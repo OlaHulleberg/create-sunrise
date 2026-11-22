@@ -19,8 +19,8 @@ use super::create_info;
 use create_engine::collider::{self, Aabb, Frame, Pose};
 use create_engine::kinetics::Dir;
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, Collider, ColliderBox,
-    Compound, EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, Flow,
+    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, BlockState, Collider,
+    ColliderBox, Compound, EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, Flow,
     GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Registrar,
     RegistrationContext, RemovalReason, ServerHost, SpawnBody, Tag,
 };
@@ -403,9 +403,15 @@ fn place_anchored(lv: &mut ServerLevel<'_>) {
     })
     .unwrap_or_default();
     for (owner, kind, pose, hash) in standing {
-        place(lv, owner, Carrier::Own(kind), pose, hash, || {
-            anchored_blocks(dim, owner)
-        });
+        place(
+            lv,
+            owner,
+            Carrier::Own(kind),
+            pose,
+            hash,
+            || anchored_blocks(dim, owner),
+            super::unnum,
+        );
     }
 }
 
@@ -440,8 +446,9 @@ fn anchored_blocks(dim: usize, owner: Owner) -> Vec<([i32; 3], u32)> {
 }
 
 /// The structure `owner` stands at `pose` now, its blocks hashing to `hash` (made by `blocks`
-/// only when they changed): its carrier's boxes follow it (`apply_to`). A structure not placed in a
-/// level's tick is gone from it by the end of the tick.
+/// only when they changed, their states numbered as `state` reads them): its carrier's boxes
+/// follow it (`apply_to`). A structure not placed in a level's tick is gone from it by the end of
+/// the tick.
 pub fn place(
     lv: &mut ServerLevel<'_>,
     owner: Owner,
@@ -449,6 +456,7 @@ pub fn place(
     pose: Pose,
     hash: u64,
     blocks: impl FnOnce() -> Vec<([i32; 3], u32)>,
+    state: fn(u32) -> Option<BlockState>,
 ) {
     let key = (lv.dim, owner);
     let now = lv.game_time();
@@ -496,7 +504,7 @@ pub fn place(
         .as_ref()
         .is_some_and(|p| p.blocks == hash && (0..3).all(|i| (p.shift[i] - shift[i]).abs() < 1e-6));
     if !same_boxes {
-        let boxes = boxes(lv, &blocks(), pose, shift);
+        let boxes = boxes(lv, &blocks(), state, pose, shift);
         let collider = Collider {
             boxes,
             rotation: was_turned,
@@ -546,6 +554,7 @@ fn unit(q: [f64; 4]) -> [f32; 4] {
 fn boxes(
     lv: &ServerLevel<'_>,
     blocks: &[([i32; 3], u32)],
+    state: fn(u32) -> Option<BlockState>,
     pose: Pose,
     shift: [f64; 3],
 ) -> Vec<ColliderBox> {
@@ -555,7 +564,7 @@ fn boxes(
             let cell = pose
                 .to_world(o.map(|v| f64::from(v) + 0.5))
                 .map(|v| v.floor() as i32);
-            let shape = super::unnum(*s)
+            let shape = state(*s)
                 .and_then(|state| {
                     lv.level
                         .block_shape(&*lv.host, state, cell, BlockShapeKind::Collision)
