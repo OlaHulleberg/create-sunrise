@@ -1,0 +1,58 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 50,
+  "checkpoints": [
+    42,
+    43,
+    44,
+    45
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_saw[axis_along_first=false,facing=up,flipped=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 48
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:stripped_oak_log",
+            "count": 1
+          }
+        }
+      }
+    }
+  ]
+}
