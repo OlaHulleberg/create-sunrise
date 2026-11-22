@@ -1,0 +1,58 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 30,
+  "checkpoints": [
+    12,
+    13
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_saw[axis_along_first=false,facing=up,flipped=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 48
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:oak_log",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}

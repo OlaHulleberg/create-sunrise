@@ -1,0 +1,77 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 40,
+  "checkpoints": [
+    20,
+    21,
+    30,
+    31
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:crushing_wheel[axis=x]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "create:crushing_wheel[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": -64
+    },
+    {
+      "pos": [
+        1,
+        8,
+        1
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 64
+    }
+  ],
+  "events": [
+    {
+      "tick": 20,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:cobblestone",
+          "count": 8
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        1
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}
