@@ -31,6 +31,7 @@ mod geometry;
 mod guided;
 mod handles;
 mod java;
+mod kinetic_faces;
 mod logistics;
 mod loot;
 mod mutate;

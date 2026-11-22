@@ -312,8 +312,9 @@ the kinetics gap report (`./run.sh fuzz gaps kinetics`) lists what remains.
 
 ## Seed families
 
-`rust/src/generate.rs` deals each seed to one scenario family by its residue modulo 128
-(`FAMILIES`). Every residue has exactly one owner: the table is checked when it compiles, and a
+`rust/src/generate.rs` deals each seed to one scenario family by its residue modulo 256
+(`FAMILIES`). It was 128 until the face families took two upper halves; every other residue r
+below 128 shares its owner with r + 128, so those families' seeds and `index` did not change. Every residue has exactly one owner: the table is checked when it compiles, and a
 unit test lists the residues that changed owner. Families written for consecutive seeds (water
 wheels, steam engines, source faces, catalogue states) pick their variants by the seed's index
 among their own seeds, so every variant is reached. A seed with `seed & 32` set also reloads
@@ -337,7 +338,8 @@ table's comments say.
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
 | geometry/states | 77, 93, 109, 125 mod 128 | 4/128 = 3% | Static kinetics: one catalogue state per seed by index, every block, face and order; each state is still reached, over more seeds |
 | geometry/stress_boundary | 0 mod 64 | 1/64 | Unchanged: every eighth static kinetics seed |
-| geometry/network | 92, 124 mod 128 | 1/64 | Random networks through compatible faces (unreached since the fluid families) |
+| geometry/network | 92, 124 mod 256 | 1/128 | Random networks through compatible faces (unreached since the fluid families) |
+| network/face_placement, face_wrench | 220, 252 mod 256 | 2/256 | Placement on and wrench turns from every face of the kinetic blocks a player builds with; geometry/network's upper halves. Variants by `index`; the placement never reloads, the wrench always ([kinetics scope](docs/kinetics-scope.md)) |
 | geometry/source_faces | 76, 108 mod 128 | 1/64 | Six input faces of gearboxes, clutches and gearshifts (unreached since fluid_pumps took 18 mod 32) |
 | geometry/cog_boundary | 34 mod 64 | 1/64 | Unchanged |
 
