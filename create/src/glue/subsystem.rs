@@ -86,6 +86,21 @@ pub trait Subsystem: Sync {
     ) {
     }
 
+    /// `SmartBlockEntity.write` as the block entity's data is saved (`saveAdditional`): the
+    /// fields of `block` at `pos` in level `dim` that count down without a change of their own
+    /// (a cooldown, a timer) are written over `fields` from the live state at game time `now`,
+    /// as the record [`save_entities`](Self::save_entities) made may be older. Numbers only: the
+    /// save hook reaches no registry.
+    fn live_fields(
+        &self,
+        _dim: usize,
+        _now: i64,
+        _pos: [i32; 3],
+        _block: create_engine::Block,
+        _fields: &mut Compound,
+    ) {
+    }
+
     /// The keys [`save_entities`](Self::save_entities) writes for a block entity of `block`.
     fn saved_keys(&self, _block: create_engine::Block) -> &'static [&'static str] {
         &[]

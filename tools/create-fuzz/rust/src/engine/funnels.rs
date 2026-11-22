@@ -144,7 +144,11 @@ impl Run {
             // The glue's `depot_output` hands a depot's stack over at the depot's turn; only
             // an ejector's (not in the walk) is pulled here.
             Mode::TakingFromBelt if depot_below && self.is_ejector(below) => {
-                self.pull_from_depot(pos, facing);
+                let resting = self.w.dims[0]
+                    .depots
+                    .get(&below)
+                    .is_some_and(|h| h.is_none_or(|h| !h.sliding()));
+                self.pull_from_depot(pos, facing, resting);
                 Some(Turn::Blocked)
             }
             _ => None,
@@ -223,9 +227,12 @@ impl Run {
         Some(Turn::Moved)
     }
     /// The glue's `depot_output` (`DepotBehaviour.tick` → `handleBeltFunnelOutput`): at the
-    /// depot's turn, a belt funnel pulling from it above takes what `pull_from_depot` gives.
-    /// True when a stack moved.
-    pub(super) fn depot_output(&mut self, depot: Pos) -> bool {
+    /// depot's turn, once its held stack has `arrived`, a belt funnel pulling from it above takes
+    /// what `pull_from_depot` gives. True when a stack moved.
+    pub(super) fn depot_output(&mut self, depot: Pos, arrived: bool) -> bool {
+        if !arrived {
+            return false;
+        }
         let pos = [depot[0], depot[1] + 1, depot[2]];
         let Some((block, info, mode)) = self.funnel_mode(pos) else {
             return false;
@@ -236,22 +243,18 @@ impl Run {
             return false;
         }
         let facing = info.facing.unwrap_or(Dir::Up);
-        matches!(self.pull_from_depot(pos, facing), Some(Turn::Moved))
+        matches!(self.pull_from_depot(pos, facing, true), Some(Turn::Moved))
     }
     /// `pull_from_depot` (`handleBeltFunnelOutput`): the depot's outputs, then its held stack
-    /// once at rest, into the inventory behind the funnel as far as they fit.
-    fn pull_from_depot(&mut self, pos: Pos, facing: Dir) -> Option<Turn> {
+    /// when `held` lets it, into the inventory behind the funnel as far as they fit.
+    fn pull_from_depot(&mut self, pos: Pos, facing: Dir, held: bool) -> Option<Turn> {
         let below = [pos[0], pos[1] - 1, pos[2]];
         if self.is_ejector(below) {
             self.note_once(format!("adapter gap: funnel over the ejector at {below:?}"));
             return None;
         }
-        let resting = self.w.dims[0]
-            .depots
-            .get(&below)
-            .is_some_and(|h| h.is_none_or(|h| !h.sliding()));
         let behind = self.funnel_inventory(pos, facing)?;
-        // The output slots in order, then the held one once it rests; the first that moves.
+        // The output slots in order, then the held one; the first that moves.
         for slot in 0..super::outputs::SLOTS {
             let Some(out) = self
                 .depot_outputs
@@ -274,7 +277,7 @@ impl Run {
             self.w.depot_changed(0, below);
             return Some(Turn::Moved);
         }
-        if !resting {
+        if !held {
             return Some(Turn::Empty);
         }
         let Some(held) = self

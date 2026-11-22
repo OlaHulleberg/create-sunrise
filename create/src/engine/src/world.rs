@@ -337,7 +337,7 @@ pub struct Dimension {
     /// Andesite tunnels to shape again: after their own neighbour changed (`updateShape`, a
     /// state that still fits is kept), and after their belt's did or they were placed
     /// (`updateTunnel`, `getStateForPlacement`: the new shape at once); those just placed
-    /// (their belt gets a casing).
+    /// (`onPlace`: their connections).
     pub tunnel_checks: Vec<[i32; 3]>,
     /// Deployers and their cycle and held stack, those mid-stroke or waiting out their pause
     /// (the only ones that tick), what was saved for those not placed yet, and those whose
@@ -1804,7 +1804,7 @@ impl CreateWorld {
                 )
             };
             if tunnel(new) && !tunnel(old) {
-                // `BeltTunnelItem`: the belt below is cased.
+                // `onPlace`: its connections are looked at.
                 self.dims[dim].tunnels_new.push(pos);
                 // `BeltTunnelBlock.getStateForPlacement`: a tunnel just placed takes the shape
                 // its surroundings give at once. A later state change of its own (the wrench's
@@ -2564,6 +2564,32 @@ impl CreateWorld {
     /// Gauges whose needle clients must see again.
     pub fn take_gauge_changes(&mut self, dim: usize) -> Vec<[i32; 3]> {
         std::mem::take(&mut self.dims[dim].gauge_changes)
+    }
+
+    /// `KineticBlockEntity.read` of the part `sub` at `pos` (`Kinetics::restore_state`). An
+    /// encased fan read turning ticks from its first tick on (`EncasedFanBlockEntity.tick` reads
+    /// the loaded `getSpeed`), with no speed change to wait for.
+    pub fn restore_kinetic_state(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        sub: u8,
+        saved: crate::kinetics::SavedKineticState,
+    ) -> bool {
+        let d = &mut self.dims[dim];
+        if !d.kinetics.restore_state(pos, sub, saved) {
+            return false;
+        }
+        if let Some(speed) = d.kinetics.speed(pos, sub)
+            && speed != 0.0
+            && let Some(fan) = d.fans.get_mut(&pos)
+        {
+            fan.speed = speed;
+            if !d.running_fans.contains(&pos) {
+                d.running_fans.push(pos);
+            }
+        }
+        true
     }
 
     /// Fans to tick: each turning one, and one that just stopped (its current goes). Those whose
@@ -5279,6 +5305,34 @@ impl CreateWorld {
     }
 
     /// The column of `pos` must be saved again (its belt's items moved).
+    /// `SidedFilteringBehaviour.updateFilterPresence`: the brass tunnel at `pos` keeps the
+    /// filters of its open sides `sides` only, a filter item on another side dropping
+    /// (`removeFilter` → `FilteringBehaviour.destroy`). True when one went.
+    pub fn keep_side_filters(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        sides: &[crate::kinetics::Dir],
+    ) -> bool {
+        let d = &mut self.dims[dim];
+        let mut removed = false;
+        for side in crate::kinetics::Dir::ALL {
+            if sides.contains(&side) {
+                continue;
+            }
+            if let Some(f) = d.tunnel_filters.remove(&(pos, side)) {
+                removed = true;
+                if f.is_filter_item() {
+                    d.dropped_filters.push((pos, f));
+                }
+            }
+        }
+        if removed {
+            d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+        removed
+    }
+
     pub fn mark_unsaved(&mut self, dim: usize, pos: [i32; 3]) {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
@@ -6029,6 +6083,39 @@ mod tests {
         assert!(w.dims[0].tunnel_fresh.is_empty());
         assert_eq!(w.dims[0].tunnel_checks, vec![at]);
         states::clear_range();
+    }
+
+    #[test]
+    fn a_brass_tunnel_drops_the_filters_of_sides_it_lost() {
+        // Seed 6382: a `cross` tunnel along z with an iron ingot on its west filter loses the
+        // depot west of its belt; Java's tunnel then has sides east, north and south and no west
+        // filter, so the west slot is empty when the depot comes back.
+        use crate::filter::{Filter, Spec};
+        use crate::kinetics::Dir;
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            std::iter::empty::<(&str, std::iter::Empty<(&str, &str)>)>(),
+        ));
+        let at = [0, 9, 2];
+        let d = &mut w.dims[0];
+        d.tunnel_filters
+            .insert((at, Dir::West), Filter::item("minecraft:iron_ingot"));
+        d.tunnel_filters.insert(
+            (at, Dir::North),
+            Filter::compile(&Spec::item("create:filter")),
+        );
+        let all = [Dir::North, Dir::South, Dir::West, Dir::East];
+        assert!(!w.keep_side_filters(0, at, &all));
+        assert_eq!(w.dims[0].tunnel_filters.len(), 2);
+        let sides = crate::tunnel::sides(crate::kinetics::Axis::Z, crate::tunnel::Shape::TRight);
+        assert!(!sides.contains(&Dir::West));
+        assert!(w.keep_side_filters(0, at, &sides));
+        assert!(!w.dims[0].tunnel_filters.contains_key(&(at, Dir::West)));
+        assert!(w.dims[0].dropped_filters.is_empty());
+        assert!(w.keep_side_filters(0, at, &[]));
+        assert!(w.dims[0].tunnel_filters.is_empty());
+        assert_eq!(w.dims[0].dropped_filters.len(), 1);
+        assert_eq!(w.dims[0].dropped_filters[0].0, at);
     }
 
     fn item_belt_world(rpm: f32) -> CreateWorld {
@@ -9308,6 +9395,41 @@ mod tests {
                 .iter()
                 .all(|(_, m)| m.multi.is_some_and(|m| m.blocks() == 1 && !m.window))
         );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_reloaded_fan_blows_from_its_first_tick() {
+        // Seed 2487: a fan at -64 RPM blasting a honey bottle on a depot is saved with
+        // `FanProcessingTime` 3; Java's reloaded fan processes it on each of the next three ticks.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "north")]),
+            ("create:encased_fan", vec![("facing", "north")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, fan) = ([0, 8, 1], [0, 8, 0]);
+        w.block_changed(0, fan, 0, 11);
+        w.block_changed(0, motor, 0, 10);
+        w.set_motor(0, motor, 64.0);
+        w.tick(0, &mut Vec::new());
+        let speed = w.speed(0, fan).unwrap();
+        assert!(speed != 0.0);
+        let saved = [motor, fan].map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        w.column_unloaded(0, 0, 0);
+        w.dims[0].kinetics = crate::kinetics::Kinetics::new();
+        w.block_loaded(0, fan, 11);
+        w.block_loaded(0, motor, 10);
+        for (p, s) in [motor, fan].into_iter().zip(saved) {
+            assert!(w.restore_kinetic_state(0, p, 0, s));
+        }
+        assert_eq!(w.fans_to_tick(0), vec![fan]);
+        assert_eq!(w.dims[0].fans[&fan].speed, speed);
+        assert!(w.dims[0].fans[&fan].rebuild);
         states::clear_range();
     }
 

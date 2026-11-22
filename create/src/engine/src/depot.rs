@@ -434,6 +434,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn a_stack_arrives_while_it_still_slides() {
+        // Seed 5687: berries put on a depot under a pulling belt funnel are at 0.125, 0.219 and
+        // 0.289 after their first three ticks and 0.45 after the eighth; Java's ninth `tick`
+        // reports them arrived, so `handleBeltFunnelOutput` moves them on before they rest.
+        let start = Held {
+            position: 0.0,
+            ..Held::new(0, false)
+        };
+        let mut h = start;
+        let arrived: Vec<bool> = (0..9).map(|_| h.slide(false)).collect();
+        assert_eq!(
+            arrived,
+            [false; 8].into_iter().chain([true]).collect::<Vec<_>>()
+        );
+        assert!(h.sliding());
+        let mut h = start;
+        let seen: Vec<f32> = (0..8)
+            .map(|_| {
+                h.slide(false);
+                h.position
+            })
+            .collect();
+        assert_eq!(seen[0], 0.125);
+        assert!((seen[1] - 0.219).abs() < 1e-3 && (seen[2] - 0.289).abs() < 1e-3);
+        assert!((seen[7] - 0.45).abs() < 1e-3);
+    }
+
+    #[test]
     fn java_random_matches_the_jdk() {
         // new java.util.Random(1).nextFloat() and new Random(0).nextFloat(), from the JDK.
         assert_eq!(JavaRandom::new(1).next_float(), 0.7308782);

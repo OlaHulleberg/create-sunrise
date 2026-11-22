@@ -174,6 +174,14 @@ pub fn use_wrench(
         // `BeltSlicer.java:86-93`: `detachKinetics`, `invalidateItemHandler` and
         // `beltLength = 0` on every segment of the belt; the belt is gone until its segments
         // form a new chain at their own tick.
+        // `BeltInventory.eject` below throws items with the controller's speed, which
+        // `detachKinetics` leaves as it was.
+        let rpm = with_world(|w| {
+            let c = *w.dims[dim].belt_of.get(&pos)?;
+            w.speed(dim, c)
+        })
+        .flatten()
+        .unwrap_or(0.0);
         let (_, mut taken) = with_world(|w| w.take_belt(dim, pos)).flatten()?;
         let next = if seg.part == Part::End {
             sub(pos, v)
@@ -213,7 +221,7 @@ pub fn use_wrench(
             taken.items.items = kept;
             for i in gone {
                 // `BeltInventory.eject` reads the zeroed `beltLength` at this point.
-                eject_item(lv, controller, &taken.segment, 0, 0.0, &i);
+                eject_item(lv, controller, &taken.segment, 0, rpm, &i);
             }
             with_world(|w| w.reform_belt(dim, controller, taken.items));
         } else {

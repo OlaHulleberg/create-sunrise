@@ -185,6 +185,10 @@ impl Subsystem for Logistics {
             );
         }
         placement::register(r);
+        for item in ["create:andesite_tunnel", "create:brass_tunnel"] {
+            let key = r.item_key(item);
+            r.item_part(key, tunnel::TunnelItem);
+        }
         for block in PARTS {
             r.block_part(states::key(block), LogisticsBlock);
         }
@@ -244,6 +248,35 @@ impl Subsystem for Logistics {
 
     fn saved_keys(&self, block: Block) -> &'static [&'static str] {
         saved_keys(block)
+    }
+
+    fn live_fields(
+        &self,
+        dim: usize,
+        now: i64,
+        pos: [i32; 3],
+        block: Block,
+        fields: &mut Compound,
+    ) {
+        if !matches!(
+            block,
+            Block::AndesiteFunnel
+                | Block::AndesiteBeltFunnel
+                | Block::BrassFunnel
+                | Block::BrassBeltFunnel
+        ) {
+            return;
+        }
+        let now = now.max(0) as u64;
+        match with_world(|w| w.saved_funnel_cooldown(dim, pos, now)).flatten() {
+            Some(0) => {
+                fields.remove(&TRANSFER_COOLDOWN.into());
+            }
+            Some(c) => {
+                fields.insert(TRANSFER_COOLDOWN.into(), Tag::Int(c as i32));
+            }
+            None => {}
+        }
     }
 
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {

@@ -38,6 +38,8 @@ struct Record {
 }
 
 thread_local! {
+    /// Each level's index and game time at its last publication, for the save hook's live fields.
+    static CLOCKS: RefCell<HashMap<LevelRef, (usize, i64)>> = RefCell::new(HashMap::new());
     static RECORDS: RefCell<HashMap<(LevelRef, [i32; 3]), Record>> = RefCell::new(HashMap::new());
     /// Data block entities loaded that the subsystems have not read yet.
     static PENDING: RefCell<Vec<(LevelRef, [i32; 3], Record)>> = const { RefCell::new(Vec::new()) };
@@ -125,7 +127,8 @@ fn write_record(
         return;
     }
     let record = RECORDS.with_borrow(|r| r.get(&(level, pos)).cloned());
-    if let Some(block) = record.as_ref().map(|r| r.block).or(block) {
+    let block = record.as_ref().map(|r| r.block).or(block);
+    if let Some(block) = block {
         for k in keys(systems, block) {
             tag.remove(&k.into());
         }
@@ -133,7 +136,29 @@ fn write_record(
     if let Some(record) = record {
         tag.extend(record.fields);
     }
+    if let Some(block) = block
+        && let Some((dim, now)) = CLOCKS.with_borrow(|c| c.get(&level).copied())
+    {
+        for s in systems {
+            s.live_fields(dim, now, pos, block, tag);
+        }
+    }
     tag.insert(MARKER.into(), Tag::Byte(1));
+}
+
+/// Sets `inner` to `value` in the compound field `outer` of `fields`, when the record holds one.
+pub fn patch(fields: &mut Compound, outer: &str, inner: &str, value: Tag) {
+    if let Some(Tag::Compound(c)) = fields.get_mut(&outer.into()) {
+        c.insert(inner.into(), value);
+    }
+}
+
+/// The game time `lv` publishes at: what the save hook's live fields are counted from.
+pub fn note_clock(lv: &ServerLevel<'_>) {
+    let now = lv.game_time();
+    CLOCKS.with_borrow_mut(|c| {
+        c.insert(lv.level, (lv.dim, now));
+    });
 }
 
 /// The columns of `lv` holding loaded data still to be read.
@@ -285,6 +310,7 @@ pub fn column_unloaded(level: LevelRef, chunk: [i32; 2]) {
 
 /// The world closed.
 pub fn clear() {
+    CLOCKS.with_borrow_mut(HashMap::clear);
     RECORDS.with_borrow_mut(HashMap::clear);
     PENDING.with_borrow_mut(Vec::clear);
 }

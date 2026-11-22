@@ -104,10 +104,7 @@ impl Run {
     }
     /// `wake_funnel` (`invVersionTracker.reset`): the funnel looks at its inventory again.
     fn wake_funnel(&mut self, p: Pos) {
-        let d = &mut self.w.dims[0];
-        if let Some(due) = d.funnels.get_mut(&p) {
-            *due = 0;
-        }
+        self.w.wake_funnel(0, p);
     }
     /// The glue's `use_funnel_filter`.
     pub(super) fn funnel_filter_use(

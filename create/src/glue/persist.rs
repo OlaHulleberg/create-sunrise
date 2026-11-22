@@ -161,6 +161,7 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
 /// no entity tick or kinetic solve runs here.
 pub(crate) fn publish(lv: &mut ServerLevel<'_>) {
     super::kinetics::drain_effects(lv);
+    super::entity_data::note_clock(lv);
     for (cx, cz) in super::world::with_world(|w| w.take_unsaved(lv.dim)).unwrap_or_default() {
         mark_unsaved(lv.dim, [cx, cz]);
     }

@@ -236,13 +236,12 @@ impl Subsystem for Arms {
         let d2 = (at[0] - f64::from(x) - 0.5).powi(2)
             + (at[1] - f64::from(y) - 1.0).powi(2)
             + (at[2] - f64::from(z) - 0.5).powi(2);
-        let dim = player
-            .dimension(&*host)
-            .and_then(|d| super::super::world::level_index(&d.to_string()));
-        if let Some(dim) = dim
+        let dimension = player.dimension(&*host).map(|d| d.to_string());
+        if let Some(dimension) = dimension
             && d2 < 4.0
+            && let Some(mut lv) = ServerLevel::new(host, &dimension)
         {
-            trigger_ejector(dim, [x, y, z]);
+            trigger_ejector(&mut lv, [x, y, z]);
         }
         true
     }
@@ -1442,6 +1441,9 @@ pub(crate) fn tick_ejector(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let before = e.state;
     let flying = e.flying.len();
     let changed = e.tick(pos, facing, speed, &mut EjectorWorld { lv: &mut *lv, pos });
+    if std::mem::take(&mut e.nudge) {
+        nudge_entities(lv, pos);
+    }
     if before == ejector::State::Charged && e.state == ejector::State::Launching {
         launch_entities(lv, pos, e.launcher.entity_motion(facing));
     }
@@ -1540,23 +1542,59 @@ fn entities_on_ejectors(lv: &mut ServerLevel<'_>) {
                 continue;
             }
         }
-        trigger_ejector(dim, pos);
+        trigger_ejector(lv, pos);
     }
 }
 
 /// `EjectorBlockEntity.activate` (`EjectorTriggerPacket` from a player's client, or something
-/// landing on it): its block entity's next turn launches.
-pub fn trigger_ejector(dim: usize, pos: [i32; 3]) {
-    with_world(|w| {
+/// landing on it): its block entity's next turn launches, and what stands in it is nudged up.
+pub fn trigger_ejector(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let activated = with_world(|w| {
         let d = &mut w.dims[dim];
         let Some(e) = d.ejectors.get_mut(&pos) else {
-            return;
+            return false;
         };
         if e.state == ejector::State::Retracting || e.powered || e.launcher.h == 0 {
-            return;
+            return false;
         }
         e.activate();
-    });
+        e.nudge = false;
+        true
+    })
+    .unwrap_or(false);
+    if activated {
+        nudge_entities(lv, pos);
+    }
+}
+
+/// `EjectorBlockEntity.nudgeEntities`: what is in the ejector's block (inset a pixel at the
+/// sides) but players goes up 2 pixels.
+fn nudge_entities(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let inset = 1.0 / 16.0;
+    let lo = [
+        f64::from(pos[0]) + inset,
+        f64::from(pos[1]),
+        f64::from(pos[2]) + inset,
+    ];
+    let hi = [
+        f64::from(pos[0] + 1) - inset,
+        f64::from(pos[1] + 1),
+        f64::from(pos[2] + 1) - inset,
+    ];
+    for e in lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default() {
+        let kind = e
+            .kind(&*lv.host)
+            .map(|k| k.id(&*lv.host))
+            .unwrap_or_default();
+        if kind.as_str() == "minecraft:player" {
+            continue;
+        }
+        let Some(at) = e.position(&*lv.host) else {
+            continue;
+        };
+        e.teleport_to(&mut *lv.host, [at[0], at[1] + 0.125, at[2]], None);
+    }
 }
 
 /// `activateDeferred`'s entities: what stands on the plate but items and players (whose own

@@ -405,7 +405,7 @@ impl Run {
                     self.land_incoming(p);
                     let arrived = self.w.tick_depot(0, p, false);
                     // The glue's `tick_depot`: `handleBeltFunnelOutput` before the processing.
-                    if !self.depot_output(p) && arrived {
+                    if !self.depot_output(p, arrived) && arrived {
                         self.depot_process_held(p);
                     }
                     continue;

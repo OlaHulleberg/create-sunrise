@@ -958,7 +958,7 @@ impl BlockEntityPart for KineticEntity {
                     if let Some(Tag::Compound(data)) = ports.get(&["0", "1"][sub as usize].into())
                         && let Some(saved) = saved_from_nbt(data)
                     {
-                        w.dims[dim].kinetics.restore_state(pos, sub, saved);
+                        w.restore_kinetic_state(dim, pos, sub, saved);
                     }
                 }
             } else if legacy {

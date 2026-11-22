@@ -306,6 +306,17 @@ impl Subsystem for Fluids {
         saved::saved_keys(block)
     }
 
+    fn live_fields(
+        &self,
+        dim: usize,
+        _now: i64,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        fields: &mut Compound,
+    ) {
+        saved::live_fields(dim, pos, block, fields);
+    }
+
     /// Prepare pipes, boilers, valves and tanks before the shared transport walk.
     /// Pumps, drains and spouts run on their registration turn in that walk.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {

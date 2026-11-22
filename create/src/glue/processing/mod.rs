@@ -223,6 +223,17 @@ impl Subsystem for Processing {
         persist::saved_keys(block)
     }
 
+    fn live_fields(
+        &self,
+        dim: usize,
+        _now: i64,
+        pos: [i32; 3],
+        block: create_engine::Block,
+        fields: &mut Compound,
+    ) {
+        persist::live_fields(dim, pos, block, fields);
+    }
+
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {

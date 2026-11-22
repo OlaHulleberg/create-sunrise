@@ -224,6 +224,18 @@ impl Run {
     /// this very tick (a wrench turning a water wheel) is lost.
     pub(super) fn reload(&mut self) {
         self.publish_entities();
+        let now = u64::from(self.now);
+        let mut at: Vec<Pos> = self.persisted.records.keys().copied().collect();
+        at.extend(self.w.dims[0].funnels.keys().copied());
+        at.sort();
+        at.dedup();
+        for p in at {
+            let fields = self.persisted.records.entry(p).or_default();
+            crate::persistence::entities::live_fields(&self.w, p, now, fields);
+            if fields.is_empty() {
+                self.persisted.records.remove(&p);
+            }
+        }
         self.load_saved();
     }
 
@@ -420,7 +432,7 @@ impl Run {
             for sub in 0..2 {
                 if let Some(saved) = entities.get(&(p, sub)).and_then(codec::saved_from_nbt) {
                     assert!(
-                        self.w.dims[0].kinetics.restore_state(p, sub, saved),
+                        self.w.restore_kinetic_state(0, p, sub, saved),
                         "saved kinetic part missing at {p:?} port {sub}"
                     );
                 }

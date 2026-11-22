@@ -6,6 +6,29 @@ use create_engine::Block;
 use create_engine::world::CreateWorld;
 use std::collections::BTreeMap;
 
+/// glue `Subsystem::live_fields` (`entity_data::write_record`): the countdowns of the record at
+/// `p`, from the live world at the last publication's game time `now`.
+pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
+    match w.block_at(0, p) {
+        Some(
+            Block::AndesiteFunnel
+            | Block::AndesiteBeltFunnel
+            | Block::BrassFunnel
+            | Block::BrassBeltFunnel,
+        ) => match w.saved_funnel_cooldown(0, p, now) {
+            Some(0) => {
+                fields.remove("TransferCooldown");
+            }
+            Some(c) => {
+                fields.insert("TransferCooldown".into(), Tag::Int(c as i32));
+            }
+            None => {}
+        },
+        Some(Block::ItemDrain) => super::fluids::live_drain(w, p, fields),
+        _ => {}
+    }
+}
+
 pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Pos, Compound> {
     let (cx, cz) = column;
     let mut out: BTreeMap<Pos, Compound> = BTreeMap::new();

@@ -256,6 +256,9 @@ pub struct Ejector {
     pub powered: bool,
     /// `launch`: launch at the start of the next tick.
     pub launch: bool,
+    /// `activate`'s `nudgeEntities`, for the world to run: what stands in the block (but
+    /// players) goes up 2 pixels.
+    pub nudge: bool,
     pub flying: Vec<Flying>,
     pub early: Option<Early>,
     pub scan_cooldown: u32,
@@ -353,6 +356,7 @@ impl Ejector {
     /// `activate` (`ejectIfTriggered`, or something landing on it): it launches next tick.
     pub fn activate(&mut self) {
         self.launch = true;
+        self.nudge = true;
     }
 
     /// `EjectorBlockEntity.tick` on the server for an ejector at `pos` facing `facing`, turning
@@ -825,6 +829,16 @@ pub fn decode(mut d: &[u8]) -> Vec<Shown> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn activating_nudges_what_stands_in_the_block() {
+        // Seed 18814: ejector 1 fires in its tick after ejector 0 dropped 16 ingots at y 8.729
+        // inside its block; Java's `activate` → `nudgeEntities` has them at 8.854.
+        let mut e = Ejector::default();
+        assert!(!e.nudge);
+        e.activate();
+        assert!(e.launch && e.nudge);
+    }
 
     /// A full-cube collider box for the cell `p`, in world units.
     fn cube_at(p: [i32; 3]) -> [f64; 6] {

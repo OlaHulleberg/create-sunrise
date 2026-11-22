@@ -227,6 +227,9 @@ impl Run {
         let speed = self.w.speed(0, pos).unwrap_or(0.);
         let before = e.state;
         let changed = e.tick(pos, facing, speed, &mut EjectorSide { run: self, pos });
+        if std::mem::take(&mut e.nudge) {
+            self.nudge_items(pos);
+        }
         if before == ejector::State::Charged && e.state == ejector::State::Launching {
             // `launch_entities`: the driver's worlds hold no entities on a plate.
         }

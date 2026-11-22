@@ -650,3 +650,47 @@ fn a_removed_belt_drops_its_connector_and_pulley_shaft_but_a_motor_needs_a_tool(
         .unwrap();
     assert!(super::run(&sc).drops.unwrap().is_empty());
 }
+
+#[test]
+fn shortening_a_belt_end_ejects_the_stack_past_it() {
+    // Seed 17763: the wrench takes the END segment of an 11-long belt off at tick 87; Java's
+    // `BeltSlicer.java:106-113` hands the 9 diamonds at 10.6 to `BeltInventory.eject`, which
+    // throws them at the belt's speed (`max(|32 / 480|, 1 / 8)`) along it: seen one flight tick
+    // later at z 10.7257, moving (0, 0.0833, 0.1225).
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/belt-shorten-end-ejects.json")).unwrap();
+    let r = super::run(&sc);
+    let drops = r.drops.unwrap();
+    let d = drops
+        .iter()
+        .find(|d| d.tick == 88)
+        .expect("the ejected diamonds");
+    assert_eq!(
+        (d.stack.item.as_str(), d.stack.count),
+        ("minecraft:diamond", 9)
+    );
+    assert!(
+        (d.pos[2] + d.motion[2] - 10.7257).abs() < 1e-3,
+        "{:?}",
+        d.pos
+    );
+    assert_eq!(d.motion, [0.0, 0.125, 0.125]);
+}
+
+#[test]
+fn a_tunnel_joining_its_group_as_the_world_saves_keeps_the_group_mode() {
+    // Seed 19054: the first tunnel is set to `forced_round_robin` at tick 56, two more join at
+    // 60 and 61, and the world reloads after the third is placed. Java's `onPlace` →
+    // `updateTunnelConnections` hands the group's mode to it at once, so all three load with it.
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/brass-join-then-reload.json")).unwrap();
+    let r = super::run(&sc);
+    for x in 0..3 {
+        let t = r.checkpoints[&62].blocks[&format!("{x},9,3")]
+            .tunnel
+            .clone()
+            .and_then(|t| t.brass)
+            .expect("a brass tunnel");
+        assert_eq!(t.mode, "forced_round_robin", "{x}");
+    }
+}
