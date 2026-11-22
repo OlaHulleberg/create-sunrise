@@ -39,6 +39,9 @@ pub trait Host {
     /// FlowSource.provideFluid first probes a generic drain. A rejected probe
     /// may only fall back to matching fluid actually exposed in the handler's tanks.
     fn provide_fluid(&mut self, face: Face, source: &mut Source, gate: Gate) -> Option<Fluid> {
+        if !source.provides_handler() {
+            return None;
+        }
         let accepts = |fluid: Option<Fluid>| match gate {
             Gate::Open => true,
             Gate::Closed => false,
@@ -55,7 +58,7 @@ pub trait Host {
                 .filter(|(_, n)| *n > 0)
                 .map(|(f, _)| vec![f])
                 .unwrap_or_default(),
-            Source::Handler => self.tank_fluids(face),
+            Source::Handler(_) => self.tank_fluids(face),
             _ => Vec::new(),
         };
         for fluid in contained {
@@ -425,12 +428,19 @@ impl Transport {
         let cell = host.cell(face.connected(), face.side);
         let source = match cell {
             Cell::Open | Cell::VanillaTarget => Source::Open(Default::default()),
-            Cell::Tank => Source::Handler,
-            Cell::Port(d) if d == face.side.opposite() => Source::Handler,
+            Cell::Tank => Source::handler(),
+            Cell::Port(d) if d == face.side.opposite() => Source::handler(),
             _ if sides(cell) != 0 => Source::OtherPipe,
             _ => Source::Blocked,
         };
         self.connection_mut(face).unwrap().set_source(source);
+    }
+    /// `PipeConnection.manageSource`.
+    fn manage_source(&mut self, host: &impl Host, face: Face) {
+        self.determine_source(host, face);
+        if let Some(Source::Handler(h)) = self.connection(face).and_then(|c| c.source.as_ref()) {
+            h.manage();
+        }
     }
     /// PumpBlockEntity.onSpeedChanged invokes updatePressureChange immediately,
     /// including when an earlier kinetic entity attaches before this pipe's turn.
@@ -497,7 +507,7 @@ impl Transport {
                 .collect();
             for &face in &faces {
                 self.connection_mut(face)?.flip_flows();
-                self.determine_source(host, face);
+                self.manage_source(host, face);
             }
             if phase == UpdatePhase::FlipFlows {
                 self.pipes.get_mut(&pos)?.phase = UpdatePhase::Idle;
@@ -535,7 +545,7 @@ impl Transport {
                             Some(Source::OtherPipe) => self
                                 .connection(face.opposite())
                                 .and_then(|c| c.provided_fluid(false)),
-                            Some(mut source @ (Source::Handler | Source::Open(_))) => {
+                            Some(mut source @ (Source::Handler(_) | Source::Open(_))) => {
                                 let gate = match host.cell(pos, face.side) {
                                     Cell::Axis(_, gate) => gate,
                                     _ => Gate::Open,
@@ -561,7 +571,7 @@ impl Transport {
                         self.reset_affected_networks(face);
                     }
                     let c = self.connection_mut(face)?;
-                    let endpoint = matches!(c.source, Some(Source::Handler | Source::Open(_)));
+                    let endpoint = matches!(c.source, Some(Source::Handler(_) | Source::Open(_)));
                     if !changed && c.flow.is_some_and(|f| f.inbound) && endpoint {
                         let mut network = c
                             .network
@@ -705,7 +715,7 @@ impl FluidNetwork {
                         remove = false;
                         continue;
                     }
-                    if matches!(source, Some(Source::Handler | Source::Open(_))) {
+                    if matches!(source, Some(Source::Handler(_) | Source::Open(_))) {
                         self.targets.push((adjacent, source.unwrap()));
                         continue;
                     }
@@ -722,8 +732,11 @@ impl FluidNetwork {
                 break;
             }
         }
-        if self.source.is_none() {
+        if self.source.is_none() && self.source_supplier.provides_handler() {
             self.source = Some(self.source_supplier.clone());
+        }
+        if self.source.is_none() {
+            return;
         }
         if !self.frontier.is_empty() {
             host.keep_alive(self.start);
@@ -734,7 +747,7 @@ impl FluidNetwork {
         if host.time() % 40 == 0 {
             for (face, source) in &mut self.targets {
                 if let Some(current) = world.connection(*face).and_then(|c| c.source.clone())
-                    && matches!(&current, Source::Handler | Source::Open(_))
+                    && matches!(&current, Source::Handler(_) | Source::Open(_))
                 {
                     *source = current;
                 }
@@ -771,6 +784,9 @@ impl FluidNetwork {
                 outputs.retain_mut(|(face, target)| {
                     let give = divided + u32::from(remainder > 0);
                     remainder = remainder.saturating_sub(1);
+                    if !target.provides_handler() {
+                        return false;
+                    }
                     let identity = match target {
                         Source::Open(open) => Capability::Open(open.identity()),
                         _ => Capability::Handler(host.identity(*face)),
@@ -1070,7 +1086,7 @@ mod tests {
         };
         assert_eq!(open.identity(), cached.identity());
         assert_eq!(c.open_ends().len(), 1);
-        c.set_source(Source::Handler);
+        c.set_source(Source::handler());
         c.wipe_pressure();
         // previousSource now refers to the handler; the network alone retains
         // the old OpenEndedPipe, exactly as FluidNetwork.reset in Java does.
@@ -1319,6 +1335,49 @@ mod tests {
                 .pressure(),
             [0.; 2]
         );
+    }
+    #[test]
+    fn a_handler_found_by_the_network_waits_for_its_pipes_manage_source() {
+        let line = Cell::Pipe(Dir::East.bit() | Dir::West.bit());
+        let run = |forget: Option<u32>| {
+            let mut world = World {
+                rpm: Some(128.),
+                ..World::default()
+            };
+            world.cells.extend([
+                ([-2, 0, 0], Cell::Tank),
+                ([-1, 0, 0], line),
+                ([0, 0, 0], Cell::Pump(Dir::East)),
+                ([1, 0, 0], line),
+                ([2, 0, 0], Cell::Tank),
+            ]);
+            world.tanks.insert([-2, 0, 0], (Fluid::Water, 1000));
+            let mut transport = register(&world);
+            let target = Face {
+                pos: [1, 0, 0],
+                side: Dir::East,
+            };
+            let mut filled = Vec::new();
+            for tick in 0..20 {
+                if forget == Some(tick) {
+                    transport.connection_mut(target).unwrap().source = None;
+                }
+                transport.prepare(&world);
+                for p in [[-1, 0, 0], [0, 0, 0], [1, 0, 0]] {
+                    transport.tick_pipe(&mut world, p);
+                }
+                filled.push(world.tanks.get(&[2, 0, 0]).map_or(0, |(_, n)| *n));
+            }
+            filled
+        };
+        let at = run(None);
+        let first = at.iter().position(|n| *n > 0).unwrap();
+        assert_eq!(at[first], 64);
+        // FluidNetwork's determineSource makes a FlowSource.FluidHandler whose
+        // fluidHandlerCache stays null until the target pipe's own tick.
+        let late = run(Some(first as u32));
+        assert_eq!(late[first], 0);
+        assert_eq!(late[first + 1], 64);
     }
     #[test]
     fn network_waits_for_both_halves_before_transfer_and_keeps_source_engaged() {

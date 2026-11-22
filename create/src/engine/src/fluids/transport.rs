@@ -5,15 +5,31 @@
 use crate::kinetics::Dir;
 use crate::open_end::OpenEnd;
 use crate::tank::Fluid;
-use std::{cell::RefCell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 /// `FlowSource`: only open endpoints carry persistent state.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
     Open(OpenSource),
-    Handler,
+    Handler(HandlerSource),
     OtherPipe,
     Blocked,
+}
+
+/// `FlowSource.FluidHandler`, shared by its connection and the networks targeting it.
+/// `fluidHandlerCache` is only filled by the owning pipe's `manageSource`.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct HandlerSource(Rc<Cell<bool>>);
+impl HandlerSource {
+    pub fn cached(&self) -> bool {
+        self.0.get()
+    }
+    pub fn manage(&self) {
+        self.0.set(true);
+    }
 }
 
 /// The same OpenEndedPipe can be retained by previousSource and a FluidNetwork.
@@ -49,6 +65,17 @@ impl OpenSource {
 impl Source {
     pub fn open(end: OpenEnd) -> Self {
         Self::Open(OpenSource(Rc::new(RefCell::new(end))))
+    }
+    pub fn handler() -> Self {
+        Self::Handler(HandlerSource::default())
+    }
+    /// `FlowSource.provideHandler` is non-null.
+    pub fn provides_handler(&self) -> bool {
+        match self {
+            Self::Open(_) => true,
+            Self::Handler(h) => h.cached(),
+            _ => false,
+        }
     }
 }
 
@@ -363,7 +390,7 @@ mod tests {
     #[test]
     fn pressure_accumulates_and_changes_speed_mid_flow() {
         let mut c = PipeConnection::default();
-        c.set_source(Source::Handler);
+        c.set_source(Source::handler());
         c.add_pressure(true, 16.0);
         c.add_pressure(true, 16.0);
         c.add_pressure(false, 8.0);
@@ -403,7 +430,7 @@ mod tests {
         b.add_pressure(Dir::East, false, 16.0);
         b.add_pressure(Dir::West, true, 64.0);
         let c = b.connection(Dir::East).unwrap();
-        c.set_source(Source::Handler);
+        c.set_source(Source::handler());
         c.manage_flows(None, Some(Fluid::Lava));
         c.tick_flow_progress();
         let saved = b.write();
