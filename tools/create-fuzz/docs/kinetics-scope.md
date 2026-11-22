@@ -66,7 +66,8 @@ categories, so the kinetics harness gaps are the work items of this subsystem al
 | Left to | Java | Category in `reasons.tsv` |
 | --- | --- | --- |
 | Belts and items (its own families and report) | `belt/*`, `chainConveyor/*` | `harness-gap` (belts work items) |
-| Processing: machine work | `mixer/*`, `millstone/*`, `crusher/*`, `saw/*`, `drill/*`, `deployer/*`, `mechanicalArm/*`, `crafter/*`, `turntable/*`, `clock/CuckooClockBlockEntity`, `base/BlockBreakingKineticBlockEntity` | `out-of-scope:processing` |
+| Processing (its own families and report, [processing scope](processing-scope.md)) | `mixer/*`, `millstone/*`, `crusher/*`, `saw/*`, `drill/*`, `deployer/*`, `mechanicalArm/*`, `crafter/*`, `base/BlockBreakingKineticBlockEntity` | `harness-gap` (processing work items) |
+| Machine work outside processing | `turntable/*`, `clock/CuckooClockBlockEntity` | `harness-gap` |
 | Processing already driven through belts and depots | `press/*` (`press_processing`), `fan/*` (`depot_outputs`, `chute_columns`) | `harness-gap` |
 | Contraptions and schematics | `gantry/*` carriages, `BlockBreakingMovementBehaviour`, every `transform`, and `rotate`/`mirror` (below) | `out-of-scope:contraptions`, `out-of-scope:schematics-and-contraptions` |
 | Client | renderers, visuals, models, particles, screens, `KineticDebugger` | `client` |
