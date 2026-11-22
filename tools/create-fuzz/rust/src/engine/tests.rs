@@ -638,7 +638,8 @@ fn a_removed_belt_drops_its_connector_and_pulley_shaft_but_a_motor_needs_a_tool(
         })
         .collect();
     drops.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
-    let spread = |item: &str| (101, item.to_owned(), [0, 8, 0], Some(Placed::Spread));
+    let popped = Some(Placed::Spread(crate::transport::Spreader::PopResource));
+    let spread = |item: &str| (101, item.to_owned(), [0, 8, 0], popped);
     assert_eq!(
         drops,
         [spread("create:belt_connector"), spread("create:shaft")]

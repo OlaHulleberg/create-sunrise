@@ -5,7 +5,7 @@
 //! level's entity pass and is observed where and how it was put; one an input put before the
 //! level tick flew a tick first, which the driver does not follow.
 use super::*;
-use crate::transport::{DroppedItem, Placed, Stack};
+use crate::transport::{DroppedItem, Placed, SPREAD_MIDDLE, Spreader, Stack};
 use create_engine::{Block, belt};
 
 pub(super) struct ItemEntity {
@@ -26,16 +26,24 @@ impl Run {
         self.join(at, motion, item, count, placed);
     }
 
-    /// `Block.popResource` at `p`: somewhere inside the block.
+    /// `Block.popResource` at `p`.
     pub(super) fn pop_resource(&mut self, p: Pos, item: &str, count: u8) {
-        let at = p.map(|v| f64::from(v) + 0.5);
-        self.join(at, [0.0; 3], item, count, Placed::Spread);
+        self.spread(p, Spreader::PopResource, item, count);
     }
 
-    /// `Containers.dropItemStack` at `at`: somewhere inside the block `at` is in.
+    /// `Containers.dropItemStack` at `at`.
     pub(super) fn drop_item_stack(&mut self, at: [f64; 3], item: &str, count: u8) {
-        let p = at.map(|v| v.floor() as i32);
-        self.pop_resource(p, item, count);
+        self.spread(
+            at.map(|v| v.floor() as i32),
+            Spreader::DropItemStack,
+            item,
+            count,
+        );
+    }
+
+    fn spread(&mut self, p: Pos, by: Spreader, item: &str, count: u8) {
+        let at = std::array::from_fn(|i| f64::from(p[i]) + SPREAD_MIDDLE[i]);
+        self.join(at, [0.0; 3], item, count, Placed::Spread(by));
     }
 
     fn join(&mut self, at: [f64; 3], motion: [f64; 3], item: &str, count: u8, placed: Placed) {

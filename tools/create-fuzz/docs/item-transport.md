@@ -185,18 +185,26 @@ keeps them as item entities until that disposal, spawned where the glue spawns t
   `handleUpwardOutput`) and a brass tunnel's throw off the belt (`insertIntoTunnel`);
 - spread at random inside a block: broken blocks' loot (`destroyBlock(pos, true)`, rolled from
   Create's generated loot tables, a pulley's shaft with a belt's, nothing by hand from a block
-  that needs a tool or in creative mode), brackets of removed shafts and pipes, and the stacks
-  of removed depots, ejectors, chutes and brass tunnels (`Block.popResource`,
-  `Containers.dropItemStack`, which splits stacks at random).
+  that needs a tool or in creative mode), brackets of removed shafts and pipes, a removed
+  depot's or ejector's held and merging stacks and a removed brass tunnel's stack
+  (`Block.popResource`: the block's centre, a quarter block each way, less half an item's
+  height), and a removed depot's outputs and chute's stack (`Containers.dropItemStack`: anywhere
+  an item's box fits inside the block, its feet in the lower three quarters, the stack split at
+  random).
 
 The comparison follows how a drop was placed. An exactly placed drop that joined after the
-level's entity pass is compared at its position and motion within the transport tolerance. A
-spread one is compared by its block, with counts summed per item, tick and block. One an input
-placed before the level tick flew a tick before the harness saw it, which the driver does not
-follow: only its tick and stack are compared. Java reports no placement, so Java against Java
-compares tick, stack and block. Comparison needs both sides to report `drops`; a server running
-an older harness reports none. Vanilla blocks other than stone and redstone blocks have no loot
-in the driver: breaking one is an adapter gap with a note.
+level's entity pass is compared at its position and motion within the transport tolerance. The
+driver puts a spread one at the middle of its range, and the other side's drops of that item and
+tick go to such origins, each to one whose range holds it, the counts summing to each origin's.
+Each range is widened by a tick's flight, at most 0.3 across and up
+(`Entity.moveTowardsClosestSpace` pushing it out of a block that replaced its own): the level
+puts one before its entity pass at an input or a shape update, and the driver runs some of those
+in its tick. An exactly placed one an input put before the level tick also flew; the driver does
+not follow that, so only its tick and stack are compared. Java reports no placement, so Java
+against Java finds the origins: blocks whose widest range, flown a tick, holds the drops sent to
+them, the counts summing to the same on both sides. Comparison needs both sides to report `drops`;
+a server running an older harness reports none. Vanilla blocks other than stone and redstone
+blocks have no loot in the driver: breaking one is an adapter gap with a note.
 
 ## Funnels pushing from a depot
 

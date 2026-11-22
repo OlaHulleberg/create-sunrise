@@ -189,8 +189,9 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
 
 /// The same item entities, in any order. A drop placed exactly on one side has one at the same
 /// place and motion within the tolerance on the other. The rest agree in how many of each item
-/// joined in each tick inside each block, but for drops that flew a tick before they were
-/// observed, which only agree in how many of each item joined in each tick.
+/// joined in each tick from each origin, a drop lying in the range its origin spreads it over.
+/// Without a placement on either side, an origin is any block whose widest range, flown a tick,
+/// takes the drops of both sides.
 fn drops_match(a: &[DroppedItem], b: &[DroppedItem]) -> bool {
     use std::collections::BTreeMap;
     let mut a: Vec<&DroppedItem> = a.iter().collect();
@@ -198,40 +199,182 @@ fn drops_match(a: &[DroppedItem], b: &[DroppedItem]) -> bool {
     if !take_exact(&mut a, &mut b) || !take_exact(&mut b, &mut a) {
         return false;
     }
-    type Key = (u32, String, Option<[i32; 3]>);
-    let add = |m: &mut BTreeMap<Key, u32>, d: &DroppedItem, block: bool| {
-        let at = block.then(|| d.pos.map(|v| v.floor() as i32));
-        *m.entry((d.tick, d.stack.item.clone(), at)).or_default() += u32::from(d.stack.count);
-    };
-    let flown = |d: &DroppedItem| d.placed == Some(Placed::Flown);
-    let (mut ab, mut bb) = (BTreeMap::new(), BTreeMap::new());
-    for d in a.iter().filter(|d| !flown(d)) {
-        add(&mut ab, d, true);
+    type Sides<'a> = (Vec<&'a DroppedItem>, Vec<&'a DroppedItem>);
+    let mut groups: BTreeMap<(u32, &str), Sides> = BTreeMap::new();
+    for d in a {
+        groups
+            .entry((d.tick, d.stack.item.as_str()))
+            .or_default()
+            .0
+            .push(d);
     }
-    for d in b.iter().filter(|d| !flown(d)) {
-        add(&mut bb, d, true);
+    for d in b {
+        groups
+            .entry((d.tick, d.stack.item.as_str()))
+            .or_default()
+            .1
+            .push(d);
     }
-    let (mut a_left, mut b_left) = (BTreeMap::new(), BTreeMap::new());
-    for (k, n) in &ab {
-        let m = bb.get(k).copied().unwrap_or(0);
-        if *n > m {
-            *a_left.entry((k.0, k.1.clone(), None)).or_default() += n - m;
+    let placed = |v: &[&DroppedItem]| v.iter().any(|d| d.placed.is_some());
+    groups.into_values().all(|(a, b)| {
+        if placed(&b) {
+            origins_match(&a, &b)
+        } else if placed(&a) {
+            origins_match(&b, &a)
+        } else {
+            blocks_match(&a, &b)
+        }
+    })
+}
+
+/// Where a drop can be from where its origin put it: the least and most per axis, or anywhere.
+fn reach(placed: Option<Placed>) -> Option<[[f64; 2]; 3]> {
+    use crate::transport::{FIRST_FLIGHT, SPREAD_MIDDLE};
+    match placed? {
+        Placed::Exact => Some([[0.0; 2]; 3]),
+        Placed::Flown => None,
+        Placed::Spread(by) => {
+            let range = by.range();
+            Some(std::array::from_fn(|i| {
+                [
+                    range[i][0] - SPREAD_MIDDLE[i] + FIRST_FLIGHT[i][0],
+                    range[i][1] - SPREAD_MIDDLE[i] + FIRST_FLIGHT[i][1],
+                ]
+            }))
         }
     }
-    for (k, n) in &bb {
-        let m = ab.get(k).copied().unwrap_or(0);
-        if *n > m {
-            *b_left.entry((k.0, k.1.clone(), None)).or_default() += n - m;
+}
+
+/// `free`'s drops go to the origins `placed`'s drops name, each to one whose reach it lies in.
+fn origins_match(free: &[&DroppedItem], placed: &[&DroppedItem]) -> bool {
+    let near =
+        |a: &[f64; 3], b: &[f64; 3]| a.iter().zip(b).all(|(x, y)| close(*x as f32, *y as f32));
+    let mut origins: Vec<&DroppedItem> = Vec::new();
+    let mut items = Vec::new();
+    for d in placed {
+        let k = origins
+            .iter()
+            .position(|o| o.placed == d.placed && near(&o.pos, &d.pos))
+            .unwrap_or_else(|| {
+                origins.push(d);
+                origins.len() - 1
+            });
+        items.push((-i64::from(d.stack.count), vec![k]));
+    }
+    for d in free {
+        let takes = |o: &&DroppedItem| {
+            (d.placed.is_none() || d.placed == o.placed)
+                && reach(o.placed).is_none_or(|r| {
+                    (0..3).all(|i| {
+                        let off = d.pos[i] - o.pos[i];
+                        off >= r[i][0] - f64::from(EPS) && off <= r[i][1] + f64::from(EPS)
+                    })
+                })
+        };
+        let keys = (0..origins.len()).filter(|&k| takes(&origins[k])).collect();
+        items.push((i64::from(d.stack.count), keys));
+    }
+    assignable(&items, origins.len())
+}
+
+/// Neither side says how its drops were placed: each goes to a block whose widest range, flown
+/// a tick, it lies in.
+fn blocks_match(a: &[&DroppedItem], b: &[&DroppedItem]) -> bool {
+    use crate::transport::{FIRST_FLIGHT, Spreader};
+    let range = Spreader::DropItemStack.range();
+    let mut blocks: Vec<[i32; 3]> = Vec::new();
+    let mut items = Vec::new();
+    for (sign, side) in [(1, a), (-1, b)] {
+        for d in side {
+            let span: [Vec<i32>; 3] = std::array::from_fn(|i| {
+                let lo = (d.pos[i] - range[i][1] - FIRST_FLIGHT[i][1]).ceil() as i32;
+                let hi = (d.pos[i] - range[i][0] - FIRST_FLIGHT[i][0]).floor() as i32;
+                (lo..=hi).collect()
+            });
+            let mut keys = Vec::new();
+            for &x in &span[0] {
+                for &y in &span[1] {
+                    for &z in &span[2] {
+                        let p = [x, y, z];
+                        let k = blocks.iter().position(|b| *b == p).unwrap_or_else(|| {
+                            blocks.push(p);
+                            blocks.len() - 1
+                        });
+                        keys.push(k);
+                    }
+                }
+            }
+            items.push((sign * i64::from(d.stack.count), keys));
         }
     }
-    let (mut a_flown, mut b_flown) = (BTreeMap::new(), BTreeMap::new());
-    for d in a.iter().filter(|d| flown(d)) {
-        add(&mut a_flown, d, false);
+    assignable(&items, blocks.len())
+}
+
+/// Whether each item (a count and the keys it may go to) can go to one of its keys so that the
+/// counts at every key sum to zero.
+fn assignable(items: &[(i64, Vec<usize>)], keys: usize) -> bool {
+    let mut group: Vec<usize> = (0..keys).collect();
+    fn root(group: &mut [usize], k: usize) -> usize {
+        let mut r = k;
+        while group[r] != r {
+            r = group[r];
+        }
+        group[k] = r;
+        r
     }
-    for d in b.iter().filter(|d| flown(d)) {
-        add(&mut b_flown, d, false);
+    for (_, ks) in items {
+        for w in ks.windows(2) {
+            let (x, y) = (root(&mut group, w[0]), root(&mut group, w[1]));
+            group[x] = y;
+        }
     }
-    a_left == b_flown && b_left == a_flown
+    let mut parts: std::collections::BTreeMap<usize, Vec<(i64, &[usize])>> = Default::default();
+    for (n, ks) in items {
+        let Some(&k) = ks.first() else {
+            return false;
+        };
+        let r = root(&mut group, k);
+        parts.entry(r).or_default().push((*n, ks));
+    }
+    parts.into_values().all(|mut part| {
+        if part.iter().map(|p| p.0).sum::<i64>() != 0 {
+            return false;
+        }
+        part.sort_by_key(|p| p.1.len());
+        let mut last = vec![0; keys];
+        for (i, (_, ks)) in part.iter().enumerate() {
+            for &k in *ks {
+                last[k] = i;
+            }
+        }
+        let mut closing = vec![Vec::new(); part.len()];
+        for (i, (_, ks)) in part.iter().enumerate() {
+            for &k in *ks {
+                if last[k] == i && !closing[i].contains(&k) {
+                    closing[i].push(k);
+                }
+            }
+        }
+        fn place(
+            part: &[(i64, &[usize])],
+            closing: &[Vec<usize>],
+            at: &mut [i64],
+            i: usize,
+        ) -> bool {
+            let Some((n, ks)) = part.get(i) else {
+                return true;
+            };
+            for &k in *ks {
+                at[k] += n;
+                if closing[i].iter().all(|&c| at[c] == 0) && place(part, closing, at, i + 1) {
+                    return true;
+                }
+                at[k] -= n;
+            }
+            false
+        }
+        place(&part, &closing, &mut vec![0; keys], 0)
+    })
 }
 
 /// Pairs each of `known`'s exactly placed drops with one of `other`'s at the same tick, stack,
@@ -505,47 +648,140 @@ mod tests {
             vec![vec!["a".into(), "c".into()], vec!["b".into()]];
         assert_eq!(diff(&j, &r), ["network partitions differ"]);
     }
-    #[test]
-    fn drops_compare_by_how_they_were_placed() {
-        use crate::transport::{DroppedItem, Placed, Stack};
-        let drop = |tick, item: &str, count, x, placed| DroppedItem {
+    fn dropped(
+        tick: u32,
+        item: &str,
+        count: u8,
+        pos: [f64; 3],
+        placed: Option<Placed>,
+    ) -> DroppedItem {
+        DroppedItem {
             tick,
-            stack: Stack {
+            stack: crate::transport::Stack {
                 item: item.into(),
                 count,
             },
-            pos: [x, 9.0625, 0.5],
+            pos,
             motion: [0.1, -0.2, 0.0],
             placed,
-        };
-        let java = |v| Snapshot {
+        }
+    }
+    fn dropping(v: Vec<DroppedItem>) -> Snapshot {
+        Snapshot {
             drops: Some(v),
             ..Snapshot::default()
-        };
-        let j = java(vec![
-            drop(4, "a", 1, 1.5, None),
-            drop(3, "b", 2, 2.3, None),
-            drop(3, "b", 1, 2.9, None),
-            drop(5, "c", 1, 7.2, None),
+        }
+    }
+    const POPPED: Option<Placed> = Some(Placed::Spread(crate::transport::Spreader::PopResource));
+    #[test]
+    fn drops_compare_by_how_they_were_placed() {
+        let spilled = Some(Placed::Spread(crate::transport::Spreader::DropItemStack));
+        let j = dropping(vec![
+            dropped(4, "a", 1, [1.5, 9.0625, 0.5], None),
+            dropped(3, "b", 2, [2.3, 9.2, 0.5], None),
+            dropped(3, "b", 1, [2.7, 9.6, 0.5], None),
+            dropped(3, "d", 5, [3.15, 9.7, 0.5], None),
+            dropped(5, "c", 1, [7.2, 9.0625, 0.5], None),
         ]);
-        let mut r = java(vec![
-            drop(3, "b", 3, 2.5, Some(Placed::Spread)),
-            drop(4, "a", 1, 1.500_000_1, Some(Placed::Exact)),
-            drop(5, "c", 1, 6.9, Some(Placed::Flown)),
+        let mut r = dropping(vec![
+            dropped(3, "b", 3, [2.5, 9.375, 0.5], POPPED),
+            dropped(3, "d", 5, [3.5, 9.375, 0.5], spilled),
+            dropped(4, "a", 1, [1.500_000_1, 9.0625, 0.5], Some(Placed::Exact)),
+            dropped(5, "c", 1, [6.9, 9.0625, 0.5], Some(Placed::Flown)),
         ]);
         assert!(diff(&j, &r).is_empty());
         assert!(diff(&r, &j).is_empty());
         assert!(diff(&j, &j).is_empty());
-        r.drops.as_mut().unwrap()[1].pos[0] = 1.6;
-        assert!(diff(&j, &r)[0].starts_with("drops:"));
-        r.drops.as_mut().unwrap()[1].pos[0] = 1.5;
-        r.drops.as_mut().unwrap()[0].pos[0] = 3.5;
-        assert!(diff(&j, &r)[0].starts_with("drops:"));
-        r.drops.as_mut().unwrap()[0].pos[0] = 2.5;
-        r.drops.as_mut().unwrap()[2].stack.count = 2;
+        let moved = |i: usize, axis: usize, v: f64| {
+            let mut r = r.clone();
+            r.drops.as_mut().unwrap()[i].pos[axis] = v;
+            diff(&j, &r)
+        };
+        assert!(moved(2, 0, 1.6)[0].starts_with("drops:"));
+        assert!(moved(0, 0, 3.1)[0].starts_with("drops:"));
+        assert!(moved(0, 1, 9.0)[0].starts_with("drops:"));
+        assert!(moved(1, 0, 4.0)[0].starts_with("drops:"));
+        assert!(moved(3, 0, 60.0).is_empty());
+        r.drops.as_mut().unwrap()[3].stack.count = 2;
         assert!(diff(&j, &r)[0].starts_with("drops:"));
         r.drops = None;
         assert!(diff(&j, &r).is_empty());
+    }
+    #[test]
+    fn a_popped_drop_flown_a_tick_may_leave_its_block() {
+        // Seeds 12711 and 12839: a redstone block replaces a depot holding iron ingots, whose
+        // `DepotBehaviour.destroy` pops them; pushed out of the redstone block in their first
+        // tick, they land in the depot's block or the next one.
+        for (origin, seen) in [
+            (
+                [2, 9, 1],
+                [
+                    [
+                        2.511_777_123_974_070_5,
+                        9.265_220_808_560_668,
+                        1.701_683_975_510_219,
+                    ],
+                    [
+                        2.571_631_306_256_904_3,
+                        9.673_597_911_216_772,
+                        0.975_950_484_810_394_6,
+                    ],
+                ],
+            ),
+            (
+                [-1, 9, 1],
+                [
+                    [
+                        -0.595_811_486_877_739_8,
+                        9.751_575_756_579_465,
+                        1.756_844_983_720_924_3,
+                    ],
+                    [
+                        0.022_908_018_130_948_45,
+                        9.276_099_891_234_324,
+                        1.398_586_957_782_868,
+                    ],
+                ],
+            ),
+        ] {
+            let java =
+                seen.map(|p| dropping(vec![dropped(70, "minecraft:iron_ingot", 24, p, None)]));
+            assert!(diff(&java[0], &java[1]).is_empty());
+            assert!(diff(&java[1], &java[0]).is_empty());
+            let middle: [f64; 3] =
+                std::array::from_fn(|i| f64::from(origin[i]) + crate::transport::SPREAD_MIDDLE[i]);
+            let rust = |dz: f64| {
+                let at = [middle[0], middle[1], middle[2] + dz];
+                dropping(vec![dropped(70, "minecraft:iron_ingot", 24, at, POPPED)])
+            };
+            for j in &java {
+                assert!(diff(j, &rust(0.0)).is_empty());
+                assert!(diff(&rust(0.0), j).is_empty());
+            }
+            assert!(java.iter().any(|j| !diff(j, &rust(1.0)).is_empty()));
+            assert!(java.iter().any(|j| !diff(j, &rust(-1.0)).is_empty()));
+        }
+    }
+    #[test]
+    fn unplaced_drops_share_an_origin_or_differ() {
+        let java = |x, count| {
+            dropping(vec![
+                dropped(7, "a", count, [x, 9.3, 0.5], None),
+                dropped(7, "a", 3, [x + 0.1, 9.4, 0.6], None),
+            ])
+        };
+        assert!(diff(&java(0.9, 2), &java(1.1, 2)).is_empty());
+        assert!(diff(&java(0.9, 2), &java(2.3, 2))[0].starts_with("drops:"));
+        assert!(diff(&java(0.9, 2), &java(1.1, 1))[0].starts_with("drops:"));
+        let split = |n| {
+            dropping(vec![
+                dropped(7, "a", n, [1.2, 9.2, 0.4], None),
+                dropped(7, "a", 5 - n, [0.7, 9.5, 0.6], None),
+            ])
+        };
+        assert!(diff(&java(0.9, 2), &split(2)).is_empty());
+        assert!(diff(&split(3), &java(0.9, 2)).is_empty());
+        assert!(diff(&java(0.9, 2), &split(4))[0].starts_with("drops:"));
     }
     #[test]
     fn checkpoints_and_air_positions_are_compared() {

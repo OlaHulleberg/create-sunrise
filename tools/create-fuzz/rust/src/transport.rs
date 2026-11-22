@@ -95,14 +95,44 @@ pub struct DroppedItem {
 pub enum Placed {
     /// Computed without randomness after the level's entity pass: compared within the tolerance.
     Exact,
-    /// Spread at random inside the block it came from (`Block.popResource`,
-    /// `Containers.dropItemStack`): only that block is compared, and counts per item, since
-    /// `dropItemStack` splits a stack at random.
-    Spread,
+    /// Spread at random about the middle of its range: the counts per item and range are
+    /// compared. The level may have put it before its entity pass, where the driver runs some
+    /// of that work in its tick (shape updates), so it may have flown a tick.
+    Spread(Spreader),
     /// Put before the level's entity pass, so it flew a tick before it was observed, which
     /// the driver does not follow: only the stack is compared.
     Flown,
 }
+
+/// What spread a drop inside the block it came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Spreader {
+    /// `Block.popResource`: the block's centre, a quarter block each way, less half an item's
+    /// height.
+    PopResource,
+    /// `Containers.dropItemStack`: anywhere an item's box fits inside the block, its feet in
+    /// the lower three quarters.
+    DropItemStack,
+}
+
+impl Spreader {
+    /// Where the position can be from the block's lower corner: the least and most per axis.
+    pub fn range(self) -> [[f64; 2]; 3] {
+        match self {
+            Self::PopResource => [[0.25, 0.75], [0.125, 0.625], [0.25, 0.75]],
+            Self::DropItemStack => [[0.125, 0.875], [0.0, 0.75], [0.125, 0.875]],
+        }
+    }
+}
+
+/// The middle of either spreader's range from the block's lower corner.
+pub const SPREAD_MIDDLE: [f64; 3] = [0.5, 0.375, 0.5];
+
+/// How far a spread item entity can move in its first tick: never down, and no more than
+/// `Entity.moveTowardsClosestSpace` pushes one stuck in a block (0.3), which is more than the
+/// spreaders' motions after gravity.
+pub const FIRST_FLIGHT: [[f64; 2]; 3] = [[-0.3, 0.3], [0.0, 0.3], [-0.3, 0.3]];
 
 /// Controlled item histories on player-connected belts.
 pub fn generate(seed: u64) -> crate::scenario::Scenario {
