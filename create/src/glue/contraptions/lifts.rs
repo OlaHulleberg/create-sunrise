@@ -22,12 +22,14 @@ use super::super::persist;
 use super::super::server::{ServerLevel, UPDATE_CLIENTS, update_all};
 use super::super::states::{self, key};
 use super::super::world::with_world;
+use super::colliders::{self, Owner};
 use super::{
     actors, add, clicker, create_info, dir_name, draw, found, in_click_level, state_of_text,
     state_text, state_with, take_blocks,
 };
 use create_engine::Block;
 use create_engine::actors::Carried;
+use create_engine::collider::Pose;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::lifts::Held;
 use mod_api::{
@@ -119,6 +121,11 @@ fn lift_put_back(
 ) {
     actors::expect_back(lv, key, |o| add(origin, o));
     super::put_back_blocks(lv, blocks, |lv, p| lv.passable(p));
+    // A clock's hour and minute hands are two structures.
+    let placed = Pose::translated(origin.map(f64::from));
+    for n in 0..2 {
+        colliders::lift_riders(lv, Owner::Anchor(key, n), placed);
+    }
 }
 
 fn mark_unsaved(lv: &ServerLevel<'_>, pos: [i32; 3]) {

@@ -16,7 +16,7 @@ use super::super::subsystem::Subsystem;
 use super::super::world::level_index;
 use super::super::world::with_world;
 use super::create_info;
-use create_engine::collider::{self, Aabb, Pose};
+use create_engine::collider::{self, Aabb, Frame, Pose};
 use create_engine::kinetics::Dir;
 use mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, Collider, ColliderBox,
@@ -272,6 +272,47 @@ pub fn apply_to(host: &mut dyn ServerHost, entity: EntityRef) {
     }
     if let Some(at) = at {
         entity.teleport_to(host, at, None);
+    }
+}
+
+/// `AbstractContraptionEntity.moveCollidedEntitiesOnDisassembly`: as structure `owner`'s blocks
+/// go back into the world at `placed`, the bodies standing on its boxes go onto them.
+pub fn lift_riders(lv: &mut ServerLevel<'_>, owner: Owner, placed: Pose) {
+    let Some((carrier, frame)) = PLACED.with_borrow(|m| {
+        let p = m.get(&(lv.dim, owner))?;
+        let frame = Frame {
+            at: p.at,
+            rotation: p.rotation.map(f64::from),
+            shift: p.shift,
+        };
+        Some((p.entity, frame))
+    }) else {
+        return;
+    };
+    let Some(collider) = carrier.collider(&*lv.host) else {
+        return;
+    };
+    let boxes: Vec<Aabb> = collider
+        .boxes
+        .iter()
+        .map(|b| [b.min[0], b.min[1], b.min[2], b.max[0], b.max[1], b.max[2]])
+        .collect();
+    let reach = boxes.iter().flatten().fold(0.0_f64, |r, v| r.max(v.abs())) * 3.0_f64.sqrt() + 2.0;
+    let lo = frame.at.map(|v| v - reach);
+    let hi = frame.at.map(|v| v + reach);
+    let around = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
+    let carriers: Vec<u32> = CARRIERS.with_borrow(|c| c.keys().copied().collect());
+    for e in around {
+        if carriers.contains(&e.id()) || e.is_passenger(&*lv.host) == Some(true) {
+            continue;
+        }
+        let Some([min, max]) = e.bounding_box(&*lv.host) else {
+            continue;
+        };
+        let body = [min[0], min[1], min[2], max[0], max[1], max[2]];
+        if let Some(to) = collider::placed_rider(&boxes, frame, body, &placed) {
+            e.teleport_to(&mut *lv.host, to, None);
+        }
     }
 }
 
