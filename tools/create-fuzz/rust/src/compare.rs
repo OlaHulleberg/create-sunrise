@@ -11,13 +11,41 @@ fn close(a: f32, b: f32) -> bool {
 }
 
 pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
-    if let Some(rolls) = crate::processing::Rolls::of(java, rust) {
-        return diff_exact(&rolls.normalize(java), &rolls.normalize(rust));
-    }
-    diff_exact(java, rust)
+    let (java, rust) = normalized(java, rust);
+    diff_exact(&java, &rust)
 }
 
-fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
+/// The documented API gap (`allow.rs`) a case's differences follow from, if they do.
+pub fn api_gap(java: &Snapshot, rust: &Snapshot) -> Option<&'static str> {
+    let (java, rust) = normalized(java, rust);
+    crate::allow::millstone_unmillable(&java, &rust)
+        .then_some("block or position in BlockEntityPart::can_place_item")
+}
+
+/// Both snapshots with what chance decides taken out and the allowed patterns paired.
+fn normalized<'a>(
+    java: &'a Snapshot,
+    rust: &'a Snapshot,
+) -> (
+    std::borrow::Cow<'a, Snapshot>,
+    std::borrow::Cow<'a, Snapshot>,
+) {
+    use std::borrow::Cow;
+    let (java, mut rust) = match crate::processing::Rolls::of(java, rust) {
+        Some(rolls) => (
+            Cow::Owned(rolls.normalize(java)),
+            Cow::Owned(rolls.normalize(rust)),
+        ),
+        None => (Cow::Borrowed(java), Cow::Borrowed(rust)),
+    };
+    let controllers = crate::allow::downward_controllers(&java);
+    if !controllers.is_empty() {
+        crate::allow::crusher_bypass(&java, rust.to_mut(), &controllers);
+    }
+    (java, rust)
+}
+
+pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
     let mut out = Vec::new();
     for (side, snapshot) in [("java", java), ("rust", rust)] {
         if snapshot
