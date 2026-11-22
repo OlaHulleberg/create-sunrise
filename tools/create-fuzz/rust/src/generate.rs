@@ -202,14 +202,11 @@ pub const FAMILIES: &[Family] = &[
         &[(64, 0)],
         geometry::stress_boundary,
     ),
-    family(
-        "geometry/network",
-        &[(256, 92), (256, 124)],
-        geometry::network,
-    ),
-    // The upper halves of geometry/network's residues: every other family keeps its seeds.
+    family("geometry/network", &[(256, 92)], geometry::network),
+    // geometry/network's other residues: every other family keeps its seeds.
     family("network/face_placement", &[(256, 220)], face_placement),
     family("network/face_wrench", &[(256, 252)], face_wrench),
+    family("network/driven_placement", &[(256, 124)], driven_placement),
     family(
         "geometry/states",
         &[(128, 77), (128, 93), (128, 109), (128, 125)],
@@ -231,6 +228,9 @@ fn face_placement(seed: u64) -> Scenario {
 }
 fn face_wrench(seed: u64) -> Scenario {
     crate::kinetic_faces::face_wrench(seed, index(seed))
+}
+fn driven_placement(seed: u64) -> Scenario {
+    crate::kinetic_faces::driven_placement(seed, index(seed))
 }
 fn geometry_states(seed: u64) -> Scenario {
     geometry::states(seed, index(seed))
@@ -518,10 +518,11 @@ mod tests {
         }
         assert_eq!(family_name(220), "network/face_placement");
         assert_eq!(family_name(252), "network/face_wrench");
+        assert_eq!(family_name(124), "network/driven_placement");
         assert_eq!(
             moved(at_9f00743),
             [
-                23, 29, 35, 39, 55, 61, 66, 78, 87, 94, 99, 103, 110, 119, 126
+                23, 29, 35, 39, 55, 61, 66, 78, 87, 94, 99, 103, 110, 119, 124, 126
             ]
         );
         // #7's own moves and the belt families'; 87 and 119 are actions' again.

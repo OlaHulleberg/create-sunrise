@@ -180,6 +180,80 @@ pub fn face_wrench(seed: u64, index: u64) -> Scenario {
     }
 }
 
+/// Place each block item into the end of a running shaft line, clicking the shaft's end (its
+/// placement helper or the cog helpers), or stone below, above, beside or past the cell, so
+/// the preferred-neighbour searches see a turning shaft (`propagateNewSource` into the placed
+/// block). Then wrench the placed block, and remove the motor (`propagateMissingSource`). The
+/// motor runs at 16, -64 or 256 rpm; odd indices sneak.
+pub fn driven_placement(seed: u64, index: u64) -> Scenario {
+    let item = ITEMS[(index % 16) as usize];
+    let speed = [16, -64, 256][(index / 16 % 3) as usize];
+    let sneaking = index / 48 % 2 == 1;
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    if item == "create:creative_motor" {
+        events.push(act(1, [0, 8, 0], Action::GameMode { creative: true }));
+    }
+    let clicks: [([i32; 3], Face); 6] = [
+        ([0, 0, -1], Face::South),
+        ([0, -1, 0], Face::Up),
+        ([0, 1, 0], Face::Down),
+        ([1, 0, 0], Face::West),
+        ([-1, 0, 0], Face::East),
+        ([0, 0, 1], Face::North),
+    ];
+    for (i, (offset, face)) in clicks.into_iter().enumerate() {
+        let cell = [i as i32 * 4 - 10, 8, 0];
+        let at = |[dx, dy, dz]: [i32; 3]| [cell[0] + dx, cell[1] + dy, cell[2] + dz];
+        blocks.push(Placed {
+            pos: at([0, 0, -2]),
+            state: "create:creative_motor[facing=south]".into(),
+            motor: Some(speed),
+        });
+        blocks.push(Placed {
+            pos: at([0, 0, -1]),
+            state: "create:shaft[axis=z]".into(),
+            motor: None,
+        });
+        if i > 0 {
+            blocks.push(Placed {
+                pos: at(offset),
+                state: "minecraft:stone".into(),
+                motor: None,
+            });
+        }
+        let tick = 20 + 2 * i as u32;
+        events.push(click(
+            tick,
+            at(offset),
+            item,
+            face,
+            look(index / 96 + i as u64),
+            sneaking,
+        ));
+        events.push(click(
+            50 + 2 * i as u32,
+            cell,
+            "create:wrench",
+            FACES[i],
+            (0., 0.),
+            false,
+        ));
+        events.push(act(80 + 2 * i as u32, at([0, 0, -2]), Action::Remove));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 120,
+        checkpoints: vec![
+            19, 21, 23, 25, 27, 29, 31, 45, 61, 79, 81, 83, 85, 87, 89, 91,
+        ],
+        blocks,
+        events,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -208,7 +282,11 @@ mod tests {
     #[test]
     fn states_are_in_the_catalogue() {
         for index in 0..192 {
-            for sc in [face_placement(index, index), face_wrench(index, index)] {
+            for sc in [
+                face_placement(index, index),
+                face_wrench(index, index),
+                driven_placement(index, index),
+            ] {
                 for b in &sc.blocks {
                     crate::catalogue::validate(&b.state).unwrap();
                 }

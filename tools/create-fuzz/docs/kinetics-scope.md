@@ -92,7 +92,7 @@ call them. The wrench never does: `IWrenchable.onWrenched` turns a state with
 
 The kinetics families and what each drives are in the README's seed table and the doc comments
 in `rust/src/network_inputs.rs`, `transmission.rs`, `geometry.rs`, `kinetic_faces.rs`,
-`waterwheel.rs` and `steam_engine.rs`. The two face families:
+`waterwheel.rs` and `steam_engine.rs`. The three in `kinetic_faces.rs`:
 
 - `network/face_placement` (256k + 220): every kinetic block item `contested_placement` places, and
   the flywheel, used on each of the six faces of a shaft on x and y, a small cog, a large cog, a
@@ -104,3 +104,7 @@ in `rust/src/network_inputs.rs`, `transmission.rs`, `geometry.rs`, `kinetic_face
 - `network/face_wrench` (256k + 252, always reloads): each of those items placed on stone, then
   wrenched from one face, the opposite face and a face across them, with a creative motor beside
   it in half the indices, and the last one picked up with a sneaking wrench. 32 indices.
+- `network/driven_placement` (256k + 124, always reloads): each item placed into the end of a
+  shaft line a creative motor turns at 16, -64 or 256 rpm, by clicking the shaft's end or stone
+  below, above, beside or past the cell, sneaking in half; then the placed block is wrenched and
+  the motor removed. 96 indices.

@@ -338,8 +338,8 @@ table's comments say.
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
 | geometry/states | 77, 93, 109, 125 mod 128 | 4/128 = 3% | Static kinetics: one catalogue state per seed by index, every block, face and order; each state is still reached, over more seeds |
 | geometry/stress_boundary | 0 mod 64 | 1/64 | Unchanged: every eighth static kinetics seed |
-| geometry/network | 92, 124 mod 256 | 1/128 | Random networks through compatible faces (unreached since the fluid families) |
-| network/face_placement, face_wrench | 220, 252 mod 256 | 2/256 | Placement on and wrench turns from every face of the kinetic blocks a player builds with; geometry/network's upper halves. Variants by `index`; the placement never reloads, the wrench always ([kinetics scope](docs/kinetics-scope.md)) |
+| geometry/network | 92 mod 256 | 1/256 | Random networks through compatible faces (unreached since the fluid families) |
+| network/face_placement, face_wrench, driven_placement | 220, 252, 124 mod 256 | 3/256 | Placement on and wrench turns from every face of the kinetic blocks a player builds with, and placement into a running shaft line; geometry/network's other residues. Variants by `index`; face_placement never reloads, the other two always ([kinetics scope](docs/kinetics-scope.md)) |
 | geometry/source_faces | 76, 108 mod 128 | 1/64 | Six input faces of gearboxes, clutches and gearshifts (unreached since fluid_pumps took 18 mod 32) |
 | geometry/cog_boundary | 34 mod 64 | 1/64 | Unchanged |
 
