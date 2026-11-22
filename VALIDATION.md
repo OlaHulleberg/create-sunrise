@@ -7,7 +7,7 @@ SDK from `sdk-7cfdf81463ebb4a19705768273909f7f3f03601d`, with the published rele
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-`684e89b` on `9425651` passed the in-game smoke test below, `c6f9470` was tried in game for the fixes merged
+`b680a0f` on the Dev build passed the in-game checks in "Dev build `7cfdf81` in game" below. On `9425651`, `684e89b` passed the in-game smoke test below, `c6f9470` was tried in game for the fixes merged
 since (#203-#224), and `11c43ca` for those merged after (#227-#234). Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
 the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
@@ -20,17 +20,46 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (118 glue tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (120 glue tests) |
 | `create/` | `cargo +1.99.1 test -p create-engine` | Pass (916 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official `94256510f7` SDK) |
+| `create/` | `cargo sunrise-mod check` | Pass (official `7cfdf81463` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
-| `create/` | `cargo sunrise-mod fits target/sunrise-mod/create.smod --build 94256510f74e6843754e0a93fd9e4da7e45b1056` | Pass (`made for`) |
+| `create/` | `cargo sunrise-mod fits target/sunrise-mod/create.smod --build 7cfdf81463ebb4a19705768273909f7f3f03601d` | Pass (`made for`) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (55 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
 | `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Pass |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Pass (124 tests) |
+| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Pass (119 of 119 cases match) |
+
+## Dev build `7cfdf81` in game (branch `pin/dev-7cfdf81`)
+
+Built with `sunrise-launcher` 1.2.0 `native-build` against `dev-2026-11-22-7cfdf81`, the profile switched from the
+nightly, a creative world, driven by `sunrise-ctl`, read back with `/data get`. Rows 1-6 ran on `9880110`, the rest on
+`b680a0f`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Creative motor turning shafts | Pass | 16 rpm on the shafts, capacity 262144 |
+| 2 | Belt carrying a diamond onto a depot | Pass | 5-long belt made with the connector; the depot at its west end holds the diamond after about 5 s |
+| 3 | Pump filling a tank | Pass | 8 mB a tick, 1592 → 2400 → 3216 → 4024 mB, then 8000 |
+| 4 | Fluid valve opened | Pass | Pointer `Value: 1.0f`, `enabled=true` |
+| 5 | Vault and tank connection groups (#213, sunrise#3875) | Pass | Two touching 2x2 vaults each join into one texture with a seam between them; a 3x3 vault (`large=true`) joins as one; two touching 2x2 tanks show separate joined tops |
+| 6 | Save, quit, relaunch | Pass | Speeds, the depot's diamond, the valve, the full tank and every vault and tank join kept |
+| 7 | Overstress flash (sunrise#3383) | Pass | A held hand crank drives 512 SU of millstones on 256 SU: the goggles say overstressed, smoke puffs out and the crank's cog draws tinted red, fading |
+| 8 | Haunted bell souls (sunrise#3400) | Pass | A rung bell raises souls on the dark blocks of each ring, upright and turned to the camera, edge-on from above, their bases flat on the ground; a glowstone placed among them clears them. Create's code-defined particles (souls, rotation indicators, air flow, cannon air) were sent with an untyped `ParticleOptions`, which this build drops; `b680a0f` sends their typed options |
+| 9 | Fluid particles (sunrise#3399) | Pass | Water pouring from an open pipe end falls as blue-tinted crumbs |
+| 10 | Rotation indicators, fan air, cannon air | Pass | With goggles a new shaft's sparks show green; a turning fan blows white air-flow wisps; a fired potato cannon puffs air ahead of the barrel |
+| 11 | Wand screen model (sunrise#3404) | Pass | Sneak-using the symmetry wand opens its screen with the wand drawn tilted in 3D beside it |
+| 12 | Bearing structure light (sunrise#3501) | Pass | Turning planks at noon read 80-94% of still planks' brightness as their faces turn (directional shading), not the half they drew before |
+| 13 | Filter menus (sunrise#3767) | Pass | A list filter opens from the hand; replacing it in that hand, or selecting another slot, closes the menu |
+| 14 | Item-group attribute (sunrise#3577, #3572) | Pass | An attribute filter on a cogwheel offers "is in group 'Create'" |
+| 15 | Toolbox inserts (sunrise#3610) | Pass | A hopper fills a toolbox: 40 cobblestone in compartment 0, then 3 dirt in compartment 1 (slot 4) |
+| 16 | Belt blocking (sunrise#3751, client) | Pass | A player riding a belt stops 0.4 blocks short of an armor stand and stays there; an area effect cloud (pistons ignore it) lets the player ride on to the belt's end |
+| 17 | Ejector nudge on the server (sunrise#3751), cart passengers (sunrise#3865) | Not tried | Not set up in game on this build |
 
 ## Saved minecart riders on `9425651`
 
