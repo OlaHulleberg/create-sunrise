@@ -72,6 +72,7 @@ pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
 // The press's depot callbacks and its head's tick, at their turns in logistics' transport walk.
 pub(crate) use press::{depot_turn as press_depot_turn, tick_press};
+pub(crate) use saw::saw_turn;
 // What the other subsystems call: fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
 // stack's sequenced progress onto and off a belt).

@@ -360,8 +360,9 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
     }
 }
 
-/// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
-/// end, the results thrown off the way the saw turns (onto a belt or depot there, else as items).
+/// What broken saws drop. The saws holding items (`SawBlockEntity.tick`: their cutting recipe
+/// in turn, applied near the end, the results thrown off the way the saw turns, onto a belt or
+/// depot there, else as items) tick at their turn in logistics' walk (`saw_turn`).
 pub fn tick_saws(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     // `destroy`: a broken saw's items drop where it was.
@@ -370,15 +371,15 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
         let at = pos.map(|v| f64::from(v) + 0.5);
         lv.spawn_moving(at, &item, u32::from(n), [0.0; 3]);
     }
-    let saws: Vec<[i32; 3]> =
-        with_world(|w| w.dims[dim].saws.keys().copied().collect()).unwrap_or_default();
-    if saws.is_empty() || !recipes::ready() {
+}
+
+/// The saw at `pos` holding items, at its turn in logistics' transport walk.
+pub fn saw_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    if !recipes::ready() {
         return;
     }
-    for pos in saws {
-        if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {
-            show_saw(lv, pos);
-        }
+    if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {
+        show_saw(lv, pos);
     }
 }
 

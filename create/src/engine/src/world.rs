@@ -33,6 +33,9 @@ fn entity_view(block: Block) -> Option<View> {
         // `PressingBehaviour.tick` moves a running press's head at its own turn: a press after
         // the depot or belt that started it moves in that tick.
         Block::MechanicalPress => Some(View::Transport),
+        // `SawBlockEntity.tick` hands an upward saw's results to the belt or depot beside it at
+        // its own turn: one after the saw moves them in that tick.
+        Block::MechanicalSaw => Some(View::Transport),
         _ => None,
     }
 }
@@ -823,6 +826,8 @@ pub enum TransportTick {
     Funnel([i32; 3]),
     /// `PressingBehaviour.tick` of a running press ([`CreateWorld::tick_press`]).
     Press([i32; 3]),
+    /// `SawBlockEntity.tick` of a saw holding items.
+    Saw([i32; 3]),
 }
 
 /// Resumable level transport walk; inventories are inspected at their turn.
@@ -862,6 +867,12 @@ impl TransportTicks {
                         .is_some_and(|x| x.running)
                     {
                         return Some(TransportTick::Press(p));
+                    }
+                    continue;
+                }
+                Some(Block::MechanicalSaw) => {
+                    if world.dims[self.dim].saws.contains_key(&p) {
+                        return Some(TransportTick::Saw(p));
                     }
                     continue;
                 }
@@ -7511,6 +7522,47 @@ mod tests {
             let pressed = (32..=50).find(|_| level_tick(&mut w));
             assert_eq!(pressed, Some(46), "depot first: {depot_first}");
         }
+        states::clear_range();
+    }
+
+    /// `p2-saw-depot-turn`: a stripped oak log cut by an upward saw at 48 rpm goes onto the
+    /// depot it turns toward in the tick it leaves the saw, and Create's depot, placed after the
+    /// saw, moves it 0.125 on in that same tick: the saw hands it over at its own turn in the
+    /// level's block-entity order, before the depot's.
+    #[test]
+    fn a_saw_hands_its_results_on_at_its_turn_in_the_block_entity_order() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:mechanical_saw",
+                vec![
+                    ("axis_along_first", "true"),
+                    ("facing", "up"),
+                    ("flipped", "false"),
+                ],
+            ),
+            ("create:depot", vec![("waterlogged", "false")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (saw, depot) = ([0, 8, 0], [1, 8, 0]);
+        w.block_changed(0, saw, 0, 2);
+        w.block_changed(0, depot, 0, 3);
+        let turns = |w: &mut CreateWorld| {
+            let mut out = Vec::new();
+            let mut walk = w.transport_ticks(0, 0);
+            while let Some(t) = walk.next(w) {
+                out.push(t);
+            }
+            out
+        };
+        assert!(!turns(&mut w).contains(&TransportTick::Saw(saw)));
+        w.dims[0].saws.insert(saw, crate::saw::Saw::default());
+        assert_eq!(
+            turns(&mut w),
+            [TransportTick::Saw(saw), TransportTick::Depot(depot)]
+        );
         states::clear_range();
     }
 
