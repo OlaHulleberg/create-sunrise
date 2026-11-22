@@ -253,8 +253,8 @@ impl Rolls {
                 self.stacks(&mut t.outputs);
                 if touched || before != (t.items.len(), t.outputs.len()) {
                     t.comparator = None;
-                    b.payload = None;
                 }
+                b.payload = None;
             }
             if let Some(p) = b.processing.as_mut() {
                 match p.kind.as_str() {
