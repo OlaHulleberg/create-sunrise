@@ -365,11 +365,12 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
 /// depot there, else as items) tick at their turn in logistics' walk (`saw_turn`).
 pub fn tick_saws(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    // `destroy`: a broken saw's items drop where it was.
+    // `destroy`: a broken saw's items scatter where it was (`ItemHelper.dropContents`).
     let drops = with_world(|w| std::mem::take(&mut w.dims[dim].saw_drops)).unwrap_or_default();
     for (pos, item, n) in drops {
-        let at = pos.map(|v| f64::from(v) + 0.5);
-        lv.spawn_moving(at, &item, u32::from(n), [0.0; 3]);
+        if let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(n)) {
+            let _ = lv.level.pop_resource(&mut *lv.host, pos, stack);
+        }
     }
 }
 

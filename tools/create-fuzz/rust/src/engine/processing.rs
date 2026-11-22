@@ -305,8 +305,7 @@ impl Run {
     pub(super) fn tick_saws(&mut self) {
         let drops = std::mem::take(&mut self.w.dims[0].saw_drops);
         for (pos, item, n) in drops {
-            let at = pos.map(|v| f64::from(v) + 0.5);
-            self.spawn_item(at, [0.0; 3], &item, n);
+            self.pop_resource(pos, &item, n);
         }
     }
 
