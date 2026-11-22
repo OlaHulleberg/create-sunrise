@@ -683,7 +683,7 @@ pub(super) fn carry(
     let at = |o: [i32; 3]| add(origin, o);
     let mut carried = carry_extras(lv, origin, blocks, skip);
     for (o, state) in blocks {
-        if let Some(mut a) = actor_of(&*lv.host, *o, *state) {
+        if let Some(mut a) = super::unnum(*state).and_then(|s| actor_of(&*lv.host, *o, s)) {
             if a.kind == Kind::Roller
                 && let Some((filter, mode)) =
                     with_world(|w| w.dims[dim].rollers.remove(&at(*o))).flatten()
@@ -1916,10 +1916,20 @@ fn collect(lv: &mut ServerLevel<'_>, key: [i32; 3], actor: &Actor, stack: ItemSt
 /// breakers, harvesters, ploughs and rollers, each a breaker of its own, and interfaces. Its
 /// storage rides it apart (`carry_storage`); its glue and controls don't.
 pub(crate) fn bearing_actors(host: &dyn Host, blocks: &[([i32; 3], u32)]) -> Carried {
+    structure_actors(host, blocks, super::unnum)
+}
+
+/// [`bearing_actors`] of a structure whose states are numbered as `state` reads them (a cart's
+/// or a train's own numbering).
+pub(crate) fn structure_actors(
+    host: &dyn Host,
+    blocks: &[([i32; 3], u32)],
+    state: impl Fn(u32) -> Option<mod_api::BlockState>,
+) -> Carried {
     Carried {
         actors: blocks
             .iter()
-            .filter_map(|(o, state)| actor_of(host, *o, *state))
+            .filter_map(|(o, id)| actor_of(host, *o, state(*id)?))
             .collect(),
         ..Carried::default()
     }
@@ -1927,17 +1937,14 @@ pub(crate) fn bearing_actors(host: &dyn Host, blocks: &[([i32; 3], u32)]) -> Car
 
 /// The actor of the block of state `state` at offset `o` (`MovementBehaviour.REGISTRY`): a
 /// Create block's, or a lit campfire's (`AllMovementBehaviours`).
-fn actor_of(host: &dyn Host, o: [i32; 3], state: u32) -> Option<Actor> {
-    if let Some((block, info)) = create_info(state) {
+fn actor_of(host: &dyn Host, o: [i32; 3], state: mod_api::BlockState) -> Option<Actor> {
+    if let Some((block, info)) = states::id(state).and_then(create_info) {
         let (kind, facing) = (Kind::of(block)?, info.facing?);
         return Some(Actor::new(o, kind, facing, -next_breaker()));
     }
-    let (name, props) = super::name_props(host, state)?;
-    let props: Vec<(&str, &str)> = props
-        .iter()
-        .map(|(k, v)| (k.as_str(), v.as_str()))
-        .collect();
-    let kind = Kind::of_vanilla(&name, &props)?;
+    let text = host.block_state_string(state)?;
+    let (name, props) = states::split(&text);
+    let kind = Kind::of_vanilla(name, &props)?;
     Some(Actor::new(o, kind, Dir::Up, -next_breaker()))
 }
 
