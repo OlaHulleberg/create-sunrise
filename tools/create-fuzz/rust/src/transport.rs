@@ -488,7 +488,11 @@ pub fn validate_scenario(sc: &crate::scenario::Scenario) {
                 // Its current's catalyst (`engine/fans.rs`).
                 "minecraft:lava",
                 // Pressing the contract's ingots (`press_processing`).
-                "create:mechanical_press"
+                "create:mechanical_press",
+                // The processing families' machines (`processing.rs`).
+                "create:millstone",
+                "create:crushing_wheel",
+                "create:mechanical_saw"
             ]
             .contains(&id.as_str())
                 || crate::fluids::contract()

@@ -215,6 +215,98 @@
     {
       "id": "create:golden_sheet",
       "max_stack": 64
+    },
+    {
+      "id": "minecraft:wheat",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:cobblestone",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:gravel",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:andesite",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:bone",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:sugar_cane",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:obsidian",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:coal_ore",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:dirt",
+      "max_stack": 64
+    },
+    {
+      "id": "create:wheat_flour",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:wheat_seeds",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:flint",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:bone_meal",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:white_dye",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:sugar",
+      "max_stack": 64
+    },
+    {
+      "id": "create:powdered_obsidian",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:sand",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:clay_ball",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:coal",
+      "max_stack": 64
+    },
+    {
+      "id": "create:experience_nugget",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:oak_log",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:stripped_oak_log",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:oak_planks",
+      "max_stack": 64
     }
   ]
 }

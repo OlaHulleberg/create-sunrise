@@ -224,7 +224,8 @@ pub fn saw_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<Item
 }
 
 /// One `item` (a sequenced assembly's `progress` with it) into the saw at `pos` while it holds
-/// nothing (`ProcessingInventory.insertItem` into slot 0). Whether it took it.
+/// nothing (`ProcessingInventory.insertItem` into slot 0), its cut started at once (`start`, the
+/// inventory's callback). Whether it took it.
 pub fn saw_put(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -232,45 +233,154 @@ pub fn saw_put(
     progress: Option<create_engine::sequenced::Progress>,
 ) -> bool {
     let dim = lv.dim;
-    let took = with_world(|w| {
-        let s = w.dims[dim].saws.entry(pos).or_default();
-        if !s.slots.is_empty() {
-            return false;
-        }
-        s.slots = vec![(item.to_owned(), 1)];
-        s.remaining = -1.0;
-        s.applied = false;
-        // `recipeIndex` stays with the saw between items.
-        s.index = SAW_INDEX.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0));
-        s.progress = progress;
-        true
-    })
-    .unwrap_or(false);
-    if took {
-        show_saw(lv, pos);
+    let mut s = with_world(|w| w.dims[dim].saws.get(&pos).cloned())
+        .flatten()
+        .unwrap_or_default();
+    if !s.slots.is_empty() {
+        return false;
     }
-    took
+    // `recipeIndex` stays with the saw between items.
+    s.index = SAW_INDEX.with_borrow(|m| m.get(&(dim, pos)).copied().unwrap_or(0));
+    s.progress = progress;
+    let up = lv.info(pos).and_then(|(_, i)| i.facing) == Some(Dir::Up);
+    let list = if up {
+        cuts(lv, pos, &s, item)
+    } else {
+        Vec::new()
+    };
+    s.insert(0, item, &list.iter().collect::<Vec<_>>(), up);
+    if up {
+        SAW_DURATION.with_borrow_mut(|m| m.insert((dim, pos), s.remaining));
+    }
+    with_world(|w| w.dims[dim].saws.insert(pos, s));
+    show_saw(lv, pos);
+    true
 }
 
-/// Saws holding items (`SawBlockEntity.tick`): their cutting recipe in turn, applied near the
-/// end, the results thrown off the way the saw turns (onto a belt or depot there, else as items).
+/// The saw's `ITEMS` handler (`SawBlockEntity.registerCapabilities`: its `ProcessingInventory`
+/// on every side but its bottom): one item into slot 0 while it holds nothing (`saw_put`),
+/// nothing out (`extractItem` gives nothing). The inventory lives in the engine, so an insert
+/// the host's transaction later aborts cannot be taken back, as with a belt segment's handler.
+pub struct SawItems {
+    pub dimension: String,
+    pub dim: usize,
+    pub pos: [i32; 3],
+}
+
+impl SawItems {
+    fn slot(&self, index: usize) -> Option<(String, u8)> {
+        with_world(|w| {
+            let s = w.dims[self.dim].saws.get(&self.pos)?;
+            // Results sit after the input's slot 0 in Create's inventory.
+            let i = if s.applied {
+                index.checked_sub(1)?
+            } else {
+                index
+            };
+            s.slots.get(i).cloned()
+        })
+        .flatten()
+    }
+
+    fn empty(&self) -> bool {
+        with_world(|w| {
+            w.dims[self.dim]
+                .saws
+                .get(&self.pos)
+                .is_none_or(|s| s.slots.is_empty())
+        })
+        .unwrap_or(false)
+    }
+}
+
+impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
+    fn size(&self, _host: &mut dyn mod_api::ServerHost) -> usize {
+        32
+    }
+    fn resource(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        index: usize,
+    ) -> Option<mod_api::ItemResource> {
+        let (item, n) = self.slot(index)?;
+        stacks::stack(&*host, &item, u32::from(n)).map(|s| mod_api::ItemResource::of(&s))
+    }
+    fn amount(&self, _host: &mut dyn mod_api::ServerHost, index: usize) -> u32 {
+        self.slot(index).map_or(0, |(_, n)| u32::from(n))
+    }
+    /// `withSlotLimit(!bulkCutting)`: one item a slot.
+    fn capacity(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        _index: usize,
+        _resource: &mod_api::ItemResource,
+    ) -> u32 {
+        1
+    }
+    fn is_valid(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        index: usize,
+        _resource: &mod_api::ItemResource,
+    ) -> bool {
+        index == 0 && self.empty()
+    }
+    fn insert(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        _tx: &mod_api::Transaction,
+        index: usize,
+        resource: &mod_api::ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let stack = resource.as_stack();
+        if index != 0 || amount == 0 || stack.damage() != 0 {
+            return 0;
+        }
+        let progress = stacks::sequenced_progress(stack);
+        // The engine keeps items by id, but for a sequenced assembly's progress.
+        if stack.components().is_some() && progress.is_none() {
+            return 0;
+        }
+        let item = stacks::id(&*host, stack);
+        let Some(mut lv) = ServerLevel::new(host, &self.dimension) else {
+            return 0;
+        };
+        u32::from(saw_put(&mut lv, self.pos, &item, progress))
+    }
+    fn extract(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        _tx: &mod_api::Transaction,
+        _index: usize,
+        _resource: &mod_api::ItemResource,
+        _amount: u32,
+    ) -> u32 {
+        0
+    }
+}
+
+/// What broken saws drop. The saws holding items (`SawBlockEntity.tick`: their cutting recipe
+/// in turn, applied near the end, the results thrown off the way the saw turns, onto a belt or
+/// depot there, else as items) tick at their turn in logistics' walk (`saw_turn`).
 pub fn tick_saws(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    // `destroy`: a broken saw's items drop where it was.
+    // `destroy`: a broken saw's items scatter where it was (`ItemHelper.dropContents`).
     let drops = with_world(|w| std::mem::take(&mut w.dims[dim].saw_drops)).unwrap_or_default();
     for (pos, item, n) in drops {
-        let at = pos.map(|v| f64::from(v) + 0.5);
-        lv.spawn_moving(at, &item, u32::from(n), [0.0; 3]);
+        if let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(n)) {
+            let _ = lv.level.pop_resource(&mut *lv.host, pos, stack);
+        }
     }
-    let saws: Vec<[i32; 3]> =
-        with_world(|w| w.dims[dim].saws.keys().copied().collect()).unwrap_or_default();
-    if saws.is_empty() || !recipes::ready() {
+}
+
+/// The saw at `pos` holding items, at its turn in logistics' transport walk.
+pub fn saw_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    if !recipes::ready() {
         return;
     }
-    for pos in saws {
-        if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {
-            show_saw(lv, pos);
-        }
+    if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {
+        show_saw(lv, pos);
     }
 }
 
@@ -278,7 +388,11 @@ pub fn tick_saws(lv: &mut ServerLevel<'_>) {
 fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
     let dim = lv.dim;
     {
-        let along_first = lv.info(pos).map(|(_, i)| i.along_first)?;
+        let (along_first, facing) = lv.info(pos).map(|(_, i)| (i.along_first, i.facing))?;
+        // `canProcess`: a saw not facing up keeps what it was given.
+        if facing != Some(Dir::Up) {
+            return Some(Step::Wait);
+        }
         let speed = lv.speed(pos);
         let mut saw = with_world(|w| w.dims[dim].saws.get(&pos).cloned()).flatten()?;
         let item = saw.slots.first().map(|s| s.0.clone()).unwrap_or_default();
@@ -286,36 +400,8 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
         match step {
             Step::Wait => {}
             Step::Start => {
-                let filter = super::filtering::filter_at(dim, pos);
-                let host = &*lv.host;
-                recipes::with(|r| {
-                    // A sequenced assembly's cutting step alone, when the item is at one
-                    // (`getRecipes`), for its processing time.
-                    if let Some((_, step)) = sequenced::step_for(
-                        &r.sequenced,
-                        &item,
-                        saw.progress.as_ref(),
-                        "create:cutting",
-                    ) {
-                        let time = Recipe {
-                            id: String::new(),
-                            ingredients: Vec::new(),
-                            results: Vec::new(),
-                            time: step.time,
-                        };
-                        saw.start(&[&time]);
-                        return;
-                    }
-                    // `outputMatchesFilter`.
-                    let list: Vec<&Recipe> = r
-                        .cutting
-                        .matching(&item)
-                        .into_iter()
-                        .map(|i| r.cutting.get(i))
-                        .filter(|x| passes(host, filter.as_ref(), x))
-                        .collect();
-                    saw.start(&list);
-                });
+                let list = cuts(lv, pos, &saw, &item);
+                saw.start(&list.iter().collect::<Vec<_>>());
             }
             Step::Apply => {
                 let mut rng = Rng::new(lv.seed_at(pos));
@@ -472,6 +558,34 @@ fn tick_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Step> {
         });
         Some(step)
     }
+}
+
+/// `getRecipes` for `item` in the saw at `pos`: a sequenced assembly's cutting step alone, when
+/// the item is at one, for its processing time; else its cutting recipes whose first result
+/// passes the saw's filter (`outputMatchesFilter`).
+fn cuts(lv: &ServerLevel<'_>, pos: [i32; 3], saw: &saw::Saw, item: &str) -> Vec<Recipe> {
+    let filter = super::filtering::filter_at(lv.dim, pos);
+    let host = &*lv.host;
+    recipes::with(|r| {
+        if let Some((_, step)) =
+            sequenced::step_for(&r.sequenced, item, saw.progress.as_ref(), "create:cutting")
+        {
+            return vec![Recipe {
+                id: String::new(),
+                ingredients: Vec::new(),
+                results: Vec::new(),
+                time: step.time,
+            }];
+        }
+        r.cutting
+            .matching(item)
+            .into_iter()
+            .map(|i| r.cutting.get(i))
+            .filter(|x| passes(host, filter.as_ref(), x))
+            .cloned()
+            .collect()
+    })
+    .unwrap_or_default()
 }
 
 /// `RecipeConditions.outputMatchesFilter`: the saw's filter on a recipe's first result.

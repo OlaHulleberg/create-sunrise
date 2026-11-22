@@ -18,6 +18,26 @@ belts, depots and ejectors, funnels, tunnels, chutes and packages. Fluids are `c
 last column leaves out the branches whose reason is not `harness-gap`: client-only code, other mods,
 data generation, schematics and contraptions, config, chunk lifecycle, error paths and dead code.
 
+## Processing
+
+Measured on a separate campaign of its own (`FUZZ_COVER_SEEDS_FROM=30000 ./run.sh fuzz cover 120`
+at `7e13401`, its corpus 40 seeds of each processing family and 16 each of `belt/press_processing`,
+`belt/depot_outputs` and `belt/chute_columns`), against the processing subsystem of
+[`subsystems.json`](../../coverage/subsystems.json): the machines under `content/kinetics` and all of
+`content/processing`. `./run.sh fuzz gaps processing` on it finds no unexplained branch.
+
+| Machine | Classes | Branches | Reached |
+| --- | ---: | ---: | ---: |
+| processing (all) | 128 | 4683 | 462 (9.9%); 462 / 3576 (12.9%) excluding branches unreachable here |
+| millstone | 4 | 82 | 62 (75.6%) |
+| crushing wheels | 6 | 294 | 135 (45.9%) |
+| saw (with the horizontal saw and tree felling) | 10 | 520 | 95 (18.3%) |
+| press | 6 | 216 | 68 (31.5%) |
+
+Missed: harness-gap 1392 groups / 3114 branches (basins and mixers, burners, deployers, arms,
+crafters, drills, entities in machines), client 351 / 849, contraptions 96 / 242, datagen 6 / 14,
+other mods 1 / 2. See the [processing scope](../processing-scope.md).
+
 ## Why the rest is never reached
 
 Groups / missed branches by category.

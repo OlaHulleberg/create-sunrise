@@ -13,5 +13,19 @@
   ],
   "fluids": [
     "com/simibubi/create/content/fluids/"
+  ],
+  "processing": [
+    "com/simibubi/create/content/kinetics/millstone/",
+    "com/simibubi/create/content/kinetics/crusher/",
+    "com/simibubi/create/content/kinetics/saw/",
+    "com/simibubi/create/content/kinetics/mixer/",
+    "com/simibubi/create/content/kinetics/press/",
+    "com/simibubi/create/content/kinetics/drill/",
+    "com/simibubi/create/content/kinetics/deployer/",
+    "com/simibubi/create/content/kinetics/mechanicalArm/",
+    "com/simibubi/create/content/kinetics/crafter/",
+    "com/simibubi/create/content/kinetics/fan/processing/",
+    "com/simibubi/create/content/kinetics/base/BlockBreakingKineticBlockEntity",
+    "com/simibubi/create/content/processing/"
   ]
 }

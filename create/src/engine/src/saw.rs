@@ -58,6 +58,22 @@ impl Saw {
         self.remaining = (time * (count / 5).max(1)) as f32;
     }
 
+    /// `ProcessingInventory.insertItem` into slot 0 of a saw holding nothing (`isItemValid`; a
+    /// slot limit of one without `bulkCutting`), then its callback `start` on the `recipes` that
+    /// fit, when the saw faces up (`canProcess`). How many it took. The item's sequenced
+    /// progress is the caller's to set.
+    pub fn insert(&mut self, slot: usize, item: &str, recipes: &[&Recipe], up: bool) -> u8 {
+        if slot != 0 || !self.slots.is_empty() {
+            return 0;
+        }
+        self.slots = vec![(item.to_owned(), 1)];
+        self.applied = false;
+        if up {
+            self.start(recipes);
+        }
+        1
+    }
+
     /// `tick` at `speed` rpm.
     pub fn tick(&mut self, speed: f32) -> Step {
         if speed == 0.0 {
@@ -206,6 +222,48 @@ mod tests {
                 ("minecraft:bucket".to_owned(), 2)
             ]
         );
+    }
+
+    #[test]
+    fn an_item_put_in_starts_its_cut_at_once() {
+        // Create: a stripped oak log dropped on an upward saw at 48 rpm has 50 left at once and
+        // 48 after the next tick; it is cut on the 23rd tick and thrown off on the 33rd.
+        let planks = Recipe {
+            id: "create:cutting/runtime_generated/compat/minecraft/stripped_oak_log_to_oak_planks"
+                .into(),
+            ingredients: vec![vec!["minecraft:stripped_oak_log".into()]],
+            results: vec![Output {
+                item: "minecraft:oak_planks".into(),
+                count: 6,
+                chance: 1.0,
+            }],
+            time: 50,
+        };
+        let mut s = Saw::default();
+        assert_eq!(
+            s.insert(0, "minecraft:stripped_oak_log", &[&planks], true),
+            1
+        );
+        assert_eq!((s.remaining, s.index), (50.0, 0));
+        assert_eq!(s.insert(0, "minecraft:dirt", &[], true), 0);
+        let mut ticks = 1;
+        while s.tick(48.0) != Step::Apply {
+            ticks += 1;
+        }
+        assert_eq!(ticks, 23);
+        s.apply(Some(&planks), |_| 64, &mut Rng::new(1), None);
+        while s.tick(48.0) != Step::Out {
+            ticks += 1;
+        }
+        assert_eq!(ticks + 1, 33);
+        // Not facing up, it holds the item without a cut; no recipe, 10 ticks.
+        let mut side = Saw::default();
+        assert_eq!(side.insert(0, "minecraft:oak_log", &[&planks], false), 1);
+        assert_eq!(side.remaining, -1.0);
+        let mut none = Saw::default();
+        assert_eq!(none.insert(2, "minecraft:dirt", &[], true), 0);
+        none.insert(0, "minecraft:dirt", &[], true);
+        assert_eq!(none.remaining, 10.0);
     }
 
     #[test]

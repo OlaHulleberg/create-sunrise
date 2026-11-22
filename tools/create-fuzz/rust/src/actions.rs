@@ -181,7 +181,10 @@ impl Action {
                 extract,
                 ..
             } => {
-                assert!(*slot < 9, "capability slot outside a depot's");
+                assert!(
+                    *slot < 32,
+                    "capability slot outside a processing inventory's"
+                );
                 assert!(
                     insert.is_some() != extract.is_some_and(|n| n > 0),
                     "a capability access inserts or extracts"

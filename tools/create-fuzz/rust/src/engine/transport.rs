@@ -53,7 +53,12 @@ impl Run {
         let mut remainder = offered.clone();
         match input {
             Input::DropOn { stack } => {
-                if self.belt_location(p).is_some() {
+                if let Some(left) = self.processing_landing(p, stack) {
+                    remainder = (left > 0).then(|| Stack {
+                        item: stack.item.clone(),
+                        count: left,
+                    });
+                } else if self.belt_location(p).is_some() {
                     if self.put_on_from_above(p, stack) == Some(0) {
                         remainder = None;
                     }
@@ -82,7 +87,11 @@ impl Run {
                 yaw,
                 sneaking,
             } => {
-                if let Some((c, index, _)) = self.belt_location(p) {
+                if stack.is_none()
+                    && let Some(given) = self.processing_use(p)
+                {
+                    taken = given;
+                } else if let Some((c, index, _)) = self.belt_location(p) {
                     if !sneaking && stack.is_none() {
                         taken = self.w.dims[0]
                             .belts
@@ -239,6 +248,10 @@ impl Run {
             taken: Vec::new(),
             handler: Some(false),
         };
+        if self.processing_capability(p, slot, insert, extract, simulate, &mut outcome) {
+            self.item_outcomes.push(outcome);
+            return;
+        }
         let block = self.w.table.get(self.at(p)).map(|(b, _)| b);
         match block {
             Some(Block::Depot | Block::WeightedEjector) => {
@@ -429,6 +442,11 @@ impl Run {
                 // The glue's `tick_press` (`PressingBehaviour.tick` at the press's turn).
                 create_engine::world::TransportTick::Press(p) => {
                     self.w.tick_press(0, p);
+                    continue;
+                }
+                // The glue's `saw_turn` (`SawBlockEntity.tick` at the saw's turn).
+                create_engine::world::TransportTick::Saw(p) => {
+                    self.tick_saw(p);
                     continue;
                 }
                 create_engine::world::TransportTick::Belt(c) => c,

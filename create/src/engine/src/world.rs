@@ -33,6 +33,9 @@ fn entity_view(block: Block) -> Option<View> {
         // `PressingBehaviour.tick` moves a running press's head at its own turn: a press after
         // the depot or belt that started it moves in that tick.
         Block::MechanicalPress => Some(View::Transport),
+        // `SawBlockEntity.tick` hands an upward saw's results to the belt or depot beside it at
+        // its own turn: one after the saw moves them in that tick.
+        Block::MechanicalSaw => Some(View::Transport),
         _ => None,
     }
 }
@@ -310,6 +313,9 @@ pub struct Dimension {
     pub crusher_checks: Vec<[i32; 3]>,
     pub crushers: HashMap<[i32; 3], (crate::crusher::Crusher, f32)>,
     pub running_crushers: Vec<[i32; 3]>,
+    /// What removed controllers held (`CrushingWheelControllerBlock.onRemove` drops its
+    /// inventory).
+    pub crusher_drops: Vec<([i32; 3], String, u8)>,
     crusher_saved: HashMap<[i32; 3], crate::crusher::Crusher>,
     /// Blaze burners' fuel, the burning ones (the only ones that tick), and fuel saved with a
     /// column waiting for its burner.
@@ -823,6 +829,8 @@ pub enum TransportTick {
     Funnel([i32; 3]),
     /// `PressingBehaviour.tick` of a running press ([`CreateWorld::tick_press`]).
     Press([i32; 3]),
+    /// `SawBlockEntity.tick` of a saw holding items.
+    Saw([i32; 3]),
 }
 
 /// Resumable level transport walk; inventories are inspected at their turn.
@@ -862,6 +870,12 @@ impl TransportTicks {
                         .is_some_and(|x| x.running)
                     {
                         return Some(TransportTick::Press(p));
+                    }
+                    continue;
+                }
+                Some(Block::MechanicalSaw) => {
+                    if world.dims[self.dim].saws.contains_key(&p) {
+                        return Some(TransportTick::Saw(p));
                     }
                     continue;
                 }
@@ -1666,7 +1680,12 @@ impl CreateWorld {
                 // type): the drain, spout or saw that was there is gone, as on its removal.
                 Block::ItemDrain => d.drains.remove(&pos).is_some(),
                 Block::Spout => d.spouts.remove(&pos).is_some(),
-                Block::MechanicalSaw => d.saws.remove(&pos).is_some(),
+                // `SawBlockEntity.destroy`: its inventory drops.
+                Block::MechanicalSaw => d.saws.remove(&pos).is_some_and(|s| {
+                    d.saw_drops
+                        .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
+                    true
+                }),
                 _ => false,
             };
             if had {
@@ -1987,9 +2006,11 @@ impl CreateWorld {
                 d.burning.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
-            if d.crushers.remove(&pos).is_some() {
+            if let Some((c, _)) = d.crushers.remove(&pos) {
                 d.running_crushers.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                d.crusher_drops
+                    .extend(c.slots.into_iter().map(|(item, n)| (pos, item, n)));
             }
             if d.fans.remove(&pos).is_some() {
                 d.running_fans.retain(|p| *p != pos);
@@ -7511,6 +7532,100 @@ mod tests {
             let pressed = (32..=50).find(|_| level_tick(&mut w));
             assert_eq!(pressed, Some(46), "depot first: {depot_first}");
         }
+        states::clear_range();
+    }
+
+    /// `p2-saw-depot-turn`: a stripped oak log cut by an upward saw at 48 rpm goes onto the
+    /// depot it turns toward in the tick it leaves the saw, and Create's depot, placed after the
+    /// saw, moves it 0.125 on in that same tick: the saw hands it over at its own turn in the
+    /// level's block-entity order, before the depot's.
+    #[test]
+    fn a_saw_hands_its_results_on_at_its_turn_in_the_block_entity_order() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:mechanical_saw",
+                vec![
+                    ("axis_along_first", "true"),
+                    ("facing", "up"),
+                    ("flipped", "false"),
+                ],
+            ),
+            ("create:depot", vec![("waterlogged", "false")]),
+        ];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let (saw, depot) = ([0, 8, 0], [1, 8, 0]);
+        w.block_changed(0, saw, 0, 2);
+        w.block_changed(0, depot, 0, 3);
+        let turns = |w: &mut CreateWorld| {
+            let mut out = Vec::new();
+            let mut walk = w.transport_ticks(0, 0);
+            while let Some(t) = walk.next(w) {
+                out.push(t);
+            }
+            out
+        };
+        assert!(!turns(&mut w).contains(&TransportTick::Saw(saw)));
+        w.dims[0].saws.insert(saw, crate::saw::Saw::default());
+        assert_eq!(
+            turns(&mut w),
+            [TransportTick::Saw(saw), TransportTick::Depot(depot)]
+        );
+        states::clear_range();
+    }
+
+    /// Create: a controller holding 8 cobblestone drops them where it stood when a wheel goes
+    /// and takes it (`CrushingWheelControllerBlock.onRemove`, `ItemHelper.dropContents`).
+    #[test]
+    fn a_removed_crushing_wheel_controller_drops_what_it_held() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:crushing_wheel_controller",
+            vec![("facing", "down"), ("valid", "true")],
+        )];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let at = [0, 8, 0];
+        w.block_changed(0, at, 0, 2);
+        let (c, _) = w.dims[0].crushers.get_mut(&at).unwrap();
+        crate::crusher::intake(c, "minecraft:cobblestone", 8, Some(250));
+        w.block_changed(0, at, 2, 0);
+        assert_eq!(
+            w.dims[0].crusher_drops,
+            [(at, "minecraft:cobblestone".to_owned(), 8)]
+        );
+        states::clear_range();
+    }
+
+    /// Create: an upward saw cutting an oak log drops it where it stood when it is broken
+    /// (`SawBlockEntity.destroy`, `ItemHelper.dropContents`).
+    #[test]
+    fn a_broken_saw_drops_what_it_held() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:mechanical_saw",
+            vec![
+                ("axis_along_first", "false"),
+                ("facing", "up"),
+                ("flipped", "false"),
+            ],
+        )];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let at = [0, 8, 0];
+        w.block_changed(0, at, 0, 2);
+        let mut s = crate::saw::Saw::default();
+        s.insert(0, "minecraft:oak_log", &[], true);
+        w.dims[0].saws.insert(at, s);
+        w.block_changed(0, at, 2, 0);
+        assert_eq!(
+            w.dims[0].saw_drops,
+            [(at, "minecraft:oak_log".to_owned(), 1)]
+        );
         states::clear_range();
     }
 

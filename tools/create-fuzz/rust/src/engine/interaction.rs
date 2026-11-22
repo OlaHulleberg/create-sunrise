@@ -29,12 +29,15 @@ impl Run {
             Action::Reload => self.reload(),
             Action::Item { input } => self.item_input(p, input),
             Action::Capability {
+                side,
                 slot,
                 insert,
                 extract,
                 simulate,
-                ..
-            } => self.capability(p, *slot, insert.as_ref(), *extract, *simulate),
+            } => {
+                self.capability_side = side.map(|f| f.dir());
+                self.capability(p, *slot, insert.as_ref(), *extract, *simulate)
+            }
             Action::SpeedSetting { row, value } => {
                 self.w.board_motor(
                     0,
