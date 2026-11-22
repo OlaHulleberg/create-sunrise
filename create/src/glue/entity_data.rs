@@ -27,7 +27,9 @@ use std::collections::{BTreeMap, HashMap};
 pub type Entities = BTreeMap<[i32; 3], Compound>;
 
 /// Marks data saved with the fields: what an older version put under the same keys (a drawn
-/// filter's id, say) is not read as them, so its column's data stands.
+/// filter's id, say) is not read as them, so its column's data stands. Data without it is read
+/// unless it came with a column an older version saved (placing with data, `/data` and cloning
+/// give a block entity Create's own keys alone, as `loadWithComponents` reads them).
 const MARKER: &str = "create:fields";
 
 /// A block entity's fields as last published or loaded, and the block they were written for.
@@ -37,12 +39,17 @@ struct Record {
     fields: Compound,
 }
 
+/// Data a block entity loaded: its level and position, its fields, and whether they are known
+/// to be them ([`loaded`]).
+type Loaded = (LevelRef, [i32; 3], Record, bool);
+
 thread_local! {
     /// Each level's index and game time at its last publication, for the save hook's live fields.
     static CLOCKS: RefCell<HashMap<LevelRef, (usize, i64)>> = RefCell::new(HashMap::new());
     static RECORDS: RefCell<HashMap<(LevelRef, [i32; 3]), Record>> = RefCell::new(HashMap::new());
-    /// Data block entities loaded that the subsystems have not read yet.
-    static PENDING: RefCell<Vec<(LevelRef, [i32; 3], Record)>> = const { RefCell::new(Vec::new()) };
+    /// Data block entities loaded that the subsystems have not read yet, and whether it is
+    /// known to be the fields (saved with the marker, or loaded into an entity that has some).
+    static PENDING: RefCell<Vec<Loaded>> = const { RefCell::new(Vec::new()) };
 }
 
 /// Adds the saved-fields part to block entity type `kind`: every type of Create's has it.
@@ -98,19 +105,37 @@ impl BlockEntityPart for SavedFields {
             return;
         };
         let known = RECORDS.with_borrow(|r| r.contains_key(&(event.level, event.pos)));
-        if !known && !event.tag.contains_key(&MARKER.into()) {
+        let Some((fields, sure)) = loaded(SUBSYSTEMS, block, event.tag, known) else {
             return;
-        }
-        let fields = own_fields(SUBSYSTEMS, block, event.tag);
-        let marker = MARKER.into();
-        if !known && fields.keys().all(|k| *k == marker) {
-            return;
-        }
+        };
         PENDING.with_borrow_mut(|p| {
-            p.retain(|(l, q, _)| (*l, *q) != (event.level, event.pos));
-            p.push((event.level, event.pos, Record { block, fields }));
+            p.retain(|(l, q, _, _)| (*l, *q) != (event.level, event.pos));
+            p.push((event.level, event.pos, Record { block, fields }, sure));
         });
     }
+}
+
+/// What `loadAdditional` gives `block`'s subsystems to read from `tag`: its own fields, and
+/// whether they are known to be them (saved with the marker, or loaded into an entity that had
+/// fields, `known`). None when the tag holds none of them.
+fn loaded(
+    systems: &[&dyn Subsystem],
+    block: Block,
+    tag: &Compound,
+    known: bool,
+) -> Option<(Compound, bool)> {
+    let fields = own_fields(systems, block, tag);
+    let marker = MARKER.into();
+    if !known && fields.keys().all(|k| *k == marker) {
+        return None;
+    }
+    Some((fields, known || tag.contains_key(&marker)))
+}
+
+/// Whether loaded fields are read: unless they came without the marker in a column an older
+/// version saved (`legacy`), whose block entities held what it drew under the same keys.
+fn read(sure: bool, legacy: bool) -> bool {
+    sure || !legacy
 }
 
 /// `saveAdditional`: the entity's record replaces its block's saved keys (none for an entity
@@ -123,7 +148,7 @@ fn write_record(
     block: Option<Block>,
     tag: &mut Compound,
 ) {
-    if PENDING.with_borrow(|p| p.iter().any(|(l, q, _)| (*l, *q) == (level, pos))) {
+    if PENDING.with_borrow(|p| p.iter().any(|(l, q, _, _)| (*l, *q) == (level, pos))) {
         return;
     }
     let record = RECORDS.with_borrow(|r| r.get(&(level, pos)).cloned());
@@ -165,8 +190,8 @@ pub fn note_clock(lv: &ServerLevel<'_>) {
 pub fn pending_columns(lv: &ServerLevel<'_>) -> Vec<[i32; 2]> {
     let mut columns: Vec<[i32; 2]> = PENDING.with_borrow(|p| {
         p.iter()
-            .filter(|(l, _, _)| *l == lv.level)
-            .map(|(_, q, _)| [q[0] >> 4, q[2] >> 4])
+            .filter(|(l, _, _, _)| *l == lv.level)
+            .map(|(_, q, _, _)| [q[0] >> 4, q[2] >> 4])
             .collect()
     });
     columns.sort_unstable();
@@ -174,15 +199,19 @@ pub fn pending_columns(lv: &ServerLevel<'_>) -> Vec<[i32; 2]> {
     columns
 }
 
-/// `SmartBlockEntity.read` for each block entity of column `chunk` of `lv` that loaded data.
-pub fn load(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) {
+/// `SmartBlockEntity.read` for each block entity of column `chunk` of `lv` that loaded data;
+/// `legacy`: the column's data is an older version's, so data without the marker is not read.
+pub fn load(lv: &mut ServerLevel<'_>, chunk: [i32; 2], legacy: bool) {
     let level = lv.level;
     let loaded: Vec<([i32; 3], Record)> = PENDING.with_borrow_mut(|p| {
         let (mine, rest) = std::mem::take(p)
             .into_iter()
-            .partition(|(l, q, _)| *l == level && [q[0] >> 4, q[2] >> 4] == chunk);
+            .partition(|(l, q, _, _)| *l == level && [q[0] >> 4, q[2] >> 4] == chunk);
         *p = rest;
-        mine.into_iter().map(|(_, q, r)| (q, r)).collect()
+        mine.into_iter()
+            .filter(|(_, _, _, sure)| read(*sure, legacy))
+            .map(|(_, q, r, _)| (q, r))
+            .collect()
     });
     for (pos, record) in loaded {
         for s in SUBSYSTEMS {
@@ -305,7 +334,7 @@ pub fn join(tag: &Compound, pos: [i32; 3], pos_key: &str, names: &[(&str, &str)]
 pub fn column_unloaded(level: LevelRef, chunk: [i32; 2]) {
     let outside = |p: &[i32; 3]| [p[0] >> 4, p[2] >> 4] != chunk;
     RECORDS.with_borrow_mut(|r| r.retain(|(l, p), _| *l != level || outside(p)));
-    PENDING.with_borrow_mut(|p| p.retain(|(l, q, _)| *l != level || outside(q)));
+    PENDING.with_borrow_mut(|p| p.retain(|(l, q, _, _)| *l != level || outside(q)));
 }
 
 /// The world closed.
@@ -335,5 +364,36 @@ mod tests {
                 assert!(!synced.contains(key), "{block:?} saves synced key {key}");
             }
         }
+    }
+
+    #[test]
+    fn data_placed_without_the_marker_is_read_outside_an_older_column() {
+        let filter = Tag::Compound(Compound::from([(
+            "id".into(),
+            Tag::String("minecraft:diamond".into()),
+        )]));
+        // `block_entity_data` on an item: Create's keys alone, as `loadWithComponents` reads them.
+        let placed = Compound::from([
+            ("id".into(), Tag::String("create:kinetic".into())),
+            ("Filter".into(), filter.clone()),
+        ]);
+        let (fields, sure) = loaded(SUBSYSTEMS, Block::BrassFunnel, &placed, false).unwrap();
+        assert_eq!(fields.get(&"Filter".into()), Some(&filter));
+        assert!(fields.get(&"id".into()).is_none());
+        assert!(!sure);
+        assert!(read(sure, false));
+        assert!(!read(sure, true));
+        // Saved with the fields, or loaded into an entity that had them: always read.
+        let mut saved = placed.clone();
+        saved.insert(MARKER.into(), Tag::Byte(1));
+        let (_, sure) = loaded(SUBSYSTEMS, Block::BrassFunnel, &saved, false).unwrap();
+        assert!(sure && read(sure, true));
+        let (_, sure) = loaded(SUBSYSTEMS, Block::BrassFunnel, &placed, true).unwrap();
+        assert!(sure && read(sure, true));
+        // Nothing of the block's own: nothing to read.
+        let other = Compound::from([("id".into(), Tag::String("create:kinetic".into()))]);
+        assert!(loaded(SUBSYSTEMS, Block::BrassFunnel, &other, false).is_none());
+        let marked = Compound::from([(MARKER.into(), Tag::Byte(1))]);
+        assert!(loaded(SUBSYSTEMS, Block::BrassFunnel, &marked, false).is_none());
     }
 }

@@ -164,10 +164,11 @@ fn load_column(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) {
     for s in SUBSYSTEMS {
         s.chunk_load(lv, chunk, &data);
     }
-    if persist::holds_legacy(&data) {
+    let legacy = persist::holds_legacy(&data);
+    if legacy {
         persist::mark_unsaved(lv.dim, chunk);
     }
-    entity_data::load(lv, chunk);
+    entity_data::load(lv, chunk, legacy);
 }
 
 /// Has the subsystems read the data block entities of `lv` loaded since they last asked: a
@@ -177,7 +178,7 @@ pub fn load_entities(lv: &mut ServerLevel<'_>) {
         if COLUMNS.with_borrow_mut(|c| c.insert((lv.dim, chunk))) {
             load_column(lv, chunk);
         } else {
-            entity_data::load(lv, chunk);
+            entity_data::load(lv, chunk, false);
         }
     }
 }

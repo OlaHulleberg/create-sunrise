@@ -189,6 +189,9 @@ impl Hooks for Create {
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
             return;
         };
+        // Data a placement or a command gave a block entity during the tick is read before the
+        // entity's first tick, as `loadWithComponents` reads it at once.
+        glue::load_entities(&mut lv);
         // A frozen server ticks no block entity, so only what Create runs from its own level
         // tick goes on (`CommonEvents.onServerWorldTick`: the railways).
         let running = world::running();
