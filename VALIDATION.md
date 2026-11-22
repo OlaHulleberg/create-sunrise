@@ -1,14 +1,14 @@
 # Validation
 
-Checked on 2026-11-21 at main `c6f9470` (Linux x86_64, Rust 1.99.1, a fresh clone), pinned to Sunrise
+Checked on 2026-11-22 at main `11c43ca` (Linux x86_64, Rust 1.99.1, a fresh clone), pinned to Sunrise
 `94256510f74e6843754e0a93fd9e4da7e45b1056` in `create/sunrise-mod.toml`.
 `cargo sunrise-mod` uses the signature-verified release tool and SDK from
 `sdk-94256510f74e6843754e0a93fd9e4da7e45b1056`, with the published release key.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-`684e89b` on `9425651` passed the in-game smoke test below, and `c6f9470` was tried in game for the fixes merged
-since (#203-#224). Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
+`684e89b` on `9425651` passed the in-game smoke test below, `c6f9470` was tried in game for the fixes merged
+since (#203-#224), and `11c43ca` for those merged after (#227-#234). Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
 the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
@@ -20,8 +20,8 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (117 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (900 engine tests) |
+| `create/` | `cargo +1.99.1 test` | Pass (118 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (916 engine tests) |
 | `create/` | `cargo sunrise-mod check` | Pass (official `94256510f7` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
 | `create/` | `cargo sunrise-mod fits target/sunrise-mod/create.smod --build 94256510f74e6843754e0a93fd9e4da7e45b1056` | Pass (`made for`) |
@@ -277,6 +277,30 @@ xvfb-run -a python3 tools/check-potato-projectile.py --ctl "$CTL" \
 ```
 
 In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test (or `--fixture --case flight` for the two billboard screenshots). Do not ship the instrumented build or publish the screenshots. Dedicated multiplayer, a free camera and flight prediction were not checked.
+
+## Fixes #227-#234 in game on `9425651` (main `11c43ca`)
+
+Built with `sunrise-launcher native-build` against `nightly-2026-11-20-9425651`, a fresh creative world, driven by
+`sunrise-ctl`, read back with `/data get`, `/tick freeze` and `step`, and the entity list. #228 is above; #230, #232 and
+#233 change only the fuzzer and docs.
+
+| PR | Item | Result | Evidence |
+|---|---|---|---|
+| #227 | Tunnel placement | Pass | An andesite tunnel is refused on stone and on an upward belt segment; on a flat belt, with ticks frozen, the segment is `casing=true` at once, saved `Casing: "andesite"`, kept over a reload |
+| #227 | Brass tunnel group | Pass | Two brass tunnels on side-by-side belts placed with ticks frozen save `ConnectedRight`/`ConnectedLeft` at once; saved and reloaded before a tick, both kept |
+| #227 | Lost side's filter | Pass | A depot beside the belt opens the tunnel `t_left`; breaking it shapes the tunnel `straight`: a diamond side filter goes, a `create:filter` one drops as an item |
+| #227 | Funnel filter change | Pass | A brass funnel on a chest with `TransferCooldown` 400, its filter clicked to cobblestone by the player: 380 after 20 ticks, the chest untouched until it ran out |
+| #227 | Live countdowns over a reload | Pass | Ticks frozen: funnel `TransferCooldown` 336, burner `Remaining` 1566, drain `ProcessingTicks` 8 (20 → 8 as it drained a bucket) saved; after the reload's 13 ticks 323 and 1553, the drain done with 1000 mB |
+| #227 | Fan after a reload | Pass | An ingot in front of a 16 rpm fan reloads moving at 0.021 a tick and keeps being pushed |
+| #227 | Depot to a pulling funnel | Pass | A belt-fed depot under a pulling brass belt funnel: the gold slides 0.125, 0.219, 0.289 … 0.45 and is in the chest on the 9th tick, still sliding. A spout above could not be filled by `/data merge` or a bucket, so the order against it was not seen |
+| #227 | Slicer at the end | Pass | Redstone on the end segment of a 16 rpm belt, the end cut off with the wrench: thrown at (−0.125, 0.125), the belt's way |
+| #227 | Ejector nudge | Pass | A gravity-free stick inside an ejector's block rises 151.5 → 151.625 as a landing ingot activates it; the ingot launches the next tick |
+| #231 | Pump into a junction over a tank | Pass | Cauldron, pipe, pump, pipe, junction beside a tank, pipe (the fuzz case's layout): the tank fills 80 → 656 → 1000 mB; reloaded 8 mB into a refill, it goes on 2144 → 2496 → 2992 |
+| #234 | Hopper into millstone, crusher, saws | Pass | Wheat milled to flour and seeds; dirt is taken too (`API_GAPS.md`). Crusher wheels turning down take one cobblestone at a time, 3 gravel out below (turning up, results are shot up into the hopper and crushed again, as Java). An upward saw takes one log at a time and throws stripped logs; an east-facing saw takes one and holds it |
+| #234 | Breaking a saw or crusher | Pass | The east-facing saw drops its cobblestone in its block; a wheel broken mid-crush drops the controller's cobblestone |
+| #234 | Reload mid-process | Fail | An upward saw reloaded mid-cut keeps its log while turning at −16 and never cuts it: `saw_turn` is never called for it (a temporary debug log; a saw filled after the load is called every tick). Repro: saw `facing=up` driven at 16, a hopper above with one oak log, save and quit within 2 s, relaunch. The crusher finished across a reload |
+| — | Millstone progress over a reload | Fail, not from these merges | 104 of 150 ticks done at the save, the flour came about 155 ticks after it: the port saves no millstone `Timer` (`MillstoneBlockEntity.write`); `millstone.rs` is unchanged by #227-#234 |
+| — | Hopper into a depot | Fail, not from these merges | The stack lands in slot 0 but the depot never holds it (no `HeldItem`, not drawn, a pulling funnel leaves it): at the commit `depot_contents_changed` reads slot 0 empty (a temporary debug log); unchanged since `b7b000d` |
 
 ## Fixes #203-#224 in game on `9425651` (main `c6f9470`)
 
