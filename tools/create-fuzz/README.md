@@ -331,7 +331,8 @@ table's comments say.
 | belt slicer, tunnels, funnels | 99, 103, 61 mod 128 | 3/128 | Reload; the slicer picks its cut, join or refusal variant by `index` |
 | belt surface, depots, chutes | 94, 29, 66 mod 128 | 3/128 | Never reload |
 | transmission valve, sequence, chain, generate | 10-12, 14 mod 16, below 64 mod 128 | 4 × 1/32 = 12.5% | Short traces with few variants (bits 16 and 32, seed / 64 mod 3); they gave up the half above 64 |
-| transmission crank | 13, 45 mod 128 | 1/64 | Its trace reads no seed bit but the reload one: one residue of each half |
+| transmission crank | 13 mod 256, 45 mod 128 | 3/256 | Its trace reads no seed bit but the reload one: one residue of each half (141, a copy of 13, went to cog_casing) |
+| network/cog_casing | 141 mod 256 | 1/256 | Cogs cased beside shafts, cogs and gearboxes on their axis faces, then wrenched and uncased; never reloads |
 | transmission flicker | 2 mod 256 | 1/256 | Reads no seed bit and 2 mod 64 never reloads: 66 generated the same trace, and so did 130 |
 | network/integrated_cogs | 130 mod 256 | 1/256 | Cog items on encased cogs and pumps (`CogwheelBlockItem`'s helpers on non-dedicated cogs); flicker's copy, never reloads |
 | waterwheel | 74, 90, 106, 122 mod 128 | 1/32 | Back after the network campaign took its residues; its pre-campaign share |

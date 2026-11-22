@@ -92,7 +92,7 @@ call them. The wrench never does: `IWrenchable.onWrenched` turns a state with
 
 The kinetics families and what each drives are in the README's seed table and the doc comments
 in `rust/src/network_inputs.rs`, `transmission.rs`, `geometry.rs`, `kinetic_faces.rs`,
-`waterwheel.rs` and `steam_engine.rs`. The four in `kinetic_faces.rs`:
+`waterwheel.rs` and `steam_engine.rs`. The five in `kinetic_faces.rs`:
 
 - `network/face_placement` (256k + 220): every kinetic block item `contested_placement` places, and
   the flywheel, used on each of the six faces of a shaft on x and y, a small cog, a large cog, a
@@ -115,3 +115,8 @@ in `rust/src/network_inputs.rs`, `transmission.rs`, `geometry.rs`, `kinetic_face
   `getOffset` never runs (`unreachable` in `reasons.tsv`). 24 indices. Millstones, mixers,
   crafters, arms and display boards have cogs too, but their own uses are processing and
   logistics work the driver does not mirror.
+- `network/cog_casing` (256k + 141): small and large cogs on each axis with nothing, a shaft
+  along or across, a cog or a gearbox on their axis faces (a motor turning the positive shaft in
+  half), cased with either casing (`EncasedCogwheelBlock.handleEncasing`), wrenched on the
+  positive axis face (`onWrenched`), across the axis (`swapShaftsForRotation`) and uncased with a
+  sneaking wrench; the last cell is cased sneaking, which places the casing as a block. 24 indices.

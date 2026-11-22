@@ -310,6 +310,143 @@ pub fn integrated_cogs(seed: u64, index: u64) -> Scenario {
     }
 }
 
+/// What stands on a cog's positive and negative axis faces when it is cased.
+#[derive(Clone, Copy)]
+enum Beside {
+    Nothing,
+    /// A shaft along the cog's axis, with a shaft towards it.
+    Along,
+    /// A shaft across the axis: an `IRotate` without a shaft towards the cog.
+    Across,
+    /// A cog on the same axis, which has a shaft on both axis faces.
+    Cog,
+    /// A gearbox on the cog's axis: shafts on its four other faces only.
+    Gearbox,
+}
+
+/// Case cogs of one size and axis beside shafts, cogs and gearboxes on their axis faces
+/// (`EncasedCogwheelBlock.handleEncasing` keeps a shaft cap only towards a neighbour with a
+/// shaft towards it), with a motor turning the positive shaft in half the indices, then wrench
+/// the encased cog on its positive axis face (`onWrenched` toggles that cap), on a face across
+/// its axis (`getRotatedBlockState` and `swapShaftsForRotation`), and take the casing off with
+/// a sneaking wrench (`onSneakWrenched`). The last cell is cased sneaking, which places the
+/// casing as a block instead (`CogWheelBlock.useItemOn`).
+pub fn cog_casing(seed: u64, index: u64) -> Scenario {
+    use create_engine::kinetics::Axis;
+    let large = index % 2 == 1;
+    let axis = [Axis::X, Axis::Y, Axis::Z][(index / 2 % 3) as usize];
+    let casing = ["create:andesite_casing", "create:brass_casing"][(index / 6 % 2) as usize];
+    let driven = index / 12 % 2 == 1;
+    let name = match axis {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    };
+    let across = match axis {
+        Axis::X => "z",
+        _ => "x",
+    };
+    let gearbox = match axis {
+        Axis::Y => "x",
+        _ => "y",
+    };
+    let unit = |sign: i32| match axis {
+        Axis::X => [sign, 0, 0],
+        Axis::Y => [0, sign, 0],
+        Axis::Z => [0, 0, sign],
+    };
+    let (positive, negative, across_face) = match axis {
+        Axis::X => (Face::East, Face::West, Face::Up),
+        Axis::Y => (Face::Up, Face::Down, Face::North),
+        Axis::Z => (Face::South, Face::North, Face::Up),
+    };
+    let patterns = [
+        (Beside::Nothing, Beside::Nothing),
+        (Beside::Along, Beside::Nothing),
+        (Beside::Nothing, Beside::Along),
+        (Beside::Along, Beside::Along),
+        (Beside::Across, Beside::Cog),
+        (Beside::Along, Beside::Gearbox),
+    ];
+    let cog = if large {
+        "create:large_cogwheel"
+    } else {
+        "create:cogwheel"
+    };
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    for (i, (up, down)) in patterns.into_iter().enumerate() {
+        let cell = [i as i32 * 6 - 15, 8, 0];
+        let at = |[dx, dy, dz]: [i32; 3]| [cell[0] + dx, cell[1] + dy, cell[2] + dz];
+        blocks.push(Placed {
+            pos: cell,
+            state: format!("{cog}[axis={name}]"),
+            motor: None,
+        });
+        for (sign, beside) in [(1, up), (-1, down)] {
+            let state = match beside {
+                Beside::Nothing => continue,
+                Beside::Along => format!("create:shaft[axis={name}]"),
+                Beside::Across => format!("create:shaft[axis={across}]"),
+                Beside::Cog => format!("create:cogwheel[axis={name}]"),
+                Beside::Gearbox => format!("create:gearbox[axis={gearbox}]"),
+            };
+            blocks.push(Placed {
+                pos: at(unit(sign)),
+                state,
+                motor: None,
+            });
+        }
+        if driven && matches!(up, Beside::Along) {
+            let facing = match axis {
+                Axis::X => "west",
+                Axis::Y => "down",
+                Axis::Z => "north",
+            };
+            blocks.push(Placed {
+                pos: at(unit(2)),
+                state: format!("create:creative_motor[facing={facing}]"),
+                motor: Some(32),
+            });
+        }
+        let tick = 20 + 2 * i as u32;
+        events.push(click(tick, cell, casing, across_face, (0., 0.), i == 5));
+        events.push(click(
+            tick + 20,
+            cell,
+            "create:wrench",
+            positive,
+            (0., 0.),
+            false,
+        ));
+        events.push(click(
+            tick + 40,
+            cell,
+            "create:wrench",
+            across_face,
+            (0., 0.),
+            false,
+        ));
+        events.push(click(
+            tick + 60,
+            cell,
+            "create:wrench",
+            negative,
+            (0., 0.),
+            true,
+        ));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 160,
+        checkpoints: vec![19, 31, 51, 71, 91],
+        blocks,
+        events,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -343,6 +480,7 @@ mod tests {
                 face_wrench(index, index),
                 driven_placement(index, index),
                 integrated_cogs(index, index),
+                cog_casing(index, index),
             ] {
                 for b in &sc.blocks {
                     crate::catalogue::validate(&b.state).unwrap();

@@ -178,9 +178,11 @@ pub const FAMILIES: &[Family] = &[
     // The crank trace reads no seed bit but the reload one: one residue of each half.
     family(
         "transmission/crank",
-        &[(128, 13), (128, 45)],
+        &[(256, 13), (128, 45)],
         transmission::crank,
     ),
+    // 13's copy: the crank trace reads no seed bit but the reload one, and 141 never reloads.
+    family("network/cog_casing", &[(256, 141)], cog_casing),
     family(
         "transmission/generate",
         &low_half(14),
@@ -236,6 +238,9 @@ fn driven_placement(seed: u64) -> Scenario {
 }
 fn integrated_cogs(seed: u64) -> Scenario {
     crate::kinetic_faces::integrated_cogs(seed, index(seed))
+}
+fn cog_casing(seed: u64) -> Scenario {
+    crate::kinetic_faces::cog_casing(seed, index(seed))
 }
 fn geometry_states(seed: u64) -> Scenario {
     geometry::states(seed, index(seed))
@@ -517,7 +522,7 @@ mod tests {
             (0..128).filter(|r| old(*r) != family_name(*r)).collect()
         };
         for r in 0..128 {
-            if ![2, 92, 124].contains(&r) {
+            if ![2, 13, 92, 124].contains(&r) {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
@@ -525,6 +530,7 @@ mod tests {
         assert_eq!(family_name(252), "network/face_wrench");
         assert_eq!(family_name(124), "network/driven_placement");
         assert_eq!(family_name(130), "network/integrated_cogs");
+        assert_eq!(family_name(141), "network/cog_casing");
         assert_eq!(
             moved(at_9f00743),
             [
