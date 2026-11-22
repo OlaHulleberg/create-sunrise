@@ -313,6 +313,9 @@ pub struct Dimension {
     pub crusher_checks: Vec<[i32; 3]>,
     pub crushers: HashMap<[i32; 3], (crate::crusher::Crusher, f32)>,
     pub running_crushers: Vec<[i32; 3]>,
+    /// What removed controllers held (`CrushingWheelControllerBlock.onRemove` drops its
+    /// inventory).
+    pub crusher_drops: Vec<([i32; 3], String, u8)>,
     crusher_saved: HashMap<[i32; 3], crate::crusher::Crusher>,
     /// Blaze burners' fuel, the burning ones (the only ones that tick), and fuel saved with a
     /// column waiting for its burner.
@@ -1998,9 +2001,11 @@ impl CreateWorld {
                 d.burning.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
-            if d.crushers.remove(&pos).is_some() {
+            if let Some((c, _)) = d.crushers.remove(&pos) {
                 d.running_crushers.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+                d.crusher_drops
+                    .extend(c.slots.into_iter().map(|(item, n)| (pos, item, n)));
             }
             if d.fans.remove(&pos).is_some() {
                 d.running_fans.retain(|p| *p != pos);
@@ -7562,6 +7567,30 @@ mod tests {
         assert_eq!(
             turns(&mut w),
             [TransportTick::Saw(saw), TransportTick::Depot(depot)]
+        );
+        states::clear_range();
+    }
+
+    /// Create: a controller holding 8 cobblestone drops them where it stood when a wheel goes
+    /// and takes it (`CrushingWheelControllerBlock.onRemove`, `ItemHelper.dropContents`).
+    #[test]
+    fn a_removed_crushing_wheel_controller_drops_what_it_held() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:crushing_wheel_controller",
+            vec![("facing", "down"), ("valid", "true")],
+        )];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let at = [0, 8, 0];
+        w.block_changed(0, at, 0, 2);
+        let (c, _) = w.dims[0].crushers.get_mut(&at).unwrap();
+        crate::crusher::intake(c, "minecraft:cobblestone", 8, Some(250));
+        w.block_changed(0, at, 2, 0);
+        assert_eq!(
+            w.dims[0].crusher_drops,
+            [(at, "minecraft:cobblestone".to_owned(), 8)]
         );
         states::clear_range();
     }

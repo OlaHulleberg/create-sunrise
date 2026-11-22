@@ -183,6 +183,9 @@ impl Run {
         for pos in checks {
             self.fix_controllers(pos);
         }
+        for (pos, item, n) in std::mem::take(&mut self.w.dims[0].crusher_drops) {
+            self.pop_resource(pos, &item, n);
+        }
         let running = self.w.dims[0].running_crushers.clone();
         for pos in running {
             self.tick_crusher(pos);

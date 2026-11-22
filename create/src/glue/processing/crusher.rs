@@ -21,6 +21,13 @@ pub fn tick_crushers(lv: &mut ServerLevel<'_>) {
     for pos in checks {
         fix_controllers(lv, pos);
     }
+    // `onRemove`: a removed controller's inventory scatters where it was.
+    let drops = with_world(|w| std::mem::take(&mut w.dims[dim].crusher_drops)).unwrap_or_default();
+    for (pos, item, n) in drops {
+        if let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(n)) {
+            let _ = lv.level.pop_resource(&mut *lv.host, pos, stack);
+        }
+    }
     let running = with_world(|w| w.dims[dim].running_crushers.clone()).unwrap_or_default();
     if running.is_empty() || !recipes::ready() {
         return;
