@@ -399,9 +399,10 @@ fn show_contents(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     super::super::drawn::publish(lv, pos, drawn_contents(&contents(lv, pos)));
 }
 
-/// A hopper (or any handler's commit) put into or took from the depot at `pos`: its held
-/// stack arrives from above (`new TransportedItemStack(stack)`, sliding in from the edge of
-/// nothing) or left.
+/// The game told of a change to the depot at `pos`'s slots: its held stack arrives from above
+/// (`new TransportedItemStack(stack)`, sliding in from the edge of nothing) or left. The game
+/// tells of no write through its item handler, which sets the held stack itself
+/// (`handlers::DepotItems`).
 pub fn depot_contents_changed(lv: &ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some(had) = with_world(|w| w.dims[dim].depots.get(&pos).copied()).flatten() else {

@@ -1,7 +1,8 @@
 //! What Create's depots, item vaults and chutes give and take through `ITEMS`, for hoppers,
 //! pipes and other mods (their `IItemHandler`s), ahead of the game's plain slots: their stacks
 //! live in their block entities' slots, so the game's journal covers every write. The engine
-//! learns of a change at its commit (`contents_changed`), never from inside a transaction.
+//! learns of a change at its commit (`contents_changed`), but for a depot's held stack: the
+//! game tells of no write to a mod's own block entity, so its handler sets it as it moves.
 
 use super::super::states;
 use super::super::world::{level_index, with_world};
@@ -154,15 +155,15 @@ fn put(
 /// `DepotItemHandler` (the ejector's `DepotBehaviour` too): in only to the held slot; a depot
 /// while it holds nothing (`canMergeItems` false), an ejector only while charged, merging onto
 /// what it holds up to its stack size (`enableMerging`, `getRemainingSpace`); out of every slot.
-/// What goes onto an ejector already holding a stack slides in on its own (`incoming`), kept in
-/// the engine: a transaction that later aborts cannot take that back (as with a belt's
-/// handler; `items::insert_room` answers ejectors from the engine).
+/// The held stack's motion and what goes onto an ejector already holding a stack (`incoming`)
+/// are kept in the engine: a transaction that later aborts cannot take them back (as with a
+/// belt's handler; `items::insert_room` answers ejectors from the engine).
 struct DepotItems(At);
 
 impl DepotItems {
     /// `insertItem` on an ejector (`DepotBehaviour.insert` with merging): onto an empty one
-    /// into the held slot, journaled, its motion set at the commit (`depot_contents_changed`);
-    /// onto a held stack into `incoming` at once.
+    /// into the held slot, journaled, arriving from above (`handler_motion`); onto a held stack
+    /// into `incoming` at once.
     fn merge(
         &self,
         host: &mut dyn ServerHost,
@@ -193,7 +194,28 @@ impl DepotItems {
         if held {
             return n;
         }
-        put(host, tx, e, 0, resource, n, n)
+        let n = put(host, tx, e, 0, resource, n, n);
+        if n > 0 {
+            with_world(|w| w.depot_put(self.0.dim, pos, Some(motion)));
+        }
+        n
+    }
+
+    /// `DepotBehaviour.insert` onto an empty depot: the stack put into its held slot is its held
+    /// stack, arriving from above (`handler_motion`).
+    fn arrived(&self, host: &mut dyn ServerHost, e: BlockEntityRef) {
+        let Some(dimension) = self.0.level.dimension().id(&*host) else {
+            return;
+        };
+        let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
+            return;
+        };
+        let Some(stack) = read(&*lv.host, Some(e), 0) else {
+            return;
+        };
+        let key = super::items::key_of(&*lv.host, &stack);
+        let motion = super::depot::handler_motion(&lv, self.0.pos, &key);
+        with_world(|w| w.depot_put(self.0.dim, self.0.pos, Some(motion)));
     }
 }
 
@@ -237,7 +259,11 @@ impl ResourceHandler<ItemResource> for DepotItems {
             return 0;
         }
         let max = limit(&*host, resource);
-        put(host, tx, e, 0, resource, amount, max)
+        let n = put(host, tx, e, 0, resource, amount, max);
+        if n > 0 {
+            self.arrived(host, e);
+        }
+        n
     }
     fn extract(
         &self,
@@ -248,7 +274,12 @@ impl ResourceHandler<ItemResource> for DepotItems {
         amount: u32,
     ) -> u32 {
         let e = self.0.entity(&*host, self.0.pos);
-        take(host, tx, e, index, resource, amount)
+        let n = take(host, tx, e, index, resource, amount);
+        // `extractItem`: a held stack taken whole is no longer held.
+        if n > 0 && index == 0 && read(&*host, e, 0).is_none() {
+            with_world(|w| w.depot_put(self.0.dim, self.0.pos, None));
+        }
+        n
     }
 }
 
