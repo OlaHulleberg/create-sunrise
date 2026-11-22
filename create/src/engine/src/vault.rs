@@ -70,6 +70,9 @@ pub struct Vaults {
     pub large: Vec<([i32; 3], bool)>,
     /// Blocks whose part changed, for their columns to be saved.
     pub changed: Vec<[i32; 3]>,
+    /// Blocks whose vault may have changed, loaded ones included: they show it
+    /// (`ItemVaultCTBehaviour.connectsTo`'s `isConnected`).
+    regrouped: Vec<[i32; 3]>,
 }
 
 impl Vaults {
@@ -85,6 +88,7 @@ impl Vaults {
             Some(mut p) => {
                 p.axis = axis;
                 p.large = large;
+                self.regrouped.push(pos);
                 p
             }
             None => Part {
@@ -114,6 +118,7 @@ impl Vaults {
             self.queue.push(pos);
         }
         self.changed.push(pos);
+        self.regrouped.push(pos);
     }
 
     /// `ItemVaultBlock.onRemove`: the block is gone, its vault splits; the others look for a
@@ -155,6 +160,18 @@ impl Vaults {
             .collect();
         v.sort_by_key(|e| e.0);
         v
+    }
+
+    /// The vault blocks whose vault may have changed since last asked, with their vault's
+    /// controller (None for a block that is gone).
+    pub fn take_regrouped(&mut self) -> Vec<([i32; 3], Option<[i32; 3]>)> {
+        let mut out: Vec<_> = std::mem::take(&mut self.regrouped)
+            .into_iter()
+            .map(|p| (p, self.controller_of(p)))
+            .collect();
+        out.sort();
+        out.dedup();
+        out
     }
 
     /// `isController`.
@@ -340,6 +357,7 @@ impl Vaults {
         if simulate {
             return amount;
         }
+        self.regrouped.push(origin);
         for y in 0..height {
             for x in 0..width {
                 for z in 0..width {
@@ -403,6 +421,7 @@ impl Vaults {
         let was_large = std::mem::replace(&mut p.large, false);
         self.queue.push(pos);
         self.changed.push(pos);
+        self.regrouped.push(pos);
         if was_large {
             self.large.push((pos, false));
         }
@@ -415,6 +434,7 @@ impl Vaults {
         };
         let large = p.width > 2;
         self.changed.push(pos);
+        self.regrouped.push(pos);
         if p.large != large {
             p.large = large;
             self.large.push((pos, large));
@@ -423,6 +443,11 @@ impl Vaults {
 }
 
 impl crate::world::CreateWorld {
+    /// The vault blocks of `dim` whose vault may have changed, with their vault's controller.
+    pub fn vault_groups(&mut self, dim: usize) -> Vec<([i32; 3], Option<[i32; 3]>)> {
+        self.dims[dim].vaults.take_regrouped()
+    }
+
     /// The vault blocks' tick in `dim`: blocks that look for their vault do; the columns of blocks
     /// whose vault changed are saved. The `large` to set on blocks.
     pub fn tick_vaults(&mut self, dim: usize) -> Vec<([i32; 3], bool)> {

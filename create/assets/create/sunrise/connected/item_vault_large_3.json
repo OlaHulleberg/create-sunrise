@@ -1,0 +1,24 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:item_vault",
+      "state": {
+        "large": [
+          "true"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/vault/vault_bottom_small"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "state",
+  "sheet": "create:block/vault/vault_bottom_large",
+  "table": "rectangle_uncovered",
+  "connect_group": true,
+  "orient": "texture"
+}

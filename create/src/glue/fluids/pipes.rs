@@ -581,6 +581,14 @@ pub(super) fn tick_tank_states(lv: &mut ServerLevel<'_>) {
         ) {
             continue;
         }
+        // `FluidTankCTBehaviour.connectsTo`: a tank's blocks join only each other.
+        let controller = with_world(|w| {
+            w.tank(dim, pos)
+                .or_else(|| w.creative_tank(dim, pos))
+                .map(|(c, _)| c)
+        })
+        .flatten();
+        super::super::connection_group(lv, pos, controller);
         let Some(state) = lv.block_state(pos) else {
             continue;
         };

@@ -1,0 +1,17 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:fluid_tank"
+  ],
+  "sprites": [
+    "create:block/fluid_tank_inner"
+  ],
+  "faces": [
+    "up",
+    "down"
+  ],
+  "connect": "block",
+  "sheet": "create:block/fluid_tank_inner_connected",
+  "table": "rectangle",
+  "connect_group": true
+}

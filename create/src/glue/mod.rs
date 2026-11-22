@@ -172,6 +172,22 @@ impl<'a> Submit<'a> {
     }
 }
 
+/// `ConnectivityHandler.isConnected` for connected textures: the block at `pos` joins the blocks
+/// of the multiblock whose controller is `controller` (`BlockPos.asLong`), none for None.
+pub fn connection_group(
+    lv: &mut server::ServerLevel<'_>,
+    pos: [i32; 3],
+    controller: Option<[i32; 3]>,
+) {
+    let group = controller.map(|[x, y, z]| {
+        ((i64::from(x) & 0x3FF_FFFF) << 38
+            | (i64::from(z) & 0x3FF_FFFF) << 12
+            | (i64::from(y) & 0xFFF)) as u64
+    });
+    let level = lv.level;
+    let _ = level.set_connection_group(&mut *lv.host, pos, group);
+}
+
 /// Registers one of Create's particle types (`ICustomParticleData.createType`, which does not
 /// override the limiter). Each particle keeps its own state, so the options carry nothing.
 pub fn particle_type(r: &mut dyn mod_api::Registrar, id: &str) -> mod_api::ParticleType<()> {

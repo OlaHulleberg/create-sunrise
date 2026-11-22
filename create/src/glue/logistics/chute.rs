@@ -936,4 +936,10 @@ pub fn tick_vaults(lv: &mut ServerLevel<'_>) {
             );
         }
     }
+    // `ItemVaultCTBehaviour.connectsTo`: a vault's blocks join only each other.
+    for (pos, controller) in with_world(|w| w.vault_groups(dim)).unwrap_or_default() {
+        if matches!(info_at(lv, pos), Some((Block::ItemVault, _))) {
+            super::super::connection_group(lv, pos, controller);
+        }
+    }
 }
