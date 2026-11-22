@@ -33,6 +33,12 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
                 c.insert("ProcessingTime".into(), Tag::Float(s.remaining.to_bits()));
             }
         }
+        // glue/processing/persist.rs `live_fields`: the millstone's `Timer`.
+        Some(Block::Millstone) => {
+            if let Some(m) = w.dims[0].millstones.get(&p) {
+                fields.insert("Timer".into(), Tag::Int(m.timer));
+            }
+        }
         _ => {}
     }
 }
@@ -164,6 +170,14 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
             .or_default()
             .insert("TransferCooldown".into(), Tag::Int(cooldown as i32));
     }
+    // glue/processing/persist.rs `save_entities`: the millstone's `Timer`.
+    for (p, m) in w.dims[0].millstones.iter() {
+        if (p[0] >> 4, p[2] >> 4) == column {
+            out.entry(*p)
+                .or_default()
+                .insert("Timer".into(), Tag::Int(m.timer));
+        }
+    }
     super::fluids::save_entities(w, column, &mut out);
     out
 }
@@ -204,6 +218,13 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
                 let cooldown = (*cooldown).max(0) as u32;
                 w.read_funnel(0, p, cooldown, now);
             }
+        }
+        Block::Millstone => {
+            let timer = match tag.get("Timer") {
+                Some(Tag::Int(t)) => *t,
+                _ => 0,
+            };
+            w.dims[0].millstones.entry(p).or_default().timer = timer;
         }
         _ => {}
     }

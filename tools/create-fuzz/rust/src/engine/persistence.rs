@@ -234,6 +234,7 @@ impl Run {
         let now = u64::from(self.now);
         let mut at: Vec<Pos> = self.persisted.records.keys().copied().collect();
         at.extend(self.w.dims[0].funnels.keys().copied());
+        at.extend(self.w.dims[0].millstones.keys().copied());
         at.sort();
         at.dedup();
         for p in at {
