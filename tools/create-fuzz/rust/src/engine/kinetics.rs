@@ -75,7 +75,10 @@ impl Run {
             self.sequencer_step(p, step);
         }
         let mut events = Vec::new();
+        // `Processing::level_tick`: crafters, millstones, fans, crushers, burners, mixers.
+        self.tick_millstones();
         self.tick_fans();
+        self.tick_crushers();
         self.tick_tank_layers();
         self.tick_fluids();
         self.tick_boilers();
@@ -84,7 +87,8 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: the deployers the depots asked for.
+        // `processing::Tools`: drills, saws, then the deployers the depots asked for.
+        self.tick_saws();
         self.tick_presses();
         self.ejectors_ticked();
         self.save_fluid_entities();

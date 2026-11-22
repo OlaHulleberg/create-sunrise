@@ -92,6 +92,7 @@ final class Observations {
                         // Ejectors' plates and throws belong to the version 3 transport contract; version 1
                         // kinetic cases use ejectors as stress loads only.
                         var ejector=transportVersion?TransportObservations.ejector(be):null;if(ejector!=null) snap.add("ejector",ejector);
+                        var processing=transportVersion?ProcessingObservations.observe(be):null;if(processing!=null) snap.add("processing",processing);
                     }
                     if (be instanceof com.simibubi.create.content.kinetics.belt.BeltBlockEntity belt) {
                         JsonObject b = new JsonObject();

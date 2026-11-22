@@ -39,6 +39,7 @@ mod network_inputs;
 mod observation;
 mod persistence;
 mod press_processing;
+mod processing;
 mod program;
 mod records;
 mod repeat_java;

@@ -1,0 +1,229 @@
+{
+ "_comment": "Create's milling, crushing and cutting recipes for the processing families' inputs (data/create/recipe, MIT; the saw's two from RuntimeDataGenerator.cuttingRecipes). The server audits every entry, and that for each machine's inputs no other recipe of the machine's types takes them: the millstone's milling, the crushing wheels' crushing and milling, the saw's cutting and stonecutting.",
+ "inputs": {
+  "millstone": [
+   "minecraft:wheat",
+   "minecraft:cobblestone",
+   "minecraft:gravel",
+   "minecraft:andesite",
+   "minecraft:bone",
+   "minecraft:sugar_cane",
+   "minecraft:dirt"
+  ],
+  "crusher": [
+   "minecraft:wheat",
+   "minecraft:cobblestone",
+   "minecraft:gravel",
+   "minecraft:andesite",
+   "minecraft:obsidian",
+   "minecraft:coal_ore",
+   "minecraft:dirt"
+  ],
+  "saw": [
+   "minecraft:oak_log",
+   "minecraft:stripped_oak_log",
+   "minecraft:dirt",
+   "minecraft:wheat"
+  ]
+ },
+ "recipes": [
+  {
+   "id": "create:milling/wheat",
+   "type": "milling",
+   "input": "minecraft:wheat",
+   "time": 150,
+   "results": [
+    {
+     "item": "create:wheat_flour",
+     "count": 1,
+     "chance": 1.0
+    },
+    {
+     "item": "create:wheat_flour",
+     "count": 2,
+     "chance": 0.25
+    },
+    {
+     "item": "minecraft:wheat_seeds",
+     "count": 1,
+     "chance": 0.25
+    }
+   ]
+  },
+  {
+   "id": "create:milling/cobblestone",
+   "type": "milling",
+   "input": "minecraft:cobblestone",
+   "time": 250,
+   "results": [
+    {
+     "item": "minecraft:gravel",
+     "count": 1,
+     "chance": 1.0
+    }
+   ]
+  },
+  {
+   "id": "create:milling/gravel",
+   "type": "milling",
+   "input": "minecraft:gravel",
+   "time": 250,
+   "results": [
+    {
+     "item": "minecraft:flint",
+     "count": 1,
+     "chance": 1.0
+    }
+   ]
+  },
+  {
+   "id": "create:milling/andesite",
+   "type": "milling",
+   "input": "minecraft:andesite",
+   "time": 200,
+   "results": [
+    {
+     "item": "minecraft:cobblestone",
+     "count": 1,
+     "chance": 1.0
+    }
+   ]
+  },
+  {
+   "id": "create:milling/bone",
+   "type": "milling",
+   "input": "minecraft:bone",
+   "time": 100,
+   "results": [
+    {
+     "item": "minecraft:bone_meal",
+     "count": 3,
+     "chance": 1.0
+    },
+    {
+     "item": "minecraft:white_dye",
+     "count": 1,
+     "chance": 0.25
+    },
+    {
+     "item": "minecraft:bone_meal",
+     "count": 3,
+     "chance": 0.25
+    }
+   ]
+  },
+  {
+   "id": "create:milling/sugar_cane",
+   "type": "milling",
+   "input": "minecraft:sugar_cane",
+   "time": 50,
+   "results": [
+    {
+     "item": "minecraft:sugar",
+     "count": 2,
+     "chance": 1.0
+    },
+    {
+     "item": "minecraft:sugar",
+     "count": 1,
+     "chance": 0.1
+    }
+   ]
+  },
+  {
+   "id": "create:crushing/obsidian",
+   "type": "crushing",
+   "input": "minecraft:obsidian",
+   "time": 500,
+   "results": [
+    {
+     "item": "create:powdered_obsidian",
+     "count": 1,
+     "chance": 1.0
+    },
+    {
+     "item": "minecraft:obsidian",
+     "count": 1,
+     "chance": 0.75
+    }
+   ]
+  },
+  {
+   "id": "create:crushing/gravel",
+   "type": "crushing",
+   "input": "minecraft:gravel",
+   "time": 250,
+   "results": [
+    {
+     "item": "minecraft:sand",
+     "count": 1,
+     "chance": 1.0
+    },
+    {
+     "item": "minecraft:flint",
+     "count": 1,
+     "chance": 0.1
+    },
+    {
+     "item": "minecraft:clay_ball",
+     "count": 1,
+     "chance": 0.05
+    }
+   ]
+  },
+  {
+   "id": "create:crushing/coal_ore",
+   "type": "crushing",
+   "input": "minecraft:coal_ore",
+   "time": 150,
+   "results": [
+    {
+     "item": "minecraft:coal",
+     "count": 1,
+     "chance": 1.0
+    },
+    {
+     "item": "minecraft:coal",
+     "count": 1,
+     "chance": 0.75
+    },
+    {
+     "item": "create:experience_nugget",
+     "count": 1,
+     "chance": 0.75
+    },
+    {
+     "item": "minecraft:cobblestone",
+     "count": 1,
+     "chance": 0.125
+    }
+   ]
+  },
+  {
+   "id": "create:cutting/runtime_generated/compat/minecraft/oak_log_to_stripped_oak_log",
+   "type": "cutting",
+   "input": "minecraft:oak_log",
+   "time": 50,
+   "results": [
+    {
+     "item": "minecraft:stripped_oak_log",
+     "count": 1,
+     "chance": 1.0
+    }
+   ]
+  },
+  {
+   "id": "create:cutting/runtime_generated/compat/minecraft/stripped_oak_log_to_oak_planks",
+   "type": "cutting",
+   "input": "minecraft:stripped_oak_log",
+   "time": 50,
+   "results": [
+    {
+     "item": "minecraft:oak_planks",
+     "count": 6,
+     "chance": 1.0
+    }
+   ]
+  }
+ ]
+}

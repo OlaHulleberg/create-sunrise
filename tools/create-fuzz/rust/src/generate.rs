@@ -203,7 +203,7 @@ pub const FAMILIES: &[Family] = &[
     ),
     family(
         "geometry/stress_boundary",
-        &[(64, 0)],
+        &[(256, 0), (256, 64), (256, 192)],
         geometry::stress_boundary,
     ),
     family("geometry/network", &[(256, 92)], geometry::network),
@@ -211,9 +211,22 @@ pub const FAMILIES: &[Family] = &[
     family("network/face_placement", &[(256, 220)], face_placement),
     family("network/face_wrench", &[(256, 252)], face_wrench),
     family("network/driven_placement", &[(256, 124)], driven_placement),
+    // Processing machines, on residues geometry/states and geometry/stress_boundary gave up;
+    // none reloads.
+    family(
+        "processing/millstone",
+        &[(256, 205)],
+        crate::processing::millstone,
+    ),
+    family(
+        "processing/crushing",
+        &[(256, 221)],
+        crate::processing::crushing,
+    ),
+    family("processing/saw", &[(256, 128)], crate::processing::saw),
     family(
         "geometry/states",
-        &[(128, 77), (128, 93), (128, 109), (128, 125)],
+        &[(256, 77), (256, 93), (128, 109), (128, 125)],
         geometry_states,
     ),
 ];
@@ -522,7 +535,7 @@ mod tests {
             (0..128).filter(|r| old(*r) != family_name(*r)).collect()
         };
         for r in 0..128 {
-            if ![2, 13, 92, 124].contains(&r) {
+            if ![0, 2, 13, 77, 92, 93, 124].contains(&r) {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
@@ -531,6 +544,9 @@ mod tests {
         assert_eq!(family_name(124), "network/driven_placement");
         assert_eq!(family_name(130), "network/integrated_cogs");
         assert_eq!(family_name(141), "network/cog_casing");
+        assert_eq!(family_name(128), "processing/saw");
+        assert_eq!(family_name(205), "processing/millstone");
+        assert_eq!(family_name(221), "processing/crushing");
         assert_eq!(
             moved(at_9f00743),
             [

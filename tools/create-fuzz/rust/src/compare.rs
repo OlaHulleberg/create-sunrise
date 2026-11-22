@@ -11,6 +11,13 @@ fn close(a: f32, b: f32) -> bool {
 }
 
 pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
+    if let Some(rolls) = crate::processing::Rolls::of(java, rust) {
+        return diff_exact(&rolls.normalize(java), &rolls.normalize(rust));
+    }
+    diff_exact(java, rust)
+}
+
+fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
     let mut out = Vec::new();
     for (side, snapshot) in [("java", java), ("rust", rust)] {
         if snapshot
@@ -141,6 +148,12 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
                         j.ejector, r.ejector
                     ));
                 }
+                if !crate::processing::equal(j.processing.as_ref(), r.processing.as_ref()) {
+                    out.push(format!(
+                        "{k}: processing: java {:?} rust {:?}",
+                        j.processing, r.processing
+                    ));
+                }
                 if j.bracket != r.bracket {
                     out.push(format!(
                         "{k}: bracket: java {:?} rust {:?}",
@@ -175,9 +188,11 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
         .collect();
     for t in ticks {
         match (java.checkpoints.get(t), rust.checkpoints.get(t)) {
-            (Some(j), Some(r)) => {
-                out.extend(diff(j, r).into_iter().map(|d| format!("tick {t}: {d}")))
-            }
+            (Some(j), Some(r)) => out.extend(
+                diff_exact(j, r)
+                    .into_iter()
+                    .map(|d| format!("tick {t}: {d}")),
+            ),
             _ => out.push(format!("tick {t}: missing checkpoint")),
         }
     }

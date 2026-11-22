@@ -24,6 +24,7 @@ mod outputs;
 mod persistence;
 mod pipes;
 mod presses;
+mod processing;
 mod pumps;
 mod sources;
 mod transport;
@@ -140,6 +141,14 @@ fn create_states(sc: &Scenario) -> Vec<String> {
             }
         }
     }
+    // The controllers crushing wheels keep between them (`updateControllers`).
+    for facing in ["up", "down", "north", "south", "west", "east"] {
+        for valid in ["false", "true"] {
+            push(format!(
+                "create:crushing_wheel_controller[facing={facing},valid={valid}]"
+            ));
+        }
+    }
     push("create:brass_casing".into());
     push("create:andesite_casing".into());
     for face in ["up", "down", "north", "south", "east", "west"] {
@@ -251,6 +260,14 @@ pub struct Run {
     wheel_fluid_flow: HashMap<Pos, [f64; 3]>,
     /// Each wheel's flow score (`WaterWheelBlockEntity.flowScore`), for observations.
     wheel_scores: HashMap<Pos, i8>,
+    books: processing::Books,
+    millstone_slots: HashMap<Pos, processing::MillSlots>,
+    /// The glue's `SAW_INDEX` and `SAW_DURATION`: an upward saw's recipe index between items
+    /// and the time it started its cut with.
+    saw_index: HashMap<Pos, usize>,
+    saw_duration: HashMap<Pos, f32>,
+    /// The side the current item handler access asks from.
+    capability_side: Option<create_engine::kinetics::Dir>,
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -321,6 +338,11 @@ impl Run {
             fluid_domain: sc.region().into_iter().collect(),
             wheel_fluid_flow: HashMap::new(),
             wheel_scores: HashMap::new(),
+            books: processing::Books::new(),
+            millstone_slots: HashMap::new(),
+            saw_index: HashMap::new(),
+            saw_duration: HashMap::new(),
+            capability_side: None,
             _guard: guard,
         }
     }
@@ -471,6 +493,9 @@ impl Run {
             if let Some(s) = self.depot_stacks.remove(&p) {
                 self.pop_resource(p, &s.item, s.count);
             }
+        }
+        if old_block == Some(create_engine::Block::Millstone) && new_block != old_block {
+            self.millstone_removed(p);
         }
         if let Some(b) = self.brackets.remove(&p) {
             // `AbstractSimpleShaftBlock.onRemove`, `FluidPipeBlock.onRemove`.
