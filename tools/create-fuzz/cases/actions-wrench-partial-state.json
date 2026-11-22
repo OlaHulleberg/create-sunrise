@@ -1,0 +1,12 @@
+{
+  "version": 3,
+  "seed": 141,
+  "ticks": 80,
+  "checkpoints": [6],
+  "blocks": [
+    {"pos": [0, 8, 0], "state": "create:cogwheel[axis=x]"}
+  ],
+  "events": [
+    {"tick": 5, "pos": [0, 8, 0], "action": {"kind": "use", "item": "create:wrench", "face": "up", "hit": [0.5, 1.0, 0.5], "yaw": 0.0, "pitch": 0.0, "sneaking": false}}
+  ]
+}

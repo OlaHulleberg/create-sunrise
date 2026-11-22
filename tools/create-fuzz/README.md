@@ -312,8 +312,9 @@ the kinetics gap report (`./run.sh fuzz gaps kinetics`) lists what remains.
 
 ## Seed families
 
-`rust/src/generate.rs` deals each seed to one scenario family by its residue modulo 128
-(`FAMILIES`). Every residue has exactly one owner: the table is checked when it compiles, and a
+`rust/src/generate.rs` deals each seed to one scenario family by its residue modulo 256
+(`FAMILIES`). It was 128 until the face families took two upper halves; every other residue r
+below 128 shares its owner with r + 128, so those families' seeds and `index` did not change. Every residue has exactly one owner: the table is checked when it compiles, and a
 unit test lists the residues that changed owner. Families written for consecutive seeds (water
 wheels, steam engines, source faces, catalogue states) pick their variants by the seed's index
 among their own seeds, so every variant is reached. A seed with `seed & 32` set also reloads
@@ -330,14 +331,17 @@ table's comments say.
 | belt slicer, tunnels, funnels | 99, 103, 61 mod 128 | 3/128 | Reload; the slicer picks its cut, join or refusal variant by `index` |
 | belt surface, depots, chutes | 94, 29, 66 mod 128 | 3/128 | Never reload |
 | transmission valve, sequence, chain, generate | 10-12, 14 mod 16, below 64 mod 128 | 4 × 1/32 = 12.5% | Short traces with few variants (bits 16 and 32, seed / 64 mod 3); they gave up the half above 64 |
-| transmission crank | 13, 45 mod 128 | 1/64 | Its trace reads no seed bit but the reload one: one residue of each half |
-| transmission flicker | 2 mod 128 | 1/128 | Reads no seed bit and 2 mod 64 never reloads: 66 generated the same trace |
+| transmission crank | 13 mod 256, 45 mod 128 | 3/256 | Its trace reads no seed bit but the reload one: one residue of each half (141, a copy of 13, went to cog_casing) |
+| network/cog_casing | 141 mod 256 | 1/256 | Cogs cased beside shafts, cogs and gearboxes on their axis faces, then wrenched and uncased; never reloads |
+| transmission flicker | 2 mod 256 | 1/256 | Reads no seed bit and 2 mod 64 never reloads: 66 generated the same trace, and so did 130 |
+| network/integrated_cogs | 130 mod 256 | 1/256 | Cog items on encased cogs and pumps (`CogwheelBlockItem`'s helpers on non-dedicated cogs); flicker's copy, never reloads |
 | waterwheel | 74, 90, 106, 122 mod 128 | 1/32 | Back after the network campaign took its residues; its pre-campaign share |
 | steam_engine | 75, 91, 107, 123 mod 128 | 1/32 | As water wheels |
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
 | geometry/states | 77, 93, 109, 125 mod 128 | 4/128 = 3% | Static kinetics: one catalogue state per seed by index, every block, face and order; each state is still reached, over more seeds |
 | geometry/stress_boundary | 0 mod 64 | 1/64 | Unchanged: every eighth static kinetics seed |
-| geometry/network | 92, 124 mod 128 | 1/64 | Random networks through compatible faces (unreached since the fluid families) |
+| geometry/network | 92 mod 256 | 1/256 | Random networks through compatible faces (unreached since the fluid families) |
+| network/face_placement, face_wrench, driven_placement | 220, 252, 124 mod 256 | 3/256 | Placement on and wrench turns from every face of the kinetic blocks a player builds with, and placement into a running shaft line; geometry/network's other residues. Variants by `index`; face_placement never reloads, the other two always ([kinetics scope](docs/kinetics-scope.md)) |
 | geometry/source_faces | 76, 108 mod 128 | 1/64 | Six input faces of gearboxes, clutches and gearshifts (unreached since fluid_pumps took 18 mod 32) |
 | geometry/cog_boundary | 34 mod 64 | 1/64 | Unchanged |
 

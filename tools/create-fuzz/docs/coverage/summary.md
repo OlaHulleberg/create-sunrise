@@ -84,6 +84,39 @@ branches in 4 rounds.
 - Guided campaigns skip a case the Java side refuses (fluid reaching the slot's edge after a
   mutation) instead of aborting.
 
+## Kinetics scope and face families (F, G)
+
+[The kinetics scope](../kinetics-scope.md) names the Java the kinetics subsystem covers and what it
+leaves to others. In `reasons.tsv`, machine work (mixers, millstones, crushers, saws, drills,
+deployers, arms, crafters, turntables, the cuckoo clock's animation and the stationary breaker)
+became `out-of-scope:processing`, and `Block.rotate`/`mirror` of kinetic blocks, which only
+structure transforms and the symmetry wand call, `out-of-scope:schematics-and-contraptions`.
+Five families (`rust/src/kinetic_faces.rs`) drive what was left of placement and the wrench.
+
+Both campaigns ran on a server of their own with `cover 0` over a fixed corpus: F the replay
+corpus and every kinetics seed 0-1023 (`network/*`, `transmission/*`, `actions`, `geometry/*`,
+water wheels, steam engines: 664 seeds, 888 scenarios) on `main` (`0ff1441`); G the same 888 and
+392 seeds of the new families (face placement 192, face wrench 32, driven placement 96, integrated
+cogs 48, cog casing 24) on `6c8f81a`, after a restart. Beyond the replay corpus neither ran fluid or
+belt seeds, so their fluid and belt figures are below campaign E's. All 888 and 1280 scenarios
+matched. None of the branches G gained over F is in a static initializer, which runs once per server.
+
+| Kinetics | Reached | Harness-gap groups / branches | Core harness-gap groups / branches |
+| --- | ---: | ---: | ---: |
+| F, `main`'s reasons | 2513 / 9646 | 2077 / 4349 | 520 / 918 |
+| F, this scope | 2513 / 9646 | 1086 / 2083 | 504 / 884 |
+| G, this scope | 2542 / 9646 | 1071 / 2056 | 490 / 858 |
+
+The scope moved 969 groups (2212 branches) to processing and 22 (54) to structure transforms. The
+families reached 29 more kinetics branches (and 7 belt ones): gauges placed on a shaft end
+(`GaugeBlock.getStateForPlacement`), cranks, sequencers and gauges against kinetic neighbours, the
+flywheel's shaft faces, both motor and controller value boxes' sides, the cog helpers' state
+predicates, and `EncasedCogwheelBlock.handleEncasing` beside shafts. Most of what they drive the
+existing families already reached; the remaining in-scope gaps are lifecycle paths (stale sources
+in `KineticBlockEntity.validateKinetics`, `switchToBlockState` without a kinetic entity), pick-block,
+adventure-mode and spectator players, and steam engine and water wheel branches. The new
+`swapShaftsForRotation`, `ChainDriveBlock.reversePart` and two fluid reasons are line-pinned.
+
 ## Port differences
 
 ### Pressure for one tick after a pipe flow collision (fixed)

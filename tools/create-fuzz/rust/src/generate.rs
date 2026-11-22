@@ -45,7 +45,7 @@ fn generate_base(seed: u64) -> Scenario {
 /// Seeds are dealt to scenario families by their residue modulo `PERIOD`: every residue has
 /// exactly one owner (`build` refuses a collision, a gap or a family without a seed at compile
 /// time), so no family can shadow another. Shares and their reasons are in README.md.
-pub const PERIOD: u64 = 128;
+pub const PERIOD: u64 = 256;
 
 /// A scenario family and the residues modulo `PERIOD` it owns, as `(modulus, residue)` classes;
 /// each modulus divides `PERIOD`.
@@ -178,16 +178,20 @@ pub const FAMILIES: &[Family] = &[
     // The crank trace reads no seed bit but the reload one: one residue of each half.
     family(
         "transmission/crank",
-        &[(128, 13), (128, 45)],
+        &[(256, 13), (128, 45)],
         transmission::crank,
     ),
+    // 13's copy: the crank trace reads no seed bit but the reload one, and 141 never reloads.
+    family("network/cog_casing", &[(256, 141)], cog_casing),
     family(
         "transmission/generate",
         &low_half(14),
         transmission::generate,
     ),
     // The flicker trace reads no seed bit, and 2 mod 64 never reloads: 66 was its copy.
-    family("transmission/flicker", &[(128, 2)], transmission::flicker),
+    family("transmission/flicker", &[(256, 2)], transmission::flicker),
+    // Flicker's copy: every flicker seed generates the same trace.
+    family("network/integrated_cogs", &[(256, 130)], integrated_cogs),
     // Player actions on a single shaft, clutch or gearshift.
     family("actions", &[(64, 3), (128, 87), (128, 119)], actions),
     // Static kinetics.
@@ -202,11 +206,11 @@ pub const FAMILIES: &[Family] = &[
         &[(64, 0)],
         geometry::stress_boundary,
     ),
-    family(
-        "geometry/network",
-        &[(128, 92), (128, 124)],
-        geometry::network,
-    ),
+    family("geometry/network", &[(256, 92)], geometry::network),
+    // geometry/network's other residues: every other family keeps its seeds.
+    family("network/face_placement", &[(256, 220)], face_placement),
+    family("network/face_wrench", &[(256, 252)], face_wrench),
+    family("network/driven_placement", &[(256, 124)], driven_placement),
     family(
         "geometry/states",
         &[(128, 77), (128, 93), (128, 109), (128, 125)],
@@ -222,6 +226,21 @@ fn steam_engine(seed: u64) -> Scenario {
 }
 fn source_faces(seed: u64) -> Scenario {
     geometry::source_faces(seed, index(seed))
+}
+fn face_placement(seed: u64) -> Scenario {
+    crate::kinetic_faces::face_placement(seed, index(seed))
+}
+fn face_wrench(seed: u64) -> Scenario {
+    crate::kinetic_faces::face_wrench(seed, index(seed))
+}
+fn driven_placement(seed: u64) -> Scenario {
+    crate::kinetic_faces::driven_placement(seed, index(seed))
+}
+fn integrated_cogs(seed: u64) -> Scenario {
+    crate::kinetic_faces::integrated_cogs(seed, index(seed))
+}
+fn cog_casing(seed: u64) -> Scenario {
+    crate::kinetic_faces::cog_casing(seed, index(seed))
 }
 fn geometry_states(seed: u64) -> Scenario {
     geometry::states(seed, index(seed))
@@ -500,12 +519,22 @@ mod tests {
     #[test]
     fn moved_residues() {
         let moved = |old: fn(u64) -> String| -> Vec<u64> {
-            (0..PERIOD).filter(|r| old(*r) != family_name(*r)).collect()
+            (0..128).filter(|r| old(*r) != family_name(*r)).collect()
         };
+        for r in 0..128 {
+            if ![2, 13, 92, 124].contains(&r) {
+                assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
+            }
+        }
+        assert_eq!(family_name(220), "network/face_placement");
+        assert_eq!(family_name(252), "network/face_wrench");
+        assert_eq!(family_name(124), "network/driven_placement");
+        assert_eq!(family_name(130), "network/integrated_cogs");
+        assert_eq!(family_name(141), "network/cog_casing");
         assert_eq!(
             moved(at_9f00743),
             [
-                23, 29, 35, 39, 55, 61, 66, 78, 87, 94, 99, 103, 110, 119, 126
+                23, 29, 35, 39, 55, 61, 66, 78, 87, 94, 99, 103, 110, 119, 124, 126
             ]
         );
         // #7's own moves and the belt families'; 87 and 119 are actions' again.
@@ -522,11 +551,11 @@ mod tests {
     /// family's. Every other belt family moved whole.
     #[test]
     fn kept_belt_residues() {
-        let kept: Vec<_> = (0..PERIOD)
+        let kept: Vec<_> = (0..128)
             .filter(|r| belts_cover(*r) == Some(family_name(*r)))
             .collect();
         assert_eq!(kept, [23, 35, 39, 55]);
-        for r in 0..PERIOD {
+        for r in 0..128 {
             if let Some(name) = belts_cover(r) {
                 assert!(FAMILIES.iter().any(|f| f.name == name), "{name}");
             }

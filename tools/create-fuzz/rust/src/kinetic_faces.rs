@@ -1,0 +1,497 @@
+//! Player placement and wrench turns against every face of the kinetic blocks a player builds
+//! with. Each case lays out one cell per face, so the six clicked faces of a target share a case.
+
+use crate::actions::{Action, Face};
+use crate::scenario::{Change, Placed, Pos, Scenario};
+
+const FACES: [Face; 6] = [
+    Face::Up,
+    Face::Down,
+    Face::North,
+    Face::South,
+    Face::West,
+    Face::East,
+];
+
+/// Every kinetic block item `contested_placement` places, and the flywheel.
+const ITEMS: [&str; 16] = [
+    "create:shaft",
+    "create:cogwheel",
+    "create:large_cogwheel",
+    "create:gearbox",
+    "create:vertical_gearbox",
+    "create:clutch",
+    "create:gearshift",
+    "create:encased_chain_drive",
+    "create:adjustable_chain_gearshift",
+    "create:sequenced_gearshift",
+    "create:rotation_speed_controller",
+    "create:creative_motor",
+    "create:hand_crank",
+    "create:speedometer",
+    "create:stressometer",
+    "create:flywheel",
+];
+
+/// Clicked kinetic blocks: shaft ends and sides (`ShaftBlock.useItemOn`'s placement helper,
+/// `GaugeBlock.getStateForPlacement` on a shaft end), cog faces (`CogwheelBlockItem`'s
+/// helpers, `CogWheelBlock.getAxisForPlacement`), a gearbox and an encased shaft
+/// (`hasShaftTowards` on all six faces).
+const TARGETS: [&str; 6] = [
+    "create:shaft[axis=x]",
+    "create:shaft[axis=y]",
+    "create:cogwheel[axis=z]",
+    "create:large_cogwheel[axis=y]",
+    "create:gearbox[axis=x]",
+    "create:andesite_encased_shaft[axis=z]",
+];
+
+fn act(tick: u32, pos: Pos, action: Action) -> Change {
+    Change {
+        tick,
+        pos,
+        action: Some(action),
+        state: None,
+        motor: None,
+        turn: None,
+    }
+}
+
+fn click(tick: u32, pos: Pos, item: &str, face: Face, look: (f32, f32), sneaking: bool) -> Change {
+    act(
+        tick,
+        pos,
+        Action::Use {
+            item: item.into(),
+            face,
+            hit: face.point(0.5, 0.5),
+            yaw: look.0,
+            pitch: look.1,
+            sneaking,
+        },
+    )
+}
+
+fn look(k: u64) -> (f32, f32) {
+    (
+        [10., 100., 190., 280.][(k % 4) as usize],
+        [0., 70., -70.][(k / 4 % 3) as usize],
+    )
+}
+
+/// Use each block item on one face of a kinetic block: six cells, one per clicked face, each
+/// with another item. Over 192 consecutive indices every item meets every face of every
+/// target, sneaking and not.
+pub fn face_placement(seed: u64, index: u64) -> Scenario {
+    let sneaking = index % 2 == 1;
+    let target = TARGETS[(index / 2 % 6) as usize];
+    let offset = index / 12;
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    let items: Vec<&str> = (0..6u64)
+        .map(|i| ITEMS[((offset + i) % 16) as usize])
+        .collect();
+    if items.contains(&"create:creative_motor") {
+        events.push(act(1, [0, 8, 0], Action::GameMode { creative: true }));
+    }
+    for (i, face) in FACES.into_iter().enumerate() {
+        let cell = [i as i32 * 4 - 10, 8, 0];
+        blocks.push(Placed {
+            pos: cell,
+            state: target.into(),
+            motor: None,
+        });
+        events.push(click(
+            6 + 2 * i as u32,
+            cell,
+            items[i],
+            face,
+            look(offset + i as u64),
+            sneaking,
+        ));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 90,
+        checkpoints: vec![5, 19],
+        blocks,
+        events,
+    }
+}
+
+/// Place each block item on a stone pedestal, then wrench it from one face, from the
+/// opposite face and from a face across them (`IWrenchable.getRotatedBlockState` and each
+/// block's override), with a creative motor beside it in half the indices. The last cell is
+/// picked up with a sneaking wrench.
+pub fn face_wrench(seed: u64, index: u64) -> Scenario {
+    let item = ITEMS[(index % 16) as usize];
+    let driven = index / 16 % 2 == 1;
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    if item == "create:creative_motor" {
+        events.push(act(1, [0, 8, 0], Action::GameMode { creative: true }));
+    }
+    let mut checkpoints = vec![30];
+    for (i, face) in FACES.into_iter().enumerate() {
+        let pedestal = [i as i32 * 4 - 10, 7, 0];
+        let placed = [pedestal[0], 8, 0];
+        blocks.push(Placed {
+            pos: pedestal,
+            state: "minecraft:stone".into(),
+            motor: None,
+        });
+        if driven {
+            blocks.push(Placed {
+                pos: [placed[0], 8, -1],
+                state: "create:creative_motor[facing=south]".into(),
+                motor: Some(32),
+            });
+        }
+        events.push(click(
+            4 + i as u32,
+            pedestal,
+            item,
+            Face::Up,
+            look(index / 32 + i as u64),
+            false,
+        ));
+        let opposite = FACES[i ^ 1];
+        let across = FACES[(i + 2) % 6];
+        for (k, f) in [face, opposite, across].into_iter().enumerate() {
+            let tick = 32 + 12 * k as u32 + 2 * i as u32;
+            events.push(click(tick, placed, "create:wrench", f, (0., 0.), false));
+            checkpoints.push(tick + 1);
+        }
+        if i == 5 {
+            events.push(click(80, placed, "create:wrench", face, (0., 0.), true));
+        }
+    }
+    checkpoints.sort_unstable();
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 150,
+        checkpoints,
+        blocks,
+        events,
+    }
+}
+
+/// Place each block item into the end of a running shaft line, clicking the shaft's end (its
+/// placement helper or the cog helpers), or stone below, above, beside or past the cell, so
+/// the preferred-neighbour searches see a turning shaft (`propagateNewSource` into the placed
+/// block). Then wrench the placed block, and remove the motor (`propagateMissingSource`). The
+/// motor runs at 16, -64 or 256 rpm; odd indices sneak.
+pub fn driven_placement(seed: u64, index: u64) -> Scenario {
+    let item = ITEMS[(index % 16) as usize];
+    let speed = [16, -64, 256][(index / 16 % 3) as usize];
+    let sneaking = index / 48 % 2 == 1;
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    if item == "create:creative_motor" {
+        events.push(act(1, [0, 8, 0], Action::GameMode { creative: true }));
+    }
+    let clicks: [([i32; 3], Face); 6] = [
+        ([0, 0, -1], Face::South),
+        ([0, -1, 0], Face::Up),
+        ([0, 1, 0], Face::Down),
+        ([1, 0, 0], Face::West),
+        ([-1, 0, 0], Face::East),
+        ([0, 0, 1], Face::North),
+    ];
+    for (i, (offset, face)) in clicks.into_iter().enumerate() {
+        let cell = [i as i32 * 4 - 10, 8, 0];
+        let at = |[dx, dy, dz]: [i32; 3]| [cell[0] + dx, cell[1] + dy, cell[2] + dz];
+        blocks.push(Placed {
+            pos: at([0, 0, -2]),
+            state: "create:creative_motor[facing=south]".into(),
+            motor: Some(speed),
+        });
+        blocks.push(Placed {
+            pos: at([0, 0, -1]),
+            state: "create:shaft[axis=z]".into(),
+            motor: None,
+        });
+        if i > 0 {
+            blocks.push(Placed {
+                pos: at(offset),
+                state: "minecraft:stone".into(),
+                motor: None,
+            });
+        }
+        let tick = 20 + 2 * i as u32;
+        events.push(click(
+            tick,
+            at(offset),
+            item,
+            face,
+            look(index / 96 + i as u64),
+            sneaking,
+        ));
+        events.push(click(
+            50 + 2 * i as u32,
+            cell,
+            "create:wrench",
+            FACES[i],
+            (0., 0.),
+            false,
+        ));
+        events.push(act(80 + 2 * i as u32, at([0, 0, -2]), Action::Remove));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 170,
+        checkpoints: vec![
+            19, 21, 23, 25, 27, 29, 31, 45, 61, 79, 81, 83, 85, 87, 89, 91,
+        ],
+        blocks,
+        events,
+    }
+}
+
+/// Blocks whose cog is not a dedicated cogwheel (`ICogWheel.isDedicatedCogWheel` false) that the
+/// driver mirrors uses on: encased cogs and the pump. The millstone, mixer, crafter, arm and
+/// display board are processing and logistics blocks whose own uses it does not mirror.
+const INTEGRATED: [&str; 6] = [
+    "create:andesite_encased_cogwheel[axis=x,bottom_shaft=false,top_shaft=false]",
+    "create:brass_encased_cogwheel[axis=y,bottom_shaft=true,top_shaft=false]",
+    "create:brass_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]",
+    "create:andesite_encased_large_cogwheel[axis=z,bottom_shaft=false,top_shaft=true]",
+    "create:mechanical_pump[facing=up]",
+    "create:mechanical_pump[facing=east]",
+];
+
+/// Use a cog item on each face of a block with a cog that is not a cogwheel. Java's
+/// `CogwheelBlockItem.onItemUseFirst` runs before the clicked block's own use, and its small and
+/// large helpers match every `ICogWheel` (`DiagonalCogHelper.getStatePredicate`,
+/// CogwheelBlockItem.java:157), so the cog goes beside, diagonally off or across the machine's
+/// cog, or the click falls through to ordinary placement when the hit is on the shaft
+/// (`hitOnShaft`). Indices 12-23 of every 24 hit the face's centre, the rest near its edge.
+pub fn integrated_cogs(seed: u64, index: u64) -> Scenario {
+    let item = ["create:cogwheel", "create:large_cogwheel"][(index % 2) as usize];
+    let target = INTEGRATED[(index / 2 % 6) as usize];
+    let centre = index / 12 % 2 == 1;
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    for (i, face) in FACES.into_iter().enumerate() {
+        let cell = [i as i32 * 5 - 12, 8, 0];
+        blocks.push(Placed {
+            pos: cell,
+            state: target.into(),
+            motor: None,
+        });
+        let (u, v) = if centre { (0.5, 0.5) } else { (0.15, 0.6) };
+        events.push(act(
+            6 + 2 * i as u32,
+            cell,
+            Action::Use {
+                item: item.into(),
+                face,
+                hit: face.point(u, v),
+                yaw: look(index / 24 + i as u64).0,
+                pitch: 0.,
+                sneaking: false,
+            },
+        ));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 90,
+        checkpoints: vec![5, 19],
+        blocks,
+        events,
+    }
+}
+
+/// What stands on a cog's positive and negative axis faces when it is cased.
+#[derive(Clone, Copy)]
+enum Beside {
+    Nothing,
+    /// A shaft along the cog's axis, with a shaft towards it.
+    Along,
+    /// A shaft across the axis: an `IRotate` without a shaft towards the cog.
+    Across,
+    /// A cog on the same axis, which has a shaft on both axis faces.
+    Cog,
+    /// A gearbox on the cog's axis: shafts on its four other faces only.
+    Gearbox,
+}
+
+/// Case cogs of one size and axis beside shafts, cogs and gearboxes on their axis faces
+/// (`EncasedCogwheelBlock.handleEncasing` keeps a shaft cap only towards a neighbour with a
+/// shaft towards it), with a motor turning the positive shaft in half the indices, then wrench
+/// the encased cog on its positive axis face (`onWrenched` toggles that cap), on a face across
+/// its axis (`getRotatedBlockState` and `swapShaftsForRotation`), and take the casing off with
+/// a sneaking wrench (`onSneakWrenched`). The last cell is cased sneaking, which places the
+/// casing as a block instead (`CogWheelBlock.useItemOn`).
+pub fn cog_casing(seed: u64, index: u64) -> Scenario {
+    use create_engine::kinetics::Axis;
+    let large = index % 2 == 1;
+    let axis = [Axis::X, Axis::Y, Axis::Z][(index / 2 % 3) as usize];
+    let casing = ["create:andesite_casing", "create:brass_casing"][(index / 6 % 2) as usize];
+    let driven = index / 12 % 2 == 1;
+    let name = match axis {
+        Axis::X => "x",
+        Axis::Y => "y",
+        Axis::Z => "z",
+    };
+    let across = match axis {
+        Axis::X => "z",
+        _ => "x",
+    };
+    let gearbox = match axis {
+        Axis::Y => "x",
+        _ => "y",
+    };
+    let unit = |sign: i32| match axis {
+        Axis::X => [sign, 0, 0],
+        Axis::Y => [0, sign, 0],
+        Axis::Z => [0, 0, sign],
+    };
+    let (positive, negative, across_face) = match axis {
+        Axis::X => (Face::East, Face::West, Face::Up),
+        Axis::Y => (Face::Up, Face::Down, Face::North),
+        Axis::Z => (Face::South, Face::North, Face::Up),
+    };
+    let patterns = [
+        (Beside::Nothing, Beside::Nothing),
+        (Beside::Along, Beside::Nothing),
+        (Beside::Nothing, Beside::Along),
+        (Beside::Along, Beside::Along),
+        (Beside::Across, Beside::Cog),
+        (Beside::Along, Beside::Gearbox),
+    ];
+    let cog = if large {
+        "create:large_cogwheel"
+    } else {
+        "create:cogwheel"
+    };
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    for (i, (up, down)) in patterns.into_iter().enumerate() {
+        let cell = [i as i32 * 6 - 15, 8, 0];
+        let at = |[dx, dy, dz]: [i32; 3]| [cell[0] + dx, cell[1] + dy, cell[2] + dz];
+        blocks.push(Placed {
+            pos: cell,
+            state: format!("{cog}[axis={name}]"),
+            motor: None,
+        });
+        for (sign, beside) in [(1, up), (-1, down)] {
+            let state = match beside {
+                Beside::Nothing => continue,
+                Beside::Along => format!("create:shaft[axis={name}]"),
+                Beside::Across => format!("create:shaft[axis={across}]"),
+                Beside::Cog => format!("create:cogwheel[axis={name}]"),
+                Beside::Gearbox => format!("create:gearbox[axis={gearbox}]"),
+            };
+            blocks.push(Placed {
+                pos: at(unit(sign)),
+                state,
+                motor: None,
+            });
+        }
+        if driven && matches!(up, Beside::Along) {
+            let facing = match axis {
+                Axis::X => "west",
+                Axis::Y => "down",
+                Axis::Z => "north",
+            };
+            blocks.push(Placed {
+                pos: at(unit(2)),
+                state: format!("create:creative_motor[facing={facing}]"),
+                motor: Some(32),
+            });
+        }
+        let tick = 20 + 2 * i as u32;
+        events.push(click(tick, cell, casing, across_face, (0., 0.), i == 5));
+        events.push(click(
+            tick + 20,
+            cell,
+            "create:wrench",
+            positive,
+            (0., 0.),
+            false,
+        ));
+        events.push(click(
+            tick + 40,
+            cell,
+            "create:wrench",
+            across_face,
+            (0., 0.),
+            false,
+        ));
+        events.push(click(
+            tick + 60,
+            cell,
+            "create:wrench",
+            negative,
+            (0., 0.),
+            true,
+        ));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 160,
+        checkpoints: vec![19, 31, 51, 71, 91],
+        blocks,
+        events,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn placement_meets_every_item_face_and_target() {
+        let mut seen = std::collections::HashSet::new();
+        for index in 0..192 {
+            let sc = face_placement(index, index);
+            let target = sc.blocks[0].state.clone();
+            for e in &sc.events {
+                if let Some(Action::Use {
+                    item,
+                    face,
+                    sneaking,
+                    ..
+                }) = &e.action
+                {
+                    seen.insert((target.clone(), item.clone(), format!("{face:?}"), *sneaking));
+                }
+            }
+        }
+        assert_eq!(seen.len(), 6 * 16 * 6 * 2);
+    }
+
+    #[test]
+    fn states_are_in_the_catalogue() {
+        for index in 0..192 {
+            for sc in [
+                face_placement(index, index),
+                face_wrench(index, index),
+                driven_placement(index, index),
+                integrated_cogs(index, index),
+                cog_casing(index, index),
+            ] {
+                for b in &sc.blocks {
+                    crate::catalogue::validate(&b.state).unwrap();
+                }
+                assert!(
+                    sc.events
+                        .iter()
+                        .all(|e| e.tick + crate::generate::SETTLE <= sc.ticks)
+                );
+                assert!(sc.blocks.len() as u32 + crate::generate::SETTLE <= sc.ticks);
+            }
+        }
+    }
+}

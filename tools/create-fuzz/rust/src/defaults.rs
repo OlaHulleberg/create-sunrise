@@ -40,3 +40,23 @@ pub fn declared(id: &str) -> State {
     cache.lock().unwrap().insert(id.to_owned(), out.clone());
     out
 }
+
+/// Create's default state of block `id` as the Java server measures it at startup
+/// (`tools/create-data/src/default_states.json`), sorted by property; empty for other blocks.
+pub fn measured(id: &str) -> State {
+    static TABLE: OnceLock<HashMap<String, HashMap<String, String>>> = OnceLock::new();
+    let table = TABLE.get_or_init(|| {
+        let path = checkout().join("tools/create-data/src/default_states.json");
+        let text =
+            std::fs::read_to_string(&path).unwrap_or_else(|e| panic!("{}: {e}", path.display()));
+        serde_json::from_str(&text).expect("default states")
+    });
+    let mut out: State = table
+        .get(id.strip_prefix("create:").unwrap_or(id))
+        .into_iter()
+        .flatten()
+        .map(|(k, v)| (k.clone(), v.clone()))
+        .collect();
+    out.sort();
+    out
+}
