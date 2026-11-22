@@ -175,7 +175,7 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 } else {
                     // Results thrown out past the facing side (`outPos`, `outSpeed`).
                     let (at, v) = crusher::output(pos, facing);
-                    for (item, count) in std::mem::take(&mut c.slots) {
+                    for (item, count) in crusher::ejected(&mut c) {
                         lv.spawn_moving(at, &item, u32::from(count), v);
                     }
                 }

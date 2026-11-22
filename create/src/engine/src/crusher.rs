@@ -142,7 +142,8 @@ pub fn tick_inventory(c: &mut Crusher, crushing_speed: f32) -> Step {
 
 /// `applyRecipe`: each item of the input rolls the recipe's results, merged into stacks of at most
 /// `max`, then the input's crafting remainder (`remainder`, once); no recipe and the input is
-/// gone.
+/// gone. Either way the inventory is cleared first (`ProcessingInventory.clear`), which zeroes
+/// its time: the results leave on the next tick.
 pub fn apply(
     c: &mut Crusher,
     recipe: Option<&crate::processing::Recipe>,
@@ -153,6 +154,7 @@ pub fn apply(
     let Some((_, count)) = c.slots.first().cloned() else {
         return;
     };
+    c.remaining = 0.0;
     let mut list: Vec<(String, u8)> = Vec::new();
     if let Some(r) = recipe {
         for _ in 0..count {
@@ -166,6 +168,13 @@ pub fn apply(
     }
     list.truncate(31);
     c.slots = list;
+}
+
+/// The results thrown out as items (`inventory.clear()`): nothing held, no time, not applied.
+pub fn ejected(c: &mut Crusher) -> Vec<(String, u8)> {
+    c.remaining = 0.0;
+    c.applied = false;
+    std::mem::take(&mut c.slots)
 }
 
 /// `tick` for the held entity: its motion (toward the middle, sinking at up to half a block a
@@ -352,6 +361,48 @@ mod tests {
         intake(&mut one, "minecraft:stone", 1, None);
         tick_inventory(&mut one, 0.32);
         assert_eq!(one.remaining, 80.0);
+    }
+
+    #[test]
+    fn results_leave_the_tick_after_they_are_made() {
+        // Create: 2 obsidian (500 ticks) at 128 rpm (crushing speed 2.56, 10.24 a tick over
+        // log2(2)) are crushed on the 47th tick and thrown out on the 48th, which leaves the
+        // controller unapplied and without time.
+        let obsidian = Recipe {
+            id: "create:crushing/obsidian".into(),
+            ingredients: vec![vec!["minecraft:obsidian".into()]],
+            results: vec![Output {
+                item: "create:powdered_obsidian".into(),
+                count: 1,
+                chance: 1.0,
+            }],
+            time: 500,
+        };
+        let mut c = Crusher::default();
+        intake(&mut c, "minecraft:obsidian", 2, Some(500));
+        let speed = crushing_speed(128.0);
+        let mut ticks = 1;
+        while tick_inventory(&mut c, speed) != Step::Apply {
+            ticks += 1;
+        }
+        assert_eq!(ticks, 47);
+        apply(&mut c, Some(&obsidian), |_| 64, &mut Rng::new(1), None);
+        assert_eq!((c.remaining, c.applied), (0.0, true));
+        assert_eq!(tick_inventory(&mut c, speed), Step::Output);
+        assert_eq!(
+            ejected(&mut c),
+            vec![("create:powdered_obsidian".to_owned(), 2)]
+        );
+        assert_eq!((c.remaining, c.applied, c.occupied()), (0.0, false, false));
+        // Without a recipe (dirt) the input is gone and the time with it.
+        let mut dirt = Crusher::default();
+        intake(&mut dirt, "minecraft:dirt", 12, None);
+        while tick_inventory(&mut dirt, 0.32) != Step::Apply {}
+        apply(&mut dirt, None, |_| 64, &mut Rng::new(1), None);
+        assert_eq!(
+            (dirt.remaining, dirt.applied, dirt.occupied()),
+            (0.0, true, false)
+        );
     }
 
     #[test]
