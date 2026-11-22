@@ -285,7 +285,7 @@ impl Host for TransportHost<'_, '_> {
                 false,
             );
         }
-        if !matches!(source, Source::Handler) {
+        if !matches!(source, Source::Handler(_)) {
             return None;
         }
         let offer = if let Some(offer) = plumbing::source(lv, pos, n, fluid) {

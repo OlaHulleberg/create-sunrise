@@ -205,7 +205,7 @@ impl Host for Run {
                 fluid,
                 false,
             ),
-            Source::Handler => self
+            Source::Handler(_) => self
                 .fluid_offer(face.connected(), n)
                 .filter(|(f, _)| fluid.is_none_or(|want| want == *f)),
             _ => None,
@@ -224,7 +224,7 @@ impl Host for Run {
                     true,
                 )
                 .map_or(0, |(_, n)| n),
-            Source::Handler => self.fluid_take(face.connected(), fluid, n),
+            Source::Handler(_) => self.fluid_take(face.connected(), fluid, n),
             _ => 0,
         }
     }
