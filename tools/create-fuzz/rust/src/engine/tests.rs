@@ -695,3 +695,39 @@ fn a_tunnel_joining_its_group_as_the_world_saves_keeps_the_group_mode() {
         assert_eq!(t.mode, "forced_round_robin", "{x}");
     }
 }
+
+#[test]
+fn a_mixer_reports_the_port_s_idle_cycle() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_value(serde_json::json!({"version":3,"ticks":20,"blocks":[
+            {"pos":[0,8,0],"state":"create:mechanical_mixer"}]}))
+        .unwrap();
+    let snap = super::run(&sc);
+    let mixer = snap.blocks["0,8,0"].processing.as_ref().unwrap();
+    assert_eq!(mixer.kind, "mixer");
+    assert_eq!(
+        (mixer.running, mixer.running_ticks, mixer.processing_ticks),
+        (Some(false), Some(0), Some(0))
+    );
+}
+
+#[test]
+fn a_broken_millstone_spills_its_slots_as_the_game_spills_a_container() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_value(serde_json::json!({"version":3,"ticks":40,"blocks":[
+            {"pos":[0,8,0],"state":"create:millstone"}],
+            "events":[
+            {"tick":2,"pos":[0,8,0],"action":{"kind":"capability","side":null,"slot":0,
+             "insert":{"item":"minecraft:cobblestone","count":3},"extract":null,"simulate":false}},
+            {"tick":5,"pos":[0,8,0],"state":"minecraft:air"}]}))
+        .unwrap();
+    let snap = super::run(&sc);
+    let drops = snap.drops.unwrap();
+    assert_eq!(drops.len(), 1);
+    assert_eq!(
+        drops[0].placed,
+        Some(crate::transport::Placed::Spread(
+            crate::transport::Spreader::DropItemStack
+        ))
+    );
+}

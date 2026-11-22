@@ -162,7 +162,8 @@ impl Run {
         taken.into_iter().filter_map(|i| s[i].take()).collect()
     }
 
-    /// A millstone gone: the game spills its container, slot by slot.
+    /// A millstone gone: the game spills its container slot by slot
+    /// (`Containers.dropContents`), as Create's `destroy` does (`ItemHelper.dropContents`).
     pub(super) fn millstone_removed(&mut self, pos: Pos) {
         for s in self
             .millstone_slots
@@ -171,7 +172,7 @@ impl Run {
             .into_iter()
             .flatten()
         {
-            self.pop_resource(pos, &s.item, s.count);
+            self.drop_item_stack(pos.map(f64::from), &s.item, s.count);
         }
     }
 
@@ -644,6 +645,16 @@ impl Run {
                         }
                         .into(),
                     ),
+                    ..Default::default()
+                })
+            }
+            Block::MechanicalMixer => {
+                let m = self.w.dims[0].mixers.get(&p).copied().unwrap_or_default();
+                Some(Observation {
+                    kind: "mixer".into(),
+                    running: Some(m.running),
+                    running_ticks: Some(m.running_ticks),
+                    processing_ticks: Some(m.processing_ticks),
                     ..Default::default()
                 })
             }
