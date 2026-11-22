@@ -92,7 +92,7 @@ call them. The wrench never does: `IWrenchable.onWrenched` turns a state with
 
 The kinetics families and what each drives are in the README's seed table and the doc comments
 in `rust/src/network_inputs.rs`, `transmission.rs`, `geometry.rs`, `kinetic_faces.rs`,
-`waterwheel.rs` and `steam_engine.rs`. The three in `kinetic_faces.rs`:
+`waterwheel.rs` and `steam_engine.rs`. The four in `kinetic_faces.rs`:
 
 - `network/face_placement` (256k + 220): every kinetic block item `contested_placement` places, and
   the flywheel, used on each of the six faces of a shaft on x and y, a small cog, a large cog, a
@@ -108,3 +108,10 @@ in `rust/src/network_inputs.rs`, `transmission.rs`, `geometry.rs`, `kinetic_face
   shaft line a creative motor turns at 16, -64 or 256 rpm, by clicking the shaft's end or stone
   below, above, beside or past the cell, sneaking in half; then the placed block is wrenched and
   the motor removed. 96 indices.
+- `network/integrated_cogs` (256k + 130): a small or large cog item used on each face of encased
+  small and large cogs and pumps, near the face's edge and at its centre. Java's dedicated
+  helpers match every `ICogWheel` (`DiagonalCogHelper.getStatePredicate`,
+  CogwheelBlockItem.java:157), so they place beside these blocks; the integrated helpers'
+  `getOffset` never runs (`unreachable` in `reasons.tsv`). 24 indices. Millstones, mixers,
+  crafters, arms and display boards have cogs too, but their own uses are processing and
+  logistics work the driver does not mirror.

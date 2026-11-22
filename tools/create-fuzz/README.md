@@ -332,7 +332,8 @@ table's comments say.
 | belt surface, depots, chutes | 94, 29, 66 mod 128 | 3/128 | Never reload |
 | transmission valve, sequence, chain, generate | 10-12, 14 mod 16, below 64 mod 128 | 4 × 1/32 = 12.5% | Short traces with few variants (bits 16 and 32, seed / 64 mod 3); they gave up the half above 64 |
 | transmission crank | 13, 45 mod 128 | 1/64 | Its trace reads no seed bit but the reload one: one residue of each half |
-| transmission flicker | 2 mod 128 | 1/128 | Reads no seed bit and 2 mod 64 never reloads: 66 generated the same trace |
+| transmission flicker | 2 mod 256 | 1/256 | Reads no seed bit and 2 mod 64 never reloads: 66 generated the same trace, and so did 130 |
+| network/integrated_cogs | 130 mod 256 | 1/256 | Cog items on encased cogs and pumps (`CogwheelBlockItem`'s helpers on non-dedicated cogs); flicker's copy, never reloads |
 | waterwheel | 74, 90, 106, 122 mod 128 | 1/32 | Back after the network campaign took its residues; its pre-campaign share |
 | steam_engine | 75, 91, 107, 123 mod 128 | 1/32 | As water wheels |
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |

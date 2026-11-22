@@ -187,7 +187,9 @@ pub const FAMILIES: &[Family] = &[
         transmission::generate,
     ),
     // The flicker trace reads no seed bit, and 2 mod 64 never reloads: 66 was its copy.
-    family("transmission/flicker", &[(128, 2)], transmission::flicker),
+    family("transmission/flicker", &[(256, 2)], transmission::flicker),
+    // Flicker's copy: every flicker seed generates the same trace.
+    family("network/integrated_cogs", &[(256, 130)], integrated_cogs),
     // Player actions on a single shaft, clutch or gearshift.
     family("actions", &[(64, 3), (128, 87), (128, 119)], actions),
     // Static kinetics.
@@ -231,6 +233,9 @@ fn face_wrench(seed: u64) -> Scenario {
 }
 fn driven_placement(seed: u64) -> Scenario {
     crate::kinetic_faces::driven_placement(seed, index(seed))
+}
+fn integrated_cogs(seed: u64) -> Scenario {
+    crate::kinetic_faces::integrated_cogs(seed, index(seed))
 }
 fn geometry_states(seed: u64) -> Scenario {
     geometry::states(seed, index(seed))
@@ -512,13 +517,14 @@ mod tests {
             (0..128).filter(|r| old(*r) != family_name(*r)).collect()
         };
         for r in 0..128 {
-            if ![92, 124].contains(&r) {
+            if ![2, 92, 124].contains(&r) {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
         assert_eq!(family_name(220), "network/face_placement");
         assert_eq!(family_name(252), "network/face_wrench");
         assert_eq!(family_name(124), "network/driven_placement");
+        assert_eq!(family_name(130), "network/integrated_cogs");
         assert_eq!(
             moved(at_9f00743),
             [

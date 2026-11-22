@@ -173,7 +173,7 @@ pub fn face_wrench(seed: u64, index: u64) -> Scenario {
         version: 3,
         seed,
         day_time: 0,
-        ticks: 110,
+        ticks: 150,
         checkpoints,
         blocks,
         events,
@@ -245,10 +245,66 @@ pub fn driven_placement(seed: u64, index: u64) -> Scenario {
         version: 3,
         seed,
         day_time: 0,
-        ticks: 120,
+        ticks: 170,
         checkpoints: vec![
             19, 21, 23, 25, 27, 29, 31, 45, 61, 79, 81, 83, 85, 87, 89, 91,
         ],
+        blocks,
+        events,
+    }
+}
+
+/// Blocks whose cog is not a dedicated cogwheel (`ICogWheel.isDedicatedCogWheel` false) that the
+/// driver mirrors uses on: encased cogs and the pump. The millstone, mixer, crafter, arm and
+/// display board are processing and logistics blocks whose own uses it does not mirror.
+const INTEGRATED: [&str; 6] = [
+    "create:andesite_encased_cogwheel[axis=x,bottom_shaft=false,top_shaft=false]",
+    "create:brass_encased_cogwheel[axis=y,bottom_shaft=true,top_shaft=false]",
+    "create:brass_encased_large_cogwheel[axis=y,bottom_shaft=false,top_shaft=false]",
+    "create:andesite_encased_large_cogwheel[axis=z,bottom_shaft=false,top_shaft=true]",
+    "create:mechanical_pump[facing=up]",
+    "create:mechanical_pump[facing=east]",
+];
+
+/// Use a cog item on each face of a block with a cog that is not a cogwheel. Java's
+/// `CogwheelBlockItem.onItemUseFirst` runs before the clicked block's own use, and its small and
+/// large helpers match every `ICogWheel` (`DiagonalCogHelper.getStatePredicate`,
+/// CogwheelBlockItem.java:157), so the cog goes beside, diagonally off or across the machine's
+/// cog, or the click falls through to ordinary placement when the hit is on the shaft
+/// (`hitOnShaft`). Indices 12-23 of every 24 hit the face's centre, the rest near its edge.
+pub fn integrated_cogs(seed: u64, index: u64) -> Scenario {
+    let item = ["create:cogwheel", "create:large_cogwheel"][(index % 2) as usize];
+    let target = INTEGRATED[(index / 2 % 6) as usize];
+    let centre = index / 12 % 2 == 1;
+    let mut blocks = Vec::new();
+    let mut events = Vec::new();
+    for (i, face) in FACES.into_iter().enumerate() {
+        let cell = [i as i32 * 5 - 12, 8, 0];
+        blocks.push(Placed {
+            pos: cell,
+            state: target.into(),
+            motor: None,
+        });
+        let (u, v) = if centre { (0.5, 0.5) } else { (0.15, 0.6) };
+        events.push(act(
+            6 + 2 * i as u32,
+            cell,
+            Action::Use {
+                item: item.into(),
+                face,
+                hit: face.point(u, v),
+                yaw: look(index / 24 + i as u64).0,
+                pitch: 0.,
+                sneaking: false,
+            },
+        ));
+    }
+    Scenario {
+        version: 3,
+        seed,
+        day_time: 0,
+        ticks: 90,
+        checkpoints: vec![5, 19],
         blocks,
         events,
     }
@@ -286,10 +342,17 @@ mod tests {
                 face_placement(index, index),
                 face_wrench(index, index),
                 driven_placement(index, index),
+                integrated_cogs(index, index),
             ] {
                 for b in &sc.blocks {
                     crate::catalogue::validate(&b.state).unwrap();
                 }
+                assert!(
+                    sc.events
+                        .iter()
+                        .all(|e| e.tick + crate::generate::SETTLE <= sc.ticks)
+                );
+                assert!(sc.blocks.len() as u32 + crate::generate::SETTLE <= sc.ticks);
             }
         }
     }
