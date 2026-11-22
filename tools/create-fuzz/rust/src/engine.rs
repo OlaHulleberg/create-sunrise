@@ -342,7 +342,24 @@ impl Run {
         if state == "minecraft:redstone_block" {
             return REDSTONE_BLOCK;
         }
-        self.ids.get(&normal(state)).copied().unwrap_or(OTHER)
+        if let Some(&id) = self.ids.get(&normal(state)) {
+            return id;
+        }
+        // A state from a partial specification (properties left to the block's default, as
+        // `/setblock` takes it) turned into one the scenario never named.
+        let (name, mut props) = parse_state(state);
+        if !name.starts_with("create:") {
+            return OTHER;
+        }
+        for (k, v) in crate::defaults::measured(&name) {
+            if !props.iter().any(|(key, _)| *key == k) {
+                props.push((k, v));
+            }
+        }
+        self.ids
+            .get(&crate::scenario::format_state(&name, &props))
+            .copied()
+            .unwrap_or(OTHER)
     }
 
     fn name(&self, id: u32) -> String {
