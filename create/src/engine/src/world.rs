@@ -1680,7 +1680,12 @@ impl CreateWorld {
                 // type): the drain, spout or saw that was there is gone, as on its removal.
                 Block::ItemDrain => d.drains.remove(&pos).is_some(),
                 Block::Spout => d.spouts.remove(&pos).is_some(),
-                Block::MechanicalSaw => d.saws.remove(&pos).is_some(),
+                // `SawBlockEntity.destroy`: its inventory drops.
+                Block::MechanicalSaw => d.saws.remove(&pos).is_some_and(|s| {
+                    d.saw_drops
+                        .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
+                    true
+                }),
                 _ => false,
             };
             if had {
@@ -7591,6 +7596,35 @@ mod tests {
         assert_eq!(
             w.dims[0].crusher_drops,
             [(at, "minecraft:cobblestone".to_owned(), 8)]
+        );
+        states::clear_range();
+    }
+
+    /// Create: an upward saw cutting an oak log drops it where it stood when it is broken
+    /// (`SawBlockEntity.destroy`, `ItemHelper.dropContents`).
+    #[test]
+    fn a_broken_saw_drops_what_it_held() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:mechanical_saw",
+            vec![
+                ("axis_along_first", "false"),
+                ("facing", "up"),
+                ("flipped", "false"),
+            ],
+        )];
+        states::set_range(2, names.len() as u32);
+        let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
+        let mut w = CreateWorld::new(table);
+        let at = [0, 8, 0];
+        w.block_changed(0, at, 0, 2);
+        let mut s = crate::saw::Saw::default();
+        s.insert(0, "minecraft:oak_log", &[], true);
+        w.dims[0].saws.insert(at, s);
+        w.block_changed(0, at, 2, 0);
+        assert_eq!(
+            w.dims[0].saw_drops,
+            [(at, "minecraft:oak_log".to_owned(), 1)]
         );
         states::clear_range();
     }
