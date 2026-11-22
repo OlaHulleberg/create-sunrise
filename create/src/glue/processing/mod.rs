@@ -155,7 +155,7 @@ impl Subsystem for Processing {
         // The crafter's group inventory, ahead of the game's plain slot (it is the kinetic type's,
         // declared by `Kinetics`).
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
-        r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, crafter::provide_items);
+        r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, provide_items);
         client::register(r);
         air::register(r);
         // Entity Part state is offered to native mods only.
@@ -528,6 +528,26 @@ impl Subsystem for Tools {
         saw::hurt_inside(lv);
         press::tick_presses(lv);
         deployer::tick_deployers(lv);
+    }
+}
+
+/// The `ITEMS` handlers of the processing machines of the kinetic type: a crafter's group's and
+/// a crushing wheel controller's. None for the others, whose slots the game offers.
+fn provide_items(
+    host: &mut dyn ServerHost,
+    side: mod_api::BlockSide,
+) -> Option<Box<dyn mod_api::ResourceHandler<mod_api::ItemResource>>> {
+    let dimension = side.level.dimension().id(&*host)?;
+    let (block, dim) = {
+        let lv = ServerLevel::new(host, &dimension)?;
+        (lv.info(side.pos)?.0, lv.dim)
+    };
+    match block {
+        Block::MechanicalCrafter => crafter::provide_items(host, side),
+        Block::CrushingWheelController => {
+            Some(Box::new(crusher::CrusherItems { dim, pos: side.pos }))
+        }
+        _ => None,
     }
 }
 

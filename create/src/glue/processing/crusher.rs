@@ -212,6 +212,116 @@ pub fn crusher_put(lv: &mut ServerLevel<'_>, pos: [i32; 3], item: &str, count: u
     .is_some()
 }
 
+/// The controller's `ITEMS` handler (`CrushingWheelControllerBlockEntity.registerCapabilities`:
+/// its `ProcessingInventory` on every side): a stack into slot 0 while it holds nothing
+/// (`crusher::insert`), nothing out (`extractItem` gives nothing). The inventory lives in the
+/// engine, so an insert the host's transaction later aborts cannot be taken back, as with a
+/// belt segment's handler.
+pub struct CrusherItems {
+    pub dim: usize,
+    pub pos: [i32; 3],
+}
+
+impl CrusherItems {
+    fn slot(&self, index: usize) -> Option<(String, u8)> {
+        with_world(|w| {
+            let (c, _) = w.dims[self.dim].crushers.get(&self.pos)?;
+            // Results sit after the input's slot 0 in Create's inventory.
+            let i = if c.applied {
+                index.checked_sub(1)?
+            } else {
+                index
+            };
+            c.slots.get(i).cloned()
+        })
+        .flatten()
+    }
+}
+
+impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
+    fn size(&self, _host: &mut dyn mod_api::ServerHost) -> usize {
+        32
+    }
+    fn resource(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        index: usize,
+    ) -> Option<mod_api::ItemResource> {
+        let (item, n) = self.slot(index)?;
+        stacks::stack(&*host, &item, u32::from(n)).map(|s| mod_api::ItemResource::of(&s))
+    }
+    fn amount(&self, _host: &mut dyn mod_api::ServerHost, index: usize) -> u32 {
+        self.slot(index).map_or(0, |(_, n)| u32::from(n))
+    }
+    fn capacity(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        _index: usize,
+        resource: &mod_api::ItemResource,
+    ) -> u32 {
+        u32::from(stacks::limit(
+            &*host,
+            &stacks::id(&*host, resource.as_stack()),
+        ))
+    }
+    fn is_valid(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        index: usize,
+        _resource: &mod_api::ItemResource,
+    ) -> bool {
+        index == 0
+            && with_world(|w| {
+                w.dims[self.dim]
+                    .crushers
+                    .get(&self.pos)
+                    .is_some_and(|(c, _)| !c.occupied())
+            })
+            .unwrap_or(false)
+    }
+    fn insert(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        _tx: &mod_api::Transaction,
+        index: usize,
+        resource: &mod_api::ItemResource,
+        amount: u32,
+    ) -> u32 {
+        let stack = resource.as_stack();
+        // The engine keeps items by id: a stack with components stays out.
+        if stack.components().is_some() || stack.damage() != 0 {
+            return 0;
+        }
+        let item = stacks::id(&*host, stack);
+        let max = stacks::limit(&*host, &item);
+        let time =
+            recipes::with(|r| crusher::recipe(&r.crushing, &r.milling, &item).map(|x| x.time))
+                .flatten();
+        let count = amount.min(255) as u8;
+        let (dim, pos) = (self.dim, self.pos);
+        with_world(|w| {
+            let (c, _) = w.dims[dim].crushers.get_mut(&pos)?;
+            let n = crusher::insert(c, index, &item, count, max, time);
+            if n > 0 {
+                w.mark_unsaved(dim, pos);
+            }
+            Some(u32::from(n))
+        })
+        .flatten()
+        .unwrap_or(0)
+    }
+    fn extract(
+        &self,
+        _host: &mut dyn mod_api::ServerHost,
+        _tx: &mod_api::Transaction,
+        _index: usize,
+        _resource: &mod_api::ItemResource,
+        _amount: u32,
+    ) -> u32 {
+        0
+    }
+}
+
 /// `CrushingWheelControllerBlockEntity.CRUSHER_DAMAGE` (`crushingDamage`, 4 by default).
 const CRUSHING_DAMAGE: f32 = 4.0;
 

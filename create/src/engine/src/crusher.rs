@@ -84,6 +84,27 @@ pub fn intake(c: &mut Crusher, item: &str, count: u8, time: Option<i32>) {
     c.applied = false;
 }
 
+/// `ProcessingInventory.insertItem` through the controller's item handler: `isItemValid` takes
+/// only slot 0 of an inventory holding nothing, and the controller's override only while it
+/// holds no entity; up to a stack (`max`), then `itemInserted`. How many it took.
+pub fn insert(
+    c: &mut Crusher,
+    slot: usize,
+    item: &str,
+    count: u8,
+    max: u8,
+    time: Option<i32>,
+) -> u8 {
+    if slot != 0 || c.occupied() {
+        return 0;
+    }
+    let n = count.min(max);
+    if n > 0 {
+        intake(c, item, n, time);
+    }
+    n
+}
+
 /// What a tick of a controller without an entity does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Step {
@@ -270,6 +291,37 @@ mod tests {
             controller(Axis::Z, Dir::South, 16.0, Some((Axis::Z, -16.0))),
             None
         );
+    }
+
+    #[test]
+    fn its_handler_takes_a_stack_into_an_empty_controller_only() {
+        // Seen in Create: 4 cobblestone into slot 0 of an empty controller at 64 rpm
+        // (crushing speed 1.28) are all taken, with milling's 250 ticks; more cobblestone, gravel
+        // or andesite into slot 0 or 1 of the busy one are refused; 3 dirt into slot 2 of the
+        // empty one are refused.
+        let mut c = Crusher::default();
+        assert_eq!(insert(&mut c, 2, "minecraft:dirt", 3, 64, None), 0);
+        assert!(!c.occupied());
+        assert_eq!(
+            insert(&mut c, 0, "minecraft:cobblestone", 4, 64, Some(250)),
+            4
+        );
+        assert_eq!(c.slots, vec![("minecraft:cobblestone".to_owned(), 4)]);
+        assert_eq!((c.remaining, c.applied), (250.0, false));
+        assert_eq!(
+            insert(&mut c, 0, "minecraft:cobblestone", 4, 64, Some(250)),
+            0
+        );
+        assert_eq!(insert(&mut c, 0, "minecraft:gravel", 2, 64, Some(250)), 0);
+        assert_eq!(insert(&mut c, 1, "minecraft:andesite", 2, 64, Some(200)), 0);
+        assert_eq!(tick_inventory(&mut c, crushing_speed(64.0)), Step::Wait);
+        assert!((c.remaining - 247.44).abs() < 1e-3);
+        let mut big = Crusher::default();
+        assert_eq!(
+            insert(&mut big, 0, "minecraft:ender_pearl", 20, 16, None),
+            16
+        );
+        assert_eq!(big.remaining, 100.0);
     }
 
     #[test]
