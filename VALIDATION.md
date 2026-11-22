@@ -311,6 +311,15 @@ noted), driven by `sunrise-ctl`, read back with `/data get`, screenshots and the
 | #222 | Belt eject | Pass | Items off the end of a running belt with no receiver land just past its end (x −1.29) |
 | #224 | Steam engine across a reload | Pass | 2×2 boiler, kindled burner, pump supply 48: engine at −64, capacity 16384; saved and reloaded the same, `Remaining` fuel 1387 → 1362 |
 
+The four failures above were fixed in #228 and tried again in game on `9425651`, on a clean build of that branch:
+
+| PR | Item | Result | Evidence |
+|---|---|---|---|
+| #228 | Piston lift rider | Pass | The same lift: the rider stays on the plank at y 154.0 when it stops (`moveCollidedEntitiesOnDisassembly`); nearby items and carts untouched |
+| #228 | Copycat friction | Pass | A stick slides 7.8 blocks on ice copycat steps, 1.3 on empty ones; both sides read `minecraft:ice`. Light: the server answers 15 at once; the client shows it after a chunk resend (API_GAPS) |
+| #228 | Campfire smoke on a cart | Pass | `campfire_cosy_smoke` at rest, rising from the moving campfire, and after a reload; a planks cart gets its collider boxes |
+| #228 | Placing with data | Pass | The funnel with `Filter` diamond passes only diamonds from its first tick, keeps `Filter` and still holds back dirt after a reload; the burner places `kindled` with `BurnerState` read |
+
 ## In-game smoke test on `9425651` (main `684e89b`)
 
 Built with `sunrise-launcher native-build` against `nightly-2026-11-20-9425651`, resources prepared by that build's
