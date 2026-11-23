@@ -87,7 +87,10 @@ impl Run {
                 yaw,
                 sneaking,
             } => {
-                if stack.is_none()
+                if let Some((left, given)) = self.basin_use_input(p, stack.as_ref()) {
+                    remainder = left;
+                    taken = given;
+                } else if stack.is_none()
                     && let Some(given) = self.processing_use(p)
                 {
                     taken = given;
@@ -441,7 +444,7 @@ impl Run {
                 }
                 // The glue's `tick_press` (`PressingBehaviour.tick` at the press's turn).
                 create_engine::world::TransportTick::Press(p) => {
-                    self.w.tick_press(0, p);
+                    self.tick_press(p);
                     continue;
                 }
                 // The glue's `saw_turn` (`SawBlockEntity.tick` at the saw's turn).
@@ -539,12 +542,14 @@ impl Run {
     /// (`DirectBeltInputBehaviour`): a depot, a belt or an item drain.
     pub(super) fn direct_input_at(&self, p: Pos) -> bool {
         let d = &self.w.dims[0];
-        // A belt segment is a `DirectBeltInputBehaviour` before its chain forms, too.
+        // A belt segment is a `DirectBeltInputBehaviour` before its chain forms, too, and so
+        // is every processing machine that takes from belts.
         d.depots.contains_key(&p)
             || self.w.block_at(0, p) == Some(Block::Belt)
             || d.drains.contains_key(&p)
             || self.funnel_at(p).is_some()
             || self.chute_at(p).is_some()
+            || self.belt_input_side(p).is_some()
     }
     /// `funnel_at`: a funnel (belt funnel or not) at `p`: its block, facing and state facts.
     pub(super) fn funnel_at(&self, p: Pos) -> Option<(Block, create_engine::parts::StateInfo)> {
@@ -596,6 +601,11 @@ impl Run {
         from_belt: bool,
         simulate: bool,
     ) -> Option<u8> {
+        // An item drain takes it as a depot would (the fluids subsystem's), and so do the
+        // processing machines through their item handlers (processing's `belt_input`).
+        if let Some(left) = self.processing_belt_input(p, side, item, simulate) {
+            return Some(left);
+        }
         if simulate
             && (self.w.dims[0].drains.contains_key(&p)
                 || self.funnel_at(p).is_some()

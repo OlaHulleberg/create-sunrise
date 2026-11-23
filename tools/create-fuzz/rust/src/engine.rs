@@ -5,6 +5,7 @@
 //! The world outside the engine is a map of positions to state strings. Redstone is only what
 //! the scenarios use: adjacent redstone blocks or controlled 0..15 signal sources.
 
+mod basin;
 mod belts;
 mod brass;
 mod chutes;
@@ -36,7 +37,7 @@ use crate::scenario::{
 use create_engine::parts::{Settings, StateInfo, parts};
 use create_engine::states;
 use create_engine::world::{CreateWorld, StateTable};
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// Create's state ids start here; below are the few vanilla ones the scenarios use.
 const FIRST: u32 = 256;
@@ -148,6 +149,10 @@ fn create_states(sc: &Scenario) -> Vec<String> {
                 "create:crushing_wheel_controller[facing={facing},valid={valid}]"
             ));
         }
+    }
+    // A basin turns its spout to a side (`BasinBlockEntity.updateSpoutput`).
+    for facing in ["down", "north", "south", "west", "east"] {
+        push(format!("create:basin[facing={facing}]"));
     }
     push("create:brass_casing".into());
     push("create:andesite_casing".into());
@@ -262,6 +267,16 @@ pub struct Run {
     wheel_scores: HashMap<Pos, i8>,
     books: processing::Books,
     millstone_slots: HashMap<Pos, processing::MillSlots>,
+    basin_books: crate::basin::Books,
+    /// The basins' 18 slots (`BasinInventory` inputs, then outputs), and their spouts.
+    basin_slots: HashMap<Pos, Vec<create_engine::processing::Slot>>,
+    spouts: HashMap<Pos, basin::Spout>,
+    /// Basins whose spout has results waiting (`spoutput`'s `BUSY`).
+    spout_busy: BTreeSet<Pos>,
+    /// The square crafting recipe a press is compacting with (`PRESS_CRAFTED`), and
+    /// `canCompress` by item (`COMPRESSED`).
+    press_crafted: HashMap<Pos, create_engine::basin::Recipe>,
+    compressed: HashMap<String, Vec<create_engine::basin::Recipe>>,
     /// The glue's `SAW_INDEX` and `SAW_DURATION`: an upward saw's recipe index between items
     /// and the time it started its cut with.
     saw_index: HashMap<Pos, usize>,
@@ -328,7 +343,7 @@ impl Run {
             native_origin: [0; 3],
             creative: false,
             fluid_host: None,
-            fluid_host_enabled: crate::fluid_world::enabled(sc),
+            fluid_host_enabled: crate::fluid_world::stepping(sc),
             native_failed: false,
             fluid_rules: crate::fluid_world::Rules::default(),
             fluid_facts: HashMap::new(),
@@ -340,6 +355,12 @@ impl Run {
             wheel_scores: HashMap::new(),
             books: processing::Books::new(),
             millstone_slots: HashMap::new(),
+            basin_books: crate::basin::Books::new(),
+            basin_slots: HashMap::new(),
+            spouts: HashMap::new(),
+            spout_busy: BTreeSet::new(),
+            press_crafted: HashMap::new(),
+            compressed: HashMap::new(),
             saw_index: HashMap::new(),
             saw_duration: HashMap::new(),
             capability_side: None,
@@ -496,6 +517,9 @@ impl Run {
         }
         if old_block == Some(create_engine::Block::Millstone) && new_block != old_block {
             self.millstone_removed(p);
+        }
+        if old_block == Some(create_engine::Block::Basin) && new_block != old_block {
+            self.basin_removed(p);
         }
         if let Some(b) = self.brackets.remove(&p) {
             // `AbstractSimpleShaftBlock.onRemove`, `FluidPipeBlock.onRemove`.

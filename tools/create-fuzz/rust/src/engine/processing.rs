@@ -5,11 +5,11 @@
 //! Item entities do not reach a controller: the harness discards them at the end of the tick
 //! they join in, before an entity's `entityInside` could start it.
 use super::*;
-use crate::processing::{Observation, Slot};
+use crate::processing::{Observation, Slot, TankFluid};
 use crate::transport::Stack;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::processing::{self as engine_processing, Book};
-use create_engine::{Block, belt, crusher, saw};
+use create_engine::{Block, basin, belt, crusher, saw, tank::Fluid};
 
 pub(super) struct Books {
     milling: Book,
@@ -56,7 +56,7 @@ fn dir_name(d: Dir) -> &'static str {
 
 impl Run {
     /// `ServerLevel::seed_at`: the seed of this tick's rolls at `pos`.
-    fn seed_at(&self, pos: Pos) -> u64 {
+    pub(super) fn seed_at(&self, pos: Pos) -> u64 {
         u64::from(self.now) ^ (pos[0] as u64).wrapping_mul(0x9E37_79B9) ^ (pos[2] as u64) << 20
     }
 
@@ -470,8 +470,112 @@ impl Run {
             Block::Millstone => Some(self.millstone_take(p, stack)),
             Block::MechanicalSaw => Some(self.saw_take(p, stack)),
             Block::CrushingWheelController => Some(stack.count),
+            Block::Basin => Some(self.basin_take(p, stack)),
             _ => None,
         }
+    }
+
+    /// `processing::belt_input` (`DirectBeltInputBehaviour.handleInsertion` of the processing
+    /// machines at `next`, for `item` moving toward `side`): an upward saw, a basin, a
+    /// millstone or a crushing wheel controller, through their item handlers. What is left
+    /// of it; None when no such machine is there.
+    pub(super) fn processing_belt_input(
+        &mut self,
+        next: Pos,
+        side: Dir,
+        item: &belt::Item,
+        simulate: bool,
+    ) -> Option<u8> {
+        let (block, info) = self.w.table.get(self.at(next))?;
+        let facing = info.facing;
+        let count = item.count;
+        let stack = Stack {
+            item: item.item.clone(),
+            count,
+        };
+        let up = facing == Some(Dir::Up);
+        // `supportsDirectBeltInput`: a controller between wheels side by side takes from any
+        // side, one between wheels above each other only from the side it faces.
+        let controller_takes = facing == Some(Dir::Down) || facing == Some(side);
+        if simulate {
+            self.belt_input_side(next)?;
+            return Some(match block {
+                Block::MechanicalSaw => {
+                    let empty = self.w.dims[0]
+                        .saws
+                        .get(&next)
+                        .is_none_or(|s| s.slots.is_empty());
+                    if !up || side == Dir::Down || !empty {
+                        count
+                    } else {
+                        count - 1
+                    }
+                }
+                Block::Basin => self.basin_room(next, &stack)?,
+                Block::Millstone => {
+                    if self.books.milling.find_single(&item.item).is_some() {
+                        let empty: MillSlots = Default::default();
+                        let held = self.millstone_slots.get(&next).unwrap_or(&empty)[0].clone();
+                        let mut input = vec![held.as_ref().map(|s| (s.item.clone(), s.count))];
+                        engine_processing::insert_stacked(
+                            &mut input,
+                            &item.item,
+                            count,
+                            limit(&item.item),
+                        )
+                    } else {
+                        count
+                    }
+                }
+                Block::CrushingWheelController => {
+                    let free = self.w.dims[0]
+                        .crushers
+                        .get(&next)
+                        .is_some_and(|(c, _)| !c.occupied());
+                    if controller_takes && free { 0 } else { count }
+                }
+                _ => count,
+            });
+        }
+        match block {
+            Block::MechanicalSaw => {
+                if !up || side == Dir::Down {
+                    return Some(count);
+                }
+                Some(if self.saw_put(next, &item.item) {
+                    count - 1
+                } else {
+                    count
+                })
+            }
+            Block::Basin => Some(self.basin_belt_input(next, item)),
+            Block::Millstone => Some(self.millstone_take(next, &stack)),
+            Block::CrushingWheelController => {
+                if !controller_takes {
+                    return Some(count);
+                }
+                Some(if self.crusher_put(next, &item.item, count) {
+                    0
+                } else {
+                    count
+                })
+            }
+            _ => None,
+        }
+    }
+
+    /// `crusher_put`: the controller's inventory takes `count` of `item` while it holds nothing.
+    fn crusher_put(&mut self, pos: Pos, item: &str, count: u8) -> bool {
+        let time = crusher::recipe(&self.books.crushing, &self.books.milling, item).map(|r| r.time);
+        let Some((c, _)) = self.w.dims[0].crushers.get_mut(&pos) else {
+            return false;
+        };
+        if c.occupied() {
+            return false;
+        }
+        crusher::intake(c, item, count, time);
+        self.w.mark_unsaved(0, pos);
+        true
     }
 
     /// An empty-hand use on a processing machine: what the player was given.
@@ -493,6 +597,9 @@ impl Run {
         simulate: bool,
         outcome: &mut crate::transport::Outcome,
     ) -> bool {
+        if self.basin_handler(p, slot, insert, extract, simulate, outcome) {
+            return true;
+        }
         match self.w.block_at(0, p) {
             Some(Block::Millstone) => {
                 outcome.handler = Some(true);
@@ -583,6 +690,45 @@ impl Run {
                 .collect()
         };
         match self.w.block_at(0, p)? {
+            Block::Basin => {
+                let empty = vec![None; create_engine::basin::SLOTS];
+                let s = self.basin_slots.get(&p).unwrap_or(&empty);
+                let tanks = self.w.dims[0]
+                    .basin_fluids
+                    .get(&p)
+                    .copied()
+                    .unwrap_or_default();
+                let items = |s: &[create_engine::processing::Slot]| -> Vec<Slot> {
+                    s.iter()
+                        .enumerate()
+                        .filter_map(|(i, x)| {
+                            x.as_ref().map(|(item, count)| Slot {
+                                item: item.clone(),
+                                count: *count,
+                                slot: i as u8,
+                            })
+                        })
+                        .collect()
+                };
+                let fluid = |t: [Option<(Fluid, u32)>; 2]| -> Vec<Option<TankFluid>> {
+                    t.iter()
+                        .map(|s| {
+                            s.map(|(f, n)| TankFluid {
+                                fluid: f.key(),
+                                amount: n as i32,
+                            })
+                        })
+                        .collect()
+                };
+                Some(Observation {
+                    kind: "basin".into(),
+                    input: Some(items(&s[..basin::INPUTS.end])),
+                    outputs: Some(items(&s[basin::OUTPUTS])),
+                    input_tanks: Some(fluid(tanks.input)),
+                    output_tanks: Some(fluid(tanks.output)),
+                    ..Default::default()
+                })
+            }
             Block::Millstone => {
                 let empty: MillSlots = Default::default();
                 let s = self.millstone_slots.get(&p).unwrap_or(&empty);
