@@ -229,26 +229,11 @@ pub fn on_shelf(controller: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
     }
 }
 
-/// `BypassCrushingWheel`: an item at or past the controller's output face (where its results are
-/// let out) isn't caught again.
-pub fn bypassed(controller: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
-    let o = facing.offset();
-    (0..3).any(|a| o[a] != 0 && (at[a] - (f64::from(controller[a]) + 0.5)) * f64::from(o[a]) >= 0.5)
-}
-
-/// Where (the dropped item's feet) and how fast the results leave (`outPos`, `outSpeed`). Create
-/// lets them out 0.55 past the middle and has them ignore the controller (`BypassCrushingWheel`);
-/// here they start clear of its collision for items, or it would push them back in.
+/// Where (the dropped item's feet) and how fast the results leave (`outPos`, `outSpeed`): 0.55
+/// past the middle along the facing, as a float.
 pub fn output(controller: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
     let o = facing.offset();
-    let mut pos = [0, 1, 2].map(|a| {
-        let past = if a == 1 { 0.55 } else { 0.68 };
-        f64::from(controller[a]) + 0.5 + past * f64::from(o[a])
-    });
-    if facing == Dir::Down {
-        // Its whole height (a quarter) below the controller.
-        pos[1] = f64::from(controller[1]) - 0.3;
-    }
+    let pos = [0, 1, 2].map(|a| f64::from(controller[a]) + 0.5 + f64::from(0.55f32 * o[a] as f32));
     let speed = match facing {
         Dir::Up => [0.0, 0.5, 0.0],
         Dir::Down => [0.0; 3],
@@ -411,6 +396,13 @@ mod tests {
         assert_eq!(v, [-0.09999999999999998, -0.5, 0.0]);
         assert!(!taken);
         assert!(hold([0, 0, 0], Dir::Down, 1.28, [0.5, 0.2, 0.5]).1);
-        assert_eq!(output([0, 0, 0], Dir::Down), ([0.5, -0.3, 0.5], [0.0; 3]));
+        assert_eq!(
+            output([0, 0, 0], Dir::Down),
+            ([0.5, 0.5 - f64::from(0.55f32), 0.5], [0.0; 3])
+        );
+        assert_eq!(
+            output([0, 0, 0], Dir::East),
+            ([0.5 + f64::from(0.55f32), 0.5, 0.5], [0.25, 0.0, 0.0])
+        );
     }
 }

@@ -313,9 +313,9 @@ pub struct Dimension {
     pub crusher_checks: Vec<[i32; 3]>,
     pub crushers: HashMap<[i32; 3], (crate::crusher::Crusher, f32)>,
     pub running_crushers: Vec<[i32; 3]>,
-    /// What removed controllers held (`CrushingWheelControllerBlock.onRemove` drops its
-    /// inventory).
-    pub crusher_drops: Vec<([i32; 3], String, u8)>,
+    /// The inventories of removed crushing wheel controllers and saws, for their block entities'
+    /// removal to spill (`CrushingWheelControllerBlock.onRemove`, `SawBlockEntity.destroy`).
+    pub removed_inventories: HashMap<[i32; 3], Vec<crate::processing::Slot>>,
     crusher_saved: HashMap<[i32; 3], crate::crusher::Crusher>,
     /// Blaze burners' fuel, the burning ones (the only ones that tick), and fuel saved with a
     /// column waiting for its burner.
@@ -464,8 +464,6 @@ pub struct Dimension {
     pub cuckoos: HashMap<[i32; 3], (crate::cuckoo::Animation, u32)>,
     /// Saws holding items (the only ones that tick) and their processing.
     pub saws: HashMap<[i32; 3], crate::saw::Saw>,
-    /// What removed saws held (`SawBlockEntity.destroy` drops its inventory).
-    pub saw_drops: Vec<([i32; 3], String, u8)>,
     /// Spouts and their tank and cycle; those holding fluid tick.
     pub spouts: HashMap<[i32; 3], crate::spout::Spout>,
     /// Item drains, their held stack and tank; those holding items tick.
@@ -1682,8 +1680,8 @@ impl CreateWorld {
                 Block::Spout => d.spouts.remove(&pos).is_some(),
                 // `SawBlockEntity.destroy`: its inventory drops.
                 Block::MechanicalSaw => d.saws.remove(&pos).is_some_and(|s| {
-                    d.saw_drops
-                        .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
+                    d.removed_inventories
+                        .insert(pos, crate::processing::inventory_slots(s.slots, s.applied));
                     true
                 }),
                 _ => false,
@@ -1906,8 +1904,8 @@ impl CreateWorld {
             d.chutes.remove(&pos);
             d.sequencers.remove(&pos);
             if let Some(s) = d.saws.remove(&pos) {
-                d.saw_drops
-                    .extend(s.slots.into_iter().map(|(item, n)| (pos, item, n)));
+                d.removed_inventories
+                    .insert(pos, crate::processing::inventory_slots(s.slots, s.applied));
             }
             d.spouts.remove(&pos);
             d.drains.remove(&pos);
@@ -2009,8 +2007,8 @@ impl CreateWorld {
             if let Some((c, _)) = d.crushers.remove(&pos) {
                 d.running_crushers.retain(|p| *p != pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-                d.crusher_drops
-                    .extend(c.slots.into_iter().map(|(item, n)| (pos, item, n)));
+                d.removed_inventories
+                    .insert(pos, crate::processing::inventory_slots(c.slots, c.applied));
             }
             if d.fans.remove(&pos).is_some() {
                 d.running_fans.retain(|p| *p != pos);
@@ -7576,10 +7574,11 @@ mod tests {
         states::clear_range();
     }
 
-    /// Create: a controller holding 8 cobblestone drops them where it stood when a wheel goes
-    /// and takes it (`CrushingWheelControllerBlock.onRemove`, `ItemHelper.dropContents`).
+    /// Create: a controller holding 8 cobblestone leaves its inventory for its removal to spill
+    /// when a wheel goes and takes it (`CrushingWheelControllerBlock.onRemove`,
+    /// `ItemHelper.dropContents`).
     #[test]
-    fn a_removed_crushing_wheel_controller_drops_what_it_held() {
+    fn a_removed_crushing_wheel_controller_hands_its_inventory_to_its_removal() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:crushing_wheel_controller",
@@ -7593,17 +7592,17 @@ mod tests {
         let (c, _) = w.dims[0].crushers.get_mut(&at).unwrap();
         crate::crusher::intake(c, "minecraft:cobblestone", 8, Some(250));
         w.block_changed(0, at, 2, 0);
-        assert_eq!(
-            w.dims[0].crusher_drops,
-            [(at, "minecraft:cobblestone".to_owned(), 8)]
-        );
+        let removed = &w.dims[0].removed_inventories[&at];
+        assert_eq!(removed.len(), crate::processing::INVENTORY_SLOTS);
+        assert_eq!(removed[0], Some(("minecraft:cobblestone".to_owned(), 8)));
+        assert!(removed[1..].iter().all(Option::is_none));
         states::clear_range();
     }
 
-    /// Create: an upward saw cutting an oak log drops it where it stood when it is broken
-    /// (`SawBlockEntity.destroy`, `ItemHelper.dropContents`).
+    /// Create: an upward saw cutting an oak log leaves its inventory for its removal to spill
+    /// when it is broken (`SawBlockEntity.destroy`, `ItemHelper.dropContents`).
     #[test]
-    fn a_broken_saw_drops_what_it_held() {
+    fn a_broken_saw_hands_its_inventory_to_its_removal() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:mechanical_saw",
@@ -7622,10 +7621,9 @@ mod tests {
         s.insert(0, "minecraft:oak_log", &[], true);
         w.dims[0].saws.insert(at, s);
         w.block_changed(0, at, 2, 0);
-        assert_eq!(
-            w.dims[0].saw_drops,
-            [(at, "minecraft:oak_log".to_owned(), 1)]
-        );
+        let removed = &w.dims[0].removed_inventories[&at];
+        assert_eq!(removed[0], Some(("minecraft:oak_log".to_owned(), 1)));
+        assert!(removed[1..].iter().all(Option::is_none));
         states::clear_range();
     }
 

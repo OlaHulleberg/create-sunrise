@@ -866,6 +866,18 @@ impl BlockPart for KineticEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for KineticEntity {
+    fn can_place_item(&self, event: &mut mod_api::CanPlaceItemEvent<'_>) -> Option<bool> {
+        super::processing::can_place_item(event)
+    }
+
+    fn pre_remove_side_effects(
+        &self,
+        _level: &mut dyn mod_api::LevelRandomHost,
+        event: &mut mod_api::PreRemoveSideEffectsEvent<'_>,
+    ) {
+        super::processing::spill_removed(event);
+    }
+
     fn block_entity_on_load(&self, event: &mut BlockEntityOnLoadEvent<'_>) {
         let Some((entity, host)) = crate::glue::loaded_entity(&mut event.subject) else {
             return;
