@@ -26,8 +26,6 @@
 //! - The deployer's slower digging of a block whose drops need another tool
 //!   (`requiresCorrectToolForDrops` and `isCorrectToolForDrops`): no query for either, so it
 //!   digs every block at its harvestable speed (the drops still follow the game's rules).
-//! - A hopper putting into a millstone what it can't mill (`MillstoneInventoryHandler`'s
-//!   `canProcess`): `ModContainer` has no per-slot insert check.
 //! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
 //!   crushing wheels deal vanilla's cramming.
 //! - The deployer's punch at full strength (`DeployerFakePlayer.getCurrentItemAttackStrengthDelay`
@@ -92,6 +90,37 @@ use mod_api::{
     RightClickBlockEvent, ServerHost,
 };
 
+/// `Container.canPlaceItem` of a kinetic block entity's slots: the millstone's handler.
+pub(crate) fn can_place_item(event: &mod_api::CanPlaceItemEvent<'_>) -> Option<bool> {
+    (event.state.block() == super::states::key(Block::Millstone))
+        .then(|| millstone::admits(event.slot, event.stack))
+}
+
+/// `CrushingWheelControllerBlock.onRemove` and `SawBlockEntity.destroy`
+/// (`ItemHelper.dropContents`): the removed block's inventory, slot by slot.
+pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) {
+    let block = event.state.block();
+    if block != super::states::key(Block::CrushingWheelController)
+        && block != super::states::key(Block::MechanicalSaw)
+    {
+        return;
+    }
+    let pos = [event.pos.x, event.pos.y, event.pos.z];
+    // The engine let go of it at the block change, earlier in this same write.
+    let slots = with_world(|w| {
+        w.dims
+            .iter_mut()
+            .find_map(|d| d.removed_inventories.remove(&pos))
+    })
+    .flatten()
+    .unwrap_or_else(|| vec![None; create_engine::processing::INVENTORY_SLOTS]);
+    event.drops.extend(
+        slots
+            .into_iter()
+            .map(|s| s.and_then(|(item, n)| stacks::known_stack(&item, u32::from(n)))),
+    );
+}
+
 pub struct Processing;
 
 impl Subsystem for Processing {
@@ -153,6 +182,7 @@ impl Subsystem for Processing {
         let _ = deployer::ITEM_PARTICLE.set(r.particle_key("minecraft:item"));
         containers::register(r);
         recipes::register(r);
+        crusher::register(r);
         // The crafter's group inventory, ahead of the game's plain slot (it is the kinetic type's,
         // declared by `Kinetics`).
         let kind = r.block_entity_type_key(super::kinetics::TYPE);
@@ -182,8 +212,31 @@ impl Subsystem for Processing {
         }
     }
 
+    fn world_opened(&self, host: &mut dyn ServerHost) {
+        crusher::world_opened(&*host);
+    }
+
+    fn entity_join_level(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityJoinLevelEvent<'_>,
+    ) -> mod_api::Flow {
+        crusher::item_joined(host, event);
+        mod_api::Flow::Continue
+    }
+
+    fn entity_leave_level(
+        &self,
+        _host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityLeaveLevelEvent<'_>,
+    ) {
+        crusher::item_left(event.entity);
+    }
+
     fn world_closed(&self) {
         recipes::clear();
+        stacks::clear_items();
+        crusher::clear();
         saw::clear();
         press::clear();
         basin::clear();
@@ -193,6 +246,7 @@ impl Subsystem for Processing {
     }
 
     fn tags_updated(&self, cx: &dyn mod_api::ReloadContext) {
+        stacks::publish_items(cx);
         recipes::publish(cx);
         basin::recipes_changed();
     }
@@ -238,6 +292,8 @@ impl Subsystem for Processing {
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
+        // What a removal without side effects (`UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS`) left.
+        with_world(|w| w.dims[lv.dim].removed_inventories.clear());
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
         fan::tick_fans(lv);
@@ -527,7 +583,6 @@ pub struct Tools;
 impl Subsystem for Tools {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         saw::tick_drills(lv);
-        saw::tick_saws(lv);
         saw::hurt_inside(lv);
         press::tick_presses(lv);
         deployer::tick_deployers(lv);

@@ -390,6 +390,16 @@ impl Hooks for Create {
         until_cancel(|s| s.entity_join_level(host, event))
     }
 
+    fn entity_leave_level(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::EntityLeaveLevelEvent<'_>,
+    ) {
+        for s in SUBSYSTEMS {
+            s.entity_leave_level(host, event);
+        }
+    }
+
     fn key_mapping_pre(
         &self,
         host: &mut dyn ClientHost,

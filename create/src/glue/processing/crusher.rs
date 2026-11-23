@@ -7,9 +7,18 @@ use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::names::Named as _;
 use crate::glue::owned::LevelLists as _;
 use crate::glue::server::{ServerLevel, update_all};
+use crate::glue::states;
 use crate::glue::world::with_world;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, crusher, processing};
+use mod_api::{
+    AttachmentCodec, AttachmentError, AttachmentType, BlockPart, BlockState, CollisionShapeEvent,
+    Compound, EntityJoinLevelEvent, Holder, HostBlockStates as _, LoopContext, Registrar,
+    ServerHost, Tag,
+};
+use std::cell::RefCell;
+use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
 
 /// Crushing wheels: the controllers between wheels turning against each other
 /// (`CrushingWheelBlock.updateControllers`, after a wheel is placed, broken or changes speed),
@@ -23,19 +32,116 @@ pub fn tick_crushers(lv: &mut ServerLevel<'_>) {
     for pos in checks {
         fix_controllers(lv, pos);
     }
-    // `onRemove`: a removed controller's inventory scatters where it was.
-    let drops = with_world(|w| std::mem::take(&mut w.dims[dim].crusher_drops)).unwrap_or_default();
-    for (pos, item, n) in drops {
-        if let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(n)) {
-            let _ = lv.level.pop_resource(&mut *lv.host, pos, stack);
-        }
-    }
     let running = with_world(|w| w.dims[dim].running_crushers.clone()).unwrap_or_default();
     if running.is_empty() || !recipes::ready() {
         return;
     }
     for pos in running {
         tick_crusher(lv, pos);
+    }
+}
+
+/// `BypassCrushingWheel` in an item's persistent data: the controller that let it out, which
+/// neither catches it again nor stops it.
+static BYPASS: AttachmentType<Option<[i32; 3]>> = AttachmentType {
+    namespace: "create",
+    name: "bypass_crushing_wheel",
+    default: || None,
+    codec: Some(AttachmentCodec {
+        encode: |pos| {
+            Ok(Compound::from([(
+                "Pos".into(),
+                Tag::IntArray(pos.map_or_else(Vec::new, |p| p.to_vec())),
+            )]))
+        },
+        decode: |saved| match saved.get(&"Pos".into()) {
+            Some(Tag::IntArray(p)) => Ok(p.as_slice().try_into().ok()),
+            _ => Err(AttachmentError::Decode),
+        },
+    }),
+    copy_on_death: false,
+    sync: false,
+};
+
+thread_local! {
+    /// [`BYPASS`] of the loaded items that have one, by entity id, for the collision rule.
+    static BYPASSING: RefCell<HashMap<u32, [i32; 3]>> = RefCell::new(HashMap::new());
+}
+
+/// The controller states whose collision a tagged item passes: valid and not facing up.
+static PASSABLE: OnceLock<HashSet<BlockState>> = OnceLock::new();
+
+pub(super) fn register(r: &mut dyn Registrar) {
+    if let Err(e) = r.register_attachment_type("create:bypass_crushing_wheel", false) {
+        crate::create_log!("[create] declaring bypass_crushing_wheel: {e:?}");
+    }
+    r.block_part(states::key(Block::CrushingWheelController), Passage);
+}
+
+pub(super) fn world_opened(host: &dyn mod_api::Host) {
+    if PASSABLE.get().is_some() {
+        return;
+    }
+    let key = states::key(Block::CrushingWheelController);
+    let Some(range) = host.block_states().states_of(key) else {
+        return;
+    };
+    let passable = range
+        .iter()
+        .filter(|&state| {
+            host.block_state_string(state).is_some_and(|text| {
+                let (_, props) = states::split(&text);
+                props.contains(&("valid", "true")) && !props.contains(&("facing", "up"))
+            })
+        })
+        .collect();
+    let _ = PASSABLE.set(passable);
+}
+
+pub(super) fn clear() {
+    BYPASSING.with_borrow_mut(HashMap::clear);
+}
+
+fn bypassing(entity: u32) -> Option<[i32; 3]> {
+    BYPASSING.with_borrow(|m| m.get(&entity).copied())
+}
+
+fn bypass(host: &mut dyn ServerHost, entity: u32, controller: [i32; 3]) {
+    if let Err(e) = BYPASS.set(host, Holder::Entity(entity), Some(controller)) {
+        crate::create_log!("[create] tagging a crushed item: {e:?}");
+    }
+    BYPASSING.with_borrow_mut(|m| m.insert(entity, controller));
+}
+
+/// An item back with its chunk keeps its tag.
+pub(super) fn item_joined(host: &mut dyn ServerHost, event: &EntityJoinLevelEvent<'_>) {
+    if event.loaded_from_disk
+        && event.kind == "minecraft:item"
+        && let Ok(Some(Some(controller))) = BYPASS.get_existing(host, Holder::Entity(event.entity))
+    {
+        BYPASSING.with_borrow_mut(|m| m.insert(event.entity, controller));
+    }
+}
+
+pub(super) fn item_left(entity: u32) {
+    BYPASSING.with_borrow_mut(|m| m.remove(&entity));
+}
+
+/// `CrushingWheelControllerBlock.getCollisionShape`: nothing for an item tagged by this
+/// controller, unless it faces up (its results land on top).
+struct Passage;
+
+#[mod_api::sunrise_part]
+impl BlockPart for Passage {
+    fn collision_shape(&self, _context: &dyn LoopContext, event: &mut CollisionShapeEvent<'_>) {
+        let Some(entity) = event.query.entity() else {
+            return;
+        };
+        if bypassing(entity) == Some([event.pos.x, event.pos.y, event.pos.z])
+            && PASSABLE.get().is_some_and(|p| p.contains(&event.state))
+        {
+            *event.shape = Some(Vec::new());
+        }
     }
 }
 
@@ -139,7 +245,7 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         c.entity = lv
             .items_in(lo, hi)
             .into_iter()
-            .find(|d| !crusher::bypassed(pos, facing, d.at))
+            .find(|d| bypassing(d.id()) != Some(pos))
             .map(|d| d.id())
             .or_else(|| crushable_in(lv, lo, hi));
     } else {
@@ -182,10 +288,24 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                     }
                     c.slots = left;
                 } else {
-                    // Results thrown out past the facing side (`outPos`, `outSpeed`).
+                    // Results thrown out past the facing side (`outPos`, `outSpeed`), tagged
+                    // `BypassCrushingWheel`.
                     let (at, v) = crusher::output(pos, facing);
                     for (item, count) in crusher::ejected(&mut c) {
-                        lv.spawn_moving(at, &item, u32::from(count), v);
+                        let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(count)) else {
+                            continue;
+                        };
+                        if let Ok(Some(entity)) = lv.level.spawn_item_with_motion(
+                            &mut *lv.host,
+                            at[0],
+                            at[1],
+                            at[2],
+                            stack,
+                            v,
+                            0,
+                        ) {
+                            bypass(&mut *lv.host, entity.id(), pos);
+                        }
                     }
                 }
             }
