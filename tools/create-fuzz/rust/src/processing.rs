@@ -438,6 +438,35 @@ fn inputs(machine: &str) -> &'static [String] {
 
 const SPEEDS: [i32; 7] = [8, 16, 32, 64, 128, 256, -48];
 
+/// A millstone output slot's limit (`ItemStackHandler.getSlotLimit`).
+const OUTPUT_LIMIT: u8 = 64;
+
+/// The most one `input` makes of any one result: a recipe's results of one item added up.
+fn most(input: &str) -> u8 {
+    let mut of_one: BTreeMap<&str, u8> = BTreeMap::new();
+    for r in contract().recipes.iter().filter(|r| r.input == input) {
+        for o in &r.results {
+            *of_one.entry(o.item.as_str()).or_default() += o.count;
+        }
+    }
+    of_one.into_values().max().unwrap_or(0)
+}
+
+/// The stack an action offers to a machine's input slot 0: dropped on it, or put there.
+fn to_input(a: &Action) -> Option<&Stack> {
+    match a {
+        Action::Item {
+            input: Input::DropOn { stack },
+        }
+        | Action::Capability {
+            slot: 0,
+            insert: Some(stack),
+            ..
+        } => Some(stack),
+        _ => None,
+    }
+}
+
 /// A millstone on a motor (`MillstoneBlockEntity`): stacks dropped on it and put into its
 /// handler (slot 0 only takes what it can mill, outputs refuse), outputs taken through the
 /// handler or by a player's empty hand (`MillstoneBlock.useItemOn`, the input when there are no
@@ -454,25 +483,41 @@ pub fn millstone(seed: u64) -> Scenario {
         Some(rpm),
     ));
     let mut tick = 10;
+    // Which stack sits in an output slot is chance's once a rolled input has reached the input
+    // slot, so none is drawn on after one. All a case's rolled inputs make less than a full
+    // slot: a full one stops the millstone (`MillstoneBlockEntity.tick`, :92) when chance says.
+    let mut reached = false;
+    let mut room = OUTPUT_LIMIT - 1;
     for _ in 0..3 + r.below(4) {
         if tick + 40 > sc.ticks {
             break;
         }
         let item = r.pick(inputs("millstone")).as_str();
-        let count = 1 + r.below(if rolled(item) { 6 } else { 20 }) as u8;
+        let rolled = rolled(item);
+        let mut count = 1 + r.below(if rolled { 6 } else { 20 }) as u8;
+        if rolled {
+            count = count.min(room / most(item));
+            room -= count * most(item);
+        }
         let a = match r.below(5) {
             0 | 1 => drop_on(item, count),
             2 => insert(None, 0, item, count),
             3 => insert(Some(Face::North), 1 + r.below(9) as u8, item, count),
             _ => insert(Some(Face::Up), 0, item, count),
         };
-        sc.events.push(act(tick, mill, a));
+        if count > 0 {
+            reached |= rolled && to_input(&a).is_some();
+            sc.events.push(act(tick, mill, a));
+        }
         sc.checkpoints.extend(tick..tick + 4);
         tick += 15 + r.below(60);
         match r.below(6) {
-            0 => sc
-                .events
-                .push(act(tick, mill, extract(None, 1 + r.below(9) as u8, 64))),
+            0 => {
+                let slot = 1 + r.below(9) as u8;
+                if !reached {
+                    sc.events.push(act(tick, mill, extract(None, slot, 64)));
+                }
+            }
             1 => sc.events.push(act(tick, mill, extract(None, 0, 64))),
             2 => sc.events.push(act(tick, mill, empty_use(Face::Up))),
             3 => sc.events.push(act(
@@ -824,5 +869,55 @@ mod tests {
         let mut bone_meal_kept = dye.clone();
         bone_meal_kept.item_outcomes[2].taken.clear();
         assert!(!crate::compare::diff(&dye, &bone_meal_kept).is_empty());
+    }
+
+    #[test]
+    fn no_output_slot_is_drawn_on_after_a_rolled_input() {
+        let mut reached = 0;
+        let mut drawn = 0;
+        for seed in (205..20_000).step_by(256) {
+            let mut rolled_yet = false;
+            for e in super::millstone(seed).events {
+                let Some(a) = &e.action else {
+                    continue;
+                };
+                if let super::Action::Capability {
+                    slot: 1..=9,
+                    extract: Some(_),
+                    ..
+                } = a
+                {
+                    assert!(!rolled_yet, "seed {seed}, tick {}", e.tick);
+                    drawn += 1;
+                }
+                rolled_yet |= super::to_input(a).is_some_and(|s| super::rolled(&s.item));
+            }
+            reached += usize::from(rolled_yet);
+        }
+        assert!(reached > 0 && drawn > 0);
+    }
+
+    #[test]
+    fn a_case_s_rolled_inputs_cannot_fill_a_slot() {
+        assert_eq!(super::most("minecraft:bone"), 6);
+        let mut bones_717 = 0;
+        for seed in (205..20_000).step_by(256) {
+            let mut of_one = 0;
+            for e in super::millstone(seed).events {
+                if let Some(s) = e.action.as_ref().and_then(super::to_input)
+                    && super::rolled(&s.item)
+                {
+                    of_one += u32::from(s.count) * u32::from(super::most(&s.item));
+                    if seed == 717 && s.item == "minecraft:bone" {
+                        bones_717 += s.count;
+                    }
+                }
+            }
+            assert!(
+                of_one < u32::from(super::OUTPUT_LIMIT),
+                "seed {seed}: {of_one}"
+            );
+        }
+        assert_eq!(bones_717, 10);
     }
 }
