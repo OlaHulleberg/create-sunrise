@@ -5,19 +5,19 @@ use super::{recipes, stacks};
 use crate::glue::kinetics::dir_name;
 use crate::glue::logistics::{insert_into_from, random_angle, upright};
 use crate::glue::names::Named as _;
-use crate::glue::owned::LevelLists as _;
+use crate::glue::owned::{LevelLists as _, OwnedStack as _};
 use crate::glue::server::{ServerLevel, update_all};
 use crate::glue::states;
-use crate::glue::world::with_world;
+use crate::glue::world::{level_index, try_with_world, with_world};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, crusher, processing};
 use mod_api::{
     AttachmentCodec, AttachmentError, AttachmentType, BlockPart, BlockState, CollisionShapeEvent,
-    Compound, EntityJoinLevelEvent, Holder, HostBlockStates as _, LoopContext, Registrar,
-    ServerHost, Tag,
+    Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityRef, EntityWrite, Holder,
+    HostBlockStates as _, InsideEffect, LevelRandomHost, LoopContext, Registrar, ServerHost, Tag,
 };
 use std::cell::RefCell;
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 use std::sync::OnceLock;
 
 /// Crushing wheels: the controllers between wheels turning against each other
@@ -68,8 +68,7 @@ thread_local! {
     static BYPASSING: RefCell<HashMap<u32, [i32; 3]>> = RefCell::new(HashMap::new());
 }
 
-/// The controller states whose collision a tagged item passes: valid and not facing up.
-static PASSABLE: OnceLock<HashSet<BlockState>> = OnceLock::new();
+static VALID_FACINGS: OnceLock<HashMap<BlockState, Dir>> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
     if let Err(e) = r.register_attachment_type("create:bypass_crushing_wheel", false) {
@@ -79,23 +78,28 @@ pub(super) fn register(r: &mut dyn Registrar) {
 }
 
 pub(super) fn world_opened(host: &dyn mod_api::Host) {
-    if PASSABLE.get().is_some() {
+    if VALID_FACINGS.get().is_some() {
         return;
     }
     let key = states::key(Block::CrushingWheelController);
     let Some(range) = host.block_states().states_of(key) else {
         return;
     };
-    let passable = range
+    let facings = range
         .iter()
-        .filter(|&state| {
-            host.block_state_string(state).is_some_and(|text| {
-                let (_, props) = states::split(&text);
-                props.contains(&("valid", "true")) && !props.contains(&("facing", "up"))
-            })
+        .filter_map(|state| {
+            let text = host.block_state_string(state)?;
+            let (_, props) = states::split(&text);
+            if !props.contains(&("valid", "true")) {
+                return None;
+            }
+            Dir::ALL
+                .into_iter()
+                .find(|&dir| props.contains(&("facing", dir_name(dir))))
+                .map(|dir| (state, dir))
         })
         .collect();
-    let _ = PASSABLE.set(passable);
+    let _ = VALID_FACINGS.set(facings);
 }
 
 pub(super) fn clear() {
@@ -127,20 +131,55 @@ pub(super) fn item_left(entity: u32) {
     BYPASSING.with_borrow_mut(|m| m.remove(&entity));
 }
 
-/// `CrushingWheelControllerBlock.getCollisionShape`: nothing for an item tagged by this
-/// controller, unless it faces up (its results land on top).
 struct Passage;
 
 #[mod_api::sunrise_part]
 impl BlockPart for Passage {
+    /// `CrushingWheelControllerBlock.getCollisionShape`.
     fn collision_shape(&self, _context: &dyn LoopContext, event: &mut CollisionShapeEvent<'_>) {
+        let Some(facing) = VALID_FACINGS.get().and_then(|f| f.get(&event.state)) else {
+            return;
+        };
         let Some(entity) = event.query.entity() else {
             return;
         };
-        if bypassing(entity) == Some([event.pos.x, event.pos.y, event.pos.z])
-            && PASSABLE.get().is_some_and(|p| p.contains(&event.state))
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        if bypassing(entity) == Some(pos) && *facing != Dir::Up {
+            *event.shape = Some(Vec::new());
+            return;
+        }
+        if try_with_world(|w| {
+            w.dims.iter().any(|dim| {
+                dim.crushers
+                    .get(&pos)
+                    .is_some_and(|(c, _)| c.entity == Some(entity))
+            })
+        }) == Some(true)
         {
             *event.shape = Some(Vec::new());
+        }
+    }
+
+    /// `CrushingWheelControllerBlock.entityInside`.
+    fn entity_inside(&self, _level: &mut dyn LevelRandomHost, event: &mut EntityInsideEvent<'_>) {
+        let Some(&facing) = VALID_FACINGS.get().and_then(|f| f.get(&event.state)) else {
+            return;
+        };
+        let Some(dim) = level_index(event.dimension) else {
+            return;
+        };
+        let pos = [event.pos.x, event.pos.y, event.pos.z];
+        if try_with_world(|w| {
+            w.dims[dim]
+                .crushers
+                .get(&pos)
+                .is_some_and(|(c, _)| c.entity == Some(event.entity as u32))
+        }) == Some(true)
+        {
+            event.effects.run_before(
+                InsideEffect::Freeze,
+                EntityWrite::StuckIn(crusher::stuck_multiplier(facing)),
+            );
         }
     }
 }
@@ -210,44 +249,14 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     else {
         return;
     };
-    let cell = |grow: f64| {
-        let lo = pos.map(|v| f64::from(v) - grow);
-        let hi = pos.map(|v| f64::from(v) + 1.0 + grow);
-        (lo, hi)
-    };
-    let before = c.clone();
+    if speed == 0.0 {
+        return;
+    }
+    let before = c.slots.clone();
     if let Some(id) = c.entity {
-        // The held item: drawn to the middle and in; taken a quarter past the middle.
-        let (lo, hi) = cell(0.5);
-        let found = lv.items_in(lo, hi).into_iter().find(|d| d.id() == id);
-        match found {
-            None if crush_entity(lv, pos, facing, speed, id) => {}
-            None => c.entity = None,
-            Some(d) => {
-                let item = stacks::id(&*lv.host, &d.stack);
-                let count = d.stack.count().min(255) as u8;
-                let (motion, taken) = crusher::hold(pos, facing, speed, d.at);
-                if taken || crusher::on_shelf(pos, facing, d.at) {
-                    let time = recipes::with(|r| {
-                        crusher::recipe(&r.crushing, &r.milling, &item).map(|x| x.time)
-                    })
-                    .flatten();
-                    crusher::intake(&mut c, &item, count, time);
-                    lv.set_dropped(&d, None, d.velocity);
-                } else {
-                    lv.set_dropped(&d, Some(d.stack.clone()), motion);
-                }
-            }
-        }
-    } else if c.slots.is_empty() {
-        // `checkEntityForProcessing`: the first item inside starts it.
-        let (lo, hi) = cell(0.0);
-        c.entity = lv
-            .items_in(lo, hi)
-            .into_iter()
-            .find(|d| bypassing(d.id()) != Some(pos))
-            .map(|d| d.id())
-            .or_else(|| crushable_in(lv, lo, hi));
+        tick_entity(lv, pos, facing, speed, &mut c, id);
+    } else if !c.occupied() {
+        c.entity = crushable_in(lv, pos);
     } else {
         match crusher::tick_inventory(&mut c, speed) {
             crusher::Step::Wait => {}
@@ -315,7 +324,7 @@ fn tick_crusher(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         if let Some(e) = w.dims[dim].crushers.get_mut(&pos) {
             e.0 = c.clone();
         }
-        if c.slots != before.slots {
+        if c.slots != before {
             w.mark_unsaved(dim, pos);
         }
     });
@@ -456,83 +465,98 @@ const CRUSHING_DAMAGE: f32 = 4.0;
 /// The damage the wheels deal: Create's own `create:crush`.
 const CRUSH: &str = "create:crush";
 
-/// `CrushingWheelControllerBlock.checkEntityForProcessing` for what is not an item: the first
-/// living entity in the controller's cell, but a creative player or any player on peaceful.
-fn crushable_in(lv: &mut ServerLevel<'_>, lo: [f64; 3], hi: [f64; 3]) -> Option<u32> {
+/// `CrushingWheelControllerBlock.checkEntityForProcessing`.
+fn crushable_in(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<u32> {
+    let lo = pos.map(f64::from);
+    let hi = lo.map(|v| v + 1.0);
     let peaceful = lv.level.difficulty(&*lv.host) == Some("peaceful");
-    let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
-    found
+    lv.level
+        .entities_in(&*lv.host, lo, hi)
+        .unwrap_or_default()
         .into_iter()
-        .find(|&e| {
-            if lv.host.item_entity(e).is_some() || lv.host.living(e).is_none() {
+        .find(|&entity| {
+            if bypassing(entity.id()) == Some(pos)
+                || (lv.host.item_entity(entity).is_none()
+                    && lv
+                        .host
+                        .living(entity)
+                        .is_none_or(|living| living.alive(&*lv.host) != Some(true)))
+            {
                 return false;
             }
-            if e.kind(&*lv.host).map(|k| k.name(&*lv.host)).as_deref() == Some("minecraft:player") {
-                let creative = e
-                    .uuid(&mut *lv.host)
-                    .and_then(|u| lv.host.player(u))
-                    .and_then(|p| p.is_creative(&*lv.host))
-                    .unwrap_or(false);
-                return !creative && !peaceful;
+            if entity.kind(&*lv.host).map(|k| k.name(&*lv.host)).as_deref()
+                == Some("minecraft:player")
+            {
+                return !peaceful
+                    && !entity
+                        .uuid(&mut *lv.host)
+                        .and_then(|u| lv.host.player(u))
+                        .and_then(|p| p.is_creative(&*lv.host))
+                        .unwrap_or(false);
             }
             true
         })
         .map(|e| e.id())
 }
 
-/// `CrushingWheelControllerBlockEntity.tick` for a held entity that is not an item: drawn to
-/// the middle and along the facing (held still across it when sneaking), hurt by the crushing
-/// (`CreateDamageSources.crush`) every tick and moved out past the wheels when it dies (just
-/// before the blow that would kill it, so its drops fall there). False when it is gone or out of
-/// the cell: the controller lets go.
-fn crush_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, speed: f32, id: u32) -> bool {
-    let lo = pos.map(|v| f64::from(v) - 0.5);
-    let hi = pos.map(|v| f64::from(v) + 1.5);
-    let Some(entity) = lv
-        .level
-        .entities_in(&*lv.host, lo, hi)
-        .unwrap_or_default()
-        .into_iter()
-        .find(|e| e.id() == id)
-    else {
-        return false;
+/// `CrushingWheelControllerBlockEntity.tick`.
+fn tick_entity(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    speed: f32,
+    c: &mut crusher::Crusher,
+    id: u32,
+) {
+    let Some(entity) = lv.host.entity(id).filter(|&entity| {
+        entity.level(&*lv.host) == Some(lv.level)
+            && entity
+                .bounding_box(&*lv.host)
+                .is_some_and(|bounds| crusher::overlaps(pos, 0.5, bounds))
+            && lv
+                .host
+                .living(entity)
+                .is_none_or(|l| l.alive(&*lv.host) == Some(true))
+    }) else {
+        c.entity = None;
+        return;
     };
-    let Some(living) = lv.host.living(entity) else {
-        return false;
-    };
-    if living.alive(&*lv.host) != Some(true) {
-        return false;
-    }
     let Some(at) = entity.position(&*lv.host) else {
-        return false;
+        c.entity = None;
+        return;
     };
-    let (mut motion, _) = crusher::hold(pos, facing, speed, at);
-    if entity.is_shift_key_down(&*lv.host) == Some(true) {
-        let a = match facing.axis() {
-            Axis::X => 0,
-            Axis::Y => 1,
-            Axis::Z => 2,
-        };
-        for (i, m) in motion.iter_mut().enumerate() {
-            if i != a {
-                *m = 0.0;
-            }
-        }
-    }
+    let sneaking = entity.is_shift_key_down(&*lv.host) == Some(true);
+    let (motion, taken) = crusher::hold(pos, facing, speed, at, sneaking);
     entity.set_velocity(&mut *lv.host, motion);
-    // `entityOutPos`: half a block past where items leave.
+    if let Some(item) = lv.host.item_entity(entity) {
+        let _ = item.set_pickup_delay(&mut *lv.host, 20);
+        if taken && let Some(stack) = item.stack(&*lv.host) {
+            let item = stacks::id(&*lv.host, &stack);
+            let count = stack.count().min(255) as u8;
+            let time =
+                recipes::with(|r| crusher::recipe(&r.crushing, &r.milling, &item).map(|x| x.time))
+                    .flatten();
+            crusher::intake(c, &item, count, time);
+            entity.discard(&mut *lv.host);
+        }
+        return;
+    }
+    crush_entity(lv, pos, facing, entity);
+}
+
+fn crush_entity(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, entity: EntityRef) {
     let (out, _) = crusher::output(pos, facing);
     let o = facing.offset();
     let out = [0, 1, 2].map(|i| out[i] + 0.5 * f64::from(o[i]));
+    let living = lv.host.living(entity);
     if living
-        .health(&*lv.host)
+        .and_then(|l| l.health(&*lv.host))
         .is_some_and(|h| h - CRUSHING_DAMAGE <= 0.0)
     {
         entity.teleport_to(&mut *lv.host, out, None);
     }
     let _ = entity.hurt(&mut *lv.host, CRUSH, CRUSHING_DAMAGE, None, None);
-    if living.alive(&*lv.host) != Some(true) {
+    if living.is_some_and(|l| l.alive(&*lv.host) != Some(true)) {
         entity.teleport_to(&mut *lv.host, out, None);
     }
-    true
 }
