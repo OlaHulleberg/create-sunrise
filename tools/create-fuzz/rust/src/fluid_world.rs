@@ -155,6 +155,73 @@ pub fn enabled(sc: &crate::scenario::Scenario) -> bool {
         })
 }
 
+/// Whether the native fluid host has to be stepped for `sc`: [`enabled`], unless no fluid
+/// can reach the world. Every fluid item of the scenario is then a player's use of a
+/// container on a basin standing there, which takes it into its tanks or refuses it
+/// (`BasinBlock.useItemOn`), and no state is the host's. A use while sneaking skips the
+/// basin (`doesSneakBypassUse`) and pours.
+pub fn stepping(sc: &crate::scenario::Scenario) -> bool {
+    if !enabled(sc) {
+        return false;
+    }
+    use crate::actions::Action;
+    use crate::transport::Input;
+    let fluid_item =
+        |item: &str| item.ends_with("bucket") || crate::fluid_recipes::contents(item).is_some();
+    let host_state = sc
+        .blocks
+        .iter()
+        .map(|b| b.state.as_str())
+        .chain(sc.events.iter().filter_map(|e| e.state.as_deref()))
+        .any(|state| {
+            id(state).is_some() || state.contains("cauldron") || state.contains("honey_level")
+        });
+    if host_state {
+        return true;
+    }
+    let basin_before = |tick: u32, pos: crate::scenario::Pos| {
+        let mut state: Option<&str> = None;
+        for (i, b) in sc.blocks.iter().enumerate() {
+            if i as u32 >= tick {
+                break;
+            }
+            if b.pos == pos {
+                state = Some(b.state.as_str());
+            }
+        }
+        for e in sc.events.iter().filter(|e| e.tick < tick) {
+            if let Some(s) = &e.state
+                && e.pos == pos
+            {
+                state = Some(s);
+            }
+        }
+        state.is_some_and(|s| s.starts_with("create:basin"))
+    };
+    let fluid_uses = sc.events.iter().any(|e| match &e.action {
+        Some(Action::Use { item, .. }) => fluid_item(item),
+        Some(Action::Item { input }) => match input {
+            Input::DropOn { stack } => fluid_item(&stack.item),
+            Input::Use { stack, .. } => stack.as_ref().is_some_and(|s| fluid_item(&s.item)),
+        },
+        _ => false,
+    });
+    !(fluid_uses
+        && sc.events.iter().all(|e| match &e.action {
+            Some(Action::Use { item, .. }) => !fluid_item(item),
+            Some(Action::Item { input }) => match input {
+                Input::DropOn { stack } => !fluid_item(&stack.item),
+                Input::Use {
+                    stack: Some(s),
+                    sneaking,
+                    ..
+                } => !fluid_item(&s.item) || (!*sneaking && basin_before(e.tick, e.pos)),
+                Input::Use { stack: None, .. } => true,
+            },
+            _ => true,
+        }))
+}
+
 pub fn generate(seed: u64) -> crate::scenario::Scenario {
     use crate::{
         actions::{Action, Face},

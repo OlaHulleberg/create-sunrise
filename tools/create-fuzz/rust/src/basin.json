@@ -1,0 +1,180 @@
+{
+  "_comment": "Create 6.0.11's basin recipes for what the basin families' basins can hold: their inputs, the recipes' results and the containers left behind. Its `data/create/recipe` (MIT) gives the mixing ones, the compacting ones, and with vanilla's recipe data the crafting ones: the shapeless a mixer runs too (`allowShapelessInMixer`: more than one ingredient, not 4 or 9 of one) and the squares a press compacts (`allowShapedSquareInPress`: 4 or 9 of one ingredient). An ingredient lists the items the recipe takes. The server audits every entry at startup (`BasinRecipeAudit`): as Create reads it, and that no recipe of these kinds that takes only what a family's basin can hold is missing.",
+  "inputs": {
+    "mixing": [
+      "minecraft:andesite",
+      "minecraft:iron_nugget",
+      "create:zinc_nugget",
+      "minecraft:copper_ingot",
+      "create:zinc_ingot",
+      "minecraft:diorite",
+      "minecraft:cobblestone",
+      "minecraft:dirt",
+      "minecraft:wheat",
+      "create:wheat_flour",
+      "minecraft:sugar",
+      "minecraft:cocoa_beans",
+      "create:bar_of_chocolate",
+      "minecraft:honey_block",
+      "minecraft:oak_leaves",
+      "create:shaft",
+      "minecraft:oak_planks",
+      "minecraft:gravel"
+    ],
+    "compacting": [
+      "minecraft:snowball",
+      "minecraft:oak_planks",
+      "minecraft:clay_ball",
+      "minecraft:coal",
+      "create:zinc_nugget",
+      "create:zinc_ingot",
+      "minecraft:honey_bottle",
+      "minecraft:egg",
+      "minecraft:sugar",
+      "create:cinder_flour",
+      "minecraft:wheat",
+      "minecraft:andesite",
+      "minecraft:dirt",
+      "minecraft:gravel"
+    ]
+  },
+  "mixing": [
+    {
+      "id": "create:mixing/andesite_alloy",
+      "ingredients": [["minecraft:andesite"], ["minecraft:iron_nugget"]],
+      "results": [{"item": "create:andesite_alloy", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:mixing/andesite_alloy_from_zinc",
+      "ingredients": [["minecraft:andesite"], ["create:zinc_nugget"]],
+      "results": [{"item": "create:andesite_alloy", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:mixing/brass_ingot",
+      "heat": "heated",
+      "ingredients": [["minecraft:copper_ingot"], ["create:zinc_ingot"]],
+      "results": [{"item": "create:brass_ingot", "count": 2, "chance": 1.0}]
+    },
+    {
+      "id": "create:mixing/chocolate_melting",
+      "heat": "heated",
+      "ingredients": [["create:bar_of_chocolate"]],
+      "results": [],
+      "fluid_results": [["create:chocolate", 250]]
+    },
+    {
+      "id": "create:mixing/honey",
+      "heat": "heated",
+      "ingredients": [["minecraft:honey_block"]],
+      "results": [],
+      "fluid_results": [["create:honey", 1000]]
+    },
+    {
+      "id": "create:mixing/lava_from_cobble",
+      "heat": "superheated",
+      "ingredients": [["minecraft:cobblestone"]],
+      "results": [],
+      "fluid_results": [["minecraft:lava", 50]]
+    },
+    {
+      "id": "create:mixing/dough_by_mixing",
+      "ingredients": [["create:wheat_flour"]],
+      "fluids": [["minecraft:water", 1000]],
+      "results": [{"item": "create:dough", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:mixing/mud_by_mixing",
+      "ingredients": [["minecraft:dirt"]],
+      "fluids": [["minecraft:water", 250]],
+      "results": [{"item": "minecraft:mud", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:mixing/chocolate",
+      "heat": "heated",
+      "ingredients": [["minecraft:sugar"], ["minecraft:cocoa_beans"]],
+      "fluids": [["minecraft:milk", 250]],
+      "results": [],
+      "fluid_results": [["create:chocolate", 250]]
+    },
+    {
+      "id": "create:mixing/tea",
+      "heat": "heated",
+      "ingredients": [["minecraft:oak_leaves"]],
+      "fluids": [["minecraft:water", 250], ["minecraft:milk", 250]],
+      "results": [],
+      "fluid_results": [["create:tea", 500]]
+    }
+  ],
+  "shapeless": [
+    {
+      "id": "minecraft:andesite",
+      "ingredients": [["minecraft:diorite"], ["minecraft:cobblestone"]],
+      "results": [{"item": "minecraft:andesite", "count": 2, "chance": 1.0}]
+    },
+    {
+      "id": "minecraft:packed_mud",
+      "ingredients": [["minecraft:mud"], ["minecraft:wheat"]],
+      "results": [{"item": "minecraft:packed_mud", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:crafting/kinetics/cogwheel",
+      "ingredients": [["create:shaft"], ["minecraft:oak_planks"]],
+      "results": [{"item": "create:cogwheel", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:crafting/kinetics/large_cogwheel",
+      "ingredients": [["create:shaft"], ["minecraft:oak_planks"], ["minecraft:oak_planks"]],
+      "results": [{"item": "create:large_cogwheel", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:crafting/kinetics/large_cogwheel_from_little",
+      "ingredients": [["create:cogwheel"], ["minecraft:oak_planks"]],
+      "results": [{"item": "create:large_cogwheel", "count": 1, "chance": 1.0}]
+    }
+  ],
+  "compacting": [
+    {
+      "id": "create:compacting/ice",
+      "ingredients": [
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"],
+        ["minecraft:snow_block"]
+      ],
+      "results": [{"item": "minecraft:ice", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:compacting/blaze_cake",
+      "ingredients": [["minecraft:egg"], ["minecraft:sugar"], ["create:cinder_flour"]],
+      "results": [{"item": "create:blaze_cake_base", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:compacting/chocolate",
+      "fluids": [["create:chocolate", 250]],
+      "results": [{"item": "create:bar_of_chocolate", "count": 1, "chance": 1.0}]
+    },
+    {
+      "id": "create:compacting/honey",
+      "fluids": [["create:honey", 1000]],
+      "results": [{"item": "minecraft:honey_block", "count": 1, "chance": 1.0}]
+    }
+  ],
+  "squares": [
+    {"id": "minecraft:snow_block", "size": 2, "item": "minecraft:snowball", "result": "minecraft:snow_block", "count": 1},
+    {"id": "minecraft:crafting_table", "size": 2, "item": "minecraft:oak_planks", "result": "minecraft:crafting_table", "count": 1},
+    {"id": "minecraft:clay", "size": 2, "item": "minecraft:clay_ball", "result": "minecraft:clay", "count": 1},
+    {"id": "minecraft:coal_block", "size": 3, "item": "minecraft:coal", "result": "minecraft:coal_block", "count": 1},
+    {"id": "minecraft:hay_block", "size": 3, "item": "minecraft:wheat", "result": "minecraft:hay_block", "count": 1},
+    {"id": "minecraft:honey_block", "size": 2, "item": "minecraft:honey_bottle", "result": "minecraft:honey_block", "count": 1},
+    {"id": "minecraft:polished_andesite", "size": 2, "item": "minecraft:andesite", "result": "minecraft:polished_andesite", "count": 4},
+    {"id": "create:crafting/materials/zinc_ingot_from_compacting", "size": 3, "item": "create:zinc_nugget", "result": "create:zinc_ingot", "count": 1},
+    {"id": "create:crafting/materials/zinc_block_from_compacting", "size": 3, "item": "create:zinc_ingot", "result": "create:zinc_block", "count": 1},
+    {"id": "minecraft:packed_ice", "size": 3, "item": "minecraft:ice", "result": "minecraft:packed_ice", "count": 1},
+    {"id": "minecraft:blue_ice", "size": 3, "item": "minecraft:packed_ice", "result": "minecraft:blue_ice", "count": 1}
+  ]
+}

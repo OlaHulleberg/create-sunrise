@@ -224,9 +224,15 @@ pub const FAMILIES: &[Family] = &[
         crate::processing::crushing,
     ),
     family("processing/saw", &[(256, 128)], crate::processing::saw),
+    family("processing/mixing", &[(256, 77)], crate::basin::mixing),
+    family(
+        "processing/compacting",
+        &[(256, 93)],
+        crate::basin::compacting,
+    ),
     family(
         "geometry/states",
-        &[(256, 77), (256, 93), (128, 109), (128, 125)],
+        &[(128, 109), (128, 125)],
         geometry_states,
     ),
 ];
@@ -547,10 +553,12 @@ mod tests {
         assert_eq!(family_name(128), "processing/saw");
         assert_eq!(family_name(205), "processing/millstone");
         assert_eq!(family_name(221), "processing/crushing");
+        assert_eq!(family_name(77), "processing/mixing");
+        assert_eq!(family_name(93), "processing/compacting");
         assert_eq!(
             moved(at_9f00743),
             [
-                23, 29, 35, 39, 55, 61, 66, 78, 87, 94, 99, 103, 110, 119, 124, 126
+                23, 29, 35, 39, 55, 61, 66, 77, 78, 87, 93, 94, 99, 103, 110, 119, 124, 126
             ]
         );
         // #7's own moves and the belt families'; 87 and 119 are actions' again.
