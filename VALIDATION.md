@@ -35,6 +35,22 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Pass (124 tests) |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Pass (119 of 119 cases match) |
 
+## PR #243 processing on the Dev APIs in game (main `43aa858`)
+
+Built with `sunrise-launcher` 1.2.0 for `dev-2026-11-22-7cfdf81`. In the creative world `proc243`, placed the
+millstone by hand, set the other fixtures with `/setblock`, and changed the motors' speeds with clipboards.
+Checked held items and timers with `/data get` and loose items with `sunrise-ctl entities`. Compared with
+Create 6.0.11 (`b62e837`) Java. Screenshots are in `/mnt/lanes/agent-procgame/game/`.
+
+| # | Item | Result | Evidence |
+|---|---|---|---|
+| 1 | Millstone admission | Pass | At 16 rpm, all 4 dirt stayed in the hopper. Swapping to 4 cobblestone filled the input and produced 4 gravel in the output. Dirt thrown by hand stayed a loose item. An inserting andesite funnel admitted all 3 cobblestone while 3 dirt stayed loose on the funnel, as in `MillstoneInventoryHandler.isItemValid` and `MillstoneBlock.updateEntityAfterFallOn`. See `01-millstone-dirt.png`, `03-millstone-gravel.png` and `14-millstone-funnel.png`. |
+| 2 | Crushing wheel exits | Pass | With opposite 128 rpm motors, cobblestone dropped from above produced gravel below the downward controller at (8,105,0). Cobblestone thrown horizontally into the controller at (18,106,0) yielded gravel north at z≈−1.99 and south at z≈2.74 after reversing the motors. The results remained loose outside the controller. With the controller facing up and fed by a hopper removed after intake, gravel rose and settled directly on top at (8.5,106,0.5). This follows `CrushingWheelControllerBlockEntity.tick` and the tagged-item collision rule in `CrushingWheelControllerBlock.getCollisionShape`. See `04-crusher-up.png` through `07-crusher-south.png`. |
+| 3 | Controller and saw removal spills | Pass | Breaking a wheel at 16 rpm removed the controller and spilled all 12 cobblestone it held with the recipe still unapplied. Breaking the powered upward saw at −16 rpm with 31 of 50 ticks left spilled its uncut oak log. An intact run yielded a stripped oak log. Both spills match the Java removal paths through `ItemHelper.dropContents`. See `10-crusher-spill.png` and `15-saw-powered-spill.png`. |
+| 4 | Save, quit, relaunch mid-process | Pass | Saved with 2 cobblestone and 4 gravel in the millstone (timer 218 before save) and 12 cobblestone in the crusher (remaining time about 240.36). After reopening, both retained those stacks and their timers counted down (millstone 125 → 95, crusher 206.80 → 197.52). The millstone finished with 6 gravel and the crusher ejected 12 gravel. This agrees with both Java block entities' inventory and timer serialization. See `11-before-save.png` through `13-reloaded-output.png`. |
+
+The three `committed_assets` tests passed, including the comparison with the cached Create jar.
+
 ## Dev build `7cfdf81` in game (branch `pin/dev-7cfdf81`)
 
 Built with `sunrise-launcher` 1.2.0 `native-build` against `dev-2026-11-22-7cfdf81`, the profile switched from the
