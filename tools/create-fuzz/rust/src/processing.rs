@@ -4,7 +4,7 @@
 use crate::{
     actions::{Action, Face},
     generate::Rng,
-    scenario::{Change, Placed, Pos, Scenario},
+    scenario::{Change, Placed, Pos, Scenario, Snapshot},
     transport::{Input, Stack},
 };
 use serde::{Deserialize, Serialize};
@@ -133,7 +133,7 @@ pub struct Rolls {
 }
 
 impl Rolls {
-    pub fn of(a: &crate::scenario::Snapshot, b: &crate::scenario::Snapshot) -> Option<Rolls> {
+    pub fn of(a: &Snapshot, b: &Snapshot) -> Option<Rolls> {
         let offered: std::collections::BTreeSet<&str> = a
             .item_outcomes
             .iter()
@@ -175,6 +175,12 @@ impl Rolls {
         self.counted.contains(item) || self.maybe.contains(item)
     }
 
+    /// Whether a rolled stack sits outside the kept input slot.
+    fn holds_rolled(&self, v: &[Slot], keep_input: bool) -> bool {
+        v.iter()
+            .any(|x| self.touches(&x.item) && !(keep_input && x.slot == 0))
+    }
+
     /// Stacks with what chance decides taken out: counts of `counted` items zeroed, `maybe` ones
     /// gone, duplicates merged.
     fn stacks(&self, v: &mut Vec<Stack>) {
@@ -188,13 +194,9 @@ impl Rolls {
         v.dedup();
     }
 
-    fn slots(&self, v: &mut Vec<Slot>, keep_input: bool) {
-        if !v
-            .iter()
-            .any(|x| self.touches(&x.item) && !(keep_input && x.slot == 0))
-        {
-            return;
-        }
+    /// Slots with what chance decides taken out: the input's slot 0 kept (`keep_input`), the
+    /// rest by stack, duplicates merged.
+    fn unslot(&self, v: &mut Vec<Slot>, keep_input: bool) {
         let mut out: Vec<Slot> = v
             .iter()
             .filter(|x| keep_input && x.slot == 0)
@@ -219,14 +221,80 @@ impl Rolls {
         *v = out;
     }
 
-    /// The snapshot (and its checkpoints) with what chance decides taken out.
-    pub fn normalize(&self, s: &crate::scenario::Snapshot) -> crate::scenario::Snapshot {
-        let mut s = s.clone();
-        self.normalize_in(&mut s);
-        s
+    /// The slots rolls can sit in, and whether slot 0 is the input's, kept.
+    fn slots(o: &Observation) -> Option<(&[Slot], bool)> {
+        match o.kind.as_str() {
+            "millstone" => Some((o.outputs.as_deref()?, false)),
+            "crusher" | "saw" => Some((o.slots.as_deref()?, o.applied != Some(true))),
+            _ => None,
+        }
     }
 
-    fn normalize_in(&self, s: &mut crate::scenario::Snapshot) {
+    fn slots_mut(o: &mut Observation) -> Option<(&mut Vec<Slot>, bool)> {
+        match o.kind.as_str() {
+            "millstone" => Some((o.outputs.as_mut()?, false)),
+            "crusher" | "saw" => Some((o.slots.as_mut()?, o.applied != Some(true))),
+            _ => None,
+        }
+    }
+
+    fn slots_together(&self, x: Option<&mut Observation>, y: Option<&mut Observation>) {
+        let rolled = [x.as_deref(), y.as_deref()]
+            .into_iter()
+            .flatten()
+            .any(|o| Self::slots(o).is_some_and(|(v, keep)| self.holds_rolled(v, keep)));
+        if !rolled {
+            return;
+        }
+        for o in [x, y].into_iter().flatten() {
+            if let Some((v, keep_input)) = Self::slots_mut(o) {
+                self.unslot(v, keep_input);
+            }
+        }
+    }
+
+    /// Both snapshots, and their checkpoints, with what chance decides taken out. A machine's
+    /// slots are read by stack when either side holds a rolled one outside the input slot:
+    /// chance decided which slots the rest sit in, whether or not a rolled stack is left.
+    pub fn normalize(&self, a: &Snapshot, b: &Snapshot) -> (Snapshot, Snapshot) {
+        let (mut a, mut b) = (a.clone(), b.clone());
+        self.normalize_in(&mut a, Some(&mut b));
+        (a, b)
+    }
+
+    fn normalize_in(&self, a: &mut Snapshot, mut b: Option<&mut Snapshot>) {
+        self.by_stack(a);
+        if let Some(b) = b.as_deref_mut() {
+            self.by_stack(b);
+        }
+        for (key, x) in a.blocks.iter_mut() {
+            let y = b
+                .as_deref_mut()
+                .and_then(|b| b.blocks.get_mut(key))
+                .and_then(|y| y.processing.as_mut());
+            self.slots_together(x.processing.as_mut(), y);
+        }
+        if let Some(b) = b.as_deref_mut() {
+            for (key, y) in b.blocks.iter_mut() {
+                if !a.blocks.contains_key(key) {
+                    self.slots_together(None, y.processing.as_mut());
+                }
+            }
+        }
+        for (t, x) in a.checkpoints.iter_mut() {
+            let y = b.as_deref_mut().and_then(|b| b.checkpoints.get_mut(t));
+            self.normalize_in(x, y);
+        }
+        if let Some(b) = b {
+            for (t, y) in b.checkpoints.iter_mut() {
+                if !a.checkpoints.contains_key(t) {
+                    self.normalize_in(y, None);
+                }
+            }
+        }
+    }
+
+    fn by_stack(&self, s: &mut Snapshot) {
         for o in &mut s.item_outcomes {
             self.stacks(&mut o.taken);
         }
@@ -256,25 +324,6 @@ impl Rolls {
                 }
                 b.payload = None;
             }
-            if let Some(p) = b.processing.as_mut() {
-                match p.kind.as_str() {
-                    "millstone" => {
-                        if let Some(o) = p.outputs.as_mut() {
-                            self.slots(o, false);
-                        }
-                    }
-                    "crusher" | "saw" => {
-                        let applied = p.applied == Some(true);
-                        if let Some(o) = p.slots.as_mut() {
-                            self.slots(o, !applied);
-                        }
-                    }
-                    _ => {}
-                }
-            }
-        }
-        for c in s.checkpoints.values_mut() {
-            self.normalize_in(c);
         }
     }
 }
@@ -621,6 +670,11 @@ pub fn saw(seed: u64) -> Scenario {
 
 #[cfg(test)]
 mod tests {
+    use super::{Observation, Slot, Stack};
+    use crate::observation::BlockSnap;
+    use crate::scenario::Snapshot;
+    use crate::transport::Outcome;
+
     #[test]
     fn no_insert_follows_a_rolled_one_over_a_depot() {
         let mut gated = 0;
@@ -656,5 +710,119 @@ mod tests {
         assert!(gated > 0);
         let sc = super::crushing(5341);
         assert_eq!(sc.events.len(), 2);
+    }
+
+    fn stack(item: &str, count: u8) -> Stack {
+        Stack {
+            item: item.into(),
+            count,
+        }
+    }
+    fn slot(item: &str, count: u8, slot: u8) -> Slot {
+        Slot {
+            item: item.into(),
+            count,
+            slot,
+        }
+    }
+    fn machine(outputs: Vec<Slot>) -> BlockSnap {
+        BlockSnap {
+            state: "create:millstone".into(),
+            processing: Some(Observation {
+                kind: "millstone".into(),
+                timer: Some(88),
+                input: Some(vec![slot("minecraft:andesite", 18, 0)]),
+                outputs: Some(outputs),
+                ..Observation::default()
+            }),
+            ..BlockSnap::default()
+        }
+    }
+    fn milled(outputs: Vec<Slot>, bone_meal: Option<u8>) -> Snapshot {
+        let mut s = Snapshot {
+            item_outcomes: vec![
+                Outcome {
+                    pos: [0, 8, 0],
+                    offered: Some(stack("minecraft:bone", 4)),
+                    remainder: None,
+                    taken: vec![],
+                    handler: Some(true),
+                },
+                Outcome {
+                    pos: [0, 8, 0],
+                    offered: Some(stack("minecraft:andesite", 19)),
+                    remainder: None,
+                    taken: vec![],
+                    handler: Some(true),
+                },
+            ],
+            ..Snapshot::default()
+        };
+        if let Some(n) = bone_meal {
+            s.item_outcomes.push(Outcome {
+                pos: [0, 8, 0],
+                offered: None,
+                remainder: None,
+                taken: vec![stack("minecraft:bone_meal", n)],
+                handler: Some(true),
+            });
+        }
+        s.blocks.insert("0,8,0".into(), machine(outputs));
+        s
+    }
+    fn at_171(s: &Snapshot, outputs: Vec<Slot>) -> Snapshot {
+        let mut s = s.clone();
+        s.checkpoints.insert(
+            171,
+            Snapshot {
+                blocks: [("0,8,0".to_string(), machine(outputs))].into(),
+                ..Snapshot::default()
+            },
+        );
+        s
+    }
+    #[test]
+    fn a_result_a_chance_one_moved_compares_by_stack() {
+        let dye = milled(
+            vec![
+                slot("minecraft:white_dye", 2, 1),
+                slot("minecraft:cobblestone", 1, 2),
+            ],
+            Some(15),
+        );
+        let no_dye = milled(vec![slot("minecraft:cobblestone", 1, 1)], Some(14));
+        assert!(!crate::compare::diff_exact(&dye, &no_dye).is_empty());
+        assert!(crate::compare::diff(&dye, &no_dye).is_empty());
+        assert!(crate::compare::diff(&no_dye, &dye).is_empty());
+        let dye_rolling = at_171(
+            &dye,
+            vec![
+                slot("minecraft:bone_meal", 15, 0),
+                slot("minecraft:white_dye", 2, 1),
+                slot("minecraft:cobblestone", 1, 2),
+            ],
+        );
+        let no_dye_rolling = at_171(
+            &no_dye,
+            vec![
+                slot("minecraft:bone_meal", 14, 0),
+                slot("minecraft:cobblestone", 1, 1),
+            ],
+        );
+        assert!(crate::compare::diff(&dye_rolling, &no_dye_rolling).is_empty());
+
+        let elsewhere = milled(vec![slot("minecraft:cobblestone", 1, 2)], Some(14));
+        assert!(!crate::compare::diff(&no_dye, &elsewhere).is_empty());
+        let more_cobblestone = milled(
+            vec![
+                slot("minecraft:white_dye", 2, 1),
+                slot("minecraft:cobblestone", 2, 2),
+            ],
+            Some(15),
+        );
+        assert!(!crate::compare::diff(&dye, &more_cobblestone).is_empty());
+        let mut bone_meal_kept = dye.clone();
+        bone_meal_kept.item_outcomes[2].taken.clear();
+        assert!(!crate::compare::diff(&dye, &bone_meal_kept).is_empty());
     }
 }

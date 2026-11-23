@@ -25,10 +25,10 @@ fn normalized<'a>(
 ) {
     use std::borrow::Cow;
     match crate::processing::Rolls::of(java, rust) {
-        Some(rolls) => (
-            Cow::Owned(rolls.normalize(java)),
-            Cow::Owned(rolls.normalize(rust)),
-        ),
+        Some(rolls) => {
+            let (java, rust) = rolls.normalize(java, rust);
+            (Cow::Owned(java), Cow::Owned(rust))
+        }
         None => (Cow::Borrowed(java), Cow::Borrowed(rust)),
     }
 }
