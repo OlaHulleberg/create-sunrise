@@ -1127,7 +1127,7 @@ pub fn calm_hive_harvest(
     if empty_hive == state {
         return false;
     }
-    let Some(player) = lv.host.player(click.player) else {
+    let Some(player) = lv.host.players().acting_player() else {
         return false;
     };
     let context = mod_api::GameEventContext {
@@ -1162,7 +1162,15 @@ pub fn calm_hive_harvest(
             let Some(honey) = stacks::stack(&*lv.host, "minecraft:honey_bottle", 1) else {
                 return false;
             };
-            lv.play_block_sound("minecraft:item.bottle.fill", pos, 1.0, 1.0);
+            lv.level.play_sound(
+                &mut *lv.host,
+                "minecraft:item.bottle.fill",
+                centre(pos),
+                mod_api::SoundSource::Neutral,
+                1.0,
+                1.0,
+                None,
+            );
             match stack.clone().shrink(1) {
                 None => {
                     crate::glue::items::set_held(&mut *lv.host, player, click.hand, Some(honey));
