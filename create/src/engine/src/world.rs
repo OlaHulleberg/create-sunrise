@@ -1553,6 +1553,28 @@ impl CreateWorld {
         }
     }
 
+    /// `AbstractFunnelBlock.neighborChanged` -> `CapManipulationBehaviourBase.onNeighborChanged`:
+    /// changing the block behind a funnel invalidates its cached `targetCapability` until the
+    /// funnel's next turn in `TransportTicks`.
+    pub fn funnel_neighbour_changed(&mut self, dim: usize, pos: [i32; 3]) {
+        if self.dims[dim].funnels.is_empty() {
+            return;
+        }
+        for dir in crate::kinetics::Dir::ALL {
+            let o = dir.offset();
+            let n = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
+            if self.dims[dim].funnels.contains_key(&n)
+                && self.dims[dim]
+                    .states
+                    .get(&n)
+                    .and_then(|s| self.table.get(*s))
+                    .is_some_and(|(_, i)| i.facing == Some(dir))
+            {
+                self.dims[dim].funnel_inv_pending.insert(n);
+            }
+        }
+    }
+
     #[cfg(test)]
     pub(crate) fn block_changed(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
         self.apply_block_change(dim, pos, old, new, false);
@@ -1666,23 +1688,8 @@ impl CreateWorld {
         {
             self.dims[dim].plumbing.hose_speeds.push((hose, f32::NAN));
         }
-        // `AbstractFunnelBlock.neighborChanged` -> `CapManipulationBehaviourBase.onNeighborChanged`:
-        // changing the block behind a funnel invalidates its cached `targetCapability` until the
-        // funnel's next tick (`findNewCapability`).
-        if old != new && !self.dims[dim].funnels.is_empty() {
-            for dir in crate::kinetics::Dir::ALL {
-                let o = dir.offset();
-                let n = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-                if self.dims[dim].funnels.contains_key(&n)
-                    && self.dims[dim]
-                        .states
-                        .get(&n)
-                        .and_then(|s| self.table.get(*s))
-                        .is_some_and(|(_, i)| i.facing == Some(dir))
-                {
-                    self.dims[dim].funnel_inv_pending.insert(n);
-                }
-            }
+        if old != new {
+            self.funnel_neighbour_changed(dim, pos);
         }
         let (was, is) = (self.table.is_kinetic(old), self.table.is_kinetic(new));
         if !was && !is {
@@ -1780,6 +1787,18 @@ impl CreateWorld {
         if kind(old) == Some(Block::ItemVault) && kind(new) != Some(Block::ItemVault) {
             // `ItemVaultBlock.onRemove`: its vault splits.
             self.dims[dim].vaults.removed(pos);
+        }
+        // `AbstractFunnelBlock.onRemove` / `FunnelBlock.onRemove`: a funnel replaced by any block
+        // that does not keep the same `FunnelBlockEntity` (including another Create block) drops
+        // its funnel entries before `place` runs for the new block.
+        if kind(old).is_some_and(crate::funnel::is_funnel)
+            && !kind(old)
+                .zip(kind(new))
+                .is_some_and(|(o, n)| keeps_block_entity(o, n))
+        {
+            let d = &mut self.dims[dim];
+            d.funnels.remove(&pos);
+            d.funnel_inv_pending.remove(&pos);
         }
         // The blocks whose filter slot `chute_filters` holds, by the blocks it stays with: a
         // brass funnel's filter goes with it onto a belt and off it again.
@@ -6815,7 +6834,8 @@ mod tests {
         assert!(w.funnel_inv_ready(0, funnel));
 
         // Changing an unrelated neighbour does not invalidate; changing the block behind the
-        // funnel (`depot` below an upward funnel) invalidates until the funnel's next turn.
+        // funnel (`depot` below an upward funnel, Create or vanilla) invalidates until the
+        // funnel's next turn.
         w.block_changed(0, side, 0, 1);
         assert!(w.funnel_inv_ready(0, funnel));
         w.block_changed(0, depot, 10, 0);
@@ -6823,18 +6843,29 @@ mod tests {
         let mut phase = w.transport_ticks(0, 2);
         assert_eq!(phase.next(&mut w), Some(TransportTick::Funnel(funnel)));
         assert!(w.funnel_inv_ready(0, funnel));
+        w.funnel_neighbour_changed(0, depot);
+        assert!(!w.funnel_inv_ready(0, funnel));
+        let mut phase = w.transport_ticks(0, 3);
+        assert_eq!(phase.next(&mut w), Some(TransportTick::Funnel(funnel)));
+        assert!(w.funnel_inv_ready(0, funnel));
+
+        // Replacing a funnel directly with another Create block clears both funnel maps.
+        w.block_changed(0, funnel, 11, 10);
+        assert!(!w.dims[0].funnels.contains_key(&funnel));
+        assert!(!w.dims[0].funnel_inv_pending.contains(&funnel));
+        w.block_changed(0, funnel, 10, 11);
 
         // After reload with a saved cooldown (due > now), the funnel still acquires its
         // capability at its first tick's turn even though it does not extract yet.
-        w.schedule_funnel(0, funnel, 20, 2);
-        let saved = w.column_funnels(0, 0, 0, 2);
+        w.schedule_funnel(0, funnel, 20, 3);
+        let saved = w.column_funnels(0, 0, 0, 3);
         w.column_unloaded(0, 0, 0);
-        w.load_funnels(0, 2, saved.into_iter());
+        w.load_funnels(0, 3, saved.into_iter());
         w.block_loaded(0, funnel, 11);
         w.block_loaded(0, depot, 10);
         assert!(!w.funnel_inv_ready(0, funnel));
         // Funnel loaded before depot: its turn resolves before depot ticks.
-        let mut phase = w.transport_ticks(0, 3);
+        let mut phase = w.transport_ticks(0, 4);
         assert_eq!(phase.next(&mut w), Some(TransportTick::Depot(depot)));
         assert!(w.funnel_inv_ready(0, funnel));
         assert_eq!(phase.next(&mut w), None);

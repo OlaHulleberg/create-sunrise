@@ -692,7 +692,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 let Some(f) = funnel_at(lv, pos) else {
                     return count;
                 };
-                if f.powered {
+                if f.powered || with_world(|w| w.funnel_inv_ready(lv.dim, pos)) != Some(true) {
                     return count;
                 }
                 let behind = create_engine::funnel::behind(pos, f.facing);

@@ -917,7 +917,11 @@ fn item_landed(
             let Some(f) = funnel::funnel_at(lv, spot) else {
                 return;
             };
-            if f.extracting || f.powered || !funnel::funnel_passes(lv, spot, &s) {
+            if f.extracting
+                || f.powered
+                || with_world(|w| w.funnel_inv_ready(lv.dim, spot)) != Some(true)
+                || !funnel::funnel_passes(lv, spot, &s)
+            {
                 return;
             }
             let behind = create_engine::funnel::behind(spot, f.facing);
