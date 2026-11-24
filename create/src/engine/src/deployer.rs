@@ -824,8 +824,17 @@ mod tests {
             hive_harvest("minecraft:bee_nest", 5, "minecraft:glass_bottle"),
             Some(HiveHarvest::Bottle)
         );
-        assert_eq!(hive_harvest("minecraft:beehive", 4, "minecraft:shears"), None);
-        assert_eq!(hive_harvest("minecraft:oak_planks", 5, "minecraft:shears"), None);
-        assert_eq!(hive_harvest("minecraft:beehive", 5, "minecraft:bucket"), None);
+        assert_eq!(
+            hive_harvest("minecraft:beehive", 4, "minecraft:shears"),
+            None
+        );
+        assert_eq!(
+            hive_harvest("minecraft:oak_planks", 5, "minecraft:shears"),
+            None
+        );
+        assert_eq!(
+            hive_harvest("minecraft:beehive", 5, "minecraft:bucket"),
+            None
+        );
     }
 }
