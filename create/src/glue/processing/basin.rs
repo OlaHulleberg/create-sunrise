@@ -75,8 +75,6 @@ pub const ITEMS_KEY: &str = "BasinItems";
 /// The key of a mixer's block entity data its clients run its head from: `T`, its running ticks
 /// when told, and `S`, the game time it was told at; none when it rests.
 pub const MIXER_KEY: &str = "Mixer";
-/// Ticks between a basin's `recipeBackupCheck`s (a lazy tick of 10, counted down from 20).
-const BACKUP_CHECK: i64 = 200;
 /// A blaze burner's blaze wears goggles (`BlazeBurnerBlockEntity.goggles`).
 pub const GOGGLES_KEY: &str = "Goggles";
 
@@ -475,26 +473,31 @@ fn matching_recipe(
     })
 }
 
-/// `BasinBlockEntity.tick`, at the basin's turn in the transport walk: its spout (`lazyTick`'s
-/// `updateSpoutput`, `tryClearingSpoutputOverflow`), then every 200 game ticks a basin that
-/// holds something has its contents changed (`recipeBackupCheck`: every 20 lazy ticks, in
-/// Java), so a burner lit after the items went in still gets them going; last, what changed
-/// since its last turn is told to its operator.
+/// `BasinBlockEntity.tick`, at the basin's turn in the transport walk: its lazy tick
+/// (`SmartBlockEntity.tick`), which turns the spout (`updateSpoutput`) and every 20 lazy ticks
+/// has a basin that is not empty looked at again by its operator (`recipeBackupCheck`), so a
+/// burner lit after the items went in still gets them going; what waits at the spout goes out;
+/// last, what changed since its last turn is told to its operator.
 pub(crate) fn tick_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     if !lv.is_loaded(pos) || !basin_at(lv, pos) {
         return;
     }
-    super::spoutput::tick_basin(lv, pos);
-    if lv.game_time() % BACKUP_CHECK == 0 {
-        let tanks = basin_tanks(dim, pos);
-        let filled = basin_slots(lv, pos).is_some_and(|s| s.iter().any(Option::is_some))
-            || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
-        if filled {
-            contents_changed(dim, pos);
-        }
+    let lazy = with_world(|w| w.basin_lazy_tick(dim, pos))
+        .flatten()
+        .unwrap_or(false);
+    super::spoutput::tick_basin(lv, pos, lazy);
+    if lazy {
+        with_world(|w| w.basin_backup_check(dim, pos, basin_empty(lv, pos)));
     }
     with_world(|w| w.basin_turn(dim, pos));
+}
+
+/// `BasinBlockEntity.isEmpty`: no item in its inventories and no fluid in its tanks.
+fn basin_empty(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let tanks = basin_tanks(lv.dim, pos);
+    basin_slots(lv, pos).is_none_or(|s| s.iter().all(Option::is_none))
+        && tanks.input.iter().chain(&tanks.output).all(Option::is_none)
 }
 
 /// `BasinOperatingBlockEntity.tick`, at the operator's turn and before its own: a basin

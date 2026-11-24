@@ -35,10 +35,6 @@ struct Applied {
     made: Option<Vec<(String, u8)>>,
 }
 
-/// Ticks between a basin's `recipeBackupCheck`s (a lazy tick of 10, counted down from 20).
-const BACKUP_CHECK: i64 = 200;
-/// `SmartBlockEntity`'s lazy tick: every 10 ticks.
-const LAZY_RATE: i64 = 10;
 /// `Iterate.horizontalDirections`: south, west, north, east.
 const HORIZONTAL: [Dir; 4] = [Dir::South, Dir::West, Dir::North, Dir::East];
 
@@ -422,19 +418,18 @@ impl Run {
     }
 
     /// `tick_basin`: `BasinBlockEntity.tick` at the basin's turn in the transport walk: its
-    /// spout, the backup check, then what changed in it since its last turn is told to its
-    /// operator.
+    /// lazy tick (the spout, then the backup check), then what changed in it since its last
+    /// turn is told to its operator.
     pub(super) fn tick_basin(&mut self, pos: Pos) {
-        self.tick_spout(pos);
-        if i64::from(self.now) % BACKUP_CHECK == 0 {
+        let lazy = self.w.basin_lazy_tick(0, pos).unwrap_or(false);
+        self.tick_spout(pos, lazy);
+        if lazy {
             let tanks = self.basin_tanks(pos);
-            let filled = self
+            let empty = self
                 .basin_slots(pos)
-                .is_some_and(|s| s.iter().any(Option::is_some))
-                || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
-            if filled {
-                self.w.basin_contents_changed(0, pos);
-            }
+                .is_none_or(|s| s.iter().all(Option::is_none))
+                && tanks.input.iter().chain(&tanks.output).all(Option::is_none);
+            self.w.basin_backup_check(0, pos, empty);
         }
         self.w.basin_turn(0, pos);
     }
@@ -813,10 +808,10 @@ impl Run {
     }
 
     /// The spout's part of `BasinBlockEntity.tick`, at the basin's turn in the transport walk:
-    /// every 10 game ticks the basin looks where to put its results; what waits at the spout
+    /// on its lazy tick the basin looks where to put its results; what waits at the spout
     /// goes out.
-    pub(super) fn tick_spout(&mut self, pos: Pos) {
-        if i64::from(self.now) % LAZY_RATE == 0 {
+    pub(super) fn tick_spout(&mut self, pos: Pos, lazy: bool) {
+        if lazy {
             self.spout_update(pos);
             if !self.spout_can_continue(pos) {
                 self.spout_busy.insert(pos);

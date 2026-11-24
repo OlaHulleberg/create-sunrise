@@ -389,8 +389,9 @@ pub struct Dimension {
     /// (`BeltTunnelBlockEntity.initialize` → `updateTunnelConnections`): their connections
     /// are looked at before their first tick.
     pub brass_initialize: Vec<[i32; 3]>,
-    /// The loaded basins, whose spout output looks for somewhere to go (`lazyTick`).
-    pub basins: HashSet<[i32; 3]>,
+    /// Each basin's `BasinBlockEntity` (`crate::basin::BasinBlockEntity`): its lazy tick turns
+    /// the spout and looks for a recipe again.
+    pub basins: HashMap<[i32; 3], crate::basin::BasinBlockEntity>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Basins whose tanks changed: their clients are told (taken by the glue).
@@ -1046,7 +1047,8 @@ impl CreateWorld {
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
         }
-        if block == Block::Basin && d.basins.insert(pos) {
+        if block == Block::Basin && !d.basins.contains_key(&pos) {
+            d.basins.insert(pos, crate::basin::BasinBlockEntity::new());
             // A new `BasinBlockEntity` starts with `contentsChanged = true`.
             d.basin_operators.contents_changed.insert(pos);
         }
@@ -2178,7 +2180,7 @@ impl CreateWorld {
             d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.basins.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.basins.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.backtanks
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.backtank_saved

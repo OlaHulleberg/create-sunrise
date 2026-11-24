@@ -35,8 +35,6 @@ const DISABLED_KEY: &str = "DisabledSpoutput";
 pub const VISUALIZED_KEY: &str = "VisualizedItems";
 /// `OUTPUT_ANIMATION_TIME`: ticks an item is seen leaving the spout.
 pub const OUTPUT_ANIMATION_TIME: i64 = 10;
-/// `SmartBlockEntity`'s lazy tick: every 10 ticks.
-const LAZY_RATE: i64 = 10;
 
 thread_local! {
     /// Basins with results waiting to go out, or items just seen leaving, by dimension.
@@ -444,13 +442,13 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 }
 
 /// The spout's part of `BasinBlockEntity.tick`, at the basin's turn in the transport walk:
-/// every 10 game ticks the basin looks where to put its results (`lazyTick`); what waits at the
-/// spout goes out (`tryClearingSpoutputOverflow`), and the items seen leaving are let go after
-/// their moment.
-pub fn tick_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+/// on its lazy tick the basin looks where to put its results (`lazyTick`'s `updateSpoutput`);
+/// what waits at the spout goes out (`tryClearingSpoutputOverflow`), and the items seen leaving
+/// are let go after their moment.
+pub fn tick_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3], lazy: bool) {
     let dim = lv.dim;
     let now = lv.game_time();
-    if now % LAZY_RATE == 0 {
+    if lazy {
         update(lv, pos);
         // A buffer read back from a save.
         if !can_continue(lv, pos) {

@@ -4,6 +4,7 @@
 //! below gives) is mixed in a cycle of the mixer's head, its results going to the nine outputs.
 
 use crate::Block;
+use crate::block_entity::SmartBlockEntity;
 use crate::fan::Heat;
 use crate::processing::{Output, Rng, Slot, insert_stacked};
 use crate::tank::Fluid;
@@ -301,6 +302,31 @@ pub struct Operators {
     pub by_pos: HashMap<[i32; 3], BasinOperatingBlockEntity>,
 }
 
+/// `BasinBlockEntity`'s own state: its `SmartBlockEntity`'s lazy tick and `recipeBackupCheck`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BasinBlockEntity {
+    pub smart: SmartBlockEntity,
+    /// `recipeBackupCheck`: down by one on every lazy tick from 20, which it is set to again at
+    /// 0.
+    pub recipe_backup_check: u8,
+}
+
+impl BasinBlockEntity {
+    /// The constructor's `recipeBackupCheck = 20`.
+    pub fn new() -> Self {
+        BasinBlockEntity {
+            smart: SmartBlockEntity::default(),
+            recipe_backup_check: 20,
+        }
+    }
+}
+
+impl Default for BasinBlockEntity {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// What `BasinOperatingBlockEntity.tick` asks of the basin before the operator's own tick.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum OperatorAsk {
@@ -475,6 +501,27 @@ impl crate::world::CreateWorld {
         if let Some(op) = self.dims[dim].basin_operators.by_pos.get_mut(&operator) {
             op.basin_removed = true;
         }
+    }
+
+    /// `SmartBlockEntity.tick` at the basin's turn: whether its `lazyTick` runs now.
+    pub fn basin_lazy_tick(&mut self, dim: usize, basin: [i32; 3]) -> Option<bool> {
+        self.dims[dim]
+            .basins
+            .get_mut(&basin)
+            .map(|b| b.smart.tick())
+    }
+
+    /// `BasinBlockEntity.lazyTick`'s end: `recipeBackupCheck-- > 0` returns; else the counter is
+    /// 20 again and whether the basin is not empty (`isEmpty`), which has its contents changed
+    /// (`notifyChangeOfContents`).
+    pub fn basin_backup_check(&mut self, dim: usize, basin: [i32; 3], empty: bool) -> bool {
+        let d = &mut self.dims[dim];
+        let Some(b) = d.basins.get_mut(&basin) else {
+            return false;
+        };
+        let due = b.recipe_backup_check == 0;
+        b.recipe_backup_check = if due { 20 } else { b.recipe_backup_check - 1 };
+        due && !empty && d.basin_operators.contents_changed.insert(basin)
     }
 
     /// `BasinBlockEntity.tick` at the basin's turn, after its spout: what changed in the basin
@@ -1461,6 +1508,39 @@ mod operator_tests {
             HashSet::from([beside]),
             "nothing changed since"
         );
+        drop(w);
+        crate::states::clear_range();
+        drop(guard);
+    }
+
+    /// `processing-basin-spout-turn`: a basin's `lazyTick` runs at its first turn (`initialize`)
+    /// and every 11 ticks after (`SmartBlockEntity`), and `recipeBackupCheck` (20) has a basin
+    /// that is not empty looked at again by its operator on the 21st lazy tick and every 20th
+    /// after.
+    #[test]
+    fn a_basin_lazy_ticks_at_its_first_turn_then_every_eleven_ticks() {
+        let (guard, mut w) = world(&[basin_state(), ("create:mechanical_mixer", vec![])]);
+        w.block_changed(0, BASIN, 0, 2);
+        w.block_changed(0, OPERATOR, 0, 3);
+        let mut lazy = Vec::new();
+        let mut tells = Vec::new();
+        for turn in 0..=439 {
+            if w.basin_lazy_tick(0, BASIN).unwrap() {
+                lazy.push(turn);
+                w.basin_backup_check(0, BASIN, turn > 219);
+            }
+            w.basin_turn(0, BASIN);
+            if told(&w, OPERATOR) {
+                tells.push(turn);
+                w.operator_ask(0, OPERATOR);
+            }
+        }
+        let mut expected = vec![0];
+        expected.extend((0..40).map(|k| 10 + 11 * k));
+        assert_eq!(lazy, expected);
+        // Its own `contentsChanged = true` at its first turn, then the 21st lazy tick's; an
+        // empty basin's 41st tells nothing.
+        assert_eq!(tells, [0, 219]);
         drop(w);
         crate::states::clear_range();
         drop(guard);
