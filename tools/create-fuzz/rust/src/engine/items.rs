@@ -142,17 +142,22 @@ impl Run {
     }
 
     /// What block entities the engine removed drop (`destroy`): a belt's items thrown off it,
-    /// a depot's merging stacks and an ejector's stacks in flight.
+    /// a depot's merging stacks, a basin's items waiting at its spout and an ejector's stacks in
+    /// flight.
     pub(super) fn flush_block_drops(&mut self) {
         let d = &mut self.w.dims[0];
         let belts = std::mem::take(&mut d.belt_drops);
         let depots = std::mem::take(&mut d.depot_drops);
+        let basins = std::mem::take(&mut d.basin_drops);
         let ejectors = std::mem::take(&mut d.ejector_drops);
         for (c, seg, length, item) in belts {
             let (at, motion) = belt::eject(c, &seg, length, 0.0, item.position);
             self.spawn_item(at, motion, &item.item, item.count);
         }
         for (p, item, count) in depots {
+            self.pop_resource(p, &item, count);
+        }
+        for (p, item, count) in basins {
             self.pop_resource(p, &item, count);
         }
         for (at, motion, item, count) in ejectors {

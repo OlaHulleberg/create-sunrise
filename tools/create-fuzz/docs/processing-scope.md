@@ -210,6 +210,7 @@ Fixed, each with an engine test carrying Create's numbers and a case in `cases/`
 | `processing-basin-spout-turn` | The basin turns its spout 11 ticks after it was placed, then every 11 (`SmartBlockEntity` calls `lazyTick` at `initialize`, then every `rate + 1` ticks) | Every 10 game ticks: the tick before | `SmartBlockEntity.java:64`, `:80`, `BasinBlockEntity.java:257` |
 | `processing-basin-handler` | The handler takes a stack only into the first empty slot and not beside a stack of the same item; it gives from the input slots | Takes into any empty input slot; gives nothing from the inputs | `BasinInventory.java:20`, `:45`, `BasinBlockEntity.java:116` |
 | `processing-basin-bucket` | A bucket emptied into the tanks leaves its empty bucket in the hand; one filled from them lands back in it | The bucket goes to the inventory | `FluidHelper.java:141`, `:185` |
+| `processing-basin-spout-pop` | A broken basin drops the items waiting at its spout | They are lost | `BasinBlockEntity.java:228` |
 
 The driver spilled a broken millstone's slots as `Block.popResource` does; the game spills a
 mod container as `Containers.dropContents` does, as Create's `destroy` (:144,
@@ -221,7 +222,6 @@ the port, so `./run.sh fuzz check cases/processing-basin-*.json` shows them):
 
 | Case | Java | Port | Deciding Java |
 | --- | --- | --- | --- |
-| `processing-basin-spout-pop` | A broken basin drops the items waiting at its spout | They are lost | `BasinBlockEntity.java:228` |
 | `processing-basin-recipe-order` (with the bucket row: its water comes from a bucket) | With dirt, water, mud and wheat in the basin the mixer packs mud first: its recipe trie hands `minecraft:packed_mud` out before `create:mixing/mud_by_mixing` | Lists Create's mixing recipes before the shapeless ones and mixes mud first | `BasinOperatingBlockEntity.java:160`, `IntArrayTrie.java:64` |
 
 A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by

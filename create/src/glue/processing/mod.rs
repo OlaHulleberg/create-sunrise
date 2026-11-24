@@ -535,7 +535,8 @@ fn passes_item_use(
 
 /// The drills and saws (after the vaults and chutes), then the presses and
 /// deployers, which work the depots and belts logistics moved this tick (`DepotBehaviour.tick`
-/// before `PressingBehaviour.tick`), and the basins whose slots or tanks changed in the walk.
+/// before `PressingBehaviour.tick`), then what waited at the spouts of basins broken since the
+/// last tick, dropped, and the basins whose slots or tanks changed in the walk.
 pub struct Tools;
 
 impl Subsystem for Tools {
@@ -545,6 +546,7 @@ impl Subsystem for Tools {
         saw::hurt_inside(lv);
         press::tick_presses(lv);
         deployer::tick_deployers(lv);
+        basin::pop_spout_drops(lv);
         basin::show_basins(lv);
     }
 }

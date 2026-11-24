@@ -16,11 +16,11 @@ use create_engine::{
 
 type Slot = create_engine::processing::Slot;
 
-/// A basin's spout: the results waiting to go out (`Overflow`, `FluidOverflow`) and the sides
-/// the wrench chose and shut (`PreferredSpoutput`, `DisabledSpoutput`).
+/// A basin's spout: the fluid results waiting to go out (`spoutputFluidBuffer`) and the sides
+/// the wrench chose and shut (`PreferredSpoutput`, `DisabledSpoutput`). The item results
+/// waiting (`spoutputBuffer`) are its `BasinBlockEntity`'s, the engine's.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub(super) struct Spout {
-    pub overflow: Vec<(String, u8)>,
     pub fluids: Vec<(Fluid, u32)>,
     pub disabled: Vec<Dir>,
     pub preferred: Option<Dir>,
@@ -675,9 +675,11 @@ impl Run {
 
     /// `canContinueProcessing`: nothing waits to go out of the spout.
     fn spout_can_continue(&self, pos: Pos) -> bool {
-        self.spouts
-            .get(&pos)
-            .is_none_or(|s| s.overflow.is_empty() && s.fluids.is_empty())
+        self.w
+            .basin_spoutput_buffer(0, pos)
+            .unwrap_or_default()
+            .is_empty()
+            && self.spouts.get(&pos).is_none_or(|s| s.fluids.is_empty())
     }
 
     /// `acceptOutputs` for a recipe's fluid results, after it put them into the basin's
@@ -710,7 +712,9 @@ impl Run {
 
     /// `acceptOutputs` facing a side: a recipe's item results go into the spout's buffer.
     fn route(&mut self, pos: Pos, results: Vec<(String, u8)>) {
-        self.spouts.entry(pos).or_default().overflow.extend(results);
+        let mut buffer = self.w.basin_spoutput_buffer(0, pos).unwrap_or_default();
+        buffer.extend(results);
+        self.w.set_basin_spoutput_buffer(0, pos, buffer);
         self.spout_busy.insert(pos);
     }
 
@@ -798,15 +802,15 @@ impl Run {
             && let Some(before) = self.basin_slots(pos)
         {
             let mut after = before.clone();
-            let mut list = spout.overflow;
+            let mut buffer = self.w.basin_spoutput_buffer(0, pos).unwrap_or_default();
             for i in basin::OUTPUTS {
                 if let Some(s) = after[i].take() {
-                    list.push(s);
+                    buffer.push(s);
                 }
             }
             if after != before {
                 self.write_basin(pos, &before, &after);
-                self.spouts.entry(pos).or_default().overflow = list;
+                self.w.set_basin_spoutput_buffer(0, pos, buffer);
                 self.spout_busy.insert(pos);
             }
         }
@@ -833,10 +837,10 @@ impl Run {
     /// still busy.
     fn clear_overflow(&mut self, pos: Pos) -> bool {
         let facing = self.basin_facing(pos);
+        let before_items = self.w.basin_spoutput_buffer(0, pos).unwrap_or_default();
+        let mut list = before_items.clone();
         let spout = self.spouts.entry(pos).or_default();
-        let before_items = spout.overflow.clone();
         let before_fluids = spout.fluids.clone();
-        let mut list = std::mem::take(&mut spout.overflow);
         let mut fluids = std::mem::take(&mut spout.fluids);
         let mut i = 0;
         while i < list.len() {
@@ -869,14 +873,13 @@ impl Run {
             fluids.retain(|&(f, n)| !self.fill_whole(below_side(pos, facing), drain, f, n));
         }
         let changed = list != before_items || fluids != before_fluids;
-        let spout = self.spouts.entry(pos).or_default();
-        spout.overflow = list;
-        spout.fluids = fluids;
+        self.w.set_basin_spoutput_buffer(0, pos, list);
+        self.spouts.entry(pos).or_default().fluids = fluids;
         // `notifyChangeOfContents`: its operator is told.
         if changed {
             self.w.basin_contents_changed(0, pos);
         }
-        !spout.overflow.is_empty() || !spout.fluids.is_empty()
+        !self.spout_can_continue(pos)
     }
 
     /// `processing::belt_input` for the basin at `pos`: `basin_take` of the stack. The count left.

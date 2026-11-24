@@ -825,3 +825,33 @@ fn a_bucket_emptied_into_a_basin_is_back_in_the_hand() {
         ]
     );
 }
+/// `processing-basin-spout-pop`: a broken basin drops the item results waiting at its spout
+/// where it stood (`BasinBlockEntity.destroy`, `Block.popResource` each), with its slots.
+#[test]
+fn a_broken_basin_drops_what_waited_at_its_spout() {
+    let sc: crate::scenario::Scenario = serde_json::from_str(include_str!(
+        "../../../cases/processing-basin-spout-pop.json"
+    ))
+    .unwrap();
+    let snap = super::run(&sc);
+    let drops = snap.drops.unwrap();
+    let mut spilled: Vec<_> = drops
+        .iter()
+        .filter(|d| d.tick == 202)
+        .map(|d| (d.stack.item.clone(), d.stack.count))
+        .collect();
+    spilled.sort();
+    assert_eq!(
+        spilled,
+        [
+            ("create:andesite_alloy".into(), 1),
+            ("create:andesite_alloy".into(), 1)
+        ]
+    );
+    assert!(
+        drops
+            .iter()
+            .filter(|d| d.tick == 202)
+            .all(|d| d.placed.is_some())
+    );
+}

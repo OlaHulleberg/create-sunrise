@@ -473,6 +473,18 @@ fn matching_recipe(
     })
 }
 
+/// Basins broken since the last tick (`BasinBlockEntity.destroy`): what waited at their spouts
+/// is dropped where they stood (`Block.popResource` each).
+pub fn pop_spout_drops(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let drops = with_world(|w| std::mem::take(&mut w.dims[dim].basin_drops)).unwrap_or_default();
+    for (pos, item, n) in drops {
+        if let Some(stack) = stacks::stack(&*lv.host, &item, u32::from(n)) {
+            let _ = lv.level.pop_resource(&mut *lv.host, pos, stack);
+        }
+    }
+}
+
 /// `BasinBlockEntity.tick`, at the basin's turn in the transport walk: its lazy tick
 /// (`SmartBlockEntity.tick`), which turns the spout (`updateSpoutput`) and every 20 lazy ticks
 /// has a basin that is not empty looked at again by its operator (`recipeBackupCheck`), so a

@@ -1,7 +1,8 @@
 //! A basin's spout (`BasinBlockEntity.updateSpoutput`, `acceptOutputs`,
 //! `tryClearingSpoutputOverflow`): a basin turns its `facing` toward a belt, depot, chute,
 //! upward funnel or processing machine diagonally below it, and the item results of its recipes
-//! go there through its spout (a buffer it empties each tick) instead of into its outputs. The
+//! go there through its spout (a buffer the engine keeps, `spoutputBuffer`, emptied each tick and
+//! dropped when the basin is broken, `destroy`) instead of into its outputs. The
 //! wrench chooses or shuts a side (`onWrenched`). The items going out are drawn falling from the
 //! spout for a moment (`visualizedOutputItems`).
 //!
@@ -21,8 +22,9 @@ use mod_api::{Compound, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
-/// Where a basin keeps the results waiting to go out (`Overflow`), by id and count.
-const OVERFLOW_KEY: &str = "Overflow";
+/// The key of a basin's block entity data its spout's waiting items are saved under
+/// (`spoutputBuffer`); the engine keeps them.
+pub(super) const OVERFLOW_KEY: &str = "Overflow";
 /// Where it keeps the fluid results waiting to go out (`FluidOverflow`): fluid (`tank::Codes`,
 /// its keys beside it) and amount, in turn.
 const FLUID_OVERFLOW_KEY: &str = "FluidOverflow";
@@ -152,8 +154,36 @@ fn insert(
     count - left.min(u32::from(count)) as u8
 }
 
-fn overflow(data: &Compound) -> Vec<(String, u8)> {
-    let Some(Tag::List(list)) = data.get(&OVERFLOW_KEY.into()) else {
+/// The basin's `spoutputBuffer`: the item results waiting at its spout.
+fn spoutput_buffer(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<(String, u8)> {
+    let dim = lv.dim;
+    with_world(|w| w.basin_spoutput_buffer(dim, pos))
+        .flatten()
+        .unwrap_or_default()
+}
+
+fn set_spoutput_buffer(lv: &mut ServerLevel<'_>, pos: [i32; 3], buffer: Vec<(String, u8)>) {
+    let dim = lv.dim;
+    with_world(|w| w.set_basin_spoutput_buffer(dim, pos, buffer));
+}
+
+/// `spoutputBuffer` as its block entity saves it: a stack's `id` and `count` each.
+pub(super) fn spoutput_buffer_tag(list: &[(String, u8)]) -> Tag {
+    Tag::List(
+        list.iter()
+            .map(|(id, n)| {
+                Tag::Compound(Compound::from([
+                    ("id".into(), Tag::String(id.as_str().into())),
+                    ("count".into(), Tag::Int(i32::from(*n))),
+                ]))
+            })
+            .collect(),
+    )
+}
+
+/// `spoutputBuffer` read back from its block entity's `Overflow`.
+pub(super) fn spoutput_buffer_of(tag: &Tag) -> Vec<(String, u8)> {
+    let Tag::List(list) = tag else {
         return Vec::new();
     };
     list.iter()
@@ -170,22 +200,10 @@ fn overflow(data: &Compound) -> Vec<(String, u8)> {
         .collect()
 }
 
-fn overflow_tag(list: &[(String, u8)]) -> Tag {
-    Tag::List(
-        list.iter()
-            .map(|(id, n)| {
-                Tag::Compound(Compound::from([
-                    ("id".into(), Tag::String(id.as_str().into())),
-                    ("count".into(), Tag::Int(i32::from(*n))),
-                ]))
-            })
-            .collect(),
-    )
-}
-
 /// `canContinueProcessing`: nothing waits to go out of the spout.
 pub fn can_continue(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    data(lv, pos).is_none_or(|d| overflow(&d).is_empty() && fluid_overflow(&d).is_empty())
+    data(lv, pos).is_none_or(|d| fluid_overflow(&d).is_empty())
+        && spoutput_buffer(lv, pos).is_empty()
 }
 
 /// What holds fluids below the side `d` (`FluidHandler.BLOCK` there): an item drain or a basin.
@@ -326,9 +344,9 @@ pub fn route(lv: &mut ServerLevel<'_>, pos: [i32; 3], results: Vec<(String, u8)>
     if results.is_empty() {
         return;
     }
-    let mut list = data(lv, pos).map(|d| overflow(&d)).unwrap_or_default();
+    let mut list = spoutput_buffer(lv, pos);
     list.extend(results);
-    super::basin::set_shown(lv, pos, &[(OVERFLOW_KEY, Some(overflow_tag(&list)))]);
+    set_spoutput_buffer(lv, pos, list);
     BUSY.with_borrow_mut(|b| b.insert((lv.dim, pos), ()));
 }
 
@@ -421,7 +439,7 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         && let Some(before) = lv.read_slots(pos, 0, basin::SLOTS)
     {
         let mut after = before.clone();
-        let mut list = overflow(&d);
+        let mut list = spoutput_buffer(lv, pos);
         for i in basin::OUTPUTS {
             if let Some((id, n)) = after[i].take() {
                 list.push((id, n));
@@ -434,7 +452,7 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
                 .collect();
             lv.set_slots(pos, &changes);
             super::basin::basin_changed(lv.dim, pos);
-            super::basin::set_shown(lv, pos, &[(OVERFLOW_KEY, Some(overflow_tag(&list)))]);
+            set_spoutput_buffer(lv, pos, list);
             BUSY.with_borrow_mut(|b| b.insert((lv.dim, pos), ()));
         }
     }
@@ -473,7 +491,7 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
     let Some(d) = data(lv, pos) else {
         return false;
     };
-    let mut list = overflow(&d);
+    let mut list = spoutput_buffer(lv, pos);
     let mut seen = visualized(&d);
     let seen_before = seen.clone();
     let before = list.clone();
@@ -526,10 +544,10 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
         set_values(lv, pos, &values);
     }
     seen.retain(|(_, at)| now - at < OUTPUT_ANIMATION_TIME);
-    let mut values = Vec::new();
     if list != before {
-        values.push((OVERFLOW_KEY, Some(overflow_tag(&list))));
+        set_spoutput_buffer(lv, pos, list.clone());
     }
+    let mut values = Vec::new();
     // `notifyChangeOfContents`: its operator is told.
     if list != before || fluids_left != fluids {
         super::basin::contents_changed(lv.dim, pos);

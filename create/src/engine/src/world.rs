@@ -390,8 +390,11 @@ pub struct Dimension {
     /// are looked at before their first tick.
     pub brass_initialize: Vec<[i32; 3]>,
     /// Each basin's `BasinBlockEntity` (`crate::basin::BasinBlockEntity`): its lazy tick turns
-    /// the spout and looks for a recipe again.
+    /// the spout and looks for a recipe again, and keeps the items waiting at its spout.
     pub basins: HashMap<[i32; 3], crate::basin::BasinBlockEntity>,
+    /// What waited at the spouts of basins broken since the last tick, for the glue to drop
+    /// (`BasinBlockEntity.destroy`).
+    pub basin_drops: Vec<([i32; 3], String, u8)>,
     /// Basins' fluid tanks (`BasinBlockEntity`'s inputs and outputs).
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Basins whose tanks changed: their clients are told (taken by the glue).
@@ -1048,7 +1051,18 @@ impl CreateWorld {
             d.millstones.entry(pos).or_default();
         }
         if block == Block::Basin && !d.basins.contains_key(&pos) {
-            d.basins.insert(pos, crate::basin::BasinBlockEntity::new());
+            let spoutput_buffer = d
+                .basin_operators
+                .carried_in
+                .remove(&pos)
+                .unwrap_or_default();
+            d.basins.insert(
+                pos,
+                crate::basin::BasinBlockEntity {
+                    spoutput_buffer,
+                    ..crate::basin::BasinBlockEntity::new()
+                },
+            );
             // A new `BasinBlockEntity` starts with `contentsChanged = true`.
             d.basin_operators.contents_changed.insert(pos);
         }
@@ -1877,7 +1891,11 @@ impl CreateWorld {
             d.handles.remove(&pos);
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
-            d.basins.remove(&pos);
+            // `BasinBlockEntity.destroy`: what waited at its spout is dropped where it stood.
+            if let Some(b) = d.basins.remove(&pos) {
+                d.basin_drops
+                    .extend(b.spoutput_buffer.into_iter().map(|s| (pos, s.0, s.1)));
+            }
             d.basin_operators.contents_changed.remove(&pos);
             d.presses.remove(&pos);
             d.basin_operators.by_pos.remove(&pos);

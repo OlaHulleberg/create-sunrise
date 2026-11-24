@@ -329,15 +329,21 @@ pub struct Operators {
     pub contents_changed: HashSet<[i32; 3]>,
     /// Each operator's `BasinOperatingBlockEntity`, by the operator's own position.
     pub by_pos: HashMap<[i32; 3], BasinOperatingBlockEntity>,
+    /// `spoutputBuffer`s of basins a moving structure puts back, for the block entity each
+    /// becomes.
+    pub carried_in: HashMap<[i32; 3], Vec<(String, u8)>>,
 }
 
-/// `BasinBlockEntity`'s own state: its `SmartBlockEntity`'s lazy tick and `recipeBackupCheck`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+/// `BasinBlockEntity`'s own state: its `SmartBlockEntity`'s lazy tick, `recipeBackupCheck` and
+/// the item results waiting at its spout.
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct BasinBlockEntity {
     pub smart: SmartBlockEntity,
     /// `recipeBackupCheck`: down by one on every lazy tick from 20, which it is set to again at
     /// 0.
     pub recipe_backup_check: u8,
+    /// `spoutputBuffer`: the item results waiting to go out of its spout, by item and count.
+    pub spoutput_buffer: Vec<(String, u8)>,
 }
 
 impl BasinBlockEntity {
@@ -346,6 +352,7 @@ impl BasinBlockEntity {
         BasinBlockEntity {
             smart: SmartBlockEntity::default(),
             recipe_backup_check: 20,
+            spoutput_buffer: Vec::new(),
         }
     }
 }
@@ -551,6 +558,58 @@ impl crate::world::CreateWorld {
         let due = b.recipe_backup_check == 0;
         b.recipe_backup_check = if due { 20 } else { b.recipe_backup_check - 1 };
         due && !empty && d.basin_operators.contents_changed.insert(basin)
+    }
+
+    /// The basin at `basin`'s `spoutputBuffer`: the item results waiting at its spout.
+    pub fn basin_spoutput_buffer(&self, dim: usize, basin: [i32; 3]) -> Option<Vec<(String, u8)>> {
+        self.dims[dim]
+            .basins
+            .get(&basin)
+            .map(|b| b.spoutput_buffer.clone())
+    }
+
+    /// The basin at `basin`'s `spoutputBuffer` set to `buffer`: its column is saved.
+    pub fn set_basin_spoutput_buffer(
+        &mut self,
+        dim: usize,
+        basin: [i32; 3],
+        buffer: Vec<(String, u8)>,
+    ) {
+        let Some(b) = self.dims[dim].basins.get_mut(&basin) else {
+            return;
+        };
+        if b.spoutput_buffer == buffer {
+            return;
+        }
+        b.spoutput_buffer = buffer;
+        self.mark_unsaved(dim, basin);
+    }
+
+    /// A moving structure takes the basin at `basin`'s `spoutputBuffer` with it (`write` into
+    /// `StructureBlockInfo.nbt`): what waited there, which no longer does.
+    pub fn take_basin_spoutput_buffer(
+        &mut self,
+        dim: usize,
+        basin: [i32; 3],
+    ) -> Option<Vec<(String, u8)>> {
+        self.dims[dim]
+            .basins
+            .get_mut(&basin)
+            .map(|b| std::mem::take(&mut b.spoutput_buffer))
+    }
+
+    /// The basin a moving structure puts back at `basin` brings `buffer` as its `spoutputBuffer`
+    /// (its `read`): the block entity it becomes keeps it.
+    pub fn carry_in_basin_spoutput_buffer(
+        &mut self,
+        dim: usize,
+        basin: [i32; 3],
+        buffer: Vec<(String, u8)>,
+    ) {
+        self.dims[dim]
+            .basin_operators
+            .carried_in
+            .insert(basin, buffer);
     }
 
     /// `BasinBlockEntity.tick` at the basin's turn, after its spout: what changed in the basin
@@ -1600,6 +1659,35 @@ mod operator_tests {
         // Its own `contentsChanged = true` at its first turn, then the 21st lazy tick's; an
         // empty basin's 41st tells nothing.
         assert_eq!(tells, [0, 219]);
+        drop(w);
+        crate::states::clear_range();
+        drop(guard);
+    }
+
+    /// `processing-basin-spout-pop`: a broken basin drops the item results waiting at its spout
+    /// where it stood (`BasinBlockEntity.destroy`, `Block.popResource` each); a basin's
+    /// `spoutputBuffer` is its own.
+    #[test]
+    fn a_broken_basin_drops_what_waited_at_its_spout() {
+        let (guard, mut w) = world(&[basin_state()]);
+        w.block_changed(0, BASIN, 0, 2);
+        let alloy = ("create:andesite_alloy".to_owned(), 1);
+        w.set_basin_spoutput_buffer(0, BASIN, vec![alloy.clone(), alloy.clone()]);
+        assert_eq!(
+            w.basin_spoutput_buffer(0, BASIN),
+            Some(vec![alloy.clone(), alloy.clone()])
+        );
+        w.set_basin_spoutput_buffer(0, [1, 6, 0], vec![alloy.clone()]);
+        assert_eq!(
+            w.basin_spoutput_buffer(0, [1, 6, 0]),
+            None,
+            "no basin there"
+        );
+        w.block_changed(0, BASIN, 2, 0);
+        assert_eq!(
+            w.dims[0].basin_drops,
+            [(BASIN, alloy.0.clone(), 1), (BASIN, alloy.0, 1)]
+        );
         drop(w);
         crate::states::clear_range();
         drop(guard);

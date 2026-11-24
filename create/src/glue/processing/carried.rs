@@ -1,12 +1,14 @@
 //! What the machines keep for a block that rides a moving structure (`Subsystem::carry_out`,
 //! Create's block entity NBT in `StructureBlockInfo.nbt`): a blaze burner's fuel and burn time
-//! or creative heat (`BlazeBurnerBlockEntity.write`), a basin's tanks, a saw's inventory, a
+//! or creative heat (`BlazeBurnerBlockEntity.write`), a basin's tanks and the items waiting at its
+//! spout, a saw's inventory, a
 //! crafter's slot cover and its joined inputs (`ConnectedInput`, turned with the structure as
 //! `MechanicalCrafterBlockEntity.transform` turns them), and its phase, countdown and the grid
 //! it holds mid-craft (`Phase`, `CountDown`, `GroupedItems`: they ride and go back rather than
 //! drop). The keys are this module's.
 
 use super::persist::{CREATIVE_BURNER, heat_of};
+use super::spoutput::{self, OVERFLOW_KEY};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::Block;
@@ -51,6 +53,11 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
                         .collect();
                     out.insert(BASIN.into(), Tag::IntArray(v));
                     crate::glue::fluids::put_fluid_keys(out, BASIN, codes);
+                }
+                if let Some(buffer) = w.take_basin_spoutput_buffer(dim, pos)
+                    && !buffer.is_empty()
+                {
+                    out.insert(OVERFLOW_KEY.into(), spoutput::spoutput_buffer_tag(&buffer));
                 }
             }
             Block::MechanicalSaw => {
@@ -142,6 +149,11 @@ pub(super) fn carry_in(
             with_world(|w| w.load_burners(dim, std::iter::once((pos, b))));
         }
         Block::Basin => {
+            if let Some(tag) = data.get(&OVERFLOW_KEY.into()) {
+                with_world(|w| {
+                    w.carry_in_basin_spoutput_buffer(dim, pos, spoutput::spoutput_buffer_of(tag))
+                });
+            }
             let Some(v) = ints(BASIN).filter(|v| v.len() == 8) else {
                 return;
             };

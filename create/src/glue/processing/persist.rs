@@ -1,5 +1,6 @@
 //! The machines' state, saved in their block entities: deployers, crushing wheel controllers,
-//! blaze burners, basins' tanks and mechanical crafters' connections and covers. An older
+//! blaze burners, basins' tanks and spout buffers and mechanical crafters' connections and
+//! covers. An older
 //! version kept them with the column under `deployers`, `crushers`, `burners`, `basins`,
 //! `crafter_inputs` and `crafter_covers`, read once by [`load`].
 
@@ -41,7 +42,7 @@ pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
         Block::Deployer => &[DEPLOYER],
         Block::CrushingWheelController => &[CRUSHER],
         Block::BlazeBurner => &[BURNER],
-        Block::Basin => &[BASIN],
+        Block::Basin => &[BASIN, super::spoutput::OVERFLOW_KEY],
         Block::MechanicalCrafter => &[INPUT, COVER],
         Block::MechanicalSaw => &[super::saw::INVENTORY, super::saw::RECIPE_INDEX],
         Block::Millstone => &[TIMER],
@@ -179,6 +180,16 @@ pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
                 .or_default()
                 .insert(BASIN.into(), Tag::Compound(tag));
         }
+        for (p, b) in d
+            .basins
+            .iter()
+            .filter(|(p, b)| mine(p) && !b.spoutput_buffer.is_empty())
+        {
+            out.entry(*p).or_default().insert(
+                super::spoutput::OVERFLOW_KEY.into(),
+                super::spoutput::spoutput_buffer_tag(&b.spoutput_buffer),
+            );
+        }
         for (p, i) in d.crafter_inputs.iter().filter(|(p, _)| mine(p)) {
             let tag = Compound::from([
                 ("Controller".into(), Tag::Byte(i8::from(i.controller))),
@@ -279,6 +290,9 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
                 Some(t) => w.dims[dim].basin_fluids.insert(pos, t),
                 None => w.dims[dim].basin_fluids.remove(&pos),
             };
+            if let Some(tag) = tag.get(&super::spoutput::OVERFLOW_KEY.into()) {
+                w.set_basin_spoutput_buffer(dim, pos, super::spoutput::spoutput_buffer_of(tag));
+            }
         }
         Block::MechanicalCrafter => {
             let d = &mut w.dims[dim];
