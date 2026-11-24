@@ -1,0 +1,131 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 252,
+  "checkpoints": [
+    250,
+    251
+  ],
+  "blocks": [
+    {
+      "pos": [
+        -1,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:cogwheel[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_mixer"
+    },
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "use",
+          "stack": {
+            "item": "minecraft:water_bucket",
+            "count": 1
+          },
+          "face": "up",
+          "yaw": 0.0,
+          "sneaking": false
+        }
+      }
+    },
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:dirt",
+            "count": 2
+          }
+        }
+      }
+    },
+    {
+      "tick": 110,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:dirt",
+            "count": 1
+          }
+        }
+      }
+    },
+    {
+      "tick": 110,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:wheat",
+            "count": 2
+          }
+        }
+      }
+    },
+    {
+      "tick": 150,
+      "pos": [
+        -1,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 0
+    }
+  ]
+}

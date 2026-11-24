@@ -159,7 +159,10 @@ cannot differ from Create's.
 `rust/src/basin.json` lists what the basin families' basins can hold and run: Create's mixing and
 compacting recipes, the shapeless crafting ones a mixer runs (`allowShapelessInMixer`) and the
 square crafting ones a press compacts (`allowShapedSquareInPress`), each ingredient as the items
-of its family it takes. `BasinRecipeAudit` checks every entry against the loaded recipe and that
+of its family it takes. An operator takes the matching recipes from a recipe trie in its
+traversal's order, those with the most ingredients first (`BasinOperatingBlockEntity`, :150-165);
+the driver keeps Create's recipes before the crafting ones, which is another order when a mixing
+and a shapeless recipe both fit (dirt, water, mud and wheat in a basin). `BasinRecipeAudit` checks every entry against the loaded recipe and that
 no recipe of these kinds is missing whose ingredients a family's basin can come to hold: its
 inputs, its recipes' results and the containers these and what they use up leave.
 
@@ -212,6 +215,7 @@ the port, so `./run.sh fuzz check cases/processing-basin-*.json` shows them):
 | `processing-basin-press-restart` | A press starts its next cycle in the tick one ends while its recipe still fits | One tick later | `MechanicalPressBlockEntity.java:171` |
 | `processing-basin-continue` | A mixer goes on with its recipe only when nothing waited at its spout before it applied | Goes on whatever waits there | `BasinOperatingBlockEntity.java:118`, `:125` |
 | `processing-basin-spout-pop` | A broken basin drops the items waiting at its spout | They are lost | `BasinBlockEntity.java:228` |
+| `processing-basin-recipe-order` (with the bucket row: its water comes from a bucket) | With dirt, water, mud and wheat in the basin the mixer packs mud first: its recipe trie hands `minecraft:packed_mud` out before `create:mixing/mud_by_mixing` | Lists Create's mixing recipes before the shapeless ones and mixes mud first | `BasinOperatingBlockEntity.java:160`, `IntArrayTrie.java:64` |
 
 A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by
 `enableMerging`), so a basin spouting into one holds its second result at the spout until the
