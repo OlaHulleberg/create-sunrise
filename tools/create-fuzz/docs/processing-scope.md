@@ -106,15 +106,28 @@ cannot differ from Create's.
 `ProcessingRecipe.rollResults` (`processing/recipe/ProcessingRecipe.java:148`) rolls each output
 below chance 1 once per count with `level.random` (`ProcessingOutput.rollOutput`, :87): the
 millstone (`MillstoneBlockEntity.java:164`), the crushing controller (`:312`) and the saw
-(`:371`). The port rolls the same odds from its own seed. Two Java runs of the same case differ
-too, so a case whose input has a rolled recipe compares what chance decides by structure
-(`processing::Rolls`): an item a rolled recipe makes for sure compares by presence, one it makes
-only by chance not at all, in machine slots, depots, thrown items and items given to a player.
-Depots' saved payloads are then not compared, nor the comparator of one holding such an item. Inputs, times and fixed recipes'
-results compare exactly. Where the rolls would change what happens next, the family does not
-go on: a depot below a controller takes one stack of the results, and how many more stay in the
-controller (so whether it takes the next insert) is chance's, so over a depot nothing is put in
-after a rolled input (seeds 5341 and 6109, where two Java runs disagreed on a later insert).
+(`:371`). `level.random` is the server's own and nothing reseeds it per case, so where its
+stream stands when a case starts is the batch's: two Java runs of one case roll differently. The
+port rolls the same odds from its own seed. A case whose input has a rolled recipe therefore
+compares what chance decides by structure (`processing::Rolls`): an item a rolled recipe makes
+for sure compares by presence, one it makes only by chance not at all, in machine slots, depots,
+thrown items and items given to a player. A machine's slots are then read by stack on both sides
+whenever either holds a rolled stack: results go to the first slot that fits
+(`MillstoneBlockEntity.java:165`), so a chance result being there or not moves the fixed results
+after it to other slots. Seed 7885's bone left white dye in one Java run and not in another, and
+the cobblestone milled after it sat in output slot 1 or 2. Depots' saved payloads are then not
+compared, nor the comparator of one holding such an item. Inputs, times and fixed recipes'
+results compare exactly.
+
+Where the rolls would change what happens next, the family does not go on:
+
+- A depot below a controller takes one stack of the results, and how many more stay in the
+  controller (so whether it takes the next insert) is chance's: over a depot nothing is put in
+  after a rolled input (seeds 5341 and 6109, where two Java runs disagreed on a later insert).
+- After a rolled input has reached a millstone's input slot, none of its output slots is drawn
+  on: which stack sits there is then chance's.
+- All a case's rolled inputs make less than a full slot of any one result, since a full one
+  stops the millstone (`MillstoneBlockEntity.tick`, :92) when chance says.
 
 ## Port differences found
 
