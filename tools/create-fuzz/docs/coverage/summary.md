@@ -20,23 +20,36 @@ data generation, schematics and contraptions, config, chunk lifecycle, error pat
 
 ## Processing
 
-Measured on a separate campaign of its own (`FUZZ_COVER_SEEDS_FROM=30000 ./run.sh fuzz cover 120`
-at `7e13401`, its corpus 40 seeds of each processing family and 16 each of `belt/press_processing`,
-`belt/depot_outputs` and `belt/chute_columns`), against the processing subsystem of
-[`subsystems.json`](../../coverage/subsystems.json): the machines under `content/kinetics` and all of
-`content/processing`. `./run.sh fuzz gaps processing` on it finds no unexplained branch.
+Measured on a separate campaign of its own (`FUZZ_COVER_SEEDS_FROM=40000 ./run.sh fuzz cover 120`
+at `26906e95`, its corpus 40 seeds of each of the five processing families and 16 each of
+`belt/press_processing`, `belt/depot_outputs` and `belt/chute_columns`: 248 scenarios), against the
+processing subsystem of [`subsystems.json`](../../coverage/subsystems.json): the machines under
+`content/kinetics` and all of `content/processing`. `./run.sh fuzz gaps processing` on it finds no
+unexplained branch. Of its 368 cases 285 matched, 78 differed (the port differences of the
+[processing scope](../processing-scope.md)), 2 were java-unstable across batch contexts (seed 7885
+of the millstone family, whose milling rolls, and 40110), 1 was refused by the Java side after a
+mutation and 2 are documented API gaps.
 
 | Machine | Classes | Branches | Reached |
 | --- | ---: | ---: | ---: |
-| processing (all) | 128 | 4683 | 462 (9.9%); 462 / 3576 (12.9%) excluding branches unreachable here |
+| processing (all) | 128 | 4683 | 857 (18.3%); 857 / 3380 (25.4%) excluding branches unreachable here |
 | millstone | 4 | 82 | 62 (75.6%) |
 | crushing wheels | 6 | 294 | 135 (45.9%) |
 | saw (with the horizontal saw and tree felling) | 10 | 520 | 95 (18.3%) |
-| press | 6 | 216 | 68 (31.5%) |
+| press (over belts, depots and basins) | 6 | 216 | 84 (38.9%) |
+| mixer | 3 | 128 | 46 (35.9%) |
+| basin | 8 | 538 | 277 (51.5%) |
+| blaze burners (with `HeatCondition`) | 10 | 476 | 67 (14.1%) |
 
-Missed: harness-gap 1392 groups / 3114 branches (basins and mixers, burners, deployers, arms,
-crafters, drills, entities in machines), client 351 / 849, contraptions 96 / 242, datagen 6 / 14,
-other mods 1 / 2. See the [processing scope](../processing-scope.md).
+Before the basin families (`7e13401`) processing reached 462 branches (9.9%). Missed now:
+harness-gap 1173 groups / 2523 branches (deployers, arms, crafters, drills, entities in machines,
+and what the basin families leave: the basin's filter, potions, belts and funnels feeding a basin,
+a fluid target under its spout, regular burner fuel), client 416 / 982, error-path 27 / 47,
+contraptions 88 / 218, datagen 10 / 22, schematics and contraptions 8 / 24, dynamictrees 1 / 2,
+unreachable 8 / 8. Every group of the basin, burner, mixer and press classes has a row in
+`reasons.tsv` naming its Create line and the input that would reach it; where JaCoCo's count leaves
+open which edge is missed, the row says so. The mixer and press classes count as kinetics in the
+table above, whose campaign never drove them, so their rows keep the category they had there.
 
 ## Why the rest is never reached
 
