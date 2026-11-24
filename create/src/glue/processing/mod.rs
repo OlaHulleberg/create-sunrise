@@ -96,16 +96,29 @@ pub(crate) fn can_place_item(event: &mod_api::CanPlaceItemEvent<'_>) -> Option<b
         .then(|| millstone::admits(event.slot, event.stack))
 }
 
-/// `CrushingWheelControllerBlock.onRemove` and `SawBlockEntity.destroy`
-/// (`ItemHelper.dropContents`): the removed block's inventory, slot by slot.
+/// `CrushingWheelControllerBlock.onRemove`, `SawBlockEntity.destroy`
+/// (`ItemHelper.dropContents`) and `DeployerBlockEntity.discardPlayer`: the removed block's
+/// inventory or held stack, with its components and wear.
 pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) {
     let block = event.state.block();
+    let pos = [event.pos.x, event.pos.y, event.pos.z];
+    if block == super::states::key(Block::Deployer) {
+        let dp = with_world(|w| {
+            w.dims
+                .iter_mut()
+                .find_map(|d| d.removed_deployers.remove(&pos))
+        })
+        .flatten();
+        if let Some(stack) = dp.and_then(|dp| deployer::held_stack(&dp, stacks::known_stack)) {
+            event.drops.push(Some(stack));
+        }
+        return;
+    }
     if block != super::states::key(Block::CrushingWheelController)
         && block != super::states::key(Block::MechanicalSaw)
     {
         return;
     }
-    let pos = [event.pos.x, event.pos.y, event.pos.z];
     // The engine let go of it at the block change, earlier in this same write.
     let slots = with_world(|w| {
         w.dims
@@ -294,7 +307,11 @@ impl Subsystem for Processing {
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         // What a removal without side effects (`UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS`) left.
-        with_world(|w| w.dims[lv.dim].removed_inventories.clear());
+        with_world(|w| {
+            let d = &mut w.dims[lv.dim];
+            d.removed_inventories.clear();
+            d.removed_deployers.clear();
+        });
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
         fan::tick_fans(lv);

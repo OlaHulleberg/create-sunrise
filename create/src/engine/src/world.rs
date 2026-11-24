@@ -353,7 +353,9 @@ pub struct Dimension {
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
     brass_saved: HashMap<[i32; 3], crate::tunnel::SavedBrass>,
     pub deployer_changes: Vec<[i32; 3]>,
-    pub deployer_drops: Vec<([i32; 3], (String, u8))>,
+    /// Removed deployers that were holding a stack, for their block entity's removal to spill
+    /// with its components and wear (`DeployerBlockEntity.discardPlayer`).
+    pub removed_deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deployer_cracks: Vec<([i32; 3], [i32; 3])>,
     /// Gantry shafts whose place in their line may have changed (`updateShape`), carriages to try
     /// to start (`queueAssembly`), and the moving gantries.
@@ -2051,13 +2053,14 @@ impl CreateWorld {
                 d.deploying.retain(|p| *p != pos);
                 d.deployer_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-                if let Some(held) = dp.held {
-                    // `IBE.onRemove`: its held stack drops.
-                    d.deployer_drops.push((pos, held));
-                }
                 // `DeployerFakePlayer.remove` (`discardPlayer`): its cracks go.
                 if let Some((at, _)) = dp.breaking {
                     d.deployer_cracks.push((pos, at));
+                }
+                if dp.held.is_some() {
+                    // `DeployerBlockEntity.discardPlayer`: its held stack drops with its
+                    // components and wear.
+                    d.removed_deployers.insert(pos, dp);
                 }
             }
             if d.burners.remove(&pos).is_some() {
@@ -7970,6 +7973,36 @@ mod tests {
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
         assert!(w.dims[0].deployer_cracks.is_empty());
+        states::clear_range();
+    }
+
+    /// Create: a broken deployer leaves its held stack, with its damage and components, for its
+    /// removal to spill (`DeployerBlockEntity.discardPlayer`).
+    #[test]
+    fn a_removed_deployer_preserves_its_held_stack_for_removal() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
+            "create:deployer",
+            vec![("axis_along_first", "false"), ("facing", "down")],
+        )];
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0, 64, 0];
+        w.block_changed(0, pos, 0, 10);
+        let mut d = w.dims[0].deployers[&pos].clone();
+        d.held = Some(("minecraft:shears".to_owned(), 1));
+        d.held_damage = 42;
+        d.held_components = vec![10, 0, 1, 2];
+        w.set_deployer(0, pos, d.clone());
+        w.block_changed(0, pos, 10, 0);
+        assert_eq!(w.dims[0].removed_deployers.remove(&pos), Some(d));
+        // An empty deployer leaves no entry.
+        w.block_changed(0, pos, 0, 10);
+        w.block_changed(0, pos, 10, 0);
+        assert!(w.dims[0].removed_deployers.is_empty());
         states::clear_range();
     }
 
