@@ -17,16 +17,14 @@ use mod_api::{
 };
 use std::collections::{HashMap, HashSet};
 
-/// One draw call's budget in `WorldDrawContext::draw_model_instances`.
-const MAX_INSTANCES: usize = 16_384;
-
 /// One block cell in a mirrored schematic variant: local coordinates and culled face mask.
 type Cell = ([i32; 3], u8);
 
 /// One of `SchematicHandler`'s three prebuilt views (`None`, `FrontBack`, `LeftRight`).
 struct Variant {
-    /// Grouped by `BlockState` so each state resolves one `ModelRef` and submits batched.
-    groups: Vec<(BlockState, Vec<Cell>)>,
+    /// Grouped by `BlockState` with its block light emission (`0..=15`) so each state resolves
+    /// one `ModelRef` and submits batched.
+    groups: Vec<(BlockState, u8, Vec<Cell>)>,
     /// Resolved `ModelRef` per group index, cleared on resource reload.
     models: Vec<Option<ModelRef>>,
     models_resolved: bool,
@@ -78,7 +76,12 @@ impl Variant {
 
         let groups = order
             .into_iter()
-            .filter_map(|s| by_state.remove(&s).map(|list| (s, list)))
+            .filter_map(|s| {
+                by_state.remove(&s).map(|list| {
+                    let emission = facts.light_emission(s).unwrap_or(0).min(15);
+                    (s, emission, list)
+                })
+            })
             .collect();
         Self {
             groups,
@@ -100,7 +103,7 @@ impl Variant {
         self.models = self
             .groups
             .iter()
-            .map(|(state, _)| assets.block_state_model(*state).ok())
+            .map(|(state, _, _)| assets.block_state_model(*state).ok())
             .collect();
         self.models_resolved = true;
     }
@@ -164,31 +167,38 @@ impl Preview {
 
         let (origin, linear) = placing.block_transform(pt);
         let level = host.level(host.dimension());
-        let mut remaining = MAX_INSTANCES;
         let mut batch: Vec<ModelInstance> = Vec::new();
 
-        for ((_, cells), model) in variant.groups.iter().zip(variant.models.iter()) {
+        'groups: for ((_, emission, cells), model) in
+            variant.groups.iter().zip(variant.models.iter())
+        {
             let Some(model) = *model else {
                 continue;
             };
-            if remaining == 0 {
-                break;
-            }
-            let take = cells.len().min(remaining);
-            batch.clear();
-            batch.reserve(take);
-            for &(local, hidden_faces) in &cells[..take] {
-                let (world_origin, center) = instance_origin_and_center(origin, linear, local);
-                let light = sample_light(host, level, center);
-                batch.push(
-                    ModelInstance::new(world_origin, linear, 0xFFFF_FFFF, light, Overlay::NONE)
-                        .with_hidden_faces(hidden_faces),
-                );
-            }
-            if event.draw.draw_model_instances(model, &batch).is_ok() {
-                remaining -= batch.len();
-            } else {
-                break;
+            let mut offset = 0;
+            while offset < cells.len() {
+                let usage = event.draw.usage();
+                let remaining = usage
+                    .instances_capacity
+                    .saturating_sub(usage.instances_used) as usize;
+                if remaining == 0 {
+                    break 'groups;
+                }
+                let end = (offset + remaining).min(cells.len());
+                batch.clear();
+                batch.reserve(end - offset);
+                for &(local, hidden_faces) in &cells[offset..end] {
+                    let (world_origin, center) = instance_origin_and_center(origin, linear, local);
+                    let light = sample_light(host, level, center, *emission);
+                    batch.push(
+                        ModelInstance::new(world_origin, linear, 0xFFFF_FFFF, light, Overlay::NONE)
+                            .with_hidden_faces(hidden_faces),
+                    );
+                }
+                if event.draw.draw_model_instances(model, &batch).is_err() {
+                    break 'groups;
+                }
+                offset = end;
             }
         }
     }
@@ -261,13 +271,14 @@ fn sample_light(
     host: &dyn ClientHost,
     level: Option<mod_api::LevelRef>,
     at: [f64; 3],
+    emission: u8,
 ) -> LightCoords {
     let pos = at.map(|v| v.floor() as i32);
     level
         .and_then(|l| {
             let b = l.brightness(host, LightLayer::Block, pos)?;
             let s = l.brightness(host, LightLayer::Sky, pos)?;
-            LightCoords::new(b.clamp(0, 15) as u8, s.clamp(0, 15) as u8)
+            LightCoords::new((b.clamp(0, 15) as u8).max(emission), s.clamp(0, 15) as u8)
         })
         .unwrap_or(LightCoords::FULL_BRIGHT)
 }
