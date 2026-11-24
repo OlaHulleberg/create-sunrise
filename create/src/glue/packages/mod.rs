@@ -736,7 +736,7 @@ pub fn debug_verb(event: &CommandCall<'_>, verbs: &[&'static str]) -> Option<&'s
 
 /// A command's answer to whoever ran it.
 pub fn feedback(host: &mut dyn ServerHost, line: String) {
-    let _ = host.commands().feedback(Text::literal(line));
+    let _ = host.commands().feedback(Text::literal(line), false);
 }
 
 /// The player who ran a command, if a player did.

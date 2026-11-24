@@ -14,7 +14,7 @@ use mod_api::{
     EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks,
     HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent, InteractionResult,
     KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
-    LevelTickPostEvent, LevelTicksHost, MenuClosedEvent, MouseScrollingEvent, NeighborChangedEvent,
+    LevelTickPostEvent, LevelWriteHost, MenuClosedEvent, MouseScrollingEvent, NeighborChangedEvent,
     PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent,
     PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
@@ -757,7 +757,7 @@ struct CreateBlock;
 impl BlockPart for CreateBlock {
     /// A neighbour of a Create block changed (`neighborChanged`). Runs inside the write: the
     /// subsystems note it and act in the level tick.
-    fn neighbor_changed(&self, _level: &mut dyn LevelTicksHost, event: &mut NeighborChangedEvent) {
+    fn neighbor_changed(&self, _level: &mut dyn LevelWriteHost, event: &mut NeighborChangedEvent) {
         let Some(state) = states::id(event.state) else {
             return;
         };

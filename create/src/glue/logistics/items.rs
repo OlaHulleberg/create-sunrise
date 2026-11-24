@@ -313,7 +313,7 @@ pub fn items_at(lv: &mut ServerLevel<'_>, pos: [i32; 3], side: Option<Direction>
 /// into empty indices. How much went in.
 fn insert_stacked(
     host: &mut dyn ServerHost,
-    tx: &mod_api::Transaction,
+    tx: &mod_api::TransactionContext,
     to: &Items,
     resource: &ItemResource,
     count: u32,
@@ -328,7 +328,7 @@ fn insert_stacked(
         .collect();
     let mut went = 0;
     for (i, n) in create_engine::vault::insert_stacked(&view, count, limit) {
-        went += to.insert_at(host, tx, i, resource, n);
+        went += to.insert_at(host, tx, i, resource, n).unwrap_or(0);
     }
     // An index the plan counted on refused: the rest goes wherever it goes.
     if went < count {
@@ -415,7 +415,10 @@ pub fn insert_room(
     let room = lv.host.transaction(|host, tx| {
         Err::<(), u32>(insert_stacked(host, tx, &to, &resource, count, limit))
     });
-    Some(room.err().unwrap_or(0))
+    Some(match room {
+        Err(mod_api::TransactionError::Aborted(n)) => n,
+        _ => 0,
+    })
 }
 
 /// Up to `amount` of the first item `test` passes from `from` (`ItemHelper.extract`), or with
@@ -450,7 +453,7 @@ pub fn extract_matching(
         .transaction(|host, tx| {
             let mut n = 0;
             for &(i, want) in &plan {
-                n += from.extract_at(host, tx, i, &resource, want);
+                n += from.extract_at(host, tx, i, &resource, want).unwrap_or(0);
             }
             if n == 0 { Err(()) } else { Ok(n) }
         })

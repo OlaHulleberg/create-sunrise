@@ -419,15 +419,15 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
     fn insert_at(
         &self,
         host: &mut dyn mod_api::ServerHost,
-        _tx: &mod_api::Transaction,
+        _tx: &mod_api::TransactionContext,
         index: usize,
         resource: &mod_api::ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, mod_api::TransactionError<mod_api::Overanswered>> {
         let stack = resource.as_stack();
         // The engine keeps items by id: a stack with components stays out.
         if stack.components().is_some() || stack.damage() != 0 {
-            return 0;
+            return Ok(0);
         }
         let item = stacks::id(&*host, stack);
         let max = stacks::limit(&*host, &item);
@@ -436,7 +436,7 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
                 .flatten();
         let count = amount.min(255) as u8;
         let (dim, pos) = (self.dim, self.pos);
-        with_world(|w| {
+        Ok(with_world(|w| {
             let (c, _) = w.dims[dim].crushers.get_mut(&pos)?;
             let n = crusher::insert(c, index, &item, count, max, time);
             if n > 0 {
@@ -445,17 +445,17 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for CrusherItems {
             Some(u32::from(n))
         })
         .flatten()
-        .unwrap_or(0)
+        .unwrap_or(0))
     }
     fn extract_at(
         &self,
         _host: &mut dyn mod_api::ServerHost,
-        _tx: &mod_api::Transaction,
+        _tx: &mod_api::TransactionContext,
         _index: usize,
         _resource: &mod_api::ItemResource,
         _amount: u32,
-    ) -> u32 {
-        0
+    ) -> Result<u32, mod_api::TransactionError<mod_api::Overanswered>> {
+        Ok(0)
     }
 }
 

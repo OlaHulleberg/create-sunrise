@@ -99,7 +99,8 @@ impl mod_api::BlockPart for Placement {
             }
             // `CardboardBlock.getStateForPlacement`: the player's horizontal axis.
             Block::CardboardBlock | Block::BoundCardboardBlock => {
-                let axis = decor::horizontal_facing(c.yaw).axis();
+                let (yaw, _, _) = states::placement_view(c.source);
+                let axis = decor::horizontal_facing(yaw).axis();
                 props_on(level, state, &[("axis", axis_name(axis))])
             }
             // `NozzleBlock.getStateForPlacement`: facing the clicked face; `canSurvive`: only on

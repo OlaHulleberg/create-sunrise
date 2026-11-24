@@ -242,11 +242,11 @@ impl BlockPart for RedstoneBlock {
         let (level, server) = states::level_view(level);
         let block = states::level_block(level, event.state)?;
         let c = event.context;
+        let (yaw, pitch, sneaking) = states::placement_view(c.source);
         match block {
             Block::ControllerRail => {
-                let (shape, backwards) = create_engine::rail::placement(
-                    create_engine::place::horizontal_direction(c.yaw),
-                );
+                let (shape, backwards) =
+                    create_engine::rail::placement(create_engine::place::horizontal_direction(yaw));
                 let state = with_properties(
                     level,
                     event.state,
@@ -273,9 +273,9 @@ impl BlockPart for RedstoneBlock {
                     p.push(Placing {
                         dimension: event.dimension.key().id().to_owned(),
                         pos,
-                        nearest: create_engine::place::ordered_by_nearest(c.yaw, c.pitch),
-                        horizontal: create_engine::place::horizontal_direction(c.yaw),
-                        sneaking: c.sneaking,
+                        nearest: create_engine::place::ordered_by_nearest(yaw, pitch),
+                        horizontal: create_engine::place::horizontal_direction(yaw),
+                        sneaking,
                         switch: block == Block::StockpileSwitch,
                     })
                 });

@@ -112,9 +112,10 @@ impl BlockPart for Placement {
         let block = states::level_block(level, event.state)?;
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
-        let looking = ordered_by_nearest(c.yaw, c.pitch);
+        let (yaw, pitch, sneaking) = states::placement_view(c.source);
+        let looking = ordered_by_nearest(yaw, pitch);
         let nearest = looking[0];
-        let horizontal = horizontal_direction(c.yaw);
+        let horizontal = horizontal_direction(yaw);
         let clicked = Dir::ALL[c.face as usize];
         let joins = |d: Dir| fluids::connects(cell(level, offset(pos, d)), d);
         let neighbours = Neighbours(&|p| states::level_info_at(level, p));
@@ -137,13 +138,13 @@ impl BlockPart for Placement {
             // pipe beside it nearest that facing unless it is on the facing's axis or the player
             // sneaks.
             Block::MechanicalPump => {
-                let target = if c.sneaking {
+                let target = if sneaking {
                     nearest
                 } else {
                     nearest.opposite()
                 };
                 let facing = match create_engine::place::preferred(false, shaft) {
-                    Some(p) if !c.sneaking => p.opposite(),
+                    Some(p) if !sneaking => p.opposite(),
                     _ => target,
                 };
                 let mut best: Option<(Dir, i32)> = None;
@@ -159,7 +160,7 @@ impl BlockPart for Placement {
                     best = Some((d, dist));
                 }
                 let facing = match best {
-                    Some((d, _)) if d.axis() != target.axis() && !c.sneaking => d,
+                    Some((d, _)) if d.axis() != target.axis() && !sneaking => d,
                     _ => facing,
                 };
                 set(
@@ -171,7 +172,7 @@ impl BlockPart for Placement {
             // FluidValveBlock (DirectionalAxisKineticBlock) placed among shafts and pipes.
             Block::FluidValve => {
                 let (facing, along) =
-                    fluids::valve_placement(nearest, c.sneaking, horizontal, shaft, joins);
+                    fluids::valve_placement(nearest, sneaking, horizontal, shaft, joins);
                 set(
                     level,
                     state,

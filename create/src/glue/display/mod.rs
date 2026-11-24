@@ -1893,9 +1893,10 @@ impl BlockPart for DisplayBlock {
                     .and_then(|state| states::level_info(level, state))
                     .filter(|(b, _)| *b == Block::DisplayBoard)
                     .and_then(|(_, i)| i.facing);
+                let (yaw, _, sneaking) = states::placement_view(c.source);
                 match against {
-                    Some(f) if !c.sneaking => f,
-                    _ => create_engine::place::horizontal_direction(c.yaw).opposite(),
+                    Some(f) if !sneaking => f,
+                    _ => create_engine::place::horizontal_direction(yaw).opposite(),
                 }
             }
             _ => return None,
@@ -2324,7 +2325,7 @@ fn display_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Fl
         }
         Some(lv) => display_state(&lv, pos),
     };
-    let _ = host.commands().feedback(Text::literal(line));
+    let _ = host.commands().feedback(Text::literal(line), false);
     Flow::Cancel
 }
 

@@ -326,7 +326,7 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, nc: &Cart, on: &mut OnCart) {
                     };
                     if added > 0 {
                         let r = mod_api::ItemResource::of(now);
-                        items.insert_at(h, tx, i, &r, added);
+                        let _ = items.insert_at(h, tx, i, &r, added);
                     }
                 }
                 Ok::<(), ()>(())
@@ -768,7 +768,7 @@ fn debug_command(
             }
         }
     };
-    let _ = host.commands().feedback(Text::literal(line));
+    let _ = host.commands().feedback(Text::literal(line), false);
     Flow::Cancel
 }
 
@@ -1234,7 +1234,7 @@ fn live_links(lv: &mut ServerLevel<'_>) -> Vec<(EntityRef, Arc<OnCart>, coupling
             continue;
         };
         if let Some(link) = on.link
-            && let Some(cart) = lv.host.entity_by_uuid(EntityUuid(uuid))
+            && let Some(cart) = lv.level.entity_by_uuid(&*lv.host, EntityUuid(uuid))
             && rider.vehicle(&*lv.host) == Some(cart)
         {
             links.push((rider, on, link));
@@ -1258,7 +1258,9 @@ fn edit_couplings(
         merged.carts.entry(link.connected).or_default().connected = Some(link);
     }
     merged.try_couple(a, b, distance, contraption, |uuid| {
-        lv.host.entity_by_uuid(EntityUuid(uuid)).is_some()
+        lv.level
+            .entity_by_uuid(&*lv.host, EntityUuid(uuid))
+            .is_some()
     })?;
     let link = merged.get(a).leading.ok_or(coupling::Refused::Silent)?;
     for (rider, mut on, before) in links {
@@ -1483,8 +1485,8 @@ fn disassemble_at(lv: &mut ServerLevel<'_>, axis: Axis, backwards: bool, nc: &Ca
     let mut on = (*on).clone();
     if let Some(other) = on.paired_cart() {
         let Some(other) = lv
-            .host
-            .entity_by_uuid(EntityUuid(other))
+            .level
+            .entity_by_uuid(&*lv.host, EntityUuid(other))
             .and_then(|e| Cart::read(lv.host, e))
         else {
             return;
@@ -1587,7 +1589,7 @@ impl EntityPart for ContraptionRider {
         });
         if let Some(other_uuid) = on.paired_cart()
             && !CARTS.with_borrow(|c| c.known.get(&other_uuid).is_some_and(|k| k.dim == lv.dim))
-            && let Some(other) = lv.host.entity_by_uuid(EntityUuid(other_uuid))
+            && let Some(other) = lv.level.entity_by_uuid(&*lv.host, EntityUuid(other_uuid))
             && let Some(pos) = other.position(&*lv.host)
         {
             CARTS.with_borrow_mut(|c| {
@@ -2344,7 +2346,7 @@ fn find_carts(lv: &mut ServerLevel<'_>) {
             .collect()
     });
     for uuid in wanted {
-        let Some(entity) = lv.host.entity_by_uuid(EntityUuid(uuid)) else {
+        let Some(entity) = lv.level.entity_by_uuid(&*lv.host, EntityUuid(uuid)) else {
             continue;
         };
         if entity.level(&*lv.host) != Some(lv.level) {
@@ -2386,7 +2388,7 @@ fn follow(lv: &mut ServerLevel<'_>) -> HashMap<u128, Cart> {
             None
         };
         let Some(cart) = cart.or_else(|| {
-            let entity = lv.host.entity_by_uuid(EntityUuid(uuid))?;
+            let entity = lv.level.entity_by_uuid(&*lv.host, EntityUuid(uuid))?;
             Cart::read(lv.host, entity)
         }) else {
             continue;

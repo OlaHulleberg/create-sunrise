@@ -39,6 +39,6 @@ pub(super) fn run(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flo
         Some((speed, None)) => format!("create speed at {x} {y} {z}: {speed} rpm"),
         None => format!("create speed at {x} {y} {z}: not kinetic"),
     };
-    let _ = host.commands().feedback(Text::literal(line));
+    let _ = host.commands().feedback(Text::literal(line), false);
     Flow::Cancel
 }

@@ -713,7 +713,7 @@ fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
         }
         _ => "usage: create_debug controller <button 0-5> <item|-> [item|-]".to_owned(),
     };
-    let _ = host.commands().feedback(Text::literal(line));
+    let _ = host.commands().feedback(Text::literal(line), false);
     Flow::Cancel
 }
 

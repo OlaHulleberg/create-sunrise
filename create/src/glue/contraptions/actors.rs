@@ -288,7 +288,7 @@ fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
         let mut out: Stored = Vec::with_capacity(size);
         for (i, slot) in view.iter().enumerate() {
             out.push(slot.as_ref().and_then(|(r, n)| {
-                let got = items.extract_at(host, tx, i, r, *n);
+                let got = items.extract_at(host, tx, i, r, *n).unwrap_or(0);
                 r.to_stack(got)
             }));
         }
@@ -328,7 +328,7 @@ pub(crate) fn restore_storage(
                 };
                 let resource = mod_api::ItemResource::of(stack);
                 let n = stack.count();
-                let mut went = items.insert_at(host, tx, i, &resource, n);
+                let mut went = items.insert_at(host, tx, i, &resource, n).unwrap_or(0);
                 if went < n {
                     went += items.insert(host, tx, &resource, n - went).unwrap_or(0);
                 }
@@ -3742,7 +3742,9 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>
             },
         }
     };
-    let _ = host.commands().feedback(mod_api::Text::literal(line));
+    let _ = host
+        .commands()
+        .feedback(mod_api::Text::literal(line), false);
     Flow::Cancel
 }
 
