@@ -287,10 +287,14 @@ fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
     let taken = host.transaction(|host, tx| {
         let mut out: Stored = Vec::with_capacity(size);
         for (i, slot) in view.iter().enumerate() {
-            out.push(slot.as_ref().and_then(|(r, n)| {
-                let got = items.extract_at(host, tx, i, r, *n).unwrap_or(0);
-                r.to_stack(got)
-            }));
+            let stack = match slot.as_ref() {
+                Some((r, n)) => {
+                    let got = items.extract_at(host, tx, i, r, *n).map_err(|_| ())?;
+                    r.to_stack(got)
+                }
+                None => None,
+            };
+            out.push(stack);
         }
         Ok::<Stored, ()>(out)
     });
@@ -328,9 +332,11 @@ pub(crate) fn restore_storage(
                 };
                 let resource = mod_api::ItemResource::of(stack);
                 let n = stack.count();
-                let mut went = items.insert_at(host, tx, i, &resource, n).unwrap_or(0);
+                let mut went = items.insert_at(host, tx, i, &resource, n).map_err(|_| ())?;
                 if went < n {
-                    went += items.insert(host, tx, &resource, n - went).unwrap_or(0);
+                    went += items
+                        .insert(host, tx, &resource, n - went)
+                        .map_err(|_| ())?;
                 }
                 if went < n
                     && let Some(rest) = resource.to_stack(n - went)

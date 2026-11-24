@@ -719,7 +719,9 @@ impl World<'_, '_> {
                 if got >= max {
                     break;
                 }
-                got += inv.extract_at(h, tx, *index, r, max - got).unwrap_or(0);
+                got += inv
+                    .extract_at(h, tx, *index, r, max - got)
+                    .map_err(|_| ())?;
             }
             Ok::<u32, ()>(got)
         })

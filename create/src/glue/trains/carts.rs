@@ -326,7 +326,7 @@ fn tick_cart_actors(lv: &mut ServerLevel<'_>, nc: &Cart, on: &mut OnCart) {
                     };
                     if added > 0 {
                         let r = mod_api::ItemResource::of(now);
-                        let _ = items.insert_at(h, tx, i, &r, added);
+                        items.insert_at(h, tx, i, &r, added).map_err(|_| ())?;
                     }
                 }
                 Ok::<(), ()>(())
