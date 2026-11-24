@@ -634,8 +634,9 @@ impl arm::World for ArmWorld<'_, '_> {
             Kind::Deployer => {
                 let mut d = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()?;
                 let (item, count) = d.held.clone()?;
-                // An arm carries an item by its id: a stack with components stays in the hand.
-                if !d.held_components.is_empty() {
+                // An arm carries an item by its id: a stack with components or wear stays in the
+                // hand.
+                if !d.held_components.is_empty() || d.held_damage > 0 {
                     return None;
                 }
                 // `DeployerItemHandler.extractItem`: what its filter names stays in its hand.
