@@ -127,7 +127,7 @@ impl Run {
     /// `Level.hasNeighborSignal` at the sequenced gearshifts in `due`, for the sequences that
     /// end inside the engine's tick or stop (`SequencedGearshiftBlockEntity.run`).
     pub(super) fn tell_sequencer_power(&mut self, due: impl IntoIterator<Item = Pos>) {
-        let powered: Vec<Pos> = due.into_iter().filter(|&p| self.signal(p) > 0).collect();
+        let powered: Vec<(Pos, bool)> = due.into_iter().map(|p| (p, self.signal(p) > 0)).collect();
         self.w.powered_sequencers(0, powered);
     }
 

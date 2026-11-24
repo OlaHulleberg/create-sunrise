@@ -3391,17 +3391,14 @@ impl CreateWorld {
         running: bool,
     ) -> Option<crate::sequencer::Step> {
         let (mut sequencers, kinetics) = self.sequencer_tick(dim);
-        if !sequencers.sequencers.contains_key(&pos) {
-            return None;
-        }
+        sequencers.sequencers.get_mut(&pos)?.powered = powered;
         let (speed, overstressed) = kinetics.theoretical(pos).unwrap_or((0.0, false));
         // A speed change since the gearshift last looked reaches it first: `getSpeed` is live.
         let mut step = sequencers.speed_changed(kinetics, pos, speed, overstressed);
-        let next = {
-            let sequencer = sequencers.sequencers.get_mut(&pos)?;
-            sequencer.powered = powered;
-            sequencer.redstone(powered, running)
-        };
+        let next = sequencers
+            .sequencers
+            .get_mut(&pos)?
+            .redstone(powered, running);
         if let Some(next) = next {
             sequencers.run(kinetics, pos, next);
             step = Some(next);
@@ -3409,13 +3406,18 @@ impl CreateWorld {
         step
     }
 
-    /// The sequenced gearshifts that are powered (`Level.hasNeighborSignal`): a listed one is,
-    /// each other is not. `run` asks when a sequence ends or stops, so a host tells before a
-    /// tick for those still running, and before stopping one (`set_sequencer_instructions`).
-    pub fn powered_sequencers(&mut self, dim: usize, powered: impl IntoIterator<Item = [i32; 3]>) {
-        let powered: HashSet<[i32; 3]> = powered.into_iter().collect();
-        for (pos, s) in self.dims[dim].sequencers.iter_mut() {
-            s.powered = powered.contains(pos);
+    /// Whether each listed sequenced gearshift is powered (`Level.hasNeighborSignal`). `run`
+    /// asks when a sequence ends or stops, so a host tells before a tick for those still
+    /// running, and before stopping one (`set_sequencer_instructions`).
+    pub fn powered_sequencers(
+        &mut self,
+        dim: usize,
+        powered: impl IntoIterator<Item = ([i32; 3], bool)>,
+    ) {
+        for (pos, powered) in powered {
+            if let Some(s) = self.dims[dim].sequencers.get_mut(&pos) {
+                s.powered = powered;
+            }
         }
     }
 
@@ -3513,7 +3515,9 @@ impl CreateWorld {
     fn sequencer_speed(&mut self, dim: usize, pos: [i32; 3]) {
         let (mut sequencers, kinetics) = self.sequencer_tick(dim);
         let (speed, overstressed) = kinetics.theoretical(pos).unwrap_or((0.0, false));
-        sequencers.speed_changed(kinetics, pos, speed, overstressed);
+        if let Some(step) = sequencers.speed_changed(kinetics, pos, speed, overstressed) {
+            sequencers.steps.push((pos, step));
+        }
     }
 
     /// `SequencedGearshiftBlockEntity.run`, on the gearshift's own kinetic entity: for a step

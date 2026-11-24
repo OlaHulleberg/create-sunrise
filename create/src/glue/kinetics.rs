@@ -739,9 +739,9 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
 /// inside the engine's tick or stop (`SequencedGearshiftBlockEntity.run`).
 pub(super) fn tell_sequencer_power(lv: &ServerLevel<'_>, due: impl IntoIterator<Item = [i32; 3]>) {
     let dim = lv.dim;
-    let powered: Vec<[i32; 3]> = due
+    let powered: Vec<([i32; 3], bool)> = due
         .into_iter()
-        .filter(|&pos| lv.has_neighbor_signal(pos))
+        .map(|pos| (pos, lv.has_neighbor_signal(pos)))
         .collect();
     with_world(|w| w.powered_sequencers(dim, powered));
 }

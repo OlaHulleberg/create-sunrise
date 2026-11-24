@@ -80,32 +80,18 @@ impl KineticNetwork {
         last_stress: f32,
     ) {
         if self.is_member(id, nodes) {
+            self.add(id, nodes);
             return;
         }
-        let n = &mut nodes[id as usize];
+        let n = &nodes[id as usize];
         if n.part.generated != 0.0 {
             self.unloaded_capacity =
                 (self.unloaded_capacity - last_capacity * n.part.generated.abs()).max(0.0);
-            let capacity = n.calculate_added_stress_capacity();
-            self.sources.insert(
-                Entity(n.entity),
-                Member {
-                    node: id,
-                    value: capacity,
-                },
-            );
         }
         self.unloaded_stress =
             (self.unloaded_stress - last_stress * n.state.theoretical.abs()).max(0.0);
-        let stress = n.calculate_stress_applied();
-        self.members.insert(
-            Entity(n.entity),
-            Member {
-                node: id,
-                value: stress,
-            },
-        );
         self.unloaded_members = self.unloaded_members.saturating_sub(1);
+        self.add(id, nodes);
     }
     /// KineticNetwork.add enrolls an entity; only a new member receives the initial
     /// updateFromNetwork and networkDirty transition (returned to the caller).
@@ -139,9 +125,7 @@ impl KineticNetwork {
         if self.members.remove(&entity).is_none() {
             return false;
         }
-        if n.part.generated != 0.0 {
-            self.sources.remove(&entity);
-        }
+        self.sources.remove(&entity);
         true
     }
     pub(super) fn update_capacity_for(&mut self, id: u32, capacity: f32, nodes: &[Node]) {
