@@ -727,6 +727,7 @@ impl Hooks for Create {
         _event: &mut mod_api::ClientResourcesReloadedEvent,
     ) {
         glue::models::forget();
+        glue::schematics::forget_models();
         glue::pipelines::bind_steam_jets(cx.render_assets());
     }
 }
