@@ -10,9 +10,15 @@ settings have loaded. A newly placed block entity has neither old drawing data n
 snapshot, so it follows the normal placement lifecycle. A block with `KineticState`
 follows the normal restore lifecycle. The client update tag still excludes server snapshots.
 
+An older build wrote an entity's `KineticState` under `0`, and a sequenced gearshift's
+second half's under `1`. The glue reads that layout back as the one entity Create has
+(`glue/kinetics.rs`, `saved_from_keyed_nbt`): the half a source outside the block drives holds
+its speed, source and network, the other its sequence context. The next save writes the
+record flat.
+
 Before first attachment, the engine groups connected legacy-loaded parts and any saved
 parts they touch. For an entirely legacy component, candidate generators are tried in
-lexicographic `(x, y, z, port)` order. Each trial infers a source tree using the engine's
+lexicographic `(x, y, z)` order. Each trial infers a source tree using the engine's
 connection and conveyed-speed rules. Ratios around loops must agree, rotation must stay
 within the speed limit, and every other generator must be a valid member at the inferred
 speed under the creative motor initialization rule: `generated <= theoretical`, or

@@ -10,9 +10,7 @@ use super::subsystem::Subsystem;
 use super::world::{level_index, with_world};
 use create_engine::Block;
 use create_engine::client::{self, Draw, Model};
-use create_engine::kinetics::{
-    Axis, Context, Dir, Event, PartLocation, SavedKineticState, SavedNetwork,
-};
+use create_engine::kinetics::{Axis, Context, Dir, Event, SavedKineticState, SavedNetwork};
 use create_engine::world::keeps_state;
 use mod_api::HostBlockStates;
 use mod_api::{
@@ -25,7 +23,8 @@ use std::sync::OnceLock;
 /// The type's id: every Create block the world keeps state for.
 pub const TYPE: &str = "create:kinetic";
 
-/// The key in a block entity's data under which its parts' speeds are, `[slot 0, slot 1]`.
+/// The key in a block entity's data under which its speeds are: the entity's (`getSpeed`), and
+/// for a sequenced gearshift the shaft half away from its source (`SplitShaftVisual`).
 pub const SPEEDS: &str = "Speeds";
 /// The keys of its first part's theoretical speed (`getTheoreticalSpeed`, what the goggles
 /// show) and of whether its network is overstressed (`isOverStressed`).
@@ -37,7 +36,7 @@ pub(crate) const BRACKET: &str = "Bracket";
 pub(crate) const SCROLL_VALUE: &str = "ScrollValue";
 /// A speed setting a moving structure carries (`Subsystem::carry_out`).
 const CARRIED_SPEED: &str = "Speed";
-/// Server-only KineticBlockEntity.write data, one compound per engine port.
+/// Server-only KineticBlockEntity.write data, one compound per engine entity.
 const SAVED_KINETICS: &str = "KineticState";
 /// `WaterWheelBlockEntity.write`'s `FlowScore`, saved with the wheel's block entity.
 const WHEEL: &str = "Wheel";
@@ -306,7 +305,8 @@ fn settings_from_nbt(data: &Compound) -> Vec<([i32; 3], i32)> {
     }
 }
 
-/// Identifies this port's old persisted format, never a newly placed empty entity.
+/// Identifies this port's oldest persisted format, never a newly placed empty entity: drawing
+/// fields but no kinetic record.
 fn loading_legacy_save(data: &Compound) -> bool {
     !data.contains_key(&SAVED_KINETICS.into())
         && (data.contains_key(&SPEEDS.into()) || data.contains_key(&THEORY.into()))
@@ -332,7 +332,7 @@ fn valve_pointer_from_nbt(data: &Compound) -> create_engine::fluids::Pointer {
     }
 }
 
-/// Java hand crank / valve use data, independent of the kinetic ports.
+/// Java hand crank / valve use data, independent of the kinetic record.
 fn handle_to_nbt(h: create_engine::valve::SavedHandle) -> Compound {
     Compound::from([
         ("InUse".into(), Tag::Int(i32::from(h.in_use))),
@@ -371,8 +371,7 @@ fn saved_to_nbt(saved: SavedKineticState) -> Compound {
         ),
     ]);
     if let Some(source) = saved.source {
-        out.insert("Source".into(), Tag::IntArray(source.pos.to_vec()));
-        out.insert("SourcePort".into(), Tag::Byte(source.sub as i8));
+        out.insert("Source".into(), Tag::IntArray(source.to_vec()));
     }
     if let Some(n) = saved.network {
         out.insert(
@@ -421,13 +420,7 @@ fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
         return None;
     };
     let source = match data.get(&"Source".into()) {
-        Some(Tag::IntArray(p)) if p.len() == 3 => Some(PartLocation {
-            pos: [p[0], p[1], p[2]],
-            sub: match data.get(&"SourcePort".into()) {
-                Some(Tag::Byte(1)) => 1,
-                _ => 0,
-            },
-        }),
+        Some(Tag::IntArray(p)) if p.len() == 3 => Some([p[0], p[1], p[2]]),
         _ => None,
     };
     let network = match data.get(&"Network".into()) {
@@ -465,6 +458,38 @@ fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
         sequence,
         needs_speed_update: matches!(data.get(&"NeedsSpeedUpdate".into()), Some(Tag::Byte(1))),
     })
+}
+
+/// The entity's kinetic record in a block entity's data (`KineticState`), as this build writes
+/// it or under the "0" an older one did.
+pub fn saved_kinetics(data: &Compound) -> Option<&Compound> {
+    let Tag::Compound(record) = data.get(&SAVED_KINETICS.into())? else {
+        return None;
+    };
+    Some(match record.get(&"0".into()) {
+        Some(Tag::Compound(first)) => first,
+        _ => record,
+    })
+}
+
+/// An older build's `KineticState`: an entity's record under "0", a sequenced gearshift's
+/// other half's under "1". The half a source outside the block at `pos` drives holds the
+/// entity's speed, source and network, the second its sequence context.
+fn saved_from_keyed_nbt(data: &Compound, pos: [i32; 3]) -> Option<SavedKineticState> {
+    let port = |key: &str| match data.get(&key.into()) {
+        Some(Tag::Compound(c)) => saved_from_nbt(c),
+        _ => None,
+    };
+    let second = port("1");
+    let first = port("0");
+    let mut saved = [first, second]
+        .into_iter()
+        .flatten()
+        .find(|s| s.source.is_some_and(|source| source != pos))
+        .or(first)
+        .or(second)?;
+    saved.sequence = second.and_then(|s| s.sequence).or(saved.sequence);
+    Some(saved)
 }
 
 /// What feeds a level's solve: split shafts following redstone (set before solving, so the
@@ -577,6 +602,16 @@ pub(crate) fn drain_effects(lv: &mut ServerLevel<'_>) {
 /// part's speed put in its block entity's data for its clients.
 fn tick_solve(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    let running = with_world(|w| {
+        w.dims[dim]
+            .sequencers
+            .iter()
+            .filter(|(_, s)| !s.is_idle())
+            .map(|(pos, _)| *pos)
+            .collect::<Vec<_>>()
+    })
+    .unwrap_or_default();
+    tell_sequencer_power(lv, running);
     let mut events = Vec::new();
     let Some((steps, removed, unsaved)) = with_world(|w| {
         let (_, steps) = w.tick(dim, &mut events);
@@ -593,7 +628,7 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
         persist::mark_unsaved(dim, [cx, cz]);
     }
     for pos in removed {
-        set_speeds(lv, pos, None, Some((0.0, false)));
+        set_speeds(lv, pos, None, (0.0, false));
     }
     apply_events(lv, events);
 }
@@ -610,15 +645,11 @@ fn apply_events(lv: &mut ServerLevel<'_>, mut events: Vec<Event>) {
                 }
                 Event::Speed {
                     pos,
-                    sub,
                     speed,
                     overstressed,
                     theoretical,
                 } => {
-                    let mut speeds = current_speeds(lv, pos);
-                    speeds[usize::from(sub & 1)] = speed;
-                    let first = (sub == 0).then_some((theoretical, overstressed));
-                    set_speeds(lv, pos, Some(speeds), first);
+                    set_speeds(lv, pos, Some(speed), (theoretical, overstressed));
                     for s in super::SUBSYSTEMS {
                         s.speed_changed(lv, pos, speed);
                     }
@@ -647,26 +678,19 @@ fn publish_saved(lv: &mut ServerLevel<'_>) {
         if let Some(pointer) = with_world(|w| w.saved_valve_pointer(dim, pos)).flatten() {
             lv.write_entity_field(pos, "Pointer", valve_pointer_to_nbt(pointer));
         }
-        let Some(states) = with_world(|w| {
+        let Some(saved) = with_world(|w| {
             (!w.dims[dim].kinetics.awaiting_legacy_load(pos)).then(|| {
-                [
-                    w.dims[dim].kinetics.saved_state(pos, 0),
-                    w.dims[dim].kinetics.saved_state(pos, 1),
-                ]
+                w.dims[dim]
+                    .kinetics
+                    .saved_state(pos)
+                    .map_or_else(Compound::new, saved_to_nbt)
             })
         })
         .flatten() else {
             continue;
         };
-        let ports: Compound = states
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, state)| {
-                state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
-            })
-            .collect();
         // KineticBlockEntity.write: a `Source` or `Network` the entity no longer has is gone.
-        lv.write_entity_field(pos, SAVED_KINETICS, ports);
+        lv.write_entity_field(pos, SAVED_KINETICS, saved);
         // `WaterWheelBlockEntity.write`: the flow score its first tick after a load reads back.
         if matches!(
             with_world(|w| w.block_at(dim, pos)).flatten(),
@@ -711,6 +735,17 @@ fn tick_sequencers(lv: &mut ServerLevel<'_>) {
     apply_sequencer_steps(lv, steps);
 }
 
+/// `Level.hasNeighborSignal` at the sequenced gearshifts in `due`, for the sequences that end
+/// inside the engine's tick or stop (`SequencedGearshiftBlockEntity.run`).
+pub(super) fn tell_sequencer_power(lv: &ServerLevel<'_>, due: impl IntoIterator<Item = [i32; 3]>) {
+    let dim = lv.dim;
+    let powered: Vec<[i32; 3]> = due
+        .into_iter()
+        .filter(|&pos| lv.has_neighbor_signal(pos))
+        .collect();
+    with_world(|w| w.powered_sequencers(dim, powered));
+}
+
 /// Write the state requested by the engine after the corresponding kinetic phase.
 pub(super) fn apply_sequencer_steps(
     lv: &mut ServerLevel<'_>,
@@ -736,14 +771,6 @@ pub(super) fn apply_sequencer_steps(
     }
 }
 
-/// The speeds a block entity shows now.
-fn current_speeds(lv: &ServerLevel<'_>, pos: [i32; 3]) -> [f32; 2] {
-    lv.host
-        .block_entity(lv.level, pos)
-        .and_then(|e| e.data(&*lv.host))
-        .map_or([0.0; 2], |d| speeds_of(&d))
-}
-
 /// The speeds in a block entity's data; on a client, 0 while the server is frozen
 /// (`KineticBlockEntity.getSpeed`), so its parts stand at their resting angle.
 pub fn speeds_of(data: &Compound) -> [f32; 2] {
@@ -762,27 +789,36 @@ pub fn speeds_of(data: &Compound) -> [f32; 2] {
     }
 }
 
-/// Puts `speeds` (none: stopped, it left the network) in the block entity at `pos`, which
-/// sends them to the clients that see it.
+/// Puts the kinetic block entity's speed (none: it left the level) in the block entity at
+/// `pos`, which sends it to the clients that see it.
 fn set_speeds(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
-    speeds: Option<[f32; 2]>,
-    first: Option<(f32, bool)>,
+    speed: Option<f32>,
+    (theoretical, overstressed): (f32, bool),
 ) {
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
-    let [a, b] = speeds.unwrap_or_default();
+    let (speed, away, source) = with_world(|w| {
+        (
+            speed,
+            speed
+                .and_then(|_| w.away_half_speed(lv.dim, pos))
+                .unwrap_or(0.0),
+            w.dims[lv.dim].kinetics.source_facing(pos),
+        )
+    })
+    .unwrap_or((None, 0.0, None));
     let mut data = Compound::from([(
         SPEEDS.into(),
-        Tag::List(vec![Tag::Float(a.to_bits()), Tag::Float(b.to_bits())]),
+        Tag::List(vec![
+            Tag::Float(speed.unwrap_or_default().to_bits()),
+            Tag::Float(away.to_bits()),
+        ]),
     )]);
-    if let Some((theory, over)) = first {
-        data.insert(THEORY.into(), Tag::Float(theory.to_bits()));
-        data.insert(OVER.into(), Tag::Byte(i8::from(over)));
-    }
-    let source = with_world(|w| w.dims[lv.dim].kinetics.source_facing(pos)).flatten();
+    data.insert(THEORY.into(), Tag::Float(theoretical.to_bits()));
+    data.insert(OVER.into(), Tag::Byte(i8::from(overstressed)));
     data.insert(
         SOURCE_FACE.into(),
         Tag::Int(source.map_or(-1, |d| d as i32)),
@@ -810,7 +846,7 @@ pub fn show_freeze(lv: &mut ServerLevel<'_>) {
         w.dims[dim]
             .kinetics
             .parts()
-            .filter(|p| p.2 != 0.0)
+            .filter(|p| p.1 != 0.0)
             .map(|p| p.0)
             .collect()
     })
@@ -897,7 +933,7 @@ impl BlockEntityPart for KineticEntity {
         super::ensure_column(host, &dimension, [pos[0] >> 4, pos[2] >> 4]);
         let data = entity.data(&*host).unwrap_or_default();
         let saved = match data.get(&SAVED_KINETICS.into()) {
-            Some(Tag::Compound(c)) => Some(c.clone()),
+            Some(Tag::Compound(c)) => saved_from_nbt(c).or_else(|| saved_from_keyed_nbt(c, pos)),
             _ => None,
         };
         // Previous builds persisted drawing state but no kinetic snapshot. A brand-new
@@ -964,20 +1000,10 @@ impl BlockEntityPart for KineticEntity {
             if let Some(Tag::Compound(pointer)) = data.get(&"Pointer".into()) {
                 w.restore_valve_pointer(dim, pos, valve_pointer_from_nbt(pointer));
             }
-            if let Some(ports) = saved {
-                for sub in 0..2 {
-                    if let Some(Tag::Compound(data)) = ports.get(&["0", "1"][sub as usize].into())
-                        && let Some(saved) = saved_from_nbt(data)
-                    {
-                        w.restore_kinetic_state(dim, pos, sub, saved);
-                    }
-                }
+            if let Some(saved) = saved {
+                w.restore_kinetic_state(dim, pos, saved);
             } else if legacy {
-                for sub in 0..2 {
-                    w.dims[dim]
-                        .kinetics
-                        .loading_save_without_kinetic_state(pos, sub);
-                }
+                w.dims[dim].kinetics.loading_save_without_kinetic_state(pos);
             }
         });
         if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::SequencedGearshift) {
@@ -1279,6 +1305,50 @@ mod saved_state_tests {
         assert!(!loading_legacy_save(&old));
     }
     #[test]
+    fn the_halves_recorded_apart_read_as_the_one_entity() {
+        let context = (
+            Context {
+                distance: false,
+                value: 90.0,
+                run: 3,
+            },
+            90.0 / 32.0,
+        );
+        let mut keyed = Compound::new();
+        for (key, speed, source, sequence) in [
+            ("0", 64.0, Some([4, 8, 0]), None),
+            ("1", 32.0, Some([5, 8, 0]), Some(context)),
+        ] {
+            keyed.insert(
+                key.into(),
+                Tag::Compound(saved_to_nbt(SavedKineticState {
+                    speed,
+                    source,
+                    sequence,
+                    network: None,
+                    needs_speed_update: false,
+                })),
+            );
+        }
+        assert_eq!(saved_from_nbt(&keyed), None);
+        let read = saved_from_keyed_nbt(&keyed, [4, 8, 0]).unwrap();
+        assert_eq!((read.speed, read.source), (32.0, Some([5, 8, 0])));
+        assert_eq!(read.sequence, Some(context));
+        let still = saved_to_nbt(SavedKineticState {
+            speed: 0.0,
+            source: None,
+            sequence: None,
+            network: None,
+            needs_speed_update: true,
+        });
+        let only = Compound::from([("0".into(), Tag::Compound(still))]);
+        assert_eq!(
+            saved_from_keyed_nbt(&only, [4, 8, 0]).map(|s| s.needs_speed_update),
+            Some(true)
+        );
+        assert_eq!(saved_from_keyed_nbt(&Compound::new(), [4, 8, 0]), None);
+    }
+    #[test]
     fn kinetic_block_entity_data_round_trips_all_server_fields() {
         let saved = SavedKineticState {
             speed: -32.0,
@@ -1290,10 +1360,7 @@ mod saved_state_tests {
                 },
                 2.5,
             )),
-            source: Some(PartLocation {
-                pos: [-17, 64, 18],
-                sub: 1,
-            }),
+            source: Some([-17, 64, 18]),
             network: Some(SavedNetwork {
                 id: create_engine::kinetics::network_id([-17, 64, 18]),
                 stress: 256.0,

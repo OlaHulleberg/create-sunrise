@@ -47,7 +47,7 @@ pub(super) struct KineticState {
     pub(super) lifecycle: Lifecycle,
     /// KineticBlockEntity.updateSpeed: attach on the next server tick.
     pub(super) update_speed: bool,
-    pub(super) source: Option<PartLocation>,
+    pub(super) source: Option<[i32; 3]>,
     pub(super) reactivate_source: bool,
     /// ChainGearshiftBlockEntity.signalChanged: input applied after the base tick.
     pub(super) chain_signal: Option<f32>,
@@ -82,12 +82,6 @@ impl KineticState {
     }
 }
 
-/// A source block position, with the engine port for split shaft halves.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct PartLocation {
-    pub pos: [i32; 3],
-    pub sub: u8,
-}
 /// KineticBlockEntity.write/read's Network compound.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct SavedNetwork {
@@ -103,7 +97,8 @@ pub struct SavedNetwork {
 pub struct SavedKineticState {
     pub speed: f32,
     pub sequence: Option<(Context, f32)>,
-    pub source: Option<PartLocation>,
+    /// `KineticBlockEntity.source`.
+    pub source: Option<[i32; 3]>,
     pub network: Option<SavedNetwork>,
     pub needs_speed_update: bool,
 }

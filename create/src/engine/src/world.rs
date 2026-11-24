@@ -5,7 +5,7 @@
 use crate::Block;
 use crate::block_entity_order::{BlockEntityOrder, View, Walk};
 use crate::kinetics::{Event, Kinetics, SolveStats};
-use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, parts};
+use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, part};
 use crate::states;
 use std::collections::{HashMap, HashSet};
 
@@ -60,7 +60,7 @@ fn keeps_block_entity(old: Block, new: Block) -> bool {
 
 /// `KineticBlock.areStatesKineticallyEquivalent` and its block overrides.
 fn kinetically_equivalent(a: Block, x: &StateInfo, b: Block, y: &StateInfo) -> bool {
-    let axis = |b, s| parts(b, s, &Settings::default())[0].map(|p| p.axis);
+    let axis = |b, s| part(b, s, &Settings::default()).map(|p| p.axis);
     a == b
         && axis(a, x) == axis(b, y)
         && match b {
@@ -1445,8 +1445,13 @@ impl CreateWorld {
         let same = previous.is_some_and(|(b, _)| keeps_block_entity(b, block));
         // `KineticBlock.updateIndirectNeighbourShapes` clears the old kinetic information.
         // A known-shape write skips it, leaving a retained block entity's information intact.
+        // So does the state a sequenced gearshift's step writes: its `run` cleared it already.
         let retain_kinetics = skip_shape_updates
-            || previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info));
+            || previous.is_some_and(|(b, old)| kinetically_equivalent(b, old, block, info))
+            || (block == Block::SequencedGearshift
+                && d.sequencers
+                    .get_mut(&pos)
+                    .is_some_and(|s| s.cleared_for.take() == Some(info.sequence)));
         // A state write that is not kinetically equivalent runs `clearKineticInformation`, which
         // a belt segment overrides to drop its `controller`, `beltLength` and `index` too. It is
         // no segment of a belt until `initBelt` looks again, and `getController()` is itself
@@ -1458,7 +1463,7 @@ impl CreateWorld {
             }
         }
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
-        let [a, b] = parts(block, info, &settings);
+        let part = part(block, info, &settings);
         if !same {
             d.kinetics.remove(pos);
         }
@@ -1469,14 +1474,11 @@ impl CreateWorld {
                 .or_default()
                 .push(pos);
         }
-        for (sub, part) in [(0, a), (1, b)] {
-            if let Some(part) = part {
-                if same {
-                    d.kinetics
-                        .change_block_state(pos, sub, part, retain_kinetics);
-                } else {
-                    d.kinetics.set(pos, sub, part);
-                }
+        if let Some(part) = part {
+            if same {
+                d.kinetics.change_block_state(pos, part, retain_kinetics);
+            } else {
+                d.kinetics.set(pos, part);
             }
         }
     }
@@ -2468,7 +2470,11 @@ impl CreateWorld {
         // Block entities tick now: the block-tick phase is over, so a block change from here on
         // schedules the sequenced gearshift's next tick (`LevelTicks.tick` clears the ticks it
         // ran and the set `willTickThisTick` reads before block entities tick).
+        // A step's state is written when its host commits the step, never after this begins.
         self.dims[dim].block_ticks.phase_ended();
+        for s in self.dims[dim].sequencers.values_mut() {
+            s.cleared_for = None;
+        }
         let stats = self.solve(dim, events);
         let steps = std::mem::take(&mut self.dims[dim].sequencer_steps);
         (stats, steps)
@@ -2508,19 +2514,15 @@ impl CreateWorld {
                 // A block entity ticks as one: `super.tick()` (the kinetic base) has run for
                 // this entity, and its own tick follows before any entity registered after it
                 // has ticked.
-                if let Some(sequencer) = sequencers.get_mut(&pos)
-                    && let Some(step) = sequencer.tick()
-                {
-                    sequencer_steps.push((pos, step));
-                    GearshiftStep {
-                        table,
-                        block_states,
-                        settings,
-                        generator_changes,
-                        sequencers,
-                    }
-                    .apply(k, pos);
+                SequencerTick {
+                    table,
+                    block_states,
+                    settings,
+                    generator_changes,
+                    sequencers,
+                    steps: sequencer_steps,
                 }
+                .entity_tick(k, pos);
                 if cranks {
                     HandleTick {
                         table,
@@ -2635,7 +2637,7 @@ impl CreateWorld {
         d.kinetics.take_touched(&mut touched);
         for pos in touched.drain(..) {
             if let Some(g) = d.gauges.get_mut(&pos)
-                && let Some((speed, stress, capacity, over)) = d.kinetics.network(pos, 0)
+                && let Some((speed, stress, capacity, over)) = d.kinetics.network(pos)
                 && g.update(speed, stress, capacity, over)
             {
                 d.gauge_changes.push(pos);
@@ -2657,14 +2659,13 @@ impl CreateWorld {
         &mut self,
         dim: usize,
         pos: [i32; 3],
-        sub: u8,
         saved: crate::kinetics::SavedKineticState,
     ) -> bool {
         let d = &mut self.dims[dim];
-        if !d.kinetics.restore_state(pos, sub, saved) {
+        if !d.kinetics.restore_state(pos, saved) {
             return false;
         }
-        if let Some(speed) = d.kinetics.speed(pos, sub)
+        if let Some(speed) = d.kinetics.speed(pos)
             && speed != 0.0
             && let Some(fan) = d.fans.get_mut(&pos)
         {
@@ -2822,7 +2823,7 @@ impl CreateWorld {
                 let shaft = crate::steam::shaft_pos(pos, connected);
                 let available = self.block_at(dim, shaft) == Some(Block::PoweredShaft)
                     && d.shaft_engine.get(&shaft).is_none_or(|e| *e == pos);
-                !available || !d.kinetics.driven_elsewhere(shaft, 0)
+                !available || !d.kinetics.driven_elsewhere(shaft)
             }
             crate::board::Activity::DistributingTunnel => match (info.axis, info.tunnel) {
                 (Some(axis), Some(shape)) => crate::tunnel::distributes(axis, shape, |side| {
@@ -2859,7 +2860,7 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         let turning = d
             .kinetics
-            .theoretical(pos, 0)
+            .theoretical(pos)
             .is_some_and(|(speed, _)| speed != 0.0);
         if turning
             || d.handles
@@ -2896,7 +2897,7 @@ impl CreateWorld {
             run: 0,
         };
         d.kinetics
-            .set_sequence_context(pos, 0, Some((context, context.value / 32.0)));
+            .set_sequence_context(pos, Some((context, context.value / 32.0)));
         self.set_settings(dim, pos, state, Settings { crank, ..old });
         true
     }
@@ -2956,15 +2957,10 @@ impl CreateWorld {
         // HandCrankBlockEntity.read restores fields without updateGeneratedRotation.
         let settings = Settings { crank, ..old };
         self.dims[dim].settings.insert(pos, settings);
-        if let Some((block, info)) = self.table.get(state) {
-            let [a, b] = parts(block, info, &settings);
-            for (sub, part) in [(0, a), (1, b)] {
-                if let Some(part) = part {
-                    self.dims[dim]
-                        .kinetics
-                        .change_block_state(pos, sub, part, true);
-                }
-            }
+        if let Some((block, info)) = self.table.get(state)
+            && let Some(part) = part(block, info, &settings)
+        {
+            self.dims[dim].kinetics.change_block_state(pos, part, true);
         }
     }
 
@@ -3204,7 +3200,7 @@ impl CreateWorld {
         let d = &self.dims[dim];
         d.millstones
             .keys()
-            .filter_map(|p| Some((*p, d.kinetics.speed(*p, 0).filter(|s| *s != 0.0)?)))
+            .filter_map(|p| Some((*p, d.kinetics.speed(*p).filter(|s| *s != 0.0)?)))
             .collect()
     }
 
@@ -3386,7 +3382,7 @@ impl CreateWorld {
     }
 
     /// `SequencedGearshiftBlock.tick`: the sequenced gearshift at `pos` is `powered` or not, its
-    /// block `running` (`state` not 0). Returns what its block's `state` becomes.
+    /// block `running` (`state` not 0). Returns the last step it asks for.
     pub fn sequencer_redstone(
         &mut self,
         dim: usize,
@@ -3394,14 +3390,33 @@ impl CreateWorld {
         powered: bool,
         running: bool,
     ) -> Option<crate::sequencer::Step> {
-        let step = self.dims[dim]
-            .sequencers
-            .get_mut(&pos)?
-            .redstone(powered, running);
-        if step.is_some() {
-            self.sequencer_stepped(dim, pos);
+        let (mut sequencers, kinetics) = self.sequencer_tick(dim);
+        if !sequencers.sequencers.contains_key(&pos) {
+            return None;
+        }
+        let (speed, overstressed) = kinetics.theoretical(pos).unwrap_or((0.0, false));
+        // A speed change since the gearshift last looked reaches it first: `getSpeed` is live.
+        let mut step = sequencers.speed_changed(kinetics, pos, speed, overstressed);
+        let next = {
+            let sequencer = sequencers.sequencers.get_mut(&pos)?;
+            sequencer.powered = powered;
+            sequencer.redstone(powered, running)
+        };
+        if let Some(next) = next {
+            sequencers.run(kinetics, pos, next);
+            step = Some(next);
         }
         step
+    }
+
+    /// The sequenced gearshifts that are powered (`Level.hasNeighborSignal`): a listed one is,
+    /// each other is not. `run` asks when a sequence ends or stops, so a host tells before a
+    /// tick for those still running, and before stopping one (`set_sequencer_instructions`).
+    pub fn powered_sequencers(&mut self, dim: usize, powered: impl IntoIterator<Item = [i32; 3]>) {
+        let powered: HashSet<[i32; 3]> = powered.into_iter().collect();
+        for (pos, s) in self.dims[dim].sequencers.iter_mut() {
+            s.powered = powered.contains(pos);
+        }
     }
 
     /// Where the sequence of the sequenced gearshift at `pos` is, to save with it.
@@ -3409,16 +3424,16 @@ impl CreateWorld {
         Some(self.dims[dim].sequencers.get(&pos)?.saved_run())
     }
 
-    /// The sequenced gearshift at `pos` loaded mid-sequence: it goes on from `run`, its far half
-    /// at the running instruction's modifier. Restore the saved kinetic state first,
-    /// as the block entity load callback does; its speed and stress are read without
-    /// a speed-change notification.
+    /// The sequenced gearshift at `pos` loaded mid-sequence: it goes on from `run`, its face
+    /// away from its source at the running instruction's modifier. Restore the saved kinetic
+    /// state first, as the block entity load callback does; its speed and stress are read
+    /// without a speed-change notification.
     pub fn restore_sequencer(&mut self, dim: usize, pos: [i32; 3], run: crate::sequencer::Run) {
         // SequencedGearshiftBlockEntity.read calls KineticBlockEntity.read: restore
         // speed and overStressed directly, without synthesizing onSpeedChanged.
         let (speed, overstressed) = self.dims[dim]
             .kinetics
-            .theoretical(pos, 0)
+            .theoretical(pos)
             .unwrap_or((0.0, false));
         let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
             return;
@@ -3431,12 +3446,10 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         let settings = d.settings.entry(pos).or_default();
         settings.sequence = modifier;
-        if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state)) {
-            for (sub, part) in parts(block, info, settings).into_iter().enumerate() {
-                if let Some(part) = part {
-                    d.kinetics.read_part(pos, sub as u8, part);
-                }
-            }
+        if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state))
+            && let Some(part) = part(block, info, settings)
+        {
+            d.kinetics.read_part(pos, part);
         }
     }
 
@@ -3468,59 +3481,69 @@ impl CreateWorld {
         } else {
             instructions
         };
-        if stop {
-            self.sequencer_stepped(dim, pos);
+        if let Some(step) = step {
+            self.sequencer_stepped(dim, pos, step);
         }
         step
     }
 
-    /// The speed the sequenced gearshift at `pos` is turned at (its block entity's theoretical
-    /// `speed`: the half turned, which the other turns at the modifier times) and whether it is
-    /// overstressed, after a solve changed either.
-    fn sequencer_speed(&mut self, dim: usize, pos: [i32; 3]) {
-        let d = &self.dims[dim];
-        let (a, overstressed) = d.kinetics.theoretical(pos, 0).unwrap_or((0.0, false));
-        let b = d.kinetics.theoretical(pos, 1).map_or(0.0, |(b, _)| b);
-        let m = f32::from(d.settings.get(&pos).map_or(0, |s| s.sequence));
-        let speed = if m == 0.0 {
-            if a != 0.0 { a } else { b }
-        } else if (b - a * m).abs() <= 1e-4 * b.abs().max(1.0) {
-            a
-        } else {
-            b
-        };
-        let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
-            return;
-        };
-        if let Some(step) = s.speed_changed(speed, overstressed) {
-            self.dims[dim].sequencer_steps.push((pos, step));
-            // onSpeedChanged only assigns a new context when it actually runs
-            // an instruction. In particular, load notifications preserve read's Sequence.
-            self.sequencer_stepped(dim, pos);
+    /// A sequenced gearshift's shaft half away from its source face, at `getSpeed()` times
+    /// that face's `getRotationSpeedModifier` (`SplitShaftVisual`); None for any other block.
+    pub fn away_half_speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
+        if !self.dims[dim].sequencers.contains_key(&pos) {
+            return None;
         }
+        let (_, info) = self.table.get(*self.dims[dim].states.get(&pos)?)?;
+        let axis = if info.vertical {
+            crate::kinetics::Axis::Y
+        } else {
+            info.axis?
+        };
+        let k = &self.dims[dim].kinetics;
+        let away = k.source_facing(pos).map_or(
+            crate::kinetics::Dir::from_axis(axis, true),
+            crate::kinetics::Dir::opposite,
+        );
+        k.face_speed(pos, away)
     }
 
-    /// After a sequenced gearshift's step: its far half turns at the instruction's modifier
-    /// (`run`, `getRotationSpeedModifier`).
-    fn sequencer_stepped(&mut self, dim: usize, pos: [i32; 3]) {
-        let table = &self.table;
-        let d = &mut self.dims[dim];
+    /// `SequencedGearshiftBlockEntity.onSpeedChanged`: the sequenced gearshift at `pos` is
+    /// turned at its block entity's theoretical `speed`, overstressed or not, after a solve
+    /// changed either.
+    fn sequencer_speed(&mut self, dim: usize, pos: [i32; 3]) {
+        let (mut sequencers, kinetics) = self.sequencer_tick(dim);
+        let (speed, overstressed) = kinetics.theoretical(pos).unwrap_or((0.0, false));
+        sequencers.speed_changed(kinetics, pos, speed, overstressed);
+    }
+
+    /// `SequencedGearshiftBlockEntity.run`, on the gearshift's own kinetic entity: for a step
+    /// its caller returns itself (`onRedstoneUpdate`, `applySettings`).
+    fn sequencer_stepped(&mut self, dim: usize, pos: [i32; 3], step: crate::sequencer::Step) {
+        let (mut sequencers, kinetics) = self.sequencer_tick(dim);
+        sequencers.run(kinetics, pos, step);
+    }
+
+    fn sequencer_tick(&mut self, dim: usize) -> (SequencerTick<'_>, &mut Kinetics) {
         let Dimension {
             kinetics,
             sequencers,
+            sequencer_steps,
             settings,
             generator_changes,
             states: block_states,
             ..
-        } = d;
-        GearshiftStep {
-            table,
-            block_states,
-            settings,
-            generator_changes,
-            sequencers,
-        }
-        .apply(kinetics, pos);
+        } = &mut self.dims[dim];
+        (
+            SequencerTick {
+                table: &self.table,
+                block_states,
+                settings,
+                generator_changes,
+                sequencers,
+                steps: sequencer_steps,
+            },
+            kinetics,
+        )
     }
 
     /// `DepotBehaviour.write`: slots retain item identity; this saves its transport state.
@@ -4804,10 +4827,8 @@ impl CreateWorld {
         else {
             return;
         };
-        for (sub, part) in parts(block, info, &settings).into_iter().enumerate() {
-            if let Some(part) = part {
-                d.kinetics.read_part(pos, sub as u8, part);
-            }
+        if let Some(part) = part(block, info, &settings) {
+            d.kinetics.read_part(pos, part);
         }
     }
 
@@ -5327,10 +5348,10 @@ impl CreateWorld {
                 crate::steam::conveyed_direction(efficiency, connected, facing, axis, counter);
             // A shaft another source turns the other way turns the engine round to it
             // (`hasSource`, `setValue(1 - ordinal)`).
-            let shaft_speed = d.kinetics.theoretical(shaft, 0).map_or(0.0, |t| t.0);
+            let shaft_speed = d.kinetics.theoretical(shaft).map_or(0.0, |t| t.0);
             if shaft_speed != 0.0
                 && (shaft_speed > 0.0) != (direction > 0)
-                && d.kinetics.driven_elsewhere(shaft, 0)
+                && d.kinetics.driven_elsewhere(shaft)
             {
                 if counter {
                     d.scroll_options.remove(&engine);
@@ -5572,7 +5593,7 @@ impl CreateWorld {
     }
 
     pub fn speed(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
-        self.dims[dim].kinetics.speed(pos, 0)
+        self.dims[dim].kinetics.speed(pos)
     }
 
     /// Backtanks saved with a column (`BacktankBlockEntity.read`): those already placed take
@@ -5617,7 +5638,7 @@ impl CreateWorld {
         d.backtanks
             .iter()
             .filter_map(|(p, b)| {
-                let speed = d.kinetics.speed(*p, 0)?;
+                let speed = d.kinetics.speed(*p)?;
                 let state = *d.states.get(p)?;
                 let waterlogged = self.table.get(state)?.1.waterlogged;
                 b.ticks(speed, waterlogged).then_some((*p, speed))
@@ -5645,8 +5666,8 @@ impl CreateWorld {
 }
 
 /// A block entity's setting changed in place: Create's block entity keeps its speed, source and
-/// network (`updateGeneratedRotation`, `run`), where a new block state starts them again
-/// (`KineticBlock.updateIndirectNeighbourShapes`). False when it has other parts now.
+/// network (`updateGeneratedRotation`), where a new block state starts them again
+/// (`KineticBlock.updateIndirectNeighbourShapes`). False when its part came or went.
 fn update_parts_in_place(
     k: &mut Kinetics,
     block: Block,
@@ -5654,58 +5675,114 @@ fn update_parts_in_place(
     pos: [i32; 3],
     settings: &Settings,
 ) -> bool {
-    let [a, b] = parts(block, info, settings);
-    if a.is_some() != k.has_part(pos, 0) || b.is_some() != k.has_part(pos, 1) {
+    let part = part(block, info, settings);
+    if part.is_some() != k.has_part(pos) {
         return false;
     }
-    for (sub, part) in [(0, a), (1, b)] {
-        if let Some(part) = part {
-            k.set(pos, sub, part);
-        }
+    if let Some(part) = part {
+        k.set(pos, part);
     }
     true
 }
 
-/// The state a sequenced gearshift's step reads and changes besides its own kinetic entity:
-/// `SequencedGearshiftBlockEntity.run`/`onSpeedChanged` make its far half turn at the running
-/// instruction's modifier (`getRotationSpeedModifier`, a `SplitShaftBlockEntity`).
-struct GearshiftStep<'a> {
+/// What `SequencedGearshiftBlockEntity` reaches beside its own fields: the gearshift's
+/// kinetic entity, the part its speed modifier makes of it, and the steps its block shows.
+struct SequencerTick<'a> {
     table: &'a StateTable,
     block_states: &'a HashMap<[i32; 3], u32>,
     settings: &'a mut HashMap<[i32; 3], Settings>,
     generator_changes: &'a mut Vec<[i32; 3]>,
-    sequencers: &'a HashMap<[i32; 3], crate::sequencer::Sequencer>,
+    sequencers: &'a mut HashMap<[i32; 3], crate::sequencer::Sequencer>,
+    steps: &'a mut Vec<([i32; 3], crate::sequencer::Step)>,
 }
-impl GearshiftStep<'_> {
-    /// A new instruction (or none) changed what the far half turns at; `run` detaches its
-    /// output and re-attaches it at that modifier.
-    fn apply(&mut self, k: &mut Kinetics, pos: [i32; 3]) {
-        let Some(s) = self.sequencers.get(&pos) else {
+impl SequencerTick<'_> {
+    /// `SequencedGearshiftBlockEntity.tick` after `KineticBlockEntity.tick`: a speed change
+    /// the base tick made (`attachKinetics`) is `onSpeedChanged` first.
+    fn entity_tick(&mut self, k: &mut Kinetics, pos: [i32; 3]) {
+        let (speed, overstressed) = k.theoretical(pos).unwrap_or((0.0, false));
+        let step = self.speed_changed(k, pos, speed, overstressed);
+        self.steps.extend(step.map(|step| (pos, step)));
+        let step = self
+            .sequencers
+            .get_mut(&pos)
+            .and_then(crate::sequencer::Sequencer::tick);
+        if let Some(step) = step {
+            self.steps.push((pos, step));
+            self.run(k, pos, step);
+        }
+    }
+
+    /// `SequencedGearshiftBlockEntity.onSpeedChanged`: the gearshift turns at its block
+    /// entity's theoretical `speed`, overstressed or not. The step it asks for is run.
+    fn speed_changed(
+        &mut self,
+        k: &mut Kinetics,
+        pos: [i32; 3],
+        speed: f32,
+        overstressed: bool,
+    ) -> Option<crate::sequencer::Step> {
+        // onSpeedChanged only assigns a new context when it actually runs an instruction. In
+        // particular, load notifications preserve read's Sequence.
+        let step = self
+            .sequencers
+            .get_mut(&pos)
+            .and_then(|s| s.speed_changed(speed, overstressed));
+        if let Some(step) = step {
+            self.run(k, pos, step);
+        }
+        step
+    }
+
+    /// `SequencedGearshiftBlockEntity.run`: it detaches what a turning instruction drove and
+    /// sets the entity's modifier and `sequenceContext`; its `setBlock` then clears the entity
+    /// (`KineticBlock.updateIndirectNeighbourShapes`) whenever it changes the block's state:
+    /// not at an end while powered, which keeps the state (`sendData`), nor writing the state
+    /// the block already has (`Level.setBlock` stops at an unchanged state).
+    fn run(&mut self, k: &mut Kinetics, pos: [i32; 3], step: crate::sequencer::Step) {
+        use crate::sequencer::Step;
+        let Some(s) = self.sequencers.get_mut(&pos) else {
             return;
         };
-        let (modifier, context) = (s.modifier() as i8, s.context());
         let old = self.settings.get(&pos).copied().unwrap_or_default();
-        let previous = k.saved_state(pos, 1).and_then(|s| s.sequence).map(|s| s.0);
-        if (old.sequence != modifier || previous != context)
-            && let Some(&state) = self.block_states.get(&pos)
-        {
-            let speed = k.theoretical(pos, 0).map_or(0.0, |s| s.0) * f32::from(modifier);
-            let sequence = context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }));
-            // A step that only restarts the same instruction still detaches its output.
-            if old.sequence == modifier {
-                k.restart_sequence_output(pos);
-            }
-            let settings = Settings {
-                sequence: modifier,
-                ..old
-            };
-            self.settings.insert(pos, settings);
-            self.generator_changes.push(pos);
-            if let Some((block, info)) = self.table.get(state) {
-                update_parts_in_place(k, block, info, pos, &settings);
-            }
-            k.set_sequence_context(pos, 1, sequence);
+        let modifier = s.modifier();
+        match step {
+            Step::Run(_) => k.detach_kinetics(pos),
+            Step::Ended if old.sequence != 0 => k.detach_kinetics(pos),
+            Step::Idle | Step::Ended => {}
         }
+        // SequenceContext.fromGearshift takes the speed of the face away from the source.
+        let speed = k.theoretical(pos).map_or(0.0, |s| s.0) * modifier as f32;
+        let sequence = s
+            .context()
+            .map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }));
+        let settings = Settings {
+            sequence: modifier as i8,
+            ..old
+        };
+        self.settings.insert(pos, settings);
+        self.generator_changes.push(pos);
+        let current = self
+            .block_states
+            .get(&pos)
+            .and_then(|&state| self.table.get(state));
+        let part = current.and_then(|(b, i)| part(b, i, &settings));
+        let keeps_state = step == Step::Ended && s.powered;
+        let writes = !keeps_state && current.is_some_and(|(_, i)| i.sequence != step.state());
+        if writes {
+            if let Some(part) = part {
+                k.change_block_state(pos, part, false);
+            }
+            // clearKineticInformation assigns the fields: no onSpeedChanged follows.
+            s.speed = 0.0;
+            s.overstressed = false;
+            s.cleared_for = Some(step.state());
+        } else {
+            if let Some(part) = part {
+                k.read_part(pos, part);
+            }
+            k.report(pos);
+        }
+        k.set_sequence_context(pos, sequence);
     }
 }
 
@@ -5738,7 +5815,7 @@ impl HandleTick<'_> {
             return;
         }
         // HandCrankBlockEntity.tick: the sequence context goes and the crank stops turning.
-        k.set_sequence_context(pos, 0, None);
+        k.set_sequence_context(pos, None);
         let old = self.settings.get(&pos).copied().unwrap_or_default();
         let settings = Settings { crank: 0, ..old };
         self.settings.insert(pos, settings);
@@ -6404,7 +6481,7 @@ mod tests {
         transport_walk(&mut w);
         w.tick(0, &mut Vec::new());
         let size = |w: &CreateWorld, p| {
-            let saved = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+            let saved = w.dims[0].kinetics.saved_state(p).unwrap();
             saved.network.unwrap().size
         };
         assert_eq!(w.belt_chain(0, end).unwrap().len(), 10);
@@ -6438,7 +6515,7 @@ mod tests {
         transport_walk(&mut w);
         assert_eq!(w.speed(0, [0, 8, 0]), Some(32.0));
         assert_eq!(w.speed(0, start_of_second), Some(0.0));
-        let saved = w.dims[0].kinetics.saved_state(start_of_second, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(start_of_second).unwrap();
         assert_eq!((saved.source, saved.network), (None, None));
         assert_eq!(w.belt_chain(0, start_of_second).unwrap().len(), 4);
         states::clear_range();
@@ -7193,7 +7270,7 @@ mod tests {
         w.block_changed(0, e, 0, 12);
         let saved: Vec<_> = [motor, shaft, e]
             .into_iter()
-            .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0)))
+            .map(|p| (p, w.dims[0].kinetics.saved_state(p)))
             .collect();
         // Java's tick 2: the motor and the shaft saved a network of 2, the motor no stress.
         let size = |s: &Option<crate::kinetics::SavedKineticState>| {
@@ -7207,14 +7284,14 @@ mod tests {
         for ((p, saved), state) in saved.into_iter().zip([10, 11, 12]) {
             w.block_loaded(0, p, state);
             if let Some(saved) = saved {
-                assert!(w.dims[0].kinetics.restore_state(p, 0, saved));
+                assert!(w.dims[0].kinetics.restore_state(p, saved));
             }
         }
         walk_ejectors(&mut w, 1);
         w.tick(0, &mut events);
         // Java's tick 3: one network of 3 with the ejector's 2 per rpm, saved by every member.
         for p in [motor, shaft, e] {
-            let saved = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+            let saved = w.dims[0].kinetics.saved_state(p).unwrap();
             let network = saved.network.unwrap();
             assert_eq!((network.size, network.stress), (3, 64.0), "{p:?}");
             assert_eq!(network.capacity, 524288.0, "{p:?}");
@@ -7318,7 +7395,7 @@ mod tests {
                 (
                     p,
                     w.saved_belt_segment(0, p).unwrap(),
-                    w.dims[0].kinetics.saved_state(p, 0).unwrap(),
+                    w.dims[0].kinetics.saved_state(p).unwrap(),
                 )
             })
             .collect();
@@ -7335,7 +7412,7 @@ mod tests {
             };
             w.block_loaded(0, p, state);
             w.restore_belt_segment(0, p, saved);
-            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+            assert!(w.dims[0].kinetics.restore_state(p, kinetic));
         }
         assert_eq!(
             w.transport_ticks(0, 0).next(&mut w),
@@ -7481,7 +7558,7 @@ mod tests {
         for _ in 0..100 {
             w.tick(0, &mut events);
             assert_eq!(w.speed(0, middle), Some(32.0));
-            assert_eq!(w.dims[0].kinetics.network(middle, 0).unwrap().2, 524288.0);
+            assert_eq!(w.dims[0].kinetics.network(middle).unwrap().2, 524288.0);
         }
         states::clear_range();
     }
@@ -7513,7 +7590,7 @@ mod tests {
         w.block_changed(0, p, 11, 12);
         w.tick(0, &mut events);
         assert_eq!(w.speed(0, p), Some(0.0));
-        assert_eq!(w.dims[0].kinetics.network(p, 0).unwrap().2, 0.0);
+        assert_eq!(w.dims[0].kinetics.network(p).unwrap().2, 0.0);
         states::clear_range();
     }
 
@@ -7549,7 +7626,7 @@ mod tests {
                 74 => {
                     w.switching_block_state(0, shaft, 13);
                     assert_eq!(
-                        w.dims[0].kinetics.network_membership(motor, 0).unwrap().1,
+                        w.dims[0].kinetics.network_membership(motor).unwrap().1,
                         2,
                         "immediately after switch"
                     );
@@ -7561,7 +7638,7 @@ mod tests {
             if tick >= 4 {
                 let expected = if tick < 74 { 3 } else { 2 };
                 assert_eq!(
-                    w.dims[0].kinetics.network_membership(motor, 0).unwrap().1,
+                    w.dims[0].kinetics.network_membership(motor).unwrap().1,
                     expected,
                     "after tick {tick}"
                 );
@@ -8565,17 +8642,17 @@ mod tests {
             w.tick(0, &mut Vec::new());
         }
         let handle = w.saved_handle(0, pos).unwrap();
-        let kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        let kinetic = w.dims[0].kinetics.saved_state(pos).unwrap();
         w.column_unloaded(0, 0, 0);
         w.block_loaded(0, pos, 10);
         w.restore_handle(0, pos, handle);
-        assert!(w.dims[0].kinetics.restore_state(pos, 0, kinetic));
+        assert!(w.dims[0].kinetics.restore_state(pos, kinetic));
         for _ in 0..handle.in_use {
             w.tick_cranks(0);
             w.tick(0, &mut Vec::new());
         }
         // Create issue #45: super.tick enrolls before expiry, so remove resets the cache.
-        assert_eq!(w.dims[0].kinetics.network(pos, 0).unwrap().2, 0.0);
+        assert_eq!(w.dims[0].kinetics.network(pos).unwrap().2, 0.0);
         if !valve {
             assert!(w.turn_crank(0, pos, true));
             w.tick_cranks(0);
@@ -8583,12 +8660,12 @@ mod tests {
             // Create issue #43: no ghost tick recalculates the retained 256 capacity.
             let net = w.dims[0]
                 .kinetics
-                .saved_state(pos, 0)
+                .saved_state(pos)
                 .unwrap()
                 .network
                 .unwrap();
             assert_eq!((net.capacity, net.size), (256.0, 2));
-            assert_eq!(w.dims[0].kinetics.network_membership(pos, 0).unwrap().1, 1);
+            assert_eq!(w.dims[0].kinetics.network_membership(pos).unwrap().1, 1);
         }
         states::clear_range();
     }
@@ -8631,20 +8708,20 @@ mod tests {
                 w.tick(0, &mut Vec::new());
                 let saved = w.saved_handle(0, pos).unwrap();
                 assert_eq!(saved.in_use, if valve { 6 } else { 9 });
-                let kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+                let kinetic = w.dims[0].kinetics.saved_state(pos).unwrap();
                 let rpm = if back ^ valve { -32.0 } else { 32.0 };
-                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
+                assert_eq!(w.dims[0].kinetics.generated(pos), Some(rpm));
                 w.column_unloaded(0, 0, 0);
                 w.block_loaded(0, pos, id);
                 w.restore_handle(0, pos, saved);
-                w.dims[0].kinetics.restore_state(pos, 0, kinetic);
-                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
+                w.dims[0].kinetics.restore_state(pos, kinetic);
+                assert_eq!(w.dims[0].kinetics.generated(pos), Some(rpm));
                 assert_eq!(w.saved_handle(0, pos), Some(saved));
                 w.tick(0, &mut Vec::new());
                 assert_eq!(w.speed(0, pos), Some(rpm));
                 let network = w.dims[0]
                     .kinetics
-                    .saved_state(pos, 0)
+                    .saved_state(pos)
                     .unwrap()
                     .network
                     .unwrap();
@@ -8652,15 +8729,15 @@ mod tests {
                 // Java getSize counts the old object and the fresh object; the
                 // cached size remains 1 until a changed network total causes sync.
                 assert_eq!(network.size, 1);
-                assert_eq!(w.dims[0].kinetics.network_membership(pos, 0).unwrap().1, 2);
+                assert_eq!(w.dims[0].kinetics.network_membership(pos).unwrap().1, 2);
                 for _ in 1..saved.in_use {
                     w.tick_cranks(0);
                     w.tick(0, &mut Vec::new());
                 }
-                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(rpm));
+                assert_eq!(w.dims[0].kinetics.generated(pos), Some(rpm));
                 w.tick_cranks(0);
                 w.tick(0, &mut Vec::new());
-                assert_eq!(w.dims[0].kinetics.generated(pos, 0), Some(0.0));
+                assert_eq!(w.dims[0].kinetics.generated(pos), Some(0.0));
                 if valve {
                     assert!(
                         w.use_valve(0, pos, false, 45),
@@ -8736,7 +8813,7 @@ mod tests {
         assert!(
             w.dims[0]
                 .kinetics
-                .saved_state(idle, 0)
+                .saved_state(idle)
                 .unwrap()
                 .needs_speed_update
         );
@@ -8745,7 +8822,7 @@ mod tests {
         assert!(
             !w.dims[0]
                 .kinetics
-                .saved_state(idle, 0)
+                .saved_state(idle)
                 .unwrap()
                 .needs_speed_update
         );
@@ -8803,10 +8880,7 @@ mod tests {
         // detach the old shaft. Java retains its speed, source and sequence.
         assert_eq!(w.dims[0].handles[&handle].saved.in_use, 0);
         assert_eq!(w.speed(0, shaft), Some(-32.0));
-        assert_eq!(
-            w.dims[0].kinetics.sequence_limit(shaft, 0, false),
-            Some(41.0)
-        );
+        assert_eq!(w.dims[0].kinetics.sequence_limit(shaft, false), Some(41.0));
         states::clear_range();
     }
 
@@ -8832,7 +8906,7 @@ mod tests {
         w.tick(0, &mut Vec::new());
         w.block_changed(0, positions[1], 11, 12);
         let handle = w.saved_handle(0, positions[1]).unwrap();
-        let saved = positions.map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        let saved = positions.map(|p| w.dims[0].kinetics.saved_state(p).unwrap());
         // KineticBlockEntity.write after clearKineticInformation keeps Sequence,
         // but writes Speed:0 and no Source/Network on the recoloured entity.
         assert_eq!(saved[1].speed, 0.0);
@@ -8845,12 +8919,12 @@ mod tests {
             if p == positions[1] {
                 w.restore_handle(0, p, handle);
             }
-            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+            assert!(w.dims[0].kinetics.restore_state(p, kinetic));
         }
         w.tick_cranks(0);
         w.tick(0, &mut Vec::new());
         assert_eq!(
-            w.dims[0].kinetics.sequence_limit(positions[2], 0, false),
+            w.dims[0].kinetics.sequence_limit(positions[2], false),
             Some(180.0)
         );
         // Java issue #69 checkpoint 223: the handle is the root at +/-32 RPM.
@@ -8859,22 +8933,12 @@ mod tests {
             Some(if backwards { 32.0 } else { -32.0 })
         );
         assert_eq!(
-            w.dims[0]
-                .kinetics
-                .saved_state(positions[1], 0)
-                .unwrap()
-                .source,
+            w.dims[0].kinetics.saved_state(positions[1]).unwrap().source,
             None
         );
         assert_eq!(
-            w.dims[0]
-                .kinetics
-                .saved_state(positions[0], 0)
-                .unwrap()
-                .source
-                .unwrap()
-                .pos,
-            positions[1]
+            w.dims[0].kinetics.saved_state(positions[0]).unwrap().source,
+            Some(positions[1])
         );
         states::clear_range();
     }
@@ -8902,17 +8966,17 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert!(w.use_valve(0, p, false, -180));
         let handle = w.saved_handle(0, p).unwrap();
-        let kinetic = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+        let kinetic = w.dims[0].kinetics.saved_state(p).unwrap();
         w.column_unloaded(0, 0, 0);
         w.block_loaded(0, p, 10);
         w.restore_handle(0, p, handle);
-        w.dims[0].kinetics.restore_state(p, 0, kinetic);
+        w.dims[0].kinetics.restore_state(p, kinetic);
         w.tick_cranks(0);
         w.tick(0, &mut Vec::new());
         assert_eq!(
             w.dims[0]
                 .kinetics
-                .saved_state(p, 0)
+                .saved_state(p)
                 .unwrap()
                 .sequence
                 .unwrap()
@@ -8941,7 +9005,7 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert!(w.use_valve(0, p, false, 180));
         let handle = w.saved_handle(0, p).unwrap();
-        let mut kinetic = w.dims[0].kinetics.saved_state(p, 0).unwrap();
+        let mut kinetic = w.dims[0].kinetics.saved_state(p).unwrap();
         // KineticBlockEntity.read reads Sequence independently of angleInput/InUse.
         for sequence in [
             Some((
@@ -8958,7 +9022,7 @@ mod tests {
             w.column_unloaded(0, 0, 0);
             w.block_loaded(0, p, 10);
             w.restore_handle(0, p, handle);
-            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+            assert!(w.dims[0].kinetics.restore_state(p, kinetic));
             w.tick_cranks(0);
             w.tick(0, &mut Vec::new());
             w.block_changed(0, p, 10, 11);
@@ -8979,7 +9043,7 @@ mod tests {
             w.tick(0, &mut Vec::new());
             assert_eq!(w.speed(0, p), Some(64.0));
             assert_eq!(
-                w.dims[0].kinetics.saved_state(p, 0).unwrap().sequence,
+                w.dims[0].kinetics.saved_state(p).unwrap().sequence,
                 sequence
             );
         }
@@ -9014,7 +9078,7 @@ mod tests {
         assert_eq!(w.speed(0, [1, 0, 0]), Some(-32.0));
         // Every valve handle has the copper one's capacity (8 su/RPM).
         assert_eq!(
-            w.dims[0].kinetics.network([1, 0, 0], 0).map(|n| n.2),
+            w.dims[0].kinetics.network([1, 0, 0]).map(|n| n.2),
             Some(8.0 * 32.0)
         );
         for _ in 0..6 {
@@ -9030,13 +9094,9 @@ mod tests {
             "cooldown does not hide the box"
         );
         // HandCrankBlockEntity.tick clears the valve's Sequence at expiry (issue #19).
-        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 0, false), None);
+        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], false), None);
         assert_eq!(
-            w.dims[0]
-                .kinetics
-                .saved_state([0, 0, 0], 0)
-                .unwrap()
-                .sequence,
+            w.dims[0].kinetics.saved_state([0, 0, 0]).unwrap().sequence,
             None
         );
         // The cooldown: 4, counted from the tick it stopped.
@@ -9366,7 +9426,6 @@ mod tests {
         w.tick(0, &mut Vec::new());
         w.dims[0].kinetics.change_block_state(
             drive,
-            0,
             crate::kinetics::Part::shaft(crate::kinetics::Axis::X),
             false,
         );
@@ -9432,7 +9491,7 @@ mod tests {
         );
         let kinetics: Vec<_> = [motor, valve]
             .into_iter()
-            .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0).unwrap()))
+            .map(|p| (p, w.dims[0].kinetics.saved_state(p).unwrap()))
             .collect();
         w.column_unloaded(0, 0, 0);
         w.load_settings(0, [(motor, rpm as i32)].into_iter());
@@ -9441,7 +9500,7 @@ mod tests {
         }
         w.restore_valve_pointer(0, valve, saved);
         for (p, saved) in kinetics {
-            w.dims[0].kinetics.restore_state(p, 0, saved);
+            w.dims[0].kinetics.restore_state(p, saved);
         }
         assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
         assert!(
@@ -9538,12 +9597,13 @@ mod tests {
         // A hose pulley turns on x (its facing north turned clockwise), its shaft out east.
         w.block_changed(0, hose, 0, 12);
         assert!(w.dims[0].plumbing.hoses.contains_key(&hose));
-        let [p, _] = crate::parts::parts(
+        let p = crate::parts::part(
             Block::HosePulley,
             &StateInfo::read([("facing", "north")].into_iter()),
             &Settings::default(),
-        );
-        assert_eq!(p.map(|p| p.axis), Some(crate::kinetics::Axis::X));
+        )
+        .unwrap();
+        assert_eq!(p.axis, crate::kinetics::Axis::X);
         // A motor east of the hose, facing west into its shaft: the hose is given its speed.
         w.block_changed(0, [6, 0, 0], 0, 10);
         w.tick(0, &mut Vec::new());
@@ -9728,13 +9788,13 @@ mod tests {
         w.tick(0, &mut Vec::new());
         let speed = w.speed(0, fan).unwrap();
         assert!(speed != 0.0);
-        let saved = [motor, fan].map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        let saved = [motor, fan].map(|p| w.dims[0].kinetics.saved_state(p).unwrap());
         w.column_unloaded(0, 0, 0);
         w.dims[0].kinetics = crate::kinetics::Kinetics::new();
         w.block_loaded(0, fan, 11);
         w.block_loaded(0, motor, 10);
         for (p, s) in [motor, fan].into_iter().zip(saved) {
-            assert!(w.restore_kinetic_state(0, p, 0, s));
+            assert!(w.restore_kinetic_state(0, p, s));
         }
         assert_eq!(w.fans_to_tick(0), vec![fan]);
         assert_eq!(w.dims[0].fans[&fan].speed, speed);
@@ -9762,7 +9822,7 @@ mod tests {
         w.set_wheel_flow(0, wheel, -1);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, wheel), Some(-8.0));
-        let saved = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(wheel).unwrap();
         assert_eq!(
             saved.network.map(|n| (n.capacity, n.size)),
             Some((256.0, 1))
@@ -9774,12 +9834,12 @@ mod tests {
         // The reloaded case owns a new network space (`NetworkIsolation.reset`).
         w.dims[0].kinetics = crate::kinetics::Kinetics::new();
         w.block_loaded(0, wheel, 10);
-        assert!(w.dims[0].kinetics.restore_state(wheel, 0, saved));
+        assert!(w.dims[0].kinetics.restore_state(wheel, saved));
         // `read` puts the saved score in the entity's field; it is not a runtime change.
         w.restore_wheel_flow(0, wheel, i32::from(flow));
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, wheel), Some(-8.0));
-        let reloaded = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        let reloaded = w.dims[0].kinetics.saved_state(wheel).unwrap();
         assert_eq!(
             reloaded.network.map(|n| (n.capacity, n.size)),
             Some((256.0, 1)),
@@ -9815,24 +9875,21 @@ mod tests {
         w.block_changed(0, wheel, 0, east);
         w.set_wheel_flow(0, wheel, -1);
         w.tick(0, &mut Vec::new());
-        let saved = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(wheel).unwrap();
         assert_eq!(saved.network.map(|n| n.capacity), Some(256.0));
         w.column_unloaded(0, 0, 0);
         w.dims[0].kinetics = crate::kinetics::Kinetics::new();
         w.block_loaded(0, wheel, east);
-        assert!(w.dims[0].kinetics.restore_state(wheel, 0, saved));
+        assert!(w.dims[0].kinetics.restore_state(wheel, saved));
         w.restore_wheel_flow(0, wheel, -1);
         // The block tick's flow determination comes before the entity's first tick: the
         // column is gone, so the wheel scores 0 and stops.
         w.set_wheel_flow(0, wheel, 0);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, wheel), Some(0.0));
+        assert_eq!(w.dims[0].kinetics.saved_state(wheel).unwrap().network, None);
         assert_eq!(
-            w.dims[0].kinetics.saved_state(wheel, 0).unwrap().network,
-            None
-        );
-        assert_eq!(
-            w.dims[0].kinetics.network(wheel, 0).map(|n| n.2),
+            w.dims[0].kinetics.network(wheel).map(|n| n.2),
             Some(256.0),
             "Java keeps the restored capacity (`KineticNetwork.remove` finds no member)"
         );
@@ -9841,9 +9898,9 @@ mod tests {
         // the rest (`KineticBlock.updateIndirectNeighbourShapes`).
         w.switching_block_state(0, wheel, south);
         w.block_changed(0, wheel, east, south);
-        let cleared = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
+        let cleared = w.dims[0].kinetics.saved_state(wheel).unwrap();
         assert_eq!((cleared.speed, cleared.network), (0.0, None));
-        assert_eq!(w.dims[0].kinetics.network(wheel, 0).map(|n| n.2), Some(0.0));
+        assert_eq!(w.dims[0].kinetics.network(wheel).map(|n| n.2), Some(0.0));
         states::clear_range();
     }
 
@@ -9896,7 +9953,7 @@ mod tests {
         w.tick_boilers(0);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, shaft), Some(64.0));
-        let saved = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(shaft).unwrap();
         assert_eq!(
             saved.network.map(|n| (n.capacity, n.size)),
             Some((16384.0, 1))
@@ -9916,7 +9973,7 @@ mod tests {
         }
         w.block_loaded(0, engine, 11);
         w.block_loaded(0, shaft, 13);
-        assert!(w.dims[0].kinetics.restore_state(shaft, 0, saved));
+        assert!(w.dims[0].kinetics.restore_state(shaft, saved));
         // `PoweredShaftBlockEntity.read`: the engine comes back with its power and direction.
         for (p, out) in engine_data {
             w.restore_shaft_steam(0, p, out);
@@ -9930,7 +9987,7 @@ mod tests {
             Some(64.0),
             "the engine keeps driving its shaft"
         );
-        let reloaded = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
+        let reloaded = w.dims[0].kinetics.saved_state(shaft).unwrap();
         assert_eq!(reloaded.network.map(|n| n.size), Some(1));
         states::clear_range();
     }
@@ -10315,11 +10372,11 @@ mod tests {
         // `KineticBlockEntity.read` restores `Speed` 16 and no `onSpeedChanged` comes, so the
         // bearing stays apart (Java: a reloaded powered bearing standing apart keeps whatever
         // is in front of it in the world).
-        let saved = [motor, bearing].map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        let saved = [motor, bearing].map(|p| w.dims[0].kinetics.saved_state(p).unwrap());
         w.column_unloaded(0, 0, 0);
         for ((p, state), kinetic) in [motor, bearing].into_iter().zip([10, 11]).zip(saved) {
             w.block_loaded(0, p, state);
-            assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
+            assert!(w.dims[0].kinetics.restore_state(p, kinetic));
         }
         for _ in 0..3 {
             w.tick(0, &mut Vec::new());
@@ -10734,7 +10791,7 @@ mod tests {
         w.tick(0, &mut Vec::new());
         w.set_chain_signal(0, positions[1], 3);
         w.tick(0, &mut Vec::new());
-        let saved = positions.map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
+        let saved = positions.map(|p| w.dims[0].kinetics.saved_state(p).unwrap());
         let signal = w.saved_chain_signal(0, positions[1]).unwrap();
         w.column_unloaded(0, 0, -1);
         w.column_unloaded(0, 0, 0);
@@ -10742,7 +10799,7 @@ mod tests {
         for (i, p) in positions.into_iter().enumerate() {
             w.block_loaded(0, p, 10 + i as u32);
             w.restore_chain_signal(0, p, signal);
-            assert!(w.dims[0].kinetics.restore_state(p, 0, saved[i]));
+            assert!(w.dims[0].kinetics.restore_state(p, saved[i]));
         }
         w.set_chain_signal(0, positions[1], 3);
         w.tick(0, &mut Vec::new());
@@ -10805,14 +10862,10 @@ mod tests {
             }],
             false,
         );
-        let mut kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        let mut kinetic = w.dims[0].kinetics.saved_state(pos).unwrap();
         kinetic.speed = 32.0;
-        w.dims[0].kinetics.restore_state(pos, 0, kinetic);
-        kinetic.speed = 64.0;
-        kinetic.source = Some(crate::kinetics::PartLocation { pos, sub: 0 });
-        w.dims[0].kinetics.restore_state(pos, 1, kinetic);
-        let far_read_state = w.dims[0].kinetics.saved_state(pos, 1).unwrap();
-        let read_state = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        w.dims[0].kinetics.restore_state(pos, kinetic);
+        let read_state = w.dims[0].kinetics.saved_state(pos).unwrap();
         // Java c37: completed tick 22 saved these fields; read does not call
         // onSpeedChanged. The unchanged 32 RPM report must leave the timer alone.
         w.restore_sequencer(
@@ -10826,8 +10879,7 @@ mod tests {
                 powered_before: true,
             },
         );
-        assert_eq!(w.dims[0].kinetics.saved_state(pos, 1), Some(far_read_state));
-        assert_eq!(w.dims[0].kinetics.saved_state(pos, 0), Some(read_state));
+        assert_eq!(w.dims[0].kinetics.saved_state(pos), Some(read_state));
         let s = w.dims[0].sequencers.get_mut(&pos).unwrap();
         assert_eq!(s.speed_changed(32.0, false), None);
         assert_eq!(s.tick(), None);
@@ -10899,7 +10951,7 @@ mod tests {
             assert!(
                 w.dims[0]
                     .kinetics
-                    .saved_state(pos, 0)
+                    .saved_state(pos)
                     .unwrap()
                     .source
                     .is_some()
@@ -10961,7 +11013,7 @@ mod tests {
         }
         assert_eq!(level_tick(&mut w), [(pos, Step::Run(2))]);
         // Java issue #20 tick 36: DELAY starts with no source or speed.
-        let saved = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(pos).unwrap();
         assert_eq!(saved.speed, 0.0);
         assert!(saved.source.is_none());
         let run = w.sequencer_run(0, pos).unwrap();
@@ -10975,7 +11027,7 @@ mod tests {
         assert!(
             w.dims[0]
                 .kinetics
-                .saved_state(pos, 0)
+                .saved_state(pos)
                 .unwrap()
                 .source
                 .is_some()
@@ -11058,12 +11110,7 @@ mod tests {
             .collect();
         let kinetic: Vec<_> = positions
             .iter()
-            .map(|&p| {
-                [
-                    w.dims[0].kinetics.saved_state(p, 0),
-                    w.dims[0].kinetics.saved_state(p, 1),
-                ]
-            })
+            .map(|&p| w.dims[0].kinetics.saved_state(p))
             .collect();
         let handle = w.saved_handle(0, crank_pos).unwrap();
         w.column_unloaded(0, 0, 0);
@@ -11074,10 +11121,8 @@ mod tests {
             if p == crank_pos {
                 w.restore_handle(0, p, handle);
             }
-            for (sub, saved) in kinetic[i].iter().enumerate() {
-                if let Some(saved) = *saved {
-                    assert!(w.dims[0].kinetics.restore_state(p, sub as u8, saved));
-                }
+            if let Some(saved) = kinetic[i] {
+                assert!(w.dims[0].kinetics.restore_state(p, saved));
             }
             if p == gearshift {
                 w.restore_sequencer(0, p, run);
@@ -11086,24 +11131,31 @@ mod tests {
         let steps = level_tick(&mut w);
         assert_eq!(steps, [(gearshift, Step::Ended)]);
         // Java at the reloaded tick: the crank and what it turns still run at 32 RPM and report
-        // the 256 SU the save restored. The gearshift that just ended its run was never
-        // enrolled in that network: it keeps its saved capacity and loses its speed.
+        // the 256 SU the save restored. The output gearshift, registered after the first and
+        // not yet enrolled, keeps its saved capacity and loses its speed; the first, its run
+        // ended unpowered, is cleared like a block whose state changed.
         assert_eq!(w.speed(0, crank_pos), Some(-32.0));
         assert_eq!(
-            w.dims[0].kinetics.network(crank_pos, 0),
+            w.dims[0].kinetics.network(crank_pos),
             Some((-32.0, 0.0, 256.0, false))
         );
-        assert_eq!(w.speed(0, gearshift), Some(-32.0));
+        assert_eq!(w.speed(0, gearshift), Some(0.0));
         assert_eq!(
-            w.dims[0].kinetics.network(gearshift, 0),
-            Some((-32.0, 0.0, 0.0, false))
+            w.dims[0].kinetics.saved_state(gearshift),
+            Some(crate::kinetics::SavedKineticState {
+                speed: 0.0,
+                sequence: None,
+                source: None,
+                network: None,
+                needs_speed_update: true,
+            })
         );
         assert_eq!(w.speed(0, output), Some(0.0));
         assert_eq!(
-            w.dims[0].kinetics.network(output, 0),
+            w.dims[0].kinetics.network(output),
             Some((0.0, 0.0, 256.0, false))
         );
-        let saved = w.dims[0].kinetics.saved_state(output, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(output).unwrap();
         assert_eq!(
             (saved.speed, saved.source, saved.network),
             (0.0, None, None)
@@ -11112,7 +11164,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sequenced_gearshift_turns_its_far_half_through_its_sequence() {
+    fn a_sequenced_gearshift_turns_its_far_face_through_its_sequence() {
         use crate::sequencer::Step;
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
@@ -11134,7 +11186,7 @@ mod tests {
         assert_eq!(
             w.speed(0, [1, 0, 0]),
             Some(0.0),
-            "idle: the far half is still"
+            "idle: its far face is still"
         );
         // Powered: its neighbour changed, its redstone is looked at; the 90° turn starts.
         w.neighbor_changed(0, [0, 0, 0], 10);
@@ -11144,7 +11196,7 @@ mod tests {
             Some(Step::Run(1))
         );
         w.block_changed(0, [0, 0, 0], 10, 11);
-        // 21 ticks at 16 RPM, then it ends and the far half stops.
+        // 21 ticks at 16 RPM, then it ends and its far face stops.
         for i in 0..21 {
             assert!(w.tick(0, &mut Vec::new()).1.is_empty());
             if i == 0 {
@@ -11155,19 +11207,94 @@ mod tests {
         assert!(w.tick(0, &mut Vec::new()).1.is_empty());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
         // SequencedGearshiftBlockEntity.run(-1): Sequence is absent, including on disk.
-        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 1, false), None);
+        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], false), None);
         assert_eq!(
-            w.dims[0]
-                .kinetics
-                .saved_state([0, 0, 0], 1)
-                .unwrap()
-                .sequence,
+            w.dims[0].kinetics.saved_state([0, 0, 0]).unwrap().sequence,
             None
         );
         assert!(
             w.tick(0, &mut Vec::new()).1.is_empty(),
             "idle: nothing ticks"
         );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_sequence_ending_powered_keeps_its_block_s_state_and_the_turning_entity() {
+        use crate::sequencer::Step;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (pos, shaft) = ([0, 0, 0], [1, 0, 0]);
+        w.block_changed(0, [-1, 0, 0], 0, 12);
+        w.block_changed(0, pos, 0, 10);
+        w.block_changed(0, shaft, 0, 13);
+        w.tick(0, &mut Vec::new());
+        w.neighbor_changed(0, pos, 10);
+        assert_eq!(w.take_sequencer_checks(0), [(pos, false)]);
+        assert_eq!(
+            w.sequencer_redstone(0, pos, true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, pos, 10, 11);
+        for _ in 0..21 {
+            assert!(w.tick(0, &mut Vec::new()).1.is_empty());
+        }
+        assert_eq!(w.speed(0, shaft), Some(16.0));
+        assert_eq!(w.tick(0, &mut Vec::new()).1, [(pos, Step::Ended)]);
+        assert_eq!(w.speed(0, shaft), Some(0.0));
+        assert_eq!(w.state_at(0, pos), Some(11));
+        let saved = w.dims[0].kinetics.saved_state(pos).unwrap();
+        assert_eq!((saved.speed, saved.needs_speed_update), (16.0, false));
+        assert_eq!(saved.source, Some([-1, 0, 0]));
+        assert!(saved.network.is_some());
+        assert_eq!(w.away_half_speed(0, pos), Some(0.0));
+        w.neighbor_changed(0, pos, 11);
+        assert_eq!(w.take_sequencer_checks(0), [(pos, true)]);
+        assert_eq!(w.sequencer_redstone(0, pos, false, true), Some(Step::Idle));
+        assert_eq!(w.speed(0, pos), Some(0.0));
+        w.block_changed(0, pos, 11, 10);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, pos), Some(16.0));
+        assert_eq!(w.state_at(0, pos), Some(10));
+        states::clear_range();
+    }
+
+    #[test]
+    fn an_idle_gearshift_whose_source_left_starts_nothing_when_powered() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, pos) = ([-1, 0, 0], [0, 0, 0]);
+        w.block_changed(0, motor, 0, 11);
+        w.block_changed(0, pos, 0, 10);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, pos), Some(16.0));
+        w.neighbor_changed(0, pos, 10);
+        w.block_changed(0, motor, 11, 0);
+        assert_eq!(w.speed(0, pos), Some(0.0));
+        assert_eq!(w.take_sequencer_checks(0), [(pos, false)]);
+        assert_eq!(w.sequencer_redstone(0, pos, true, false), None);
+        assert_eq!(w.sequencer_run(0, pos).map(|r| r.current), Some(-1));
+        assert_eq!(w.state_at(0, pos), Some(10));
         states::clear_range();
     }
 
@@ -11289,9 +11416,8 @@ mod tests {
         let run = w.sequencer_run(0, gearshift).unwrap();
         let saved: Vec<_> = [crank, shaft, gearshift]
             .into_iter()
-            .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0)))
+            .map(|p| (p, w.dims[0].kinetics.saved_state(p)))
             .collect();
-        let far = w.dims[0].kinetics.saved_state(gearshift, 1);
         let handle = w.saved_handle(0, crank).unwrap();
         let states: Vec<_> = [shaft, gearshift, crank]
             .into_iter()
@@ -11308,11 +11434,8 @@ mod tests {
         }
         for (p, state) in saved {
             if let Some(state) = state {
-                assert!(w.dims[0].kinetics.restore_state(p, 0, state));
+                assert!(w.dims[0].kinetics.restore_state(p, state));
             }
-        }
-        if let Some(far) = far {
-            assert!(w.dims[0].kinetics.restore_state(gearshift, 1, far));
         }
         w.restore_handle(0, crank, handle);
         w.set_sequencer_instructions(0, gearshift, instructions, false);
@@ -11327,16 +11450,16 @@ mod tests {
         w.block_changed(0, gearshift, 11, 12);
         w.tick(0, &mut Vec::new());
         // Java: the program restarts at 32 RPM (12 ticks for 90°) and the gearshift is
-        // attached again in this tick, turning its far half 9.6° a tick.
+        // attached again in this tick, turning its far face 9.6° a tick.
         assert_eq!(w.state_at(0, gearshift), Some(12));
         let run = w.sequencer_run(0, gearshift).unwrap();
         assert_eq!((run.current, run.duration, run.timer), (0, 12, 1));
         assert!((run.progress + 9.6).abs() < 1e-4);
         assert!(run.powered_before);
         assert_eq!(w.speed(0, gearshift), Some(-32.0));
-        let saved = w.dims[0].kinetics.saved_state(gearshift, 0).unwrap();
+        let saved = w.dims[0].kinetics.saved_state(gearshift).unwrap();
         assert_eq!((saved.speed, saved.needs_speed_update), (-32.0, false));
-        assert_eq!(saved.source.map(|s| s.pos), Some(shaft));
+        assert_eq!(saved.source, Some(shaft));
         states::clear_range();
     }
 
@@ -11424,9 +11547,10 @@ mod tests {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
-            ("create:sequenced_gearshift", seq("2")),
+            ("create:sequenced_gearshift", seq("1")),
             ("create:creative_motor", vec![("facing", "east")]),
             ("create:shaft", vec![("axis", "x")]),
+            ("create:sequenced_gearshift", seq("2")),
         ];
         states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
@@ -11457,13 +11581,181 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "waiting: still");
         assert_eq!(w.sequencer_run(0, [0, 0, 0]).map(|r| r.current), Some(0));
-        // The pulse moves past the await to the turn.
+        // The pulse moves past the await to the turn: `run` clears the entity (`setBlock`).
         assert_eq!(
             w.sequencer_redstone(0, [0, 0, 0], true, true),
             Some(Step::Run(2))
         );
+        assert_eq!(w.speed(0, [0, 0, 0]), Some(0.0));
+        // Its host writes the state the step asked for.
+        w.block_changed(0, [0, 0, 0], 10, 13);
+        assert!(
+            w.dims[0]
+                .kinetics
+                .saved_state([0, 0, 0])
+                .unwrap()
+                .needs_speed_update
+        );
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_step_writing_the_state_the_block_has_clears_nothing() {
+        use crate::sequencer::{Instruction, Kind, Run, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("2")),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0, 0, 0];
+        w.block_changed(0, [-1, 0, 0], 0, 11);
+        w.block_changed(0, pos, 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 12);
+        w.set_sequencer_instructions(
+            0,
+            pos,
+            vec![
+                Instruction::new(Kind::Await, -1),
+                Instruction::new(Kind::TurnAngle, 90),
+                Instruction::new(Kind::End, 1),
+            ],
+            false,
+        );
+        w.restore_sequencer(
+            0,
+            pos,
+            Run {
+                current: 0,
+                duration: -1,
+                progress: 0.0,
+                timer: 0,
+                powered_before: false,
+            },
+        );
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, pos), Some(16.0));
+        assert_eq!(
+            w.sequencer_redstone(0, pos, true, true),
+            Some(Step::Run(2)),
+            "the turn starts with the state the block already shows"
+        );
+        let saved = w.dims[0].kinetics.saved_state(pos).unwrap();
+        assert_eq!((saved.speed, saved.needs_speed_update), (16.0, false));
+        assert!(saved.source.is_some());
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, pos), Some(16.0));
+        assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "nothing propagated");
+        states::clear_range();
+    }
+
+    #[test]
+    fn saving_the_program_of_an_idle_gearshift_clears_nothing() {
+        use crate::sequencer::{Instruction, Kind, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0, 0, 0];
+        w.block_changed(0, [-1, 0, 0], 0, 11);
+        w.block_changed(0, pos, 0, 10);
+        w.block_changed(0, [1, 0, 0], 0, 12);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, pos), Some(16.0));
+        assert_eq!(
+            w.set_sequencer_instructions(
+                0,
+                pos,
+                vec![
+                    Instruction::new(Kind::Delay, 20),
+                    Instruction::new(Kind::End, 1),
+                ],
+                true,
+            ),
+            Some(Step::Ended)
+        );
+        let saved = w.dims[0].kinetics.saved_state(pos).unwrap();
+        assert_eq!((saved.speed, saved.needs_speed_update), (16.0, false));
+        assert!(saved.source.is_some());
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_step_s_state_written_after_its_tick_keeps_what_the_tick_attached() {
+        use crate::sequencer::{Instruction, Kind, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:creative_motor", vec![("facing", "west")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (pos, east) = ([0, 0, 0], [1, 0, 0]);
+        w.block_changed(0, [-1, 0, 0], 0, 12);
+        w.block_changed(0, pos, 0, 10);
+        w.set_sequencer_instructions(
+            0,
+            pos,
+            vec![
+                Instruction::new(Kind::TurnAngle, 90),
+                Instruction::new(Kind::End, 1),
+            ],
+            false,
+        );
+        w.tick(0, &mut Vec::new());
+        assert_eq!(
+            w.sequencer_redstone(0, pos, true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, pos, 10, 11);
+        assert_eq!(w.sequencer_redstone(0, pos, false, true), None);
+        w.tick(0, &mut Vec::new());
+        for _ in 0..20 {
+            assert!(w.tick(0, &mut Vec::new()).1.is_empty());
+        }
+        assert_eq!(
+            w.sequencer_run(0, pos).map(|r| r.timer),
+            Some(21),
+            "the turn ends on the next tick"
+        );
+        w.block_changed(0, east, 0, 13);
+        let (_, steps) = w.tick(0, &mut Vec::new());
+        assert_eq!(steps, [(pos, Step::Ended)]);
+        let saved = w.dims[0].kinetics.saved_state(pos).unwrap();
+        assert_eq!((saved.speed, saved.source), (-16.0, Some(east)));
+        assert!(saved.needs_speed_update);
+        w.block_changed(0, pos, 11, 10);
+        let saved = w.dims[0].kinetics.saved_state(pos).unwrap();
+        assert_eq!((saved.speed, saved.source), (-16.0, Some(east)));
+        assert!(saved.needs_speed_update);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, pos), Some(-16.0));
+        assert_eq!(
+            w.dims[0].kinetics.saved_state(pos).unwrap().source,
+            Some(east)
+        );
         states::clear_range();
     }
 

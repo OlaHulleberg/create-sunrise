@@ -68,7 +68,7 @@ fn tell_generated(lv: &mut ServerLevel<'_>) {
     for pos in due {
         let Some(generated) = with_world(|w| {
             let (block, _) = w.table.get(w.state_at(dim, pos)?)?;
-            generates(block).then(|| w.dims[dim].kinetics.generated(pos, 0).unwrap_or(0.0))
+            generates(block).then(|| w.dims[dim].kinetics.generated(pos).unwrap_or(0.0))
         })
         .flatten() else {
             continue;
@@ -85,7 +85,7 @@ fn tell_generated(lv: &mut ServerLevel<'_>) {
         // `updateGeneratedRotation`: a source that drives its network (`!hasSource`) and
         // changes speed level shows its indicators.
         let level = create_engine::gauge::SpeedLevel::of;
-        let driving = with_world(|w| w.dims[dim].kinetics.speed(pos, 0))
+        let driving = with_world(|w| w.dims[dim].kinetics.speed(pos))
             .flatten()
             .is_some_and(|s| s.abs() == generated.abs());
         if level(told.unwrap_or(0.0)) != level(generated) && driving {

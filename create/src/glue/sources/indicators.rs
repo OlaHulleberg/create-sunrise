@@ -94,7 +94,7 @@ fn spawn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let dim = lv.dim;
     let Some((speed, block, info)) = with_world(|w| {
-        let speed = w.dims[dim].kinetics.speed(pos, 0)?;
+        let speed = w.dims[dim].kinetics.speed(pos)?;
         let (block, info) = w.table.get(w.state_at(dim, pos)?)?;
         Some((speed, block, *info))
     })
@@ -104,8 +104,7 @@ fn spawn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if speed == 0.0 {
         return;
     }
-    let Some(axis) =
-        create_engine::parts::parts(block, &info, &Default::default())[0].map(|p| p.axis)
+    let Some(axis) = create_engine::parts::part(block, &info, &Default::default()).map(|p| p.axis)
     else {
         return;
     };

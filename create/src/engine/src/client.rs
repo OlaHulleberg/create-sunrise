@@ -156,7 +156,8 @@ pub fn rotation_offset(block: Block, axis: Axis, pos: [i32; 3]) -> f32 {
         }
 }
 
-/// The parts block `block` draws at `pos`, turning at `speeds` (its first and second half).
+/// The parts block `block` draws at `pos`: `speeds` holds its entity's speed and, for a
+/// sequenced gearshift, the half away from its source.
 pub fn draws(block: Block, s: &StateInfo, pos: [i32; 3], speeds: [f32; 2]) -> Vec<Draw> {
     draws_from_source(block, s, pos, speeds, None)
 }
@@ -257,14 +258,23 @@ pub fn draws_from_source(
             .axis
             .map(|a| vec![own(a, Model::Shaft(a))])
             .unwrap_or_default(),
-        // SplitShaftVisual: a sequenced gearshift's halves, on y when vertical.
+        // SplitShaftVisual: a sequenced gearshift's two faces, on y when vertical, each at
+        // `getSpeed()` times `getRotationSpeedModifier`: its source's face at its own speed.
         Block::SequencedGearshift => s
             .axis
             .map(|a| {
                 let a = if s.vertical { Axis::Y } else { a };
+                let (negative, positive) = (Dir::from_axis(a, false), Dir::from_axis(a, true));
+                let at = |face| {
+                    if source == Some(face) {
+                        speeds[0]
+                    } else {
+                        speeds[1]
+                    }
+                };
                 vec![
-                    half(0, Dir::from_axis(a, false), speeds[0]),
-                    half(1, Dir::from_axis(a, true), speeds[1]),
+                    half(0, negative, at(negative)),
+                    half(1, positive, at(positive)),
                 ]
             })
             .unwrap_or_default(),

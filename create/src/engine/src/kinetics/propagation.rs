@@ -1,40 +1,6 @@
 //! Create RotationPropagator and GeneratingKineticBlockEntity lifecycle.
 use super::*;
 impl Kinetics {
-    /// RotationPropagator.getConnectedNeighbours, including non-ratio couplings.
-    pub(super) fn get_connected_neighbours(&self, id: u32) -> Vec<u32> {
-        let mut out = self.java_order(id);
-        out.retain(|&(m, _)| self.nodes[m as usize].live);
-        let (mut cs, mut pull) = (Vec::new(), Vec::new());
-        self.couplings(id, &mut cs, &mut pull);
-        pull.extend(cs.iter().flat_map(|c| {
-            let _ = c.kind;
-            [c.from, c.to]
-        }));
-        for m in pull {
-            if m == id || !self.nodes[m as usize].live {
-                continue;
-            }
-            if !out.iter().any(|&(n, _)| n == m) {
-                out.push((m, 0.0));
-            }
-        }
-        let pos = self.nodes[id as usize].pos;
-        out.sort_by_key(|&(m, _)| {
-            let o = sub(self.nodes[m as usize].pos, pos);
-            if o == [0, 0, 0] {
-                -1
-            } else if let Some(d) = Dir::from_offset(o) {
-                d as i32
-            } else if o.iter().all(|c| c.abs() <= 1) {
-                6 + (o[2] + 1) * 9 + (o[1] + 1) * 3 + o[0] + 1
-            } else {
-                100
-            }
-        });
-        out.into_iter().map(|(id, _)| id).collect()
-    }
-
     /// RotationPropagator.getConveyedSpeed; controller connections depend on source.
     pub(super) fn get_conveyed_speed(&self, from: u32, to: u32) -> f32 {
         let a = &self.nodes[from as usize];
@@ -47,14 +13,12 @@ impl Kinetics {
             None
         };
         if let Some((c, w, targeting)) = controller {
-            let Some(Couple::Controller(target)) = c.part.couple else {
-                unreachable!()
-            };
+            let target = c.part.controller.expect("a speed controller");
             let desired = if target == 0.0 || (targeting && w.state.theoretical == 0.0) {
                 0.0
             } else if c.state.source.is_none() {
                 if targeting { target } else { 0.0 }
-            } else if c.state.source.is_some_and(|s| s.pos == w.pos) {
+            } else if c.state.source == Some(w.pos) {
                 if targeting {
                     target
                 } else {
@@ -78,20 +42,8 @@ impl Kinetics {
                 desired
             };
         }
-        if a.pos == b.pos
-            && let Some(Couple::Relay(m)) = a.part.couple.or(b.part.couple)
-        {
-            return if a.state.source == Some(self_location(b)) {
-                if m == 0.0 {
-                    0.0
-                } else {
-                    a.state.theoretical / m
-                }
-            } else {
-                a.state.theoretical * m
-            };
-        }
-        // RotationPropagator.getRotationSpeedModifier's axis connection.
+        // RotationPropagator.getRotationSpeedModifier's axis connection: the far entity's
+        // modifier inverted (0 stays 0), times the near one's.
         if let Some(d) = Dir::from_offset(sub(b.pos, a.pos))
             && a.part.shafts & d.bit() != 0
             && b.part.shafts & d.opposite().bit() != 0
@@ -101,11 +53,8 @@ impl Kinetics {
                 .part
                 .rotation
                 .modifier(self.source_facing(b.pos), d.opposite());
-            return if input == 0.0 {
-                0.0
-            } else {
-                a.state.theoretical * output / input
-            };
+            let input = if input != 0.0 { 1.0 / input } else { input };
+            return a.state.theoretical * (output * input);
         }
         // RotationPropagator.getConveyedSpeed evaluates the directed modifier
         // from the live entities; a reverse edge is not its rounded reciprocal.
@@ -121,18 +70,13 @@ impl Kinetics {
     pub(super) fn change_speed(&mut self, id: u32, speed: f32) {
         let n = &mut self.nodes[id as usize];
         let shown = if n.state.overstressed { 0.0 } else { speed };
-        n.state.flicker = n.state.flicker(self.now)
-            + if n.sub == 0 {
-                flicker_gain(n.state.speed, shown)
-            } else {
-                0
-            };
+        n.state.flicker = n.state.flicker(self.now) + flicker_gain(n.state.speed, shown);
         n.state.flicker_at = self.now;
         let changed = n.state.theoretical != speed || n.state.speed != shown;
         n.fresh |= changed;
         n.state.theoretical = speed;
         n.state.speed = shown;
-        if changed && n.sub == 0 {
+        if changed {
             self.speed_notifications.push((n.pos, shown));
         }
         // KineticBlockEntity.setSpeed/onSpeedChanged do not enroll members.
@@ -181,16 +125,16 @@ impl Kinetics {
             self.remove_source(id);
             return;
         }
+        let pos = self.nodes[source as usize].pos;
         let net = self.nodes[source as usize].state.net;
         let seq = self.nodes[source as usize].state.seq;
         let speed = self.nodes[source as usize].state.speed;
-        let location = self_location(&self.nodes[source as usize]);
         let n = &mut self.nodes[id as usize];
-        if n.state.source != Some(location) {
+        if n.state.source != Some(pos) {
             self.saved_dirty.insert(n.pos);
             n.fresh = true;
         }
-        n.state.source = Some(location);
+        n.state.source = Some(pos);
         let old_seq = n.state.seq;
         if matches!(n.part.context, super::SequenceContextSource::Inherited) {
             n.state.seq = seq;
@@ -214,14 +158,13 @@ impl Kinetics {
                 continue;
             }
             self.remove_source(id);
+            let pos = self.nodes[id as usize].pos;
             for m in self.get_connected_neighbours(id) {
                 let n = &self.nodes[m as usize];
-                if Some(self_location(&self.nodes[m as usize])) == missing
-                    || n.state.source.is_none()
-                {
+                if Some(n.pos) == missing || n.state.source.is_none() {
                     continue;
                 }
-                if n.state.source != Some(self_location(&self.nodes[id as usize])) {
+                if n.state.source != Some(pos) {
                     candidates.push(m);
                     continue;
                 }
@@ -246,23 +189,22 @@ impl Kinetics {
             return;
         }
         let n = &self.nodes[id as usize];
+        let pos = n.pos;
         let mut potential = Vec::new();
-        for o in neighbour_offsets(&n.part).chain(std::iter::once([0, 0, 0])) {
-            if let Some(pair) = self.at.get(&add(n.pos, o)) {
-                potential.extend(pair.iter().copied().filter(|&m| m != NONE));
+        for o in neighbour_offsets(&n.part) {
+            if let Some(&m) = self.at.get(&add(pos, o)) {
+                potential.push(m);
             }
         }
-        for pos in self.far.get(&n.pos).into_iter().flatten() {
-            if let Some(pair) = self.at.get(pos) {
-                potential.extend(pair.iter().copied().filter(|&m| m != NONE));
+        for p in self.far.get(&pos).into_iter().flatten() {
+            if let Some(&m) = self.at.get(p) {
+                potential.push(m);
             }
         }
         let dependents = potential
             .into_iter()
             .filter(|&m| {
-                self.nodes[m as usize].live
-                    && self.nodes[m as usize].state.source
-                        == Some(self_location(&self.nodes[id as usize]))
+                self.nodes[m as usize].live && self.nodes[m as usize].state.source == Some(pos)
             })
             .collect::<Vec<_>>();
         for m in dependents {
@@ -321,9 +263,7 @@ impl Kinetics {
                     }
                     continue;
                 }
-                if self.nodes[cur as usize].state.source
-                    == Some(self_location(&self.nodes[m as usize]))
-                {
+                if self.nodes[cur as usize].state.source == Some(self.nodes[m as usize].pos) {
                     self.remove_source(cur);
                 }
             } else if (other - new).abs() <= 1e-4 {
@@ -384,7 +324,7 @@ impl Kinetics {
         id: u32,
         prev: f32,
         generated: f32,
-        source: Option<PartLocation>,
+        source: Option<[i32; 3]>,
         events: &mut Vec<Event>,
     ) {
         if generated == 0.0 {

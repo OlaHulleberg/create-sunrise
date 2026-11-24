@@ -33,7 +33,7 @@ mod tunnels;
 use crate::scenario::{
     BlockSnap, Kinetic, Placed, Pos, Scenario, Snapshot, key, parse_state, with_prop,
 };
-use create_engine::parts::{Settings, StateInfo, parts};
+use create_engine::parts::{Settings, StateInfo, part};
 use create_engine::states;
 use create_engine::world::{CreateWorld, StateTable};
 use std::collections::{BTreeMap, HashMap};
@@ -419,8 +419,7 @@ impl Run {
     fn commit_with(&mut self, p: Pos, new: u32, notify: bool, skip_shape_updates: bool) {
         let old = self.at(p);
         if self.w.table.get(old).map(|(b, _)| b) != self.w.table.get(new).map(|(b, _)| b) {
-            self.persisted.kinetics.remove(&(p, 0));
-            self.persisted.kinetics.remove(&(p, 1));
+            self.persisted.kinetics.remove(&p);
             self.persisted.sequences.remove(&p);
             self.persisted.depots.remove(&p);
             self.persisted.belts.remove(&p);

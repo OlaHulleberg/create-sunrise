@@ -2,7 +2,7 @@
 //! cog type, generated speed and stress, decoded once per state when a world opens.
 
 use crate::Block;
-use crate::kinetics::{Axis, Chain, Couple, Dir, Gantry, Part, convert_to_direction};
+use crate::kinetics::{Axis, Chain, Dir, Gantry, Part, convert_to_direction};
 
 /// What the kinetic rules read of one block state, decoded from its property strings once.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -176,7 +176,8 @@ pub struct Settings {
     pub windmill: f32,
     /// An adjustable chain gearshift's redstone signal (`ChainGearshiftBlockEntity.signal`).
     pub signal: i8,
-    /// A sequenced gearshift's far half's speed modifier (`getModifier`: 0 idle).
+    /// A sequenced gearshift's speed modifier (`SequencedGearshiftBlockEntity.getModifier`: its
+    /// running instruction's, 0 idle).
     pub sequence: i8,
     /// What drives a powered shaft: its steam engine's direction and efficiency.
     pub steam: crate::steam::Output,
@@ -200,37 +201,35 @@ impl Default for Settings {
 /// `HandCrankBlock.getRotationSpeed`.
 pub const CRANK_RPM: f32 = 32.0;
 
-/// The kinetic entities of a block state; sequenced gearshifts retain two coupled ports.
-pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>; 2] {
+/// The kinetic block entity of a block state: what the kinetic rules read of it.
+pub fn part(block: Block, s: &StateInfo, settings: &Settings) -> Option<Part> {
     let with_stress = |p: Part| Part {
         impact: block.impact(),
         capacity: block.capacity(),
         ..p
     };
-    let one = |p: Part| [Some(with_stress(p)), None];
+    let one = |p: Part| Some(with_stress(p));
     match block {
-        Block::Shaft => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        Block::Shaft => s.axis.and_then(|a| one(Part::shaft(a))),
         // PoweredShaftBlock (AbstractShaftBlock): a shaft its engine turns
         // (`PoweredShaftBlockEntity.getGeneratedSpeed`, `calculateAddedStressCapacity`).
-        Block::PoweredShaft => s.axis.map_or([None, None], |a| {
-            [
-                Some(Part {
-                    generated: settings.steam.generated_speed(),
-                    capacity: settings.steam.capacity(),
-                    ..with_stress(Part::shaft(a))
-                }),
-                None,
-            ]
+        Block::PoweredShaft => s.axis.map(|a| {
+            let mut p = with_stress(Part {
+                generated: settings.steam.generated_speed(),
+                ..Part::shaft(a)
+            });
+            p.capacity = settings.steam.capacity();
+            p
         }),
-        Block::Cogwheel => s.axis.map_or([None, None], |a| one(Part::cog(a, false))),
-        Block::LargeCogwheel => s.axis.map_or([None, None], |a| one(Part::cog(a, true))),
+        Block::Cogwheel => s.axis.and_then(|a| one(Part::cog(a, false))),
+        Block::LargeCogwheel => s.axis.and_then(|a| one(Part::cog(a, true))),
         Block::AndesiteEncasedShaft | Block::BrassEncasedShaft | Block::MetalGirderEncasedShaft => {
-            s.axis.map_or([None, None], |a| one(Part::shaft(a)))
+            s.axis.and_then(|a| one(Part::shaft(a)))
         }
         Block::AndesiteEncasedCogwheel
         | Block::BrassEncasedCogwheel
         | Block::AndesiteEncasedLargeCogwheel
-        | Block::BrassEncasedLargeCogwheel => s.axis.map_or([None, None], |a| {
+        | Block::BrassEncasedLargeCogwheel => s.axis.and_then(|a| {
             // EncasedCogwheelBlock.hasShaftTowards: along the axis, where top/bottom_shaft is set.
             let large = matches!(
                 block,
@@ -246,8 +245,8 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             }
             one(p)
         }),
-        Block::Gearbox => s.axis.map_or([None, None], |a| one(Part::gearbox(a))),
-        Block::Clutch | Block::Gearshift => s.axis.map_or([None, None], |a| {
+        Block::Gearbox => s.axis.and_then(|a| one(Part::gearbox(a))),
+        Block::Clutch | Block::Gearshift => s.axis.and_then(|a| {
             // SplitShaftBlockEntity: the half away from the source turns at 0 (clutch) or reversed
             // (gearshift) while powered.
             let link = match (block, s.powered) {
@@ -260,55 +259,47 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         // ChainDriveBlock: shafts at both ends of its axis, and its chain to the drives beside it
         // (`areBlocksConnected`), turning it at the adjustable gearshift's modifier for its
         // signal (`ChainGearshiftBlockEntity.getModifier`).
-        Block::EncasedChainDrive | Block::AdjustableChainGearshift => {
-            s.axis.map_or([None, None], |a| {
-                let d = crate::chain::Drive {
-                    axis: a,
-                    part: s.chain.unwrap_or_default(),
-                    along_first: s.along_first,
-                };
-                let (positive, negative) = d.goes_on();
-                let modifier = if block == Block::AdjustableChainGearshift {
-                    crate::chain::modifier_for_signal(i32::from(settings.signal))
-                } else {
-                    1.0
-                };
-                one(Part {
-                    chain: Some(Chain {
-                        along: d.connection_axis(),
-                        positive,
-                        negative,
-                        modifier,
-                    }),
-                    ..Part::shaft(a)
-                })
-            })
-        }
-        // SpeedControllerBlock (HorizontalAxisKineticBlock): shafts at both ends of its axis; the
-        // large cog above it turns at its target.
-        Block::RotationSpeedController => s.axis.map_or([None, None], |a| {
+        Block::EncasedChainDrive | Block::AdjustableChainGearshift => s.axis.and_then(|a| {
+            let d = crate::chain::Drive {
+                axis: a,
+                part: s.chain.unwrap_or_default(),
+                along_first: s.along_first,
+            };
+            let (positive, negative) = d.goes_on();
+            let modifier = if block == Block::AdjustableChainGearshift {
+                crate::chain::modifier_for_signal(i32::from(settings.signal))
+            } else {
+                1.0
+            };
             one(Part {
-                couple: Some(Couple::Controller(settings.motor_rpm)),
+                chain: Some(Chain {
+                    along: d.connection_axis(),
+                    positive,
+                    negative,
+                    modifier,
+                }),
                 ..Part::shaft(a)
             })
         }),
-        // SequencedGearshiftBlock: a split shaft on its horizontal axis, or vertical; the half
-        // away from the one turned turns at the running instruction's modifier
-        // (`SequencedGearshiftBlockEntity.getRotationSpeedModifier`), still while idle.
-        Block::SequencedGearshift => s.axis.map_or([None, None], |a| {
-            let a = if s.vertical { Axis::Y } else { a };
-            let first = Part {
-                context: crate::kinetics::SequenceContextSource::Owned,
-                ..Part::half(Dir::from_axis(a, false))
-            };
-            let second = Part {
-                couple: Some(Couple::Relay(f32::from(settings.sequence))),
-                context: crate::kinetics::SequenceContextSource::Owned,
-                ..Part::half(Dir::from_axis(a, true))
-            };
-            [Some(with_stress(first)), Some(with_stress(second))]
+        // SpeedControllerBlock (HorizontalAxisKineticBlock): shafts at both ends of its axis; the
+        // large cog above it turns at its target.
+        Block::RotationSpeedController => s.axis.and_then(|a| {
+            one(Part {
+                controller: Some(settings.motor_rpm),
+                ..Part::shaft(a)
+            })
         }),
-        Block::CreativeMotor => s.facing.map_or([None, None], |f| {
+        // SequencedGearshiftBlock: a split shaft on its horizontal axis, or vertical, whose face
+        // away from its source turns at the running instruction's modifier
+        // (`SequencedGearshiftBlockEntity.getRotationSpeedModifier`).
+        Block::SequencedGearshift => s.axis.and_then(|a| {
+            let a = if s.vertical { Axis::Y } else { a };
+            one(Part {
+                context: crate::kinetics::SequenceContextSource::Owned,
+                ..Part::split_shaft(a, f32::from(settings.sequence))
+            })
+        }),
+        Block::CreativeMotor => s.facing.and_then(|f| {
             // CreativeMotorBlock.hasShaftTowards: its facing; getGeneratedSpeed converts the
             // setting to that face's direction.
             one(Part {
@@ -317,7 +308,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 ..Part::half(f)
             })
         }),
-        Block::HandCrank => s.facing.map_or([None, None], |f| {
+        Block::HandCrank => s.facing.and_then(|f| {
             // HandCrankBlock.hasShaftTowards: the face it hangs from; HandCrankBlockEntity
             // .getGeneratedSpeed: 32 while turned (negated backwards), in its facing's direction.
             one(Part {
@@ -328,18 +319,13 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // ValveHandleBlock (a HandCrankBlock turning at 32 too); every valve handle's stress is
         // the copper one's (`getStressConfigKey`).
-        b if crate::dye::is_valve_handle(b) => s.facing.map_or([None, None], |f| {
-            [
-                Some(Part {
-                    initialization: crate::kinetics::GeneratorInitialization::Placement,
-                    generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
-                    impact: Block::CopperValveHandle.impact(),
-                    capacity: Block::CopperValveHandle.capacity(),
-                    context: crate::kinetics::SequenceContextSource::Owned,
-                    ..Part::half(f.opposite())
-                }),
-                None,
-            ]
+        b if crate::dye::is_valve_handle(b) => s.facing.map(|f| Part {
+            initialization: crate::kinetics::GeneratorInitialization::Placement,
+            generated: convert_to_direction(f32::from(settings.crank) * CRANK_RPM, f),
+            impact: Block::CopperValveHandle.impact(),
+            capacity: Block::CopperValveHandle.capacity(),
+            context: crate::kinetics::SequenceContextSource::Owned,
+            ..Part::half(f.opposite())
         }),
         // BacktankBlock (HorizontalKineticBlock): turns on y, its shaft out of its top.
         Block::CopperBacktank | Block::NetheriteBacktank => one(Part::half(Dir::Up)),
@@ -364,12 +350,12 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
                 );
                 one(p)
             }
-            _ => [None, None],
+            _ => None,
         },
         // WindmillBearingBlock (BearingBlock): a shaft out of its back; while its sails are
         // assembled it generates `WindmillBearingBlockEntity.getGeneratedSpeed`, not converted
         // to its facing.
-        Block::WindmillBearing => s.facing.map_or([None, None], |f| {
+        Block::WindmillBearing => s.facing.and_then(|f| {
             one(Part {
                 generated: settings.windmill,
                 ..Part::half(f.opposite())
@@ -378,7 +364,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         // MechanicalCrafterBlock (ICogWheel): a small cog on its facing's axis, no shaft.
         // FlapDisplayBlock (HorizontalKineticBlock, ICogWheel): a small cog on its facing's axis
         // (`getRotationAxis`), no shaft; no stress (`setNoImpact`).
-        Block::MechanicalCrafter | Block::DisplayBoard => s.facing.map_or([None, None], |f| {
+        Block::MechanicalCrafter | Block::DisplayBoard => s.facing.and_then(|f| {
             one(Part {
                 shafts: 0,
                 ..Part::cog(f.axis(), false)
@@ -386,7 +372,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // GantryShaftBlock (DirectionalKineticBlock): turns on its facing's axis, shafts at both
         // ends.
-        Block::GantryShaft => s.facing.map_or([None, None], |f| {
+        Block::GantryShaft => s.facing.and_then(|f| {
             one(Part {
                 gantry: Some(Gantry::Shaft {
                     facing: f,
@@ -397,7 +383,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // GantryCarriageBlock (DirectionalAxisKineticBlock): a shaft through it on its rotation
         // axis, across its facing, and the pinion on the gantry shaft behind it.
-        Block::GantryCarriage => s.facing.map_or([None, None], |f| {
+        Block::GantryCarriage => s.facing.and_then(|f| {
             one(Part {
                 gantry: Some(Gantry::Carriage { facing: f }),
                 ..Part::shaft(directional_axis(f, s.along_first))
@@ -405,14 +391,14 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // MechanicalBearingBlock and ClockworkBearingBlock (BearingBlock): a shaft out of its
         // back, turning what it carries.
-        Block::MechanicalBearing | Block::ClockworkBearing => s
-            .facing
-            .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        Block::MechanicalBearing | Block::ClockworkBearing => {
+            s.facing.and_then(|f| one(Part::half(f.opposite())))
+        }
         // PulleyBlock (HorizontalAxisKineticBlock): shafts at both ends of its axis.
-        Block::RopePulley => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        Block::RopePulley => s.axis.and_then(|a| one(Part::shaft(a))),
         // ElevatorPulleyBlock (HorizontalKineticBlock): shafts across its facing
         // (`getRotationAxis`: the facing turned clockwise).
-        Block::ElevatorPulley => s.facing.map_or([None, None], |f| {
+        Block::ElevatorPulley => s.facing.and_then(|f| {
             one(Part::shaft(if f.axis() == Axis::X {
                 Axis::Z
             } else {
@@ -420,23 +406,21 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             }))
         }),
         // MechanicalPressBlock: turns on its horizontal facing's axis, shafts at both ends.
-        Block::MechanicalPress => s
-            .facing
-            .map_or([None, None], |f| one(Part::shaft(f.axis()))),
+        Block::MechanicalPress => s.facing.and_then(|f| one(Part::shaft(f.axis()))),
         // MechanicalPistonBlock (DirectionalAxisKineticBlock.getRotationAxis): a shaft across
         // its facing, on the first or second other axis. GaugeBlock too, with no stress
         // (`CStress.setNoImpact`).
         // SawBlock: facing sideways, it turns on its facing's axis with a shaft out of its back
         // only (`getRotationAxis`, `hasShaftTowards`); facing up or down, as the piston.
-        Block::MechanicalSaw if s.facing.is_some_and(|f| f.axis() != Axis::Y) => s
-            .facing
-            .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        Block::MechanicalSaw if s.facing.is_some_and(|f| f.axis() != Axis::Y) => {
+            s.facing.and_then(|f| one(Part::half(f.opposite())))
+        }
         Block::MechanicalPiston
         | Block::StickyMechanicalPiston
         | Block::MechanicalSaw
         | Block::Deployer
         | Block::Speedometer
-        | Block::Stressometer => s.facing.map_or([None, None], |f| {
+        | Block::Stressometer => s.facing.and_then(|f| {
             one(Part {
                 speed_changed: if block == Block::Stressometer {
                     crate::kinetics::SpeedChanged::StressGauge
@@ -448,15 +432,13 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // CuckooClockBlock (HorizontalKineticBlock): a shaft out of its back
         // (`hasShaftTowards`), on its facing's axis.
-        Block::CuckooClock | Block::MysteriousCuckooClock => s
-            .facing
-            .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        Block::CuckooClock | Block::MysteriousCuckooClock => {
+            s.facing.and_then(|f| one(Part::half(f.opposite())))
+        }
         // DrillBlock (DirectionalKineticBlock): a shaft out of its back.
-        Block::MechanicalDrill => s
-            .facing
-            .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        Block::MechanicalDrill => s.facing.and_then(|f| one(Part::half(f.opposite()))),
         // PumpBlock: a small cog on its facing's axis, no shaft.
-        Block::MechanicalPump => s.facing.map_or([None, None], |f| {
+        Block::MechanicalPump => s.facing.and_then(|f| {
             one(Part {
                 shafts: 0,
                 ..Part::cog(f.axis(), false)
@@ -464,38 +446,36 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // FluidValveBlock (DirectionalAxisKineticBlock): shafts at both ends of its rotation
         // axis, across its facing and its pipe.
-        Block::FluidValve => s.facing.map_or([None, None], |f| {
-            one(Part::shaft(directional_axis(f, s.along_first)))
-        }),
+        Block::FluidValve => s
+            .facing
+            .and_then(|f| one(Part::shaft(directional_axis(f, s.along_first)))),
         // HosePulleyBlock (HorizontalKineticBlock): one shaft, out of the side clockwise of its
         // facing (`hasShaftTowards`); the other side is its pipe's.
-        Block::HosePulley => s.facing.map_or([None, None], |f| {
-            one(Part::half(crate::wrench::clockwise(f, Axis::Y)))
-        }),
+        Block::HosePulley => s
+            .facing
+            .and_then(|f| one(Part::half(crate::wrench::clockwise(f, Axis::Y)))),
         // MechanicalMixerBlock: a small cog on the y axis, no shaft (`hasShaftTowards` false).
         Block::MechanicalMixer => one(Part {
             shafts: 0,
             ..Part::cog(Axis::Y, false)
         }),
         // CrushingWheelBlock (RotatedPillarKineticBlock): shafts at both ends of its axis.
-        Block::CrushingWheel => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        Block::CrushingWheel => s.axis.and_then(|a| one(Part::shaft(a))),
         // EncasedFanBlock.hasShaftTowards: the face behind it.
-        Block::EncasedFan => s
-            .facing
-            .map_or([None, None], |f| one(Part::half(f.opposite()))),
+        Block::EncasedFan => s.facing.and_then(|f| one(Part::half(f.opposite()))),
         // LargeWaterWheelBlock (RotatedPillarKineticBlock): shafts at both ends of its axis;
         // `LargeWaterWheelBlockEntity.getSize` 2 halves its speed.
-        Block::LargeWaterWheel => s.axis.map_or([None, None], |a| {
+        Block::LargeWaterWheel => s.axis.and_then(|a| {
             one(Part {
                 generated: crate::waterwheel::generated_speed(i32::from(settings.flow), 2),
                 ..Part::shaft(a)
             })
         }),
         // FlywheelBlock (RotatedPillarKineticBlock): shafts at both ends of its axis, no stress.
-        Block::Flywheel => s.axis.map_or([None, None], |a| one(Part::shaft(a))),
+        Block::Flywheel => s.axis.and_then(|a| one(Part::shaft(a))),
         // TurntableBlock (KineticBlock): on the y axis, a shaft only below (`hasShaftTowards`).
         Block::Turntable => one(Part::half(Dir::Down)),
-        Block::WaterWheel => s.facing.map_or([None, None], |f| {
+        Block::WaterWheel => s.facing.and_then(|f| {
             // WaterWheelBlock.hasShaftTowards: both ends of its axis.
             one(Part {
                 generated: crate::waterwheel::generated_speed(i32::from(settings.flow), 1),
@@ -512,7 +492,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
         }),
         // EjectorBlock (HorizontalKineticBlock): turns on the axis across its facing, shafts at
         // both ends (`getRotationAxis`: the facing turned clockwise).
-        Block::WeightedEjector => s.facing.map_or([None, None], |f| {
+        Block::WeightedEjector => s.facing.and_then(|f| {
             let axis = if f.axis() == Axis::X {
                 Axis::Z
             } else {
@@ -520,7 +500,7 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> [Option<Part>;
             };
             one(Part::shaft(axis))
         }),
-        _ => [None, None],
+        _ => None,
     }
 }
 
@@ -533,23 +513,17 @@ pub(crate) fn has_shaft_towards(block: Block, info: &StateInfo, face: Dir) -> bo
             .belt
             .is_some_and(|seg| seg.has_pulley() && seg.rotation_axis() == face.axis());
     }
-    parts(block, info, &Settings::default())
-        .into_iter()
-        .flatten()
-        .any(|p| p.shafts & face.bit() != 0)
+    part(block, info, &Settings::default()).is_some_and(|p| p.shafts & face.bit() != 0)
 }
 
 /// The first cog in a block's state: whether it is large, and the axis it turns on.
 pub(crate) fn cog(block: Block, info: &StateInfo) -> Option<(bool, Axis)> {
     use crate::kinetics::Cog;
-    parts(block, info, &Settings::default())
-        .into_iter()
-        .flatten()
-        .find_map(|p| match p.cog {
-            Cog::Small => Some((false, p.axis)),
-            Cog::Large => Some((true, p.axis)),
-            Cog::None => None,
-        })
+    part(block, info, &Settings::default()).and_then(|p| match p.cog {
+        Cog::Small => Some((false, p.axis)),
+        Cog::Large => Some((true, p.axis)),
+        Cog::None => None,
+    })
 }
 
 /// `DirectionalAxisKineticBlock.getRotationAxis`: the first or second axis other than the
@@ -627,7 +601,7 @@ pub fn is_kinetic(block: Block) -> bool {
         power: 0,
         rail_type: None,
     };
-    parts(block, &probe, &Settings::default())[0].is_some()
+    part(block, &probe, &Settings::default()).is_some()
 }
 
 #[cfg(test)]
@@ -642,9 +616,8 @@ mod tests {
     #[test]
     fn states_decode_once_into_parts() {
         let s = info(&[("axis", "x"), ("waterlogged", "false")]);
-        let [p, none] = parts(Block::Shaft, &s, &Settings::default());
-        assert_eq!(p.unwrap().axis, Axis::X);
-        assert!(none.is_none());
+        let p = part(Block::Shaft, &s, &Settings::default()).unwrap();
+        assert_eq!(p.axis, Axis::X);
         assert!(is_kinetic(Block::Cogwheel));
         assert!(!is_kinetic(Block::AndesiteCasing));
     }
@@ -658,56 +631,48 @@ mod tests {
             motor_rpm: 32.0,
             ..Settings::default()
         };
-        let [m, _] = parts(Block::CreativeMotor, &motor, &settings);
-        k.set([0, -1, 0], 0, m.unwrap());
+        let m = part(Block::CreativeMotor, &motor, &settings).unwrap();
+        k.set([0, -1, 0], m);
         let none = info(&[]);
         for p in [[0, 0, 0], [5, 0, 0]] {
-            k.set(
-                p,
-                0,
-                parts(Block::ChainConveyor, &none, &settings)[0].unwrap(),
-            );
+            k.set(p, part(Block::ChainConveyor, &none, &settings).unwrap());
         }
         let mut e = Vec::new();
         k.solve(&mut e);
-        assert_eq!(k.speed([5, 0, 0], 0), Some(0.0));
+        assert_eq!(k.speed([5, 0, 0]), Some(0.0));
         k.set_far([0, 0, 0], vec![[5, 0, 0]]);
         k.set_far([5, 0, 0], vec![[0, 0, 0]]);
         k.solve(&mut e);
-        assert_eq!(k.speed([0, 0, 0], 0), Some(32.0));
-        assert_eq!(k.speed([5, 0, 0], 0), Some(32.0));
+        assert_eq!(k.speed([0, 0, 0]), Some(32.0));
+        assert_eq!(k.speed([5, 0, 0]), Some(32.0));
         assert_eq!(Block::ChainConveyor.impact(), 1.0);
         k.set_far([5, 0, 0], vec![]);
         k.solve(&mut e);
-        assert_eq!(
-            k.speed([5, 0, 0], 0),
-            Some(0.0),
-            "a chain one side lists only"
-        );
+        assert_eq!(k.speed([5, 0, 0]), Some(0.0), "a chain one side lists only");
     }
 
     #[test]
     fn a_creative_motor_drives_a_shaft_and_a_press_costs_its_stress() {
         let mut k = Kinetics::new();
         let motor = info(&[("facing", "east")]);
-        let [m, _] = parts(
+        let m = part(
             Block::CreativeMotor,
             &motor,
             &Settings {
                 motor_rpm: 32.0,
                 ..Settings::default()
             },
-        );
-        k.set([0, 0, 0], 0, m.unwrap());
+        )
+        .unwrap();
+        k.set([0, 0, 0], m);
         let shaft = info(&[("axis", "x")]);
         k.set(
             [1, 0, 0],
-            0,
-            parts(Block::Shaft, &shaft, &Settings::default())[0].unwrap(),
+            part(Block::Shaft, &shaft, &Settings::default()).unwrap(),
         );
         let mut e = Vec::new();
         k.solve(&mut e);
-        assert_eq!(k.speed([1, 0, 0], 0), Some(32.0));
+        assert_eq!(k.speed([1, 0, 0]), Some(32.0));
         assert!(e.iter().all(|x| !matches!(x, Event::Break { .. })));
     }
 
@@ -719,34 +684,32 @@ mod tests {
         let motor = info(&[("facing", "up")]);
         k.set(
             [0, -1, 0],
-            0,
-            parts(Block::CreativeMotor, &motor, &Settings::default())[0].unwrap(),
+            part(Block::CreativeMotor, &motor, &Settings::default()).unwrap(),
         );
-        let t = parts(Block::Turntable, &info(&[]), &Settings::default())[0].unwrap();
+        let t = part(Block::Turntable, &info(&[]), &Settings::default()).unwrap();
         assert_eq!((t.axis, t.impact), (Axis::Y, 4.0));
-        k.set([0, 0, 0], 0, t);
+        k.set([0, 0, 0], t);
         k.solve(&mut Vec::new());
-        assert_eq!(k.speed([0, 0, 0], 0), Some(16.0));
+        assert_eq!(k.speed([0, 0, 0]), Some(16.0));
         // Nothing passes out of its top.
         k.set(
             [0, 1, 0],
-            0,
-            parts(Block::Shaft, &info(&[("axis", "y")]), &Settings::default())[0].unwrap(),
+            part(Block::Shaft, &info(&[("axis", "y")]), &Settings::default()).unwrap(),
         );
         k.solve(&mut Vec::new());
-        assert_eq!(k.speed([0, 1, 0], 0), Some(0.0));
-        let f = parts(
+        assert_eq!(k.speed([0, 1, 0]), Some(0.0));
+        let f = part(
             Block::Flywheel,
             &info(&[("axis", "x")]),
             &Settings::default(),
-        )[0]
+        )
         .unwrap();
         assert_eq!((f.axis, f.impact, f.capacity), (Axis::X, 0.0, 0.0));
         let flowing = Settings {
             flow: -1,
             ..Settings::default()
         };
-        let w = parts(Block::LargeWaterWheel, &info(&[("axis", "z")]), &flowing)[0].unwrap();
+        let w = part(Block::LargeWaterWheel, &info(&[("axis", "z")]), &flowing).unwrap();
         assert_eq!((w.axis, w.generated, w.capacity), (Axis::Z, -4.0, 128.0));
         assert!(is_kinetic(Block::LargeWaterWheel) && is_kinetic(Block::Turntable));
     }
@@ -757,35 +720,27 @@ mod tests {
         let mut k = Kinetics::new();
         // A carriage facing up on a gantry shaft along x, its own shaft along z.
         let carriage = info(&[("facing", "up"), ("axis_along_first", "false")]);
-        let c = parts(Block::GantryCarriage, &carriage, &st)[0].unwrap();
+        let c = part(Block::GantryCarriage, &carriage, &st).unwrap();
         assert_eq!(c.axis, Axis::Z);
-        k.set([0, 0, 0], 0, c);
+        k.set([0, 0, 0], c);
         let motor = info(&[("facing", "south")]);
-        k.set(
-            [0, 0, -1],
-            0,
-            parts(Block::CreativeMotor, &motor, &st)[0].unwrap(),
-        );
+        k.set([0, 0, -1], part(Block::CreativeMotor, &motor, &st).unwrap());
         let shaft = |powered: &str| {
             let s = info(&[("facing", "east"), ("powered", powered)]);
-            parts(Block::GantryShaft, &s, &st)[0].unwrap()
+            part(Block::GantryShaft, &s, &st).unwrap()
         };
-        k.set([0, -1, 0], 0, shaft("false"));
+        k.set([0, -1, 0], shaft("false"));
         k.solve(&mut Vec::new());
         assert_eq!(
-            k.speed([0, 0, 0], 0),
+            k.speed([0, 0, 0]),
             Some(16.0),
             "turned by the motor's shaft"
         );
-        assert_eq!(
-            k.speed([0, -1, 0], 0),
-            Some(0.0),
-            "an unpowered gantry is not"
-        );
+        assert_eq!(k.speed([0, -1, 0]), Some(0.0), "an unpowered gantry is not");
         // Powered, the carriage turns the gantry (`getGantryPinionModifier`: x, pinion up: +1).
-        k.set([0, -1, 0], 0, shaft("true"));
+        k.set([0, -1, 0], shaft("true"));
         k.solve(&mut Vec::new());
-        assert_eq!(k.speed([0, -1, 0], 0), Some(16.0));
+        assert_eq!(k.speed([0, -1, 0]), Some(16.0));
         assert_eq!(
             crate::kinetics::gantry_pinion_modifier(Dir::East, Dir::Down),
             -1.0
@@ -806,24 +761,21 @@ mod tests {
         let motor = info(&[("facing", "east")]);
         k.set(
             [-1, 0, 0],
-            0,
-            parts(Block::CreativeMotor, &motor, &Settings::default())[0].unwrap(),
+            part(Block::CreativeMotor, &motor, &Settings::default()).unwrap(),
         );
         // Facing up, along the first axis: its shaft runs along x.
         let gauge = info(&[("facing", "up"), ("axis_along_first", "true")]);
-        let [g, _] = parts(Block::Stressometer, &gauge, &Settings::default());
-        let g = g.unwrap();
+        let g = part(Block::Stressometer, &gauge, &Settings::default()).unwrap();
         assert_eq!((g.axis, g.impact), (Axis::X, 0.0));
-        k.set([0, 0, 0], 0, g);
+        k.set([0, 0, 0], g);
         let shaft = info(&[("axis", "x")]);
         k.set(
             [1, 0, 0],
-            0,
-            parts(Block::Shaft, &shaft, &Settings::default())[0].unwrap(),
+            part(Block::Shaft, &shaft, &Settings::default()).unwrap(),
         );
         k.solve(&mut Vec::new());
-        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
-        let (speed, stress, capacity, over) = k.network([0, 0, 0], 0).unwrap();
+        assert_eq!(k.speed([1, 0, 0]), Some(16.0));
+        let (speed, stress, capacity, over) = k.network([0, 0, 0]).unwrap();
         assert_eq!((speed, stress, over), (16.0, 0.0, false));
         assert!(capacity > 0.0);
         assert_eq!(Block::Speedometer.impact(), 0.0);
@@ -836,21 +788,20 @@ mod tests {
             let motor = info(&[("facing", "east")]);
             k.set(
                 [-1, 0, 0],
-                0,
-                parts(Block::CreativeMotor, &motor, &Settings::default())[0].unwrap(),
+                part(Block::CreativeMotor, &motor, &Settings::default()).unwrap(),
             );
             let split = info(&[("axis", "x"), ("powered", "true")]);
-            let [a, b] = parts(block, &split, &Settings::default());
-            k.set([0, 0, 0], 0, a.unwrap());
-            assert!(b.is_none());
+            k.set(
+                [0, 0, 0],
+                part(block, &split, &Settings::default()).unwrap(),
+            );
             let shaft = info(&[("axis", "x")]);
             k.set(
                 [1, 0, 0],
-                0,
-                parts(Block::Shaft, &shaft, &Settings::default())[0].unwrap(),
+                part(Block::Shaft, &shaft, &Settings::default()).unwrap(),
             );
             k.solve(&mut Vec::new());
-            assert_eq!(k.speed([1, 0, 0], 0), Some(expect), "{block:?}");
+            assert_eq!(k.speed([1, 0, 0]), Some(expect), "{block:?}");
         }
     }
 }

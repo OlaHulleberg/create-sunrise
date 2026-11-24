@@ -174,10 +174,10 @@ Java continues to call the actual impact/capacity methods. Steam sensing/program
 outside this group's action grammar and is not covered by these observations.
 
 Both adapters record network membership as sorted position partitions and per-position
-network sizes. Rust reads the selected part's actual membership through
-`Kinetics::network_membership`; split shafts select the same driven half used for kinetic
-figures. Raw network ids are used only to group positions within each snapshot and are never
-serialized or compared. An empty network observation is emitted as empty partitions and sizes.
+network sizes. Rust reads each entity's actual membership through
+`Kinetics::network_membership`; a split shaft (a clutch, a gearshift, a sequenced gearshift)
+is one entity, as in Java. Raw network ids are used only to group positions within each
+snapshot and are never serialized or compared. An empty network observation is emitted as empty partitions and sizes.
 Dynamic settings other than the currently driven motor/crank inputs and readable steam output,
 environment sensing, belt/conveyor links, placement outside the version 3 subset and machine
 work remain outside differential coverage until their action adapters and required accessors exist.

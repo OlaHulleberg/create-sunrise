@@ -21,10 +21,10 @@ value tree crosses a byte serialization boundary; engine objects do not survive
 by cloning. End-of-tick kinetic changes populate persisted records, and motor
 settings/belt inventories populate column attachments. Reload calls
 column_unloaded, loads column settings/items/fluid records, scans with block_loaded, restores
-handle use with restore_handle before kinetic ports with restore_state, then
+handle use with restore_handle before the kinetic record with restore_state, then
 loads sequencer instructions/run.
 Saved BeltState membership restores immediately after each block_loaded, before
-kinetic ports. Every saved kinetic restore is checked; no extra solve or transport
+the kinetic record. Every saved kinetic restore is checked; no extra solve or transport
 tick is inserted into reload.
 Conveyor links use Chains::unload/add and set_far. Host slots and valve-use data
 cross the serialization boundary independently of engine state.
@@ -50,7 +50,7 @@ actual reload uses write.
 Explicit boundaries:
 
 - Crank and valve HandleState changes are flushed every tick, including
-  countdown-only changes, and restored after block_loaded before kinetic ports. InUse and
+  countdown-only changes, and restored after block_loaded before the kinetic record. InUse and
   Backwards are compared for both, and StartAngle for valves. Cooldown is
   deliberately absent from the codec, matching Java's fresh-entity lifecycle.
 - DepotState records persist engine-owned held motion, insertion side, angle,
@@ -110,8 +110,8 @@ must not refresh an earlier entity record or serialize an unmarked column.
 | DepotState | Post-subsystem write_entities, every registered depot including empty records, after all transfers |
 | BeltState | Belt-phase changed-controller notifications, all chain members; inventory column data stays at its marked end-of-level flush |
 | HandleState | After solve, sequencer steps and world effects; only take_handle_changes |
-| Kinetic ports | Same solve phase, after handles; only take_saved_changes, excluding pending legacy migration |
-| Adjustable chain Signal | Same saved-change journal, after kinetic ports; saved_chain_signal reads the entity value, including analog changes without a speed change |
+| Kinetic records | Same solve phase, after handles; only take_saved_changes, excluding pending legacy migration |
+| Adjustable chain Signal | Same saved-change journal, after kinetic records; saved_chain_signal reads the entity value, including analog changes without a speed change |
 | Sequencer run | Actual instruction transitions plus post-subsystem write_entities; save_run writes only its five run fields |
 | Sequencer instructions | Immediately in an accepted program message, independently of run saves |
 | Motor settings and belt inventories | End-of-level persist::flush, only marked columns; collect engine unsaved columns at the solve's actual drain point |
@@ -139,9 +139,9 @@ before-entity-save callback in API_GAPS.md; no unload-time refresh can repair an
 already saved chunk. The driver does not invent such a callback.
 
 Reload completes each kinetic block_entity_on_load callback before starting the
-next entity: block_loaded, saved belt/depot/handle fields, kinetic ports, then
+next entity: block_loaded, saved belt/depot/handle fields, the kinetic record, then
 that entity's sequencer instructions/run. It does not restore all entities'
-kinetic ports first and defer all sequencer callbacks to a later pass. The
+kinetic records first and defer all sequencer callbacks to a later pass. The
 sequencer reload fixture compares this path with an independent per-entity
 reference using the same public engine entries. Publication remains unchanged.
 

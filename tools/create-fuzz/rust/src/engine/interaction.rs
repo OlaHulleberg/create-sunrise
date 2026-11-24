@@ -78,6 +78,8 @@ impl Run {
                 if self.w.block_at(0, p) != Some(create_engine::Block::SequencedGearshift) {
                     return;
                 }
+                // `applySettings` stops the sequence: `run` asks for the power.
+                self.tell_sequencer_power([p]);
                 if let Some(step) = self.w.set_sequencer_instructions(
                     0,
                     p,

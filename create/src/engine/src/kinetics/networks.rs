@@ -2,16 +2,24 @@
 use super::Node;
 use std::collections::{HashMap, HashSet};
 
-/// Generation identity of Create's KineticBlockEntity within this dimension. Shaft faces are ports,
-/// not separate entities (`SplitShaftBlockEntity.getRotationSpeedModifier`).
+/// Generation identity of Create's KineticBlockEntity within this dimension: a split shaft's
+/// faces belong to the one entity.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
 struct Entity(u64);
 
-/// One Java network member, with all engine ports that must receive its figures.
-#[derive(Clone)]
+/// One entry of `KineticNetwork.members` or `sources`: the node that is the block entity now,
+/// and its base stress or capacity.
+#[derive(Clone, Copy)]
 struct Member {
-    ports: HashSet<u32>,
-    stress: f32,
+    node: u32,
+    value: f32,
+}
+
+/// Whether a member is still the block entity its position holds: Create prunes a retained
+/// object the world has replaced (`be.getLevel().getBlockEntity(be.getBlockPos()) != be`).
+fn present(member: &Member, entity: &Entity, nodes: &[Node]) -> bool {
+    let n = &nodes[member.node as usize];
+    n.live && n.entity == entity.0
 }
 
 /// KineticNetwork stores base stress/capacity; actual contributions use current entity speeds.
@@ -30,6 +38,11 @@ impl KineticNetwork {
     #[cfg(test)]
     pub(super) fn unloaded_count(&self) -> u32 {
         self.unloaded_members
+    }
+
+    fn is_member(&self, id: u32, nodes: &[Node]) -> bool {
+        self.members
+            .contains_key(&Entity(nodes[id as usize].entity))
     }
 
     /// KineticNetwork.initFromTE accounts for members not yet loaded.
@@ -66,137 +79,106 @@ impl KineticNetwork {
         last_capacity: f32,
         last_stress: f32,
     ) {
-        let n = &nodes[id as usize];
-        if self.members.contains_key(&Entity(n.entity)) {
-            self.add(id, nodes);
+        if self.is_member(id, nodes) {
             return;
         }
+        let n = &mut nodes[id as usize];
         if n.part.generated != 0.0 {
             self.unloaded_capacity =
                 (self.unloaded_capacity - last_capacity * n.part.generated.abs()).max(0.0);
+            let capacity = n.calculate_added_stress_capacity();
+            self.sources.insert(
+                Entity(n.entity),
+                Member {
+                    node: id,
+                    value: capacity,
+                },
+            );
         }
         self.unloaded_stress =
             (self.unloaded_stress - last_stress * n.state.theoretical.abs()).max(0.0);
+        let stress = n.calculate_stress_applied();
+        self.members.insert(
+            Entity(n.entity),
+            Member {
+                node: id,
+                value: stress,
+            },
+        );
         self.unloaded_members = self.unloaded_members.saturating_sub(1);
-        self.add(id, nodes);
     }
     /// KineticNetwork.add enrolls an entity; only a new member receives the initial
     /// updateFromNetwork and networkDirty transition (returned to the caller).
     pub(super) fn add(&mut self, id: u32, nodes: &mut [Node]) -> bool {
         self.initialized = true;
-        let n = &mut nodes[id as usize];
-        let enrolled = self.members.contains_key(&Entity(n.entity));
-        self.members
-            .entry(Entity(n.entity))
-            .or_insert_with(|| Member {
-                ports: HashSet::new(),
-                stress: n.part.impact,
-            })
-            .ports
-            .insert(id);
-        // KineticNetwork.add returns before updating sources or syncing an existing entity.
-        if enrolled {
+        if self.is_member(id, nodes) {
             return false;
         }
+        let n = &mut nodes[id as usize];
+        // KineticNetwork.add returns before updating sources or syncing an existing entity.
         n.calculate_stress_applied();
         if n.part.generated != 0.0 {
-            n.calculate_added_stress_capacity();
+            let capacity = n.calculate_added_stress_capacity();
             self.sources.insert(
                 Entity(n.entity),
                 Member {
-                    ports: HashSet::from([id]),
-                    stress: n.part.capacity,
+                    node: id,
+                    value: capacity,
                 },
             );
         }
+        let value = n.part.impact;
+        self.members
+            .insert(Entity(n.entity), Member { node: id, value });
         true
     }
-    /// Detach a port; the entity leaves only when its last enrolled port leaves.
+    /// KineticNetwork.remove; false for an entity the network does not hold.
     pub(super) fn remove(&mut self, id: u32, nodes: &[Node]) -> bool {
-        let mut removed = false;
-        self.members.retain(|entity, member| {
-            if entity.0 != nodes[id as usize].entity {
-                return true;
-            }
-            removed |= member.ports.remove(&id);
-            if member.ports.is_empty() {
-                self.sources.remove(entity);
-                false
-            } else {
-                true
-            }
-        });
-        removed
+        let n = &nodes[id as usize];
+        let entity = Entity(n.entity);
+        if self.members.remove(&entity).is_none() {
+            return false;
+        }
+        if n.part.generated != 0.0 {
+            self.sources.remove(&entity);
+        }
+        true
     }
     pub(super) fn update_capacity_for(&mut self, id: u32, capacity: f32, nodes: &[Node]) {
         self.sources.insert(
             Entity(nodes[id as usize].entity),
             Member {
-                ports: HashSet::from([id]),
-                stress: capacity,
+                node: id,
+                value: capacity,
             },
         );
     }
     pub(super) fn update_stress_for(&mut self, id: u32, stress: f32, nodes: &[Node]) {
         // KineticNetwork.updateStressFor: `members.put(be, stress)`, nothing else.
-        let member = self
-            .members
+        self.members
             .entry(Entity(nodes[id as usize].entity))
-            .or_insert_with(|| Member {
-                ports: HashSet::new(),
-                stress,
-            });
-        member.ports.insert(id);
-        member.stress = stress;
+            .or_insert(Member {
+                node: id,
+                value: stress,
+            })
+            .value = stress;
     }
     fn calculate_capacity(&mut self, nodes: &[Node]) -> f32 {
         // KineticNetwork.calculateCapacity prunes sources independently of members.
-        self.sources.retain(|entity, source| {
-            source
-                .ports
-                .retain(|&id| nodes[id as usize].live && nodes[id as usize].entity == entity.0);
-            !source.ports.is_empty()
-        });
+        self.sources
+            .retain(|entity, source| present(source, entity, nodes));
         self.sources
             .values()
-            .map(|source| {
-                source.stress
-                    * source
-                        .ports
-                        .iter()
-                        .map(|&id| nodes[id as usize].part.generated.abs())
-                        .fold(0.0_f32, f32::max)
-            })
+            .map(|source| source.value * nodes[source.node as usize].part.generated.abs())
             .sum::<f32>()
             + self.unloaded_capacity
     }
     fn calculate_stress(&mut self, nodes: &[Node]) -> f32 {
-        // Java compares the world block entity with the retained object reference.
-        self.members.retain(|entity, member| {
-            member
-                .ports
-                .retain(|&id| nodes[id as usize].live && nodes[id as usize].entity == entity.0);
-            !member.ports.is_empty()
-        });
+        self.members
+            .retain(|entity, member| present(member, entity, nodes));
         self.members
             .values()
-            .map(|member| {
-                // A split shaft has one theoretical speed; face modifiers only affect
-                // conveyed rotation. Prefer its externally driven port to its relay.
-                let id = member
-                    .ports
-                    .iter()
-                    .copied()
-                    .min_by_key(|&id| {
-                        let n = &nodes[id as usize];
-                        (
-                            n.state.source.is_none_or(|source| source.pos == n.pos),
-                            n.sub,
-                        )
-                    })
-                    .unwrap();
-                member.stress * nodes[id as usize].state.theoretical.abs()
-            })
+            .map(|member| member.value * nodes[member.node as usize].state.theoretical.abs())
             .sum::<f32>()
             + self.unloaded_stress
     }
@@ -235,11 +217,8 @@ impl KineticNetwork {
             members: self
                 .members
                 .iter()
-                .flat_map(|(entity, m)| {
-                    m.ports.iter().copied().filter(|&id| {
-                        nodes[id as usize].live && nodes[id as usize].entity == entity.0
-                    })
-                })
+                .filter(|(entity, member)| present(member, entity, nodes))
+                .map(|(_, member)| member.node)
                 .collect(),
             stress: self.stress,
             capacity: self.capacity,
@@ -292,13 +271,9 @@ impl TorquePropagator {
         if let Some((&entity, member)) = net
             .and_then(|n| self.networks.get(&n))
             .and_then(|n| n.members.iter().next())
+            && present(member, &entity, nodes)
         {
-            for &id in &member.ports {
-                let n = &nodes[id as usize];
-                if n.live && n.entity == entity.0 {
-                    self.dirty.insert((id, entity));
-                }
-            }
+            self.dirty.insert((member.node, entity));
         }
     }
 
@@ -333,11 +308,10 @@ impl TorquePropagator {
         id.and_then(|id| self.networks.get(&id))
             .into_iter()
             .flat_map(|n| {
-                n.members.iter().flat_map(|(entity, m)| {
-                    m.ports.iter().copied().filter(|&id| {
-                        nodes[id as usize].live && nodes[id as usize].entity == entity.0
-                    })
-                })
+                n.members
+                    .iter()
+                    .filter(|(entity, member)| present(member, entity, nodes))
+                    .map(|(_, member)| member.node)
             })
     }
     pub(super) fn figures(&self, id: Option<i64>) -> (f32, f32, u32) {
@@ -365,7 +339,6 @@ mod tests {
         let mut kinetics = Kinetics::new();
         kinetics.set(
             [1, 8, 0],
-            0,
             Part {
                 impact: 8.0,
                 ..Part::shaft(Axis::X)

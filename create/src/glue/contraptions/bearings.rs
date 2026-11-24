@@ -402,7 +402,7 @@ pub(super) fn set_exception(
 /// `sequenceContext.getEffectiveValue` of the turn (`distance`: by metres, else by degrees) a
 /// sequenced gearshift or valve handle hands the block at `pos`, as its speed changes.
 fn sequence_limit(dim: usize, pos: [i32; 3], distance: bool) -> Option<f32> {
-    with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, distance)).flatten()
+    with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, distance)).flatten()
 }
 
 /// Windmills: structures whose bearing broke go back; right-clicked bearings assemble their
@@ -1046,7 +1046,7 @@ pub(super) fn tick_pistons(lv: &mut ServerLevel<'_>) {
         let rpm = speed(dim, pos);
         // `onSpeedChanged`: a piston kept together by its mode moves again.
         let running = with_world(|w| {
-            let limit = w.dims[dim].kinetics.sequence_limit(pos, 0, true);
+            let limit = w.dims[dim].kinetics.sequence_limit(pos, true);
             let m = w.dims[dim].pistons.get_mut(&pos)?;
             m.waiting = false;
             // The limit starts again from the context it has now (not for the speed it is

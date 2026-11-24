@@ -26,7 +26,7 @@ impl From<create_engine::kinetics::SavedKineticState> for Saved {
         Self {
             speed: s.speed,
             needs_speed_update: s.needs_speed_update,
-            source: s.source.map(|p| p.pos),
+            source: s.source,
             network: s.network.map(|n| Network {
                 stress: n.stress,
                 capacity: n.capacity,

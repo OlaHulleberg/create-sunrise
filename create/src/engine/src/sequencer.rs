@@ -1,7 +1,8 @@
 //! The sequenced gearshift, after Create's `SequencedGearshiftBlockEntity`, `Instruction`,
 //! `SequencerInstructions` and `InstructionSpeedModifiers`: a list of instructions (turn so many
 //! degrees or metres, wait, wait for a pulse, end) run one after the other while it is powered,
-//! each turning the far half at its speed modifier for as many ticks as it needs.
+//! each turning the face away from the gearshift's source at its speed modifier for as many
+//! ticks as it needs.
 //!
 //! The block's `state` (0 idle, else the running instruction's index + 1) is what the game shows
 //! and what a comparator reads; the rest lives here, ticking only while an instruction runs.
@@ -219,7 +220,8 @@ impl Instruction {
         }
     }
 
-    /// `getSpeedModifier`: what the far half turns at while it runs (0 while waiting).
+    /// `getSpeedModifier`: what the face away from the gearshift's source turns at, relative to
+    /// its speed, while it runs (0 while waiting).
     pub fn speed_modifier(&self) -> i32 {
         if self.kind.turns() {
             self.speed.value()
@@ -250,13 +252,18 @@ pub struct Sequencer {
     pub timer: i32,
     /// `poweredPreviously`.
     pub powered_before: bool,
-    /// The speed its block entity turns at (the half turned), as its tick reads it: the
-    /// theoretical one (`speed`), overstressed or not.
+    /// The speed its block entity turns at, as its tick reads it: the theoretical one (`speed`),
+    /// overstressed or not.
     pub speed: f32,
     /// Its network is overstressed: it shows no speed (`getSpeed` is 0).
     pub overstressed: bool,
     /// Turning instructions started (not saved): each start is a context of its own.
     pub runs: u32,
+    /// `Level.hasNeighborSignal` at the block, as its host last told it (`powered_sequencers`):
+    /// `run` asks at an end.
+    pub powered: bool,
+    /// The `state` a step's `run` cleared its kinetic entity for, until its host writes it.
+    pub cleared_for: Option<u8>,
 }
 
 impl Default for Sequencer {
@@ -271,6 +278,8 @@ impl Default for Sequencer {
             speed: 0.0,
             overstressed: false,
             runs: 0,
+            powered: false,
+            cleared_for: None,
         }
     }
 }
@@ -284,6 +293,16 @@ pub enum Step {
     Idle,
     /// The sequence ended (`run` past its end): 0 unless the block is still powered.
     Ended,
+}
+
+impl Step {
+    /// The `state` it asks for: an instruction's index + 1, else 0.
+    pub fn state(self) -> u8 {
+        match self {
+            Self::Run(state) => state,
+            _ => 0,
+        }
+    }
 }
 
 pub type State = Option<Step>;
@@ -337,7 +356,8 @@ impl Sequencer {
             .copied()
     }
 
-    /// `getModifier`: the far half's speed relative to the near one's (0 idle).
+    /// `getModifier`: what the face away from the gearshift's source turns at relative to its
+    /// speed (0 idle).
     pub fn modifier(&self) -> i32 {
         if self.is_idle() {
             return 0;
@@ -609,7 +629,7 @@ mod tests {
             ..Sequencer::default()
         };
         assert_eq!(s.modifier(), 0);
-        // Powered: the 90° turn starts (state 1), the far half turns.
+        // Powered: the 90° turn starts (state 1), its far face turns.
         assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
         assert_eq!(s.modifier(), 1);
         assert_eq!(s.duration, 21);
@@ -641,7 +661,7 @@ mod tests {
             ..Sequencer::default()
         };
         assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
-        assert_eq!(s.modifier(), 0, "a delay holds the far half");
+        assert_eq!(s.modifier(), 0, "a delay holds its far face");
         s.tick();
         s.tick();
         assert_eq!(s.tick(), Some(Step::Run(2)), "the await");

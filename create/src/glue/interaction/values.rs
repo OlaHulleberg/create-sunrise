@@ -97,13 +97,8 @@ pub(crate) fn client_active(host: &dyn mod_api::ClientHost, pos: [i32; 3]) -> bo
                 .and_then(|l| host.block_entity(l, shaft))
                 .and_then(|e| e.data(host))
                 .is_none_or(|d| {
-                    let Some(mod_api::Tag::Compound(ports)) = d.get(&"KineticState".into()) else {
-                        return true;
-                    };
-                    let Some(mod_api::Tag::Compound(port)) = ports.get(&"0".into()) else {
-                        return true;
-                    };
-                    !port.contains_key(&"Source".into())
+                    super::super::kinetics::saved_kinetics(&d)
+                        .is_none_or(|record| !record.contains_key(&"Source".into()))
                 })
         })
         .unwrap_or(true),

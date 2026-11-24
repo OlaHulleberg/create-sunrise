@@ -6,7 +6,7 @@ use crate::persistence::codec::{self, Compound, Tag};
 pub(super) struct Store {
     pub clock: usize,
     pub phase: u8,
-    pub kinetics: HashMap<(Pos, u8), Compound>,
+    pub kinetics: HashMap<Pos, Compound>,
     pub sequences: HashMap<Pos, Compound>,
     pub handles: HashMap<Pos, Compound>,
     pub valve_pointers: HashMap<Pos, Compound>,
@@ -22,7 +22,7 @@ pub(super) struct Store {
     pub records: BTreeMap<Pos, Compound>,
 }
 type ReloadData = (
-    Vec<(Pos, u8, Compound)>,
+    Vec<(Pos, Compound)>,
     Vec<(Pos, Compound)>,
     Vec<(Pos, crate::transport::Stack)>,
     Vec<(Pos, crate::handles::Handle)>,
@@ -123,14 +123,12 @@ impl Run {
             if self.w.dims[0].kinetics.awaiting_legacy_load(p) {
                 continue;
             }
-            for sub in 0..2 {
-                if let Some(saved) = self.w.dims[0].kinetics.saved_state(p, sub) {
-                    self.persisted
-                        .kinetics
-                        .insert((p, sub), codec::saved_to_nbt(saved));
-                } else {
-                    self.persisted.kinetics.remove(&(p, sub));
-                }
+            if let Some(saved) = self.w.dims[0].kinetics.saved_state(p) {
+                self.persisted
+                    .kinetics
+                    .insert(p, codec::saved_to_nbt(saved));
+            } else {
+                self.persisted.kinetics.remove(&p);
             }
             if let Some(signal) = self.w.saved_chain_signal(0, p) {
                 self.persisted
@@ -309,10 +307,8 @@ impl Run {
         let mut entities = Vec::new();
         let mut sequences = Vec::new();
         for &(p, _) in &blocks {
-            for sub in 0..2 {
-                if let Some(data) = self.persisted.kinetics.get(&(p, sub)) {
-                    entities.push((p, sub, data.clone()));
-                }
+            if let Some(data) = self.persisted.kinetics.get(&p) {
+                entities.push((p, data.clone()));
             }
             if self.w.block_at(0, p) == Some(create_engine::Block::SequencedGearshift)
                 && let Some(data) = self.persisted.sequences.get(&p)
@@ -399,10 +395,7 @@ impl Run {
         let saved_handles: HashMap<_, _> = saved_handles.into_iter().collect();
         let saved_engines: HashMap<_, _> = saved_engines.into_iter().collect();
         let sequences: HashMap<_, _> = sequences.into_iter().collect();
-        let entities: HashMap<_, _> = entities
-            .into_iter()
-            .map(|(p, sub, data)| ((p, sub), data))
-            .collect();
+        let entities: HashMap<_, _> = entities.into_iter().collect();
         let restored_depots: std::collections::HashSet<_> = saved_depots.keys().copied().collect();
         // Complete one block_entity_on_load callback before starting the next one.
         for &(p, s) in &blocks {
@@ -447,13 +440,11 @@ impl Run {
                 self.w
                     .restore_valve_pointer(0, p, codec::valve_pointer_from_nbt(data));
             }
-            for sub in 0..2 {
-                if let Some(saved) = entities.get(&(p, sub)).and_then(codec::saved_from_nbt) {
-                    assert!(
-                        self.w.restore_kinetic_state(0, p, sub, saved),
-                        "saved kinetic part missing at {p:?} port {sub}"
-                    );
-                }
+            if let Some(saved) = entities.get(&p).and_then(codec::saved_from_nbt) {
+                assert!(
+                    self.w.restore_kinetic_state(0, p, saved),
+                    "saved kinetic entity missing at {p:?}"
+                );
             }
             if self.w.block_at(0, p) == Some(create_engine::Block::SequencedGearshift)
                 && let Some(data) = sequences.get(&p)
@@ -697,7 +688,7 @@ mod tests {
             let setting = create_engine::board::Settings { row: 1, value: 32 };
             r.w.board_motor(0, a, setting);
             r.w.board_motor(0, b, setting);
-            assert!(!r.w.dims[0].kinetics.has_part(b, 0));
+            assert!(!r.w.dims[0].kinetics.has_part(b));
             assert_ne!(r.at(b), AIR, "the host still owes the queued break");
             if tick {
                 r.tick();
@@ -705,7 +696,7 @@ mod tests {
                 r.publish_interaction();
             }
             assert_eq!(r.at(b), AIR);
-            assert!(!r.persisted.kinetics.contains_key(&(b, 0)));
+            assert!(!r.persisted.kinetics.contains_key(&b));
             assert!(
                 !r.persisted.records.contains_key(&b),
                 "destroyed settings must be flushed after the break"
@@ -715,7 +706,7 @@ mod tests {
             assert_eq!(
                 r.w.dims[0]
                     .kinetics
-                    .saved_state(a, 0)
+                    .saved_state(a)
                     .unwrap()
                     .network
                     .unwrap()
@@ -786,7 +777,7 @@ mod tests {
             0.0,
             true,
         );
-        let saved = codec::saved_from_nbt(&r.persisted.kinetics[&(p, 0)]).unwrap();
+        let saved = codec::saved_from_nbt(&r.persisted.kinetics[&p]).unwrap();
         assert_eq!(saved.speed, 0.0);
         assert_eq!(saved.source, None);
         assert_eq!(saved.network, None);
@@ -804,7 +795,7 @@ mod tests {
         r.tick();
         r.set_motor(&sc.blocks[0]);
         assert_eq!(
-            codec::saved_from_nbt(&r.persisted.kinetics[&(p, 0)])
+            codec::saved_from_nbt(&r.persisted.kinetics[&p])
                 .unwrap()
                 .speed,
             32.0
@@ -887,22 +878,22 @@ mod tests {
                 let rpm = if back ^ valve { -32. } else { 32. };
                 r.reload();
                 assert_eq!(r.w.saved_handle(0, p), Some(saved));
-                assert_eq!(r.w.dims[0].kinetics.generated(p, 0), Some(rpm));
+                assert_eq!(r.w.dims[0].kinetics.generated(p), Some(rpm));
                 r.w.tick(0, &mut Vec::new());
                 let net = r.w.dims[0]
                     .kinetics
-                    .saved_state(p, 0)
+                    .saved_state(p)
                     .unwrap()
                     .network
                     .unwrap();
                 assert_eq!((net.capacity, net.size), (256., 1));
                 // One physical entity must not become two registry members after
                 // replacing its runtime instance. Repeat to catch retained generations.
-                assert_eq!(r.w.dims[0].kinetics.network_membership(p, 0).unwrap().1, 1);
+                assert_eq!(r.w.dims[0].kinetics.network_membership(p).unwrap().1, 1);
                 for _ in 0..2 {
                     r.reload();
                     r.w.tick(0, &mut Vec::new());
-                    assert_eq!(r.w.dims[0].kinetics.network_membership(p, 0).unwrap().1, 1);
+                    assert_eq!(r.w.dims[0].kinetics.network_membership(p).unwrap().1, 1);
                     assert_eq!(r.w.saved_handle(0, p), Some(saved));
                 }
                 for _ in 1..saved.in_use {
@@ -912,12 +903,12 @@ mod tests {
                     r.w.tick(0, &mut Vec::new());
                     r.save_kinetic_records();
                 }
-                assert_eq!(r.w.dims[0].kinetics.generated(p, 0), Some(rpm));
+                assert_eq!(r.w.dims[0].kinetics.generated(p), Some(rpm));
                 r.w.tick_cranks(0);
                 r.w.tick(0, &mut Vec::new());
                 r.save_kinetic_records();
                 assert_eq!(r.w.saved_handle(0, p).unwrap().in_use, 0);
-                assert_eq!(r.w.dims[0].kinetics.generated(p, 0), Some(0.));
+                assert_eq!(r.w.dims[0].kinetics.generated(p), Some(0.));
                 if valve {
                     assert!(r.w.use_valve(0, p, false, 45));
                 }
@@ -1080,14 +1071,14 @@ mod tests {
             ));
             r.w.block_loaded(0, [x, 8, 0], state);
         }
-        assert!(!r.w.dims[0].kinetics.has_part(c, 0));
+        assert!(!r.w.dims[0].kinetics.has_part(c));
         let mut phase = r.w.transport_ticks(0, 0);
         assert_eq!(
             phase.next(&mut r.w),
             Some(create_engine::world::TransportTick::Belt(c))
         );
         assert_eq!(r.w.dims[0].belts[&c].items.items[0].position, 1.4);
-        assert!(r.w.dims[0].kinetics.has_part(c, 0));
+        assert!(r.w.dims[0].kinetics.has_part(c));
     }
     #[test]
     fn saved_membership_and_insertion_survive_two_belt_reloads() {
@@ -1114,7 +1105,7 @@ mod tests {
                             let saved =
                                 codec::belt_segment_from_nbt(&r.persisted.belts[&p]).unwrap();
                             assert_eq!(r.w.saved_belt_segment(0, p), Some(saved));
-                            assert!(r.w.dims[0].kinetics.has_part(p, 0));
+                            assert!(r.w.dims[0].kinetics.has_part(p));
                         }
                         let item = &r.w.dims[0].belts[&c].items.items[0];
                         assert_eq!(item.inserted_at, 1);
@@ -1228,11 +1219,11 @@ mod write_phase_tests {
             r.set_motor(b);
         }
         r.tick();
-        let written = serde_json::to_vec(&r.persisted.kinetics[&(p, 0)]).unwrap();
+        let written = serde_json::to_vec(&r.persisted.kinetics[&p]).unwrap();
         assert_eq!(
             r.w.dims[0]
                 .kinetics
-                .saved_state(p, 0)
+                .saved_state(p)
                 .unwrap()
                 .network
                 .unwrap()
@@ -1240,18 +1231,18 @@ mod write_phase_tests {
             0.
         );
         assert_eq!(
-            r.w.dims[0].kinetics.calculate_added_stress_capacity(p, 0),
+            r.w.dims[0].kinetics.calculate_added_stress_capacity(p),
             Some(8.)
         );
         r.save_kinetic_records();
         assert_eq!(
-            serde_json::to_vec(&r.persisted.kinetics[&(p, 0)]).unwrap(),
+            serde_json::to_vec(&r.persisted.kinetics[&p]).unwrap(),
             written
         );
         assert_eq!(
             r.w.dims[0]
                 .kinetics
-                .saved_state(p, 0)
+                .saved_state(p)
                 .unwrap()
                 .network
                 .unwrap()
@@ -1432,10 +1423,8 @@ mod reload_order_tests {
             // this case has kinetic entities and one sequencer, no belt/handle/depot.
             for (p, s) in blocks {
                 r.w.block_loaded(0, p, s);
-                for sub in 0..2 {
-                    if let Some(saved) = kinetic.get(&(p, sub)).and_then(codec::saved_from_nbt) {
-                        assert!(r.w.dims[0].kinetics.restore_state(p, sub, saved));
-                    }
+                if let Some(saved) = kinetic.get(&p).and_then(codec::saved_from_nbt) {
+                    assert!(r.w.dims[0].kinetics.restore_state(p, saved));
                 }
                 if let Some(data) = sequence.get(&p) {
                     let instructions = codec::of_tag(data);

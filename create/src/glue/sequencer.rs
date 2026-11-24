@@ -243,6 +243,7 @@ pub fn client_message(
     if !near || with_world(|w| w.block_at(dim, pos)).flatten() != Some(Block::SequencedGearshift) {
         return true;
     }
+    super::kinetics::tell_sequencer_power(&lv, [pos]);
     let Some(step) =
         with_world(|w| w.set_sequencer_instructions(dim, pos, list.clone(), true)).flatten()
     else {

@@ -135,8 +135,10 @@ pub(super) fn goggle_overlay(host: &dyn ClientHost, draw: &mut dyn DrawContext) 
         {
             settings.steam = super::super::fluids::engine::shown_steam(&d);
         }
-        let [part, _] = create_engine::parts::parts(block, info, &settings);
-        Some(part.map_or((block, 0.0, 0.0), |p| (block, p.impact, p.capacity)))
+        Some(
+            create_engine::parts::part(block, info, &settings)
+                .map_or((block, 0.0, 0.0), |p| (block, p.impact, p.capacity)),
+        )
     })
     .flatten() else {
         return;

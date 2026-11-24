@@ -185,7 +185,7 @@ pub fn handle_from_nbt(data: &Compound) -> create_engine::valve::SavedHandle {
     }
 }
 
-use create_engine::kinetics::{Context, PartLocation, SavedKineticState, SavedNetwork};
+use create_engine::kinetics::{Context, SavedKineticState, SavedNetwork};
 use serde::{Deserialize, Serialize};
 pub type Compound = std::collections::BTreeMap<String, Tag>;
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -208,8 +208,7 @@ pub fn saved_to_nbt(saved: SavedKineticState) -> Compound {
         ),
     ]);
     if let Some(source) = saved.source {
-        out.insert("Source".into(), Tag::IntArray(source.pos.to_vec()));
-        out.insert("SourcePort".into(), Tag::Byte(source.sub as i8));
+        out.insert("Source".into(), Tag::IntArray(source.to_vec()));
     }
     if let Some(n) = saved.network {
         out.insert(
@@ -258,13 +257,7 @@ pub fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
         return None;
     };
     let source = match data.get("Source") {
-        Some(Tag::IntArray(p)) if p.len() == 3 => Some(PartLocation {
-            pos: [p[0], p[1], p[2]],
-            sub: match data.get("SourcePort") {
-                Some(Tag::Byte(1)) => 1,
-                _ => 0,
-            },
-        }),
+        Some(Tag::IntArray(p)) if p.len() == 3 => Some([p[0], p[1], p[2]]),
         _ => None,
     };
     let network = match data.get("Network") {
@@ -535,14 +528,11 @@ pub fn sequencer_to_nbt(s: &seq::Sequencer) -> Compound {
 mod tests {
     use super::*;
     #[test]
-    fn kinetic_round_trip_preserves_ports_sequences_and_float_bits() {
+    fn kinetic_round_trip_preserves_sources_sequences_and_float_bits() {
         let saved = SavedKineticState {
             speed: -32.,
             needs_speed_update: true,
-            source: Some(PartLocation {
-                pos: [-2, 8, 4],
-                sub: 1,
-            }),
+            source: Some([-2, 8, 4]),
             network: Some(SavedNetwork {
                 id: 123,
                 stress: 24.,

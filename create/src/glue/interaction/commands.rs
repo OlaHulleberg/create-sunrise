@@ -28,7 +28,7 @@ pub(super) fn run(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flo
         .unwrap_or(0);
     let found = with_world(|w| {
         let speed = w.speed(dim, [x, y, z])?;
-        Some((speed, w.dims.get(dim)?.kinetics.network([x, y, z], 0)))
+        Some((speed, w.dims.get(dim)?.kinetics.network([x, y, z])))
     })
     .flatten();
     let line = match found {

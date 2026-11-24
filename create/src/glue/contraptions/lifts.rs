@@ -465,7 +465,7 @@ fn tick_pulleys(lv: &mut ServerLevel<'_>) {
         }
         let rpm = speed(dim, pos);
         let running = with_world(|w| {
-            let limit = w.dims[dim].kinetics.sequence_limit(pos, 0, true);
+            let limit = w.dims[dim].kinetics.sequence_limit(pos, true);
             let p = w.dims[dim].lifts.pulleys.get_mut(&pos)?;
             // `onSpeedChanged`: one kept together by its mode moves again, and its limit
             // starts again from the context it has now.
@@ -583,7 +583,7 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     super::set_exception(lv, pos, None);
     let mut p = Pulley::new(anchor, offset, range, blocks);
     p.rpm = rpm;
-    p.limit = with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, true)).flatten();
+    p.limit = with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, true)).flatten();
     // `isCollidingWithWorld` a block further down: it doesn't start.
     if rpm > 0.0
         && !p.blocks.is_empty()

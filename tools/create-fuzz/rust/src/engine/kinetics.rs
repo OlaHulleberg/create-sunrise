@@ -91,6 +91,14 @@ impl Run {
         self.tick_presses();
         self.ejectors_ticked();
         self.save_fluid_entities();
+        // The glue's `tell_sequencer_power`: `run` asks for the power when a sequence ends.
+        let running: Vec<Pos> = self.w.dims[0]
+            .sequencers
+            .iter()
+            .filter(|(_, s)| !s.is_idle())
+            .map(|(p, _)| *p)
+            .collect();
+        self.tell_sequencer_power(running);
         // CreateWorld::tick: the solve, then sequencer instructions (committed after it).
         let (_, steps) = self.w.tick(0, &mut events);
         self.persisted.dirty_columns.extend(self.w.take_unsaved(0));
@@ -116,17 +124,21 @@ impl Run {
         }
     }
 
+    /// `Level.hasNeighborSignal` at the sequenced gearshifts in `due`, for the sequences that
+    /// end inside the engine's tick or stop (`SequencedGearshiftBlockEntity.run`).
+    pub(super) fn tell_sequencer_power(&mut self, due: impl IntoIterator<Item = Pos>) {
+        let powered: Vec<Pos> = due.into_iter().filter(|&p| self.signal(p) > 0).collect();
+        self.w.powered_sequencers(0, powered);
+    }
+
     /// The glue's commit of a sequencer step: its `state` (kept while powered at the end).
     pub(super) fn sequencer_step(&mut self, p: [i32; 3], step: create_engine::sequencer::Step) {
-        self.save_sequence(p);
         use create_engine::sequencer::Step;
-        let n = match step {
-            Step::Run(n) => n,
-            Step::Idle => 0,
-            Step::Ended if self.signal(p) > 0 => return,
-            Step::Ended => 0,
-        };
-        let next = with_prop(&self.name(self.at(p)), "state", &n.to_string());
+        self.save_sequence(p);
+        if step == Step::Ended && self.signal(p) > 0 {
+            return;
+        }
+        let next = with_prop(&self.name(self.at(p)), "state", &step.state().to_string());
         self.set(p, self.id(&next));
     }
 }

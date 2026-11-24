@@ -10,9 +10,7 @@ impl Run {
             let state = self.name(id);
             let kinetic = self.kinetic(p, id);
             if kinetic.is_some()
-                && let Some((network, size)) = self.w.dims[0]
-                    .kinetics
-                    .network_membership(p, self.observed_sub(p))
+                && let Some((network, size)) = self.w.dims[0].kinetics.network_membership(p)
             {
                 groups.entry(network).or_default().push(key(p));
                 sizes.insert(
@@ -36,7 +34,7 @@ impl Run {
                     saved: self
                         .persisted
                         .kinetics
-                        .get(&(p, self.observed_sub(p)))
+                        .get(&p)
                         .and_then(crate::persistence::codec::saved_from_nbt)
                         .map(Into::into),
                     fluid_tank: self.fluid_tank(p),
@@ -105,38 +103,6 @@ impl Run {
         }
     }
 
-    /// Match the Java block entity's driven half for split shafts. Use the same
-    /// part for kinetic figures, network membership and network size observations.
-    pub(super) fn observed_sub(&self, p: Pos) -> u8 {
-        let k = &self.w.dims[0].kinetics;
-        u8::from(
-            k.network(p, 0).is_some_and(|n| n.2 == 0.0)
-                && k.network(p, 1).is_some_and(|n| n.2 > 0.0),
-        )
-    }
-
-    pub(super) fn context_limit(&self, p: Pos, sub: u8, distance: bool) -> Option<f32> {
-        let k = &self.w.dims[0].kinetics;
-        if self.w.block_at(0, p) == Some(create_engine::Block::SequencedGearshift) {
-            // Java's single entity holds the outgoing context but reads it at the
-            // driven shaft's theoretical speed. The engine stores it on the far half.
-            let driven = k.theoretical(p, sub)?.0;
-            for half in [0, 1] {
-                if let Some(value) = k.sequence_limit(p, half, distance) {
-                    let speed = k.theoretical(p, half)?.0;
-                    return Some(if speed == 0. {
-                        0.
-                    } else {
-                        value * (driven / speed).abs()
-                    });
-                }
-            }
-            None
-        } else {
-            k.sequence_limit(p, sub, distance)
-        }
-    }
-
     pub(super) fn kinetic(&self, p: Pos, id: u32) -> Option<Kinetic> {
         let k = &self.w.dims[0].kinetics;
         let (block, info): (create_engine::Block, &StateInfo) = self.w.table.get(id)?;
@@ -153,33 +119,24 @@ impl Run {
             flow: self.wheel_scores.get(&p).copied().unwrap_or(0),
             ..Settings::default()
         };
-        let both = parts(block, info, &settings);
-        // A split shaft is one block entity in Create, holding the figures of the half its
-        // source drives: here, the half whose network has a generator.
-        let sub = self.observed_sub(p);
-        let (theoretical, stress, capacity, overstressed) = k.network(p, sub)?;
-        let speed = k.speed(p, sub)?;
-        let generated = k.generated(p, sub)?;
-        let part = both[sub as usize]?;
-        let faces = (both[1].is_some()
-            || matches!(
-                part.rotation,
-                create_engine::kinetics::ShaftRotation::Split(_)
-            ))
+        let part = part(block, info, &settings)?;
+        let (theoretical, stress, capacity, overstressed) = k.network(p)?;
+        let speed = k.speed(p)?;
+        let generated = k.generated(p)?;
+        // A clutch's, a gearshift's or a sequenced gearshift's halves: the speed each shaft
+        // face turns at.
+        let faces = matches!(
+            part.rotation,
+            create_engine::kinetics::ShaftRotation::Split(_)
+        )
         .then(|| {
             let mut m = BTreeMap::new();
             for d in create_engine::kinetics::Dir::ALL {
-                for (s, half) in both.iter().enumerate() {
-                    if half.is_some_and(|h| h.shafts & d.bit() != 0) {
-                        m.insert(
-                            format!("{d:?}").to_lowercase(),
-                            if both[1].is_none() {
-                                k.face_speed(p, d).unwrap_or(0.0)
-                            } else {
-                                k.speed(p, s as u8).unwrap_or(0.0)
-                            },
-                        );
-                    }
+                if d.axis() == part.axis {
+                    m.insert(
+                        format!("{d:?}").to_lowercase(),
+                        k.face_speed(p, d).unwrap_or(0.0),
+                    );
                 }
             }
             m
@@ -193,16 +150,16 @@ impl Run {
             impact: part.impact,
             added_capacity: part.capacity,
             generated,
-            has_source: k.driven_elsewhere(p, sub),
+            has_source: k.driven_elsewhere(p),
             comparator: self.w.dims[0]
                 .gauges
                 .get(&p)
                 .map(|g| create_engine::gauge::analog_output(g.shown.dial)),
-            sequence_angle: self.context_limit(p, sub, false),
-            sequence_distance: self.context_limit(p, sub, true),
+            sequence_angle: k.sequence_limit(p, false),
+            sequence_distance: k.sequence_limit(p, true),
             valve: self.handles.get(&p).map(|h| {
                 let mut observed = h.observe(info.facing.is_some_and(|f| f.positive()));
-                if h.remaining == 0 && k.driven_elsewhere(p, sub) && speed != 0. {
+                if h.remaining == 0 && k.driven_elsewhere(p) && speed != 0. {
                     observed.angle = None;
                     observed.angle_unavailable =
                         Some("externally driven angle requires client renderer".into());

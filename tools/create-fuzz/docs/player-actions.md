@@ -213,9 +213,9 @@ an initial fixture; large-cog item placement and its assistance are not claimed.
 
 Chain trace variants also force x/y/z shaft axes, swap adjustable gearshifts
 between line ends and middle positions, and reconnect a removed middle drive.
-Their topology properties are compared without exclusions. Sequencer context
-normalization reads the engine's outgoing half at the driven half's speed to
-match Java's single block entity. A present zero context remains distinct from
+Their topology properties are compared without exclusions. A sequenced gearshift is
+one kinetic entity in the engine, as Java's single block entity, so its context is
+read at its own speed. A present zero context remains distinct from
 absence, so stale contexts after expiry/end are findings.
 
 The driver distinguishes committed state changes with neighbour notifications

@@ -1,7 +1,7 @@
 //! Migration of this port's pre-KineticState saves. This is deliberately not Create behaviour.
 //!
 //! Loaded legacy entities remain eligible while neighbouring columns arrive. Reconstruct a
-//! consistent source tree in lexicographic (x,y,z,port) order, or extend authoritative saved
+//! consistent source tree in lexicographic (x, y, z) order, or extend authoritative saved
 //! state in mixed-format components. Never use this entry point for player placements.
 use super::*;
 use std::collections::VecDeque;
@@ -23,14 +23,8 @@ impl LoadOrigin {
 impl Kinetics {
     /// Marks a part loaded from the old save format, before its first solve. Later column
     /// arrivals can re-evaluate its legacy component; subsequent saves use KineticState.
-    pub fn loading_save_without_kinetic_state(&mut self, pos: [i32; 3], sub: u8) {
-        if let Some(id) = self
-            .at
-            .get(&pos)
-            .and_then(|ids| ids.get(sub as usize))
-            .copied()
-            .filter(|&id| id != NONE)
-        {
+    pub fn loading_save_without_kinetic_state(&mut self, pos: [i32; 3]) {
+        if let Some(&id) = self.at.get(&pos) {
             self.legacy_loading = true;
             self.nodes[id as usize].load_origin = LoadOrigin::Legacy;
             self.legacy_loads.push((id, self.nodes[id as usize].stamp));
@@ -40,10 +34,8 @@ impl Kinetics {
     /// Whether this block is waiting for a consistent legacy reconstruction. Do not
     /// overwrite its old block-entity data with an invented empty KineticState.
     pub fn awaiting_legacy_load(&self, pos: [i32; 3]) -> bool {
-        self.at.get(&pos).is_some_and(|ids| {
-            ids.iter()
-                .any(|&id| id != NONE && self.nodes[id as usize].load_origin == LoadOrigin::Legacy)
-        })
+        self.node(pos)
+            .is_some_and(|n| n.load_origin == LoadOrigin::Legacy)
     }
 
     /// Startup inputs (flow, redstone, crank expiry) can change a loaded part before
@@ -90,10 +82,7 @@ impl Kinetics {
             {
                 continue;
             }
-            group.sort_by_key(|&id| {
-                let n = &self.nodes[id as usize];
-                (n.pos, n.sub)
-            });
+            group.sort_by_key(|&id| self.nodes[id as usize].pos);
             let original = group
                 .iter()
                 .map(|&id| self.nodes[id as usize].state.clone())
@@ -246,7 +235,7 @@ impl Kinetics {
                 }
                 let (net, seq, source) = {
                     let n = &self.nodes[id as usize];
-                    (n.state.net, n.state.seq, self_location(n))
+                    (n.state.net, n.state.seq, n.pos)
                 };
                 let n = &mut self.nodes[m as usize];
                 n.state.theoretical = speed;
@@ -289,33 +278,29 @@ mod tests {
     fn missing_saved_source_defers_legacy_data_until_its_column_arrives() {
         let mut original = Kinetics::new();
         for x in 0..3 {
-            original.set([x, 0, 0], 0, parts()[x as usize]);
+            original.set([x, 0, 0], parts()[x as usize]);
         }
         original.solve(&mut Vec::new());
         let mut k = Kinetics::new();
-        k.set([2, 0, 0], 0, parts()[2]);
-        k.restore_state([2, 0, 0], 0, original.saved_state([2, 0, 0], 0).unwrap());
+        k.set([2, 0, 0], parts()[2]);
+        k.restore_state([2, 0, 0], original.saved_state([2, 0, 0]).unwrap());
         k.solve(&mut Vec::new());
-        k.set([1, 0, 0], 0, parts()[1]);
-        k.loading_save_without_kinetic_state([1, 0, 0], 0);
+        k.set([1, 0, 0], parts()[1]);
+        k.loading_save_without_kinetic_state([1, 0, 0]);
         let mut events = Vec::new();
         k.solve(&mut events);
         assert!(!events.iter().any(|e| matches!(e, Event::Break { .. })));
         assert!(k.awaiting_legacy_load([1, 0, 0]));
-        assert_eq!(k.saved_state([1, 0, 0], 0), None);
-        k.set([0, 0, 0], 0, parts()[0]);
-        k.loading_save_without_kinetic_state([0, 0, 0], 0);
+        assert_eq!(k.saved_state([1, 0, 0]), None);
+        k.set([0, 0, 0], parts()[0]);
+        k.loading_save_without_kinetic_state([0, 0, 0]);
         events.clear();
         k.solve(&mut events);
         assert!(!events.iter().any(|e| matches!(e, Event::Break { .. })));
         assert!(!k.awaiting_legacy_load([1, 0, 0]));
-        assert_eq!(k.saved_state([0, 0, 0], 0).unwrap().source, None);
+        assert_eq!(k.saved_state([0, 0, 0]).unwrap().source, None);
         assert_eq!(
-            k.saved_state([0, 0, 0], 0)
-                .unwrap()
-                .network
-                .unwrap()
-                .capacity,
+            k.saved_state([0, 0, 0]).unwrap().network.unwrap().capacity,
             2048.0
         );
     }
@@ -327,15 +312,15 @@ mod tests {
         p[0].generated = -16.0;
         p[2].generated = 16.0;
         for x in [2, 1, 0] {
-            k.set([x, 0, 0], 0, p[x as usize]);
-            k.loading_save_without_kinetic_state([x, 0, 0], 0);
+            k.set([x, 0, 0], p[x as usize]);
+            k.loading_save_without_kinetic_state([x, 0, 0]);
         }
         let mut events = Vec::new();
         k.solve(&mut events);
         assert!(!events.iter().any(|e| matches!(e, Event::Break { .. })));
-        assert_eq!(k.saved_state([2, 0, 0], 0).unwrap().source, None);
+        assert_eq!(k.saved_state([2, 0, 0]).unwrap().source, None);
         for x in 0..3 {
-            assert_eq!(k.speed([x, 0, 0], 0), Some(16.0));
+            assert_eq!(k.speed([x, 0, 0]), Some(16.0));
         }
     }
 
@@ -344,8 +329,8 @@ mod tests {
         for order in [[0, 1, 2], [2, 1, 0]] {
             let mut k = Kinetics::new();
             for x in order {
-                k.set([x as i32, 0, 0], 0, parts()[x]);
-                k.loading_save_without_kinetic_state([x as i32, 0, 0], 0);
+                k.set([x as i32, 0, 0], parts()[x]);
+                k.loading_save_without_kinetic_state([x as i32, 0, 0]);
                 let mut events = Vec::new();
                 k.solve(&mut events);
                 assert!(
@@ -354,12 +339,12 @@ mod tests {
                 );
             }
             for x in 0..3 {
-                assert_eq!(k.speed([x, 0, 0], 0), Some(16.0));
+                assert_eq!(k.speed([x, 0, 0]), Some(16.0));
             }
-            assert_eq!(k.saved_state([0, 0, 0], 0).unwrap().source, None);
-            assert!(k.saved_state([2, 0, 0], 0).unwrap().source.is_some());
+            assert_eq!(k.saved_state([0, 0, 0]).unwrap().source, None);
+            assert!(k.saved_state([2, 0, 0]).unwrap().source.is_some());
             assert_eq!(
-                k.saved_state([0, 0, 0], 0).unwrap().network.unwrap().id,
+                k.saved_state([0, 0, 0]).unwrap().network.unwrap().id,
                 network_id([0, 0, 0])
             );
         }
@@ -368,7 +353,7 @@ mod tests {
     fn mixed_saved_and_legacy_parts_keep_authoritative_sources() {
         let mut original = Kinetics::new();
         for x in 0..3 {
-            original.set([x, 0, 0], 0, parts()[x as usize]);
+            original.set([x, 0, 0], parts()[x as usize]);
         }
         original.solve(&mut Vec::new());
         for saved_x in [0, 2] {
@@ -376,15 +361,14 @@ mod tests {
                 let mut k = Kinetics::new();
                 // Columns may arrive on different ticks; saved anchors stay authoritative.
                 for x in order {
-                    k.set([x as i32, 0, 0], 0, parts()[x]);
+                    k.set([x as i32, 0, 0], parts()[x]);
                     if x == saved_x {
                         k.restore_state(
                             [x as i32, 0, 0],
-                            0,
-                            original.saved_state([x as i32, 0, 0], 0).unwrap(),
+                            original.saved_state([x as i32, 0, 0]).unwrap(),
                         );
                     } else {
-                        k.loading_save_without_kinetic_state([x as i32, 0, 0], 0);
+                        k.loading_save_without_kinetic_state([x as i32, 0, 0]);
                     }
                     let mut events = Vec::new();
                     k.solve(&mut events);
@@ -400,16 +384,12 @@ mod tests {
                     "{events:?}"
                 );
                 for x in 0..3 {
-                    assert_eq!(k.speed([x, 0, 0], 0), Some(16.0));
+                    assert_eq!(k.speed([x, 0, 0]), Some(16.0));
                 }
-                assert_eq!(k.saved_state([0, 0, 0], 0).unwrap().source, None);
-                assert!(k.saved_state([2, 0, 0], 0).unwrap().source.is_some());
+                assert_eq!(k.saved_state([0, 0, 0]).unwrap().source, None);
+                assert!(k.saved_state([2, 0, 0]).unwrap().source.is_some());
                 assert_eq!(
-                    k.saved_state([0, 0, 0], 0)
-                        .unwrap()
-                        .network
-                        .unwrap()
-                        .capacity,
+                    k.saved_state([0, 0, 0]).unwrap().network.unwrap().capacity,
                     2048.0
                 );
             }
