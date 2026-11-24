@@ -313,12 +313,12 @@ pub fn items_at(lv: &mut ServerLevel<'_>, pos: [i32; 3], side: Option<Direction>
 /// into empty indices. How much went in.
 fn insert_stacked(
     host: &mut dyn ServerHost,
-    tx: &mod_api::Transaction,
+    tx: &mod_api::TransactionContext,
     to: &Items,
     resource: &ItemResource,
     count: u32,
     limit: u32,
-) -> u32 {
+) -> Result<u32, ()> {
     let size = to.size(host);
     let view: Vec<Option<(bool, u32)>> = (0..size)
         .map(|i| {
@@ -328,13 +328,15 @@ fn insert_stacked(
         .collect();
     let mut went = 0;
     for (i, n) in create_engine::vault::insert_stacked(&view, count, limit) {
-        went += to.insert_at(host, tx, i, resource, n);
+        went += to.insert_at(host, tx, i, resource, n).map_err(|_| ())?;
     }
     // An index the plan counted on refused: the rest goes wherever it goes.
     if went < count {
-        went += to.insert(host, tx, resource, count - went).unwrap_or(0);
+        went += to
+            .insert(host, tx, resource, count - went)
+            .map_err(|_| ())?;
     }
-    went.min(count)
+    Ok(went.min(count))
 }
 
 /// Puts `stack` into the container at `pos` through its side `side`
@@ -360,9 +362,7 @@ pub fn insert_item(
     let limit = u32::from(stack_limit(&*lv.host, &id_of(&*lv.host, &stack)));
     let went = lv
         .host
-        .transaction(|host, tx| {
-            Ok::<u32, ()>(insert_stacked(host, tx, &to, &resource, count, limit))
-        })
+        .transaction(|host, tx| insert_stacked(host, tx, &to, &resource, count, limit))
         .unwrap_or(0);
     with_count(&stack, count - went.min(count))
 }
@@ -413,9 +413,12 @@ pub fn insert_room(
     let count = stack.count();
     // Tried, then aborted: the answer comes out in the error.
     let room = lv.host.transaction(|host, tx| {
-        Err::<(), u32>(insert_stacked(host, tx, &to, &resource, count, limit))
+        Err::<(), u32>(insert_stacked(host, tx, &to, &resource, count, limit).unwrap_or(0))
     });
-    Some(room.err().unwrap_or(0))
+    Some(match room {
+        Err(mod_api::TransactionError::Aborted(n)) => n,
+        _ => 0,
+    })
 }
 
 /// Up to `amount` of the first item `test` passes from `from` (`ItemHelper.extract`), or with
@@ -450,7 +453,9 @@ pub fn extract_matching(
         .transaction(|host, tx| {
             let mut n = 0;
             for &(i, want) in &plan {
-                n += from.extract_at(host, tx, i, &resource, want);
+                n += from
+                    .extract_at(host, tx, i, &resource, want)
+                    .map_err(|_| ())?;
             }
             if n == 0 { Err(()) } else { Ok(n) }
         })

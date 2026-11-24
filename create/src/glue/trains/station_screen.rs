@@ -1485,7 +1485,9 @@ pub fn debug_command(
             _ => "unknown".to_owned(),
         }
     })();
-    let _ = host.commands().feedback(mod_api::Text::literal(line));
+    let _ = host
+        .commands()
+        .feedback(mod_api::Text::literal(line), false);
     mod_api::Flow::Cancel
 }
 

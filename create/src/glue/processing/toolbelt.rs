@@ -37,7 +37,8 @@ use create_engine::toolbox::{self as tb, STACKS_PER_COMPARTMENT};
 use create_engine::{Block, dye};
 use mod_api::{
     BlockEntityRef, BlockSide, ClientHost, Compound, DrawContext, Flow, Host, HostTransaction,
-    ItemResource, ItemStack, PlayerRef, ResourceHandler, ServerHost, Tag, Text, Transaction,
+    ItemResource, ItemStack, Overanswered, PlayerRef, ResourceHandler, ServerHost, Tag, Text,
+    TransactionContext, TransactionError,
 };
 use std::cell::RefCell;
 
@@ -392,70 +393,70 @@ impl ResourceHandler<ItemResource> for ToolboxItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let Some(mut lv) = self.level(host) else {
-            return 0;
+            return Ok(0);
         };
         if amount == 0 || !self.accepts(&lv, index, resource.as_stack()) {
-            return 0;
+            return Ok(0);
         }
         let c = index / STACKS_PER_COMPARTMENT;
         let mut stacks = compartment(&lv, self.pos, c);
         let held = &mut stacks[index % STACKS_PER_COMPARTMENT];
         if held.as_ref().is_some_and(|h| !resource.matches(h)) {
-            return 0;
+            return Ok(0);
         }
         let have = held.as_ref().map_or(0, ItemStack::count);
         let limit = max_stack(&lv, resource.as_stack()).min(64);
         let n = amount.min(limit.saturating_sub(have));
         if n == 0 {
-            return 0;
+            return Ok(0);
         }
         *held = resource.to_stack(have + n);
-        if self.write(&mut lv, c, stacks, resource.as_stack()) {
+        Ok(if self.write(&mut lv, c, stacks, resource.as_stack()) {
             n
         } else {
             0
-        }
+        })
     }
     /// `ItemStackHandler.extractItem`.
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let Some(mut lv) = self.level(host) else {
-            return 0;
+            return Ok(0);
         };
         if index >= tb::STORED {
-            return 0;
+            return Ok(0);
         }
         let c = index / STACKS_PER_COMPARTMENT;
         let mut stacks = compartment(&lv, self.pos, c);
         let slot = &mut stacks[index % STACKS_PER_COMPARTMENT];
         let Some(held) = slot.take() else {
-            return 0;
+            return Ok(0);
         };
         if !resource.matches(&held) {
-            return 0;
+            return Ok(0);
         }
         let n = amount.min(held.count());
         if n == 0 {
-            return 0;
+            return Ok(0);
         }
         *slot = held.clone().shrink(n);
-        if self.write(&mut lv, c, stacks, &held) {
+        Ok(if self.write(&mut lv, c, stacks, &held) {
             n
         } else {
             0
-        }
+        })
     }
 }
 

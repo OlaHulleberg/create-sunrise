@@ -1634,10 +1634,11 @@ impl BlockPart for ContactPart {
         }
         let cx = event.context;
         let pos = [cx.pos.x, cx.pos.y, cx.pos.z];
+        let (yaw, pitch, sneaking) = states::placement_view(cx.source);
         let ctx = create_engine::place::Context {
-            yaw: cx.yaw,
-            pitch: cx.pitch,
-            sneaking: cx.sneaking,
+            yaw,
+            pitch,
+            sneaking,
             clicked_face: Dir::ALL[cx.face as usize],
         };
         let (facing, powered) = create_engine::place::redstone_contact(ctx, |d| {

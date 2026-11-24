@@ -466,9 +466,62 @@ pub fn state(id: u32) -> Option<BlockState> {
     STATES.read().ok()?.as_ref()?.by_id.get(i).copied()
 }
 
+/// The `(yaw, pitch, sneaking)` view of a placement context's source (`BlockPlaceContext` vs
+/// `DirectionalPlaceContext`, where `getNearestLookingDirection()` is `direction`,
+/// `getHorizontalDirection()` is `direction` if horizontal else `North`, and sneaking is false).
+pub fn placement_view(source: mod_api::world::snapshots::PlacementSource) -> (f32, f32, bool) {
+    match source {
+        mod_api::world::snapshots::PlacementSource::Player {
+            yaw,
+            pitch,
+            sneaking,
+        } => (yaw, pitch, sneaking),
+        mod_api::world::snapshots::PlacementSource::Directional { direction } => match direction {
+            mod_api::Direction::Down => (180.0, 90.0, false),
+            mod_api::Direction::Up => (180.0, -90.0, false),
+            mod_api::Direction::South => (0.0, 0.0, false),
+            mod_api::Direction::West => (90.0, 0.0, false),
+            mod_api::Direction::North => (180.0, 0.0, false),
+            mod_api::Direction::East => (-90.0, 0.0, false),
+        },
+        _ => (180.0, 0.0, false),
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{PARTIALS, split};
+    use super::{PARTIALS, placement_view, split};
+
+    #[test]
+    fn directional_placement_view_matches_nearest_and_horizontal() {
+        use create_engine::kinetics::Dir;
+        use create_engine::place::{horizontal_direction, ordered_by_nearest};
+        use mod_api::Direction;
+        use mod_api::world::snapshots::PlacementSource;
+
+        let cases = [
+            (Direction::Down, Dir::Down, Dir::North),
+            (Direction::Up, Dir::Up, Dir::North),
+            (Direction::North, Dir::North, Dir::North),
+            (Direction::South, Dir::South, Dir::South),
+            (Direction::West, Dir::West, Dir::West),
+            (Direction::East, Dir::East, Dir::East),
+        ];
+        for (direction, want_nearest, want_horizontal) in cases {
+            let (yaw, pitch, sneaking) = placement_view(PlacementSource::Directional { direction });
+            assert!(!sneaking);
+            assert_eq!(ordered_by_nearest(yaw, pitch)[0], want_nearest);
+            assert_eq!(horizontal_direction(yaw), want_horizontal);
+        }
+        assert_eq!(
+            placement_view(PlacementSource::Player {
+                yaw: 45.0,
+                pitch: -20.0,
+                sneaking: true,
+            }),
+            (45.0, -20.0, true)
+        );
+    }
 
     #[test]
     fn partials_are_the_content_s_part_blocks_sorted() {

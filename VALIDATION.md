@@ -1,14 +1,15 @@
 # Validation
 
-Checked on 2026-11-22 on branch `pin/dev-7cfdf81` (Linux x86_64, Rust 1.99.1, a fresh clone), pinned to the Sunrise
-Dev build `dev-2026-11-22-7cfdf81` (main at `7cfdf81463ebb4a19705768273909f7f3f03601d`) in `create/sunrise-mod.toml`.
+Checked on 2026-11-24 on branch `create-sunrise-pin-3d34bbe` (Linux x86_64, Rust 1.99.1), pinned to the Sunrise
+Dev build `dev-2026-11-24-3d34bbe` (main at `3d34bbe63d71bb24c098c1e4021ef866be12fe2d`) in `create/sunrise-mod.toml`.
 A Dev build is a test build with no stable mod API. `cargo sunrise-mod` uses the signature-verified release tool and
-SDK from `sdk-7cfdf81463ebb4a19705768273909f7f3f03601d`, with the published release key.
+SDK from `sdk-3d34bbe63d71bb24c098c1e4021ef866be12fe2d`, with the published release key.
 No SDK mirror or trusted-key override is used. Mixins stays at
 `e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
 
-`b680a0f` on the Dev build passed the in-game checks in "Dev build `7cfdf81` in game" below. On `9425651`, `684e89b` passed the in-game smoke test below, `c6f9470` was tried in game for the fixes merged
-since (#203-#224), and `11c43ca` for those merged after (#227-#234). Earlier in-game results are historical: `6373106` ran on `520fc48`, the developer build was `b77574e`,
+In-game runtime checks and `tools/create-fuzz/` have not been run on `3d34bbe` yet. Earlier in-game results are
+historical: `b680a0f` on the Dev build `7cfdf81` passed the in-game checks in "Dev build `7cfdf81` in game" below, `684e89b` on `9425651` passed the in-game smoke test below, `c6f9470` was tried in game for the fixes merged
+since (#203-#224), `11c43ca` for those merged after (#227-#234), `6373106` ran on `520fc48`, the developer build was `b77574e`,
 the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
 
 ## Checks
@@ -20,20 +21,20 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (120 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (916 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official `7cfdf81463` SDK) |
+| `create/` | `cargo +1.99.1 test` | Pass (121 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (919 engine tests) |
+| `create/` | `cargo sunrise-mod check` | Pass (official `3d34bbe63d` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
-| `create/` | `cargo sunrise-mod fits target/sunrise-mod/create.smod --build 7cfdf81463ebb4a19705768273909f7f3f03601d` | Pass (`made for`) |
+| `create/` | `cargo sunrise-mod check target/sunrise-mod/create.smod --build 3d34bbe63d71bb24c098c1e4021ef866be12fe2d` | Pass (`made for`) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (55 tests, including `committed_assets` with `CREATE_JAR` set to the pinned jar) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (55 tests) |
 | `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
-| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Pass |
-| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Pass (124 tests) |
-| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Pass (119 of 119 cases match) |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Not run on `3d34bbe` |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `3d34bbe` |
+| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `3d34bbe` |
 
 ## PR #243 processing on the Dev APIs in game (main `43aa858`)
 

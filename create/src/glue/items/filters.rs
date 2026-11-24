@@ -1054,19 +1054,19 @@ fn same_slot(a: Option<&Held>, b: Option<&Held>) -> bool {
 /// Empties `place` and puts `to` there.
 fn replace(
     host: &mut dyn ServerHost,
-    tx: &mod_api::Transaction,
+    tx: &mod_api::TransactionContext,
     place: &mod_api::ItemPlace,
     to: Option<&Held>,
 ) -> Result<(), ()> {
     if let Some(old) = place.stack(host) {
         let n = old.count();
-        if place.extract(host, tx, &mod_api::ItemResource::of(&old), n) != n {
+        if place.extract(host, tx, &mod_api::ItemResource::of(&old), n) != Ok(n) {
             return Err(());
         }
     }
     if let Some(to) = to {
         let n = to.stack.count();
-        if place.insert(host, tx, &mod_api::ItemResource::of(&to.stack), n) != n {
+        if place.insert(host, tx, &mod_api::ItemResource::of(&to.stack), n) != Ok(n) {
             return Err(());
         }
     }

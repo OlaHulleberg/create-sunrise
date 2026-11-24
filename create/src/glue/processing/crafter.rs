@@ -10,8 +10,9 @@ use create_engine::crafter::{self, Phase, Pointing};
 use create_engine::kinetics::Dir;
 use create_engine::{Block, belt, crafter_input};
 use mod_api::{
-    BlockClick, BlockFace, BlockSide, Direction, HostTransaction, ITEMS, ItemResource, ItemStack,
-    LevelRef, PlayerRef, ResourceHandler, ServerHost, SupportType, Transaction,
+    BlockClick, BlockEntityItemError, BlockFace, BlockSide, Direction, HostTransaction, ITEMS,
+    ItemResource, ItemStack, LevelRef, Overanswered, PlayerRef, ResourceHandler, ServerHost,
+    SupportType, TransactionContext, TransactionError,
 };
 
 /// A mechanical crafter's facing and pointing; None for any other block.
@@ -208,13 +209,13 @@ impl ResourceHandler<ItemResource> for CrafterItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let Some(&p) = self.group(host).get(index) else {
-            return 0;
+            return Ok(0);
         };
         // `if (phase != Phase.IDLE) return stack; if (covered) return stack;`
         let idle = with_world(|w| w.dims[self.dim].crafters.get(&p).map(|c| c.phase))
@@ -222,32 +223,33 @@ impl ResourceHandler<ItemResource> for CrafterItems {
             .is_none_or(|ph| ph == Phase::Idle);
         if amount == 0 || !idle || crafter_covered(self.dim, p) || self.held(host, index).is_some()
         {
-            return 0;
+            return Ok(0);
         }
         // The grid keeps items by id: a stack with components stays out.
         let Some(one) = resource.to_stack(1) else {
-            return 0;
+            return Ok(0);
         };
         if one.components().is_some() || one.damage() != 0 {
-            return 0;
+            return Ok(0);
         }
         let Some(e) = host.block_entity(self.level, p) else {
-            return 0;
+            return Ok(0);
         };
         match e.set_item_slot(host, tx, 0, Some(one)) {
-            Ok(_) => 1,
-            Err(_) => 0,
+            Ok(_) => Ok(1),
+            Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(_) => Ok(0),
         }
     }
     fn extract_at(
         &self,
         _host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         _index: usize,
         _resource: &ItemResource,
         _amount: u32,
-    ) -> u32 {
-        0
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        Ok(0)
     }
 }
 

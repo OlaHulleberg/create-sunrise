@@ -20,8 +20,8 @@
 use super::{Block, ServerLevel, body, center, drop_stack, inv, unwrap, with};
 use create_engine::package;
 use mod_api::{
-    BlockEntityRef, BlockSide, HostTransaction, ItemResource, ItemStack, ModContainer,
-    ResourceHandler, ServerHost, Transaction,
+    BlockEntityItemError, BlockEntityRef, BlockSide, HostTransaction, ItemResource, ItemStack,
+    ModContainer, Overanswered, ResourceHandler, ServerHost, TransactionContext, TransactionError,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -370,19 +370,19 @@ impl ResourceHandler<ItemResource> for PortItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if amount == 0 || index >= PORT_SLOTS || !self.known() {
-            return 0;
+            return Ok(0);
         }
         let Some(stack) = resource.to_stack(1) else {
-            return 0;
+            return Ok(0);
         };
         if !package::is_package(&body::item_id(&*host, &stack)) {
-            return 0;
+            return Ok(0);
         }
         let address = body::address(&stack);
         let takes = with(self.dim, |pk| {
@@ -391,33 +391,36 @@ impl ResourceHandler<ItemResource> for PortItems {
                 .is_some_and(|p| p.automation_takes(&address))
         });
         if !takes || self.slot(&*host, index).is_some() {
-            return 0;
+            return Ok(0);
         }
         let Some(e) = host.block_entity(self.level, self.pos) else {
-            return 0;
+            return Ok(0);
         };
-        let ok = e.set_item_slot(host, tx, index as u32, Some(stack)).is_ok();
-        if ok {
-            written(self.dim, self.pos);
+        match e.set_item_slot(host, tx, index as u32, Some(stack)) {
+            Ok(_) => {
+                written(self.dim, self.pos);
+                Ok(1)
+            }
+            Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(_) => Ok(0),
         }
-        u32::from(ok)
     }
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if amount == 0 || index >= PORT_SLOTS || !self.known() {
-            return 0;
+            return Ok(0);
         }
         let Some(held) = self.slot(&*host, index) else {
-            return 0;
+            return Ok(0);
         };
         if !resource.matches(&held) {
-            return 0;
+            return Ok(0);
         }
         let address = body::address(&held);
         let gives = with(self.dim, |pk| {
@@ -426,18 +429,19 @@ impl ResourceHandler<ItemResource> for PortItems {
                 .is_some_and(|p| p.automation_gives(&address))
         });
         if !gives {
-            return 0;
+            return Ok(0);
         }
         let Some(e) = host.block_entity(self.level, self.pos) else {
-            return 0;
+            return Ok(0);
         };
         let n = held.count().min(amount);
         match e.set_item_slot(host, tx, index as u32, held.shrink(n)) {
             Ok(_) => {
                 written(self.dim, self.pos);
-                n
+                Ok(n)
             }
-            Err(_) => 0,
+            Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(_) => Ok(0),
         }
     }
 }
@@ -485,26 +489,26 @@ impl ResourceHandler<ItemResource> for PackagerItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         _index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if amount == 0 {
-            return 0;
+            return Ok(0);
         }
         let Some(stack) = resource.to_stack(1) else {
-            return 0;
+            return Ok(0);
         };
         if !package::is_package(&body::item_id(&*host, &stack)) {
-            return 0;
+            return Ok(0);
         }
         let free = with(self.dim, |pk| {
             let k = pk.packager(self.pos);
             k.held.is_none() && k.queue.is_empty() && k.can_unwrap()
         });
         if !free || self.slot(&*host, HELD).is_some() || self.slot(&*host, INCOMING).is_some() {
-            return 0;
+            return Ok(0);
         }
         let Some(dimension) = self
             .level
@@ -513,50 +517,56 @@ impl ResourceHandler<ItemResource> for PackagerItems {
             .map(str::to_owned)
             .map(|d| d.to_string())
         else {
-            return 0;
+            return Ok(0);
         };
         let fits = match ServerLevel::new(host, &dimension) {
             Some(mut lv) => unwrap(&mut lv, self.dim, self.pos, &stack, true),
             None => false,
         };
         let Some(e) = self.entity(&*host) else {
-            return 0;
+            return Ok(0);
         };
-        if fits && e.set_item_slot(host, tx, INCOMING, Some(stack)).is_ok() {
-            written(self.dim, self.pos);
-            1
-        } else {
-            0
+        if !fits {
+            return Ok(0);
+        }
+        match e.set_item_slot(host, tx, INCOMING, Some(stack)) {
+            Ok(_) => {
+                written(self.dim, self.pos);
+                Ok(1)
+            }
+            Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(_) => Ok(0),
         }
     }
     /// `extractItem`: the held box, not while the tray moves.
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         _index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if amount == 0 || with(self.dim, |pk| pk.packager(self.pos).animation_ticks != 0) {
-            return 0;
+            return Ok(0);
         }
         let Some(held) = self.slot(&*host, HELD) else {
-            return 0;
+            return Ok(0);
         };
         if !resource.matches(&held) {
-            return 0;
+            return Ok(0);
         }
         let Some(e) = self.entity(&*host) else {
-            return 0;
+            return Ok(0);
         };
         let n = held.count().min(amount);
         match e.set_item_slot(host, tx, HELD, held.shrink(n)) {
             Ok(_) => {
                 written(self.dim, self.pos);
-                n
+                Ok(n)
             }
-            Err(_) => 0,
+            Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+            Err(_) => Ok(0),
         }
     }
 }

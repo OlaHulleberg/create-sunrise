@@ -9,8 +9,8 @@ use super::super::world::{level_index, with_world};
 use crate::glue::items::filters;
 use create_engine::Block;
 use mod_api::{
-    BlockEntityRef, BlockSide, ItemResource, ItemStack, LevelRef, ResourceHandler, ServerHost,
-    Transaction,
+    BlockEntityItemError, BlockEntityRef, BlockSide, ItemResource, ItemStack, LevelRef,
+    Overanswered, ResourceHandler, ServerHost, TransactionContext, TransactionError,
 };
 
 /// The engine's index of `level`.
@@ -116,55 +116,57 @@ fn held_limit(host: &dyn mod_api::Host, e: Option<BlockEntityRef>, slot: usize) 
 /// Takes up to `amount` of `resource` out of slot `slot` of `e`.
 fn take(
     host: &mut dyn ServerHost,
-    tx: &Transaction,
+    tx: &TransactionContext,
     e: Option<BlockEntityRef>,
     slot: usize,
     resource: &ItemResource,
     amount: u32,
-) -> u32 {
-    let Some(e) = e else { return 0 };
+) -> Result<u32, TransactionError<Overanswered>> {
+    let Some(e) = e else { return Ok(0) };
     let Some(held) = read(&*host, Some(e), slot) else {
-        return 0;
+        return Ok(0);
     };
     if !resource.matches(&held) {
-        return 0;
+        return Ok(0);
     }
     let n = held.count().min(amount);
     if n == 0 {
-        return 0;
+        return Ok(0);
     }
     let rest = held.shrink(n);
     match e.set_item_slot(host, tx, slot as u32, rest) {
-        Ok(_) => n,
-        Err(_) => 0,
+        Ok(_) => Ok(n),
+        Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+        Err(_) => Ok(0),
     }
 }
 
 /// Puts up to `amount` of `resource` onto slot `slot` of `e`, up to `room` in all there.
 fn put(
     host: &mut dyn ServerHost,
-    tx: &Transaction,
+    tx: &TransactionContext,
     e: BlockEntityRef,
     slot: usize,
     resource: &ItemResource,
     amount: u32,
     room: u32,
-) -> u32 {
+) -> Result<u32, TransactionError<Overanswered>> {
     let held = read(&*host, Some(e), slot);
     let now = held.as_ref().map_or(0, ItemStack::count);
     if held.as_ref().is_some_and(|h| !resource.matches(h)) {
-        return 0;
+        return Ok(0);
     }
     let n = amount.min(room.saturating_sub(now));
     if n == 0 {
-        return 0;
+        return Ok(0);
     }
     let Some(stack) = resource.to_stack(now + n) else {
-        return 0;
+        return Ok(0);
     };
     match e.set_item_slot(host, tx, slot as u32, Some(stack)) {
-        Ok(_) => n,
-        Err(_) => 0,
+        Ok(_) => Ok(n),
+        Err(BlockEntityItemError::InvalidContext) => Err(TransactionError::InvalidContext),
+        Err(_) => Ok(0),
     }
 }
 
@@ -183,22 +185,22 @@ impl DepotItems {
     fn merge(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         e: BlockEntityRef,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let Some(stack) = resource
             .to_stack(amount.min(u32::from(u8::MAX)))
             .filter(|_| amount > 0)
         else {
-            return 0;
+            return Ok(0);
         };
         let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
-            return 0;
+            return Ok(0);
         };
         let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) else {
-            return 0;
+            return Ok(0);
         };
         let key = super::items::key_of(&*lv.host, &stack);
         let count = stack.count().min(u32::from(u8::MAX)) as u8;
@@ -208,13 +210,13 @@ impl DepotItems {
         let left = super::depot::merge_insert(&mut lv, pos, &key, count, motion, !held);
         let n = u32::from(count - left);
         if held {
-            return n;
+            return Ok(n);
         }
-        let n = put(host, tx, e, 0, resource, n, n);
+        let n = put(host, tx, e, 0, resource, n, n)?;
         if n > 0 {
             with_world(|w| w.depot_put(self.0.dim, pos, Some(motion)));
         }
-        n
+        Ok(n)
     }
 
     /// `DepotBehaviour.insert` onto an empty depot: the stack put into its held slot is its held
@@ -274,16 +276,16 @@ impl ResourceHandler<ItemResource> for DepotItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if index != 0 {
-            return 0;
+            return Ok(0);
         }
         let Some(e) = self.0.entity(&*host, self.0.pos) else {
-            return 0;
+            return Ok(0);
         };
         let slots: Vec<Option<ItemStack>> = (0..create_engine::depot::SLOTS)
             .map(|i| read(&*host, Some(e), i))
@@ -292,30 +294,30 @@ impl ResourceHandler<ItemResource> for DepotItems {
             return self.merge(host, tx, e, resource, amount);
         }
         if slots.iter().any(Option::is_some) {
-            return 0;
+            return Ok(0);
         }
         let max = limit(&*host, resource);
-        let n = put(host, tx, e, 0, resource, amount, max);
+        let n = put(host, tx, e, 0, resource, amount, max)?;
         if n > 0 {
             self.arrived(host, e);
         }
-        n
+        Ok(n)
     }
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let e = self.0.entity(&*host, self.0.pos);
-        let n = take(host, tx, e, index, resource, amount);
+        let n = take(host, tx, e, index, resource, amount)?;
         // `extractItem`: a held stack taken whole is no longer held.
         if n > 0 && index == 0 && read(&*host, e, 0).is_none() {
             with_world(|w| w.depot_put(self.0.dim, self.0.pos, None));
         }
-        n
+        Ok(n)
     }
 }
 
@@ -386,56 +388,58 @@ impl ResourceHandler<ItemResource> for BeltItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if index != 0 {
-            return 0;
+            return Ok(0);
         }
         let Some(stack) = resource.to_stack(amount.min(u32::from(u8::MAX))) else {
-            return 0;
+            return Ok(0);
         };
         let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
-            return 0;
+            return Ok(0);
         };
         let Some(mut lv) = super::super::server::ServerLevel::new(host, &dimension) else {
-            return 0;
+            return Ok(0);
         };
         // `insertItem`: canInsertAt, the count limited to one stack, the rest refused.
         let (id, progress) = super::belt::belt_name(&*lv.host, &stack);
         let count = stack.count().min(u32::from(u8::MAX)) as u8;
-        match super::belt::put_on_from_above(&mut lv, self.0.pos, &id, count, progress, false) {
-            Some(left) => u32::from(count - left),
-            None => 0,
-        }
+        Ok(
+            match super::belt::put_on_from_above(&mut lv, self.0.pos, &id, count, progress, false) {
+                Some(left) => u32::from(count - left),
+                None => 0,
+            },
+        )
     }
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if index != 0 {
-            return 0;
+            return Ok(0);
         }
         let Some((c, segment, item)) = self.stack_at(&*host) else {
-            return 0;
+            return Ok(0);
         };
         let Some(dimension) = self.0.level.dimension().id(&*host).map(str::to_owned) else {
-            return 0;
+            return Ok(0);
         };
         let Some(lv) = super::super::server::ServerLevel::new(host, &dimension) else {
-            return 0;
+            return Ok(0);
         };
         if !super::belt::belt_stack(&lv, &item).is_some_and(|s| resource.matches(&s)) {
-            return 0;
+            return Ok(0);
         }
         let dim = lv.dim;
-        with_world(|w| {
+        Ok(with_world(|w| {
             let d = &mut w.dims[dim];
             let b = d.belts.get_mut(&c)?;
             let taken = b
@@ -448,7 +452,7 @@ impl ResourceHandler<ItemResource> for BeltItems {
             Some(u32::from(taken))
         })
         .flatten()
-        .unwrap_or(0)
+        .unwrap_or(0))
     }
 }
 /// `ItemVaultBlockEntity`'s capability: the whole vault's stacks (`CombinedInvWrapper` of each
@@ -490,16 +494,16 @@ impl ResourceHandler<ItemResource> for VaultItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let Some((pos, slot)) = self.slot(index) else {
-            return 0;
+            return Ok(0);
         };
         let Some(e) = self.at.entity(&*host, pos) else {
-            return 0;
+            return Ok(0);
         };
         let room = limit(&*host, resource);
         put(host, tx, e, slot, resource, amount, room)
@@ -507,13 +511,13 @@ impl ResourceHandler<ItemResource> for VaultItems {
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let Some((pos, slot)) = self.slot(index) else {
-            return 0;
+            return Ok(0);
         };
         let e = self.at.entity(&*host, pos);
         take(host, tx, e, slot, resource, amount)
@@ -552,35 +556,35 @@ impl ResourceHandler<ItemResource> for ChuteItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if index != 0 || !accepts(&*host, self.0, resource.as_stack()) {
-            return 0;
+            return Ok(0);
         }
         let Some(e) = self.0.entity(&*host, self.0.pos) else {
-            return 0;
+            return Ok(0);
         };
         if read(&*host, Some(e), 0).is_some() {
-            return 0;
+            return Ok(0);
         }
         let room = limit(&*host, resource);
-        let n = put(host, tx, e, 0, resource, amount, room);
+        let n = put(host, tx, e, 0, resource, amount, room)?;
         if n > 0 {
             chute_given(host, self.0);
         }
-        n
+        Ok(n)
     }
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         let e = self.0.entity(&*host, self.0.pos);
         take(host, tx, e, index, resource, amount)
     }
@@ -677,33 +681,33 @@ impl ResourceHandler<ItemResource> for TunnelItems {
     fn insert_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         match self.target(host) {
             Some(create_engine::tunnel::HandlerTarget::BeltBelow) => {
                 self.belt().insert_at(host, tx, index, resource, amount)
             }
             Some(create_engine::tunnel::HandlerTarget::Distribute) if index == 0 => {
                 let Some(e) = self.0.entity(&*host, self.0.pos) else {
-                    return 0;
+                    return Ok(0);
                 };
                 let room = limit(&*host, resource);
                 put(host, tx, e, 0, resource, amount, room)
             }
-            _ => 0,
+            _ => Ok(0),
         }
     }
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        tx: &Transaction,
+        tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         self.belt().extract_at(host, tx, index, resource, amount)
     }
 }

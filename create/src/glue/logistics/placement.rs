@@ -81,10 +81,11 @@ impl BlockPart for Placement {
         let c = event.context;
         let pos = [c.pos.x, c.pos.y, c.pos.z];
         let clicked_face = dir_of(c.face);
+        let (yaw, pitch, sneaking) = states::placement_view(c.source);
         let ctx = create_engine::place::Context {
-            yaw: c.yaw,
-            pitch: c.pitch,
-            sneaking: c.sneaking,
+            yaw,
+            pitch,
+            sneaking,
             clicked_face,
         };
         let set = |s: BlockState, k: &str, v: &str| level.state_with_property(s, k, v).unwrap_or(s);
@@ -115,8 +116,8 @@ impl BlockPart for Placement {
                 .filter(|(b, _)| *b == Block::ItemVault)
                 .and_then(|(_, i)| i.axis);
             let axis = match preferred {
-                Some(a) if !c.sneaking => a,
-                _ => create_engine::place::horizontal_direction(c.yaw).axis(),
+                Some(a) if !sneaking => a,
+                _ => create_engine::place::horizontal_direction(yaw).axis(),
             };
             return Some(Some(set(default, "axis", axis_name(axis))));
         }
@@ -135,8 +136,8 @@ impl BlockPart for Placement {
             // GaugeBlock.getStateForPlacement: the block it was placed on (behind the clicked
             // face) carries its shaft on through it.
             let on = beside(clicked_face.opposite());
-            let look = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)[0];
-            let horizontal = create_engine::place::horizontal_direction(c.yaw);
+            let look = create_engine::place::ordered_by_nearest(yaw, pitch)[0];
+            let horizontal = create_engine::place::horizontal_direction(yaw);
             let (facing, along) = create_engine::gauge::placement(
                 clicked_face,
                 look,
@@ -171,7 +172,7 @@ impl BlockPart for Placement {
                         .find(|f| !funnel(beside(f.opposite())))
                         .unwrap_or(Dir::Up);
                 let s = set(default, "facing", super::super::kinetics::dir_name(facing));
-                let s = set(s, "extracting", flag(!c.sneaking));
+                let s = set(s, "extracting", flag(!sneaking));
                 return Some(Some(s));
             }
             // ChuteBlock.getStateForPlacement: down, or, placed against a block's side while not
@@ -186,7 +187,7 @@ impl BlockPart for Placement {
                         _ => None,
                     }
                 };
-                let facing = if clicked_face.axis() != Axis::Y && !c.sneaking {
+                let facing = if clicked_face.axis() != Axis::Y && !sneaking {
                     clicked_face
                 } else {
                     Dir::Down
@@ -208,7 +209,7 @@ impl BlockPart for Placement {
             }
             // HorizontalKineticBlock.getStateForPlacement: facing the player.
             Block::WeightedEjector => {
-                let f = create_engine::place::horizontal_direction(c.yaw).opposite();
+                let f = create_engine::place::horizontal_direction(yaw).opposite();
                 return Some(Some(set(
                     default,
                     "facing",

@@ -17,8 +17,8 @@ use crate::glue::names::Named as _;
 use crate::glue::owned::LevelLists as _;
 use crate::glue::owned::OwnedStack as _;
 use mod_api::{
-    BlockState, ClientHost, Hand, Host, HostBlockStates, HostSide, InteractionResult, ItemPart,
-    ItemStack, PlayerRef, ReleaseUsingEvent, ServerHost, Tag, UseAnimation, UseAnimationEvent,
+    BlockState, Hand, Host, HostBlockStates, HostSide, InteractionResult, ItemPart, ItemStack,
+    PlayerRef, ReleaseUsingEvent, ServerHost, Tag, UseAnimation, UseAnimationEvent,
     UseDurationEvent, UseItemEvent, UseOnEvent,
 };
 
@@ -61,7 +61,7 @@ impl ItemPart for SandPaper {
     }
 
     /// `getUseAnimation`: eating's.
-    fn use_animation(&self, _host: &dyn ClientHost, event: &mut UseAnimationEvent<'_>) {
+    fn use_animation(&self, _host: &dyn mod_api::Host, event: &mut UseAnimationEvent<'_>) {
         *event.animation = UseAnimation::Eat;
     }
 

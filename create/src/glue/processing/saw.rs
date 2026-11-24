@@ -331,35 +331,35 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
     fn insert_at(
         &self,
         host: &mut dyn mod_api::ServerHost,
-        _tx: &mod_api::Transaction,
+        _tx: &mod_api::TransactionContext,
         index: usize,
         resource: &mod_api::ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, mod_api::TransactionError<mod_api::Overanswered>> {
         let stack = resource.as_stack();
         if index != 0 || amount == 0 || stack.damage() != 0 {
-            return 0;
+            return Ok(0);
         }
         let progress = stacks::sequenced_progress(stack);
         // The engine keeps items by id, but for a sequenced assembly's progress.
         if stack.components().is_some() && progress.is_none() {
-            return 0;
+            return Ok(0);
         }
         let item = stacks::id(&*host, stack);
         let Some(mut lv) = ServerLevel::new(host, &self.dimension) else {
-            return 0;
+            return Ok(0);
         };
-        u32::from(saw_put(&mut lv, self.pos, &item, progress))
+        Ok(u32::from(saw_put(&mut lv, self.pos, &item, progress)))
     }
     fn extract_at(
         &self,
         _host: &mut dyn mod_api::ServerHost,
-        _tx: &mod_api::Transaction,
+        _tx: &mod_api::TransactionContext,
         _index: usize,
         _resource: &mod_api::ItemResource,
         _amount: u32,
-    ) -> u32 {
-        0
+    ) -> Result<u32, mod_api::TransactionError<mod_api::Overanswered>> {
+        Ok(0)
     }
 }
 

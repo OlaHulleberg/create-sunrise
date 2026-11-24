@@ -102,8 +102,8 @@ pub fn take(
             let r = items.resource(host, slot)?;
             let got = host
                 .transaction(|h, tx| match items.extract_at(h, tx, slot, &r, n) {
-                    0 => Err(()),
-                    got => Ok(got),
+                    Ok(0) | Err(_) => Err(()),
+                    Ok(got) => Ok(got),
                 })
                 .ok()?;
             r.to_stack(got).map(parcel)
@@ -141,8 +141,8 @@ pub fn insert_items(
 /// Whether every one of `stacks` would go into `items` (`insertItemStacked(.., simulate)`):
 /// inserted in a transaction that is then aborted.
 pub fn fits(lv: &mut ServerLevel<'_>, items: &Items, stacks: &[ItemStack]) -> bool {
-    lv.host
-        .transaction(|h, tx| -> Result<(), bool> {
+    matches!(
+        lv.host.transaction(|h, tx| -> Result<(), bool> {
             for s in stacks {
                 let r = ItemResource::of(s);
                 if items.insert(h, tx, &r, s.count()).unwrap_or(0) < s.count() {
@@ -150,9 +150,9 @@ pub fn fits(lv: &mut ServerLevel<'_>, items: &Items, stacks: &[ItemStack]) -> bo
                 }
             }
             Err(true)
-        })
-        .err()
-        .unwrap_or(false)
+        }),
+        Err(mod_api::TransactionError::Aborted(true))
+    )
 }
 
 /// Whether some index of `items` is empty (a whole package goes in there).

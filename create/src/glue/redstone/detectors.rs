@@ -422,11 +422,12 @@ fn capability_tanks(
             .key()
             .and_then(|k| create_engine::tank::Fluid::of_id(&k.name(&*lv.host)));
         // `drain(fluidInTank, SIMULATE)`: taken in a transaction that is then dropped.
-        let drained = lv
-            .host
-            .transaction(|host, tx| Err::<(), u32>(handler.extract_at(host, tx, i, &r, amount)))
-            .err()
-            .unwrap_or(0);
+        let drained = match lv.host.transaction(|host, tx| {
+            Err::<(), u32>(handler.extract_at(host, tx, i, &r, amount).unwrap_or(0))
+        }) {
+            Err(mod_api::TransactionError::Aborted(n)) => n,
+            _ => 0,
+        };
         tanks.push(create_engine::observe::TankSlot {
             fluid,
             amount,
@@ -764,7 +765,7 @@ pub(super) fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>
             }
         }
     };
-    let _ = host.commands().feedback(Text::literal(line));
+    let _ = host.commands().feedback(Text::literal(line), false);
     Flow::Cancel
 }
 

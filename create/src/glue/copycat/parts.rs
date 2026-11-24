@@ -252,8 +252,9 @@ impl BlockPart for CopycatBlock {
         let (level, _) = states::level_view(level);
         let block = copycat_block(event.state.block())?;
         let c = event.context;
-        let nearest = create_engine::place::ordered_by_nearest(c.yaw, c.pitch)[0];
-        let horizontal = create_engine::place::horizontal_direction(c.yaw);
+        let (yaw, pitch, _) = states::placement_view(c.source);
+        let nearest = create_engine::place::ordered_by_nearest(yaw, pitch)[0];
+        let horizontal = create_engine::place::horizontal_direction(yaw);
         // `getClickLocation().y - getClickedPos().getY()`.
         let hit_y = c.hit[1] - f64::from(c.pos.y);
         let shape = cc::placed(

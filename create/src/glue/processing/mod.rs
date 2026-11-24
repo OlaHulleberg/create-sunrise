@@ -684,7 +684,8 @@ impl BlockPart for BurnerPlacement {
     ) -> Option<Option<mod_api::BlockState>> {
         let (level, _) = crate::glue::states::level_view(level);
         let c = event.context;
-        let facing = create_engine::decor::horizontal_facing(c.yaw).opposite();
+        let (yaw, _, _) = crate::glue::states::placement_view(c.source);
+        let facing = create_engine::decor::horizontal_facing(yaw).opposite();
         let state = level.state_with_property(event.state, "blaze", "smouldering")?;
         let state =
             level.state_with_property(state, "facing", super::kinetics::dir_name(facing))?;

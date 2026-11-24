@@ -535,7 +535,7 @@ impl Subsystem for Items {
             }
             _ => return Flow::Continue,
         };
-        let _ = host.commands().feedback(Text::literal(line));
+        let _ = host.commands().feedback(Text::literal(line), false);
         Flow::Cancel
     }
 }

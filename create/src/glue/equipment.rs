@@ -43,7 +43,7 @@ use mod_api::{
     EntityRef, EquipmentSlot, Flow, GameMode, Hand, HostSide, HostTransaction, Identifier, ItemKey,
     ItemPart, ItemPlace, ItemStack, LevelHost, LivingRef, ModifierLifetime, PlayerRef,
     PlayerTickPostEvent, Registrar, RegistrationContext, ServerHost, SetPlacedByEvent, SoundSource,
-    StackError, Tag, Transaction,
+    StackError, Tag, TransactionContext,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -946,7 +946,7 @@ fn consume_air(host: &mut dyn ServerHost, player: PlayerRef, slot: usize, amount
 
 fn debit_air(
     host: &mut dyn ServerHost,
-    tx: &Transaction,
+    tx: &TransactionContext,
     player: PlayerRef,
     slot: usize,
     amount: i32,
@@ -1030,7 +1030,7 @@ fn absorb(host: &mut dyn ServerHost, player: PlayerRef, uses_per_tank: i32) -> b
 /// Warn only after the caller's transaction commits.
 pub(crate) fn debit_backtank(
     host: &mut dyn ServerHost,
-    tx: &Transaction,
+    tx: &TransactionContext,
     player: PlayerRef,
     uses_per_tank: i32,
 ) -> Result<Option<Vec<eq::Warning>>, ()> {

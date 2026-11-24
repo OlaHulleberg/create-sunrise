@@ -8,7 +8,8 @@ use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::decor;
 use mod_api::{
-    BlockSide, ITEMS, ItemResource, Registrar, ResourceHandler, ServerHost, Transaction,
+    BlockSide, ITEMS, ItemResource, Overanswered, Registrar, ResourceHandler, ServerHost,
+    TransactionContext, TransactionError,
 };
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -67,33 +68,33 @@ impl ResourceHandler<ItemResource> for Bottomless {
     fn insert_at(
         &self,
         _host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         index: usize,
         _resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
-        if index == 0 { amount } else { 0 }
+    ) -> Result<u32, TransactionError<Overanswered>> {
+        Ok(if index == 0 { amount } else { 0 })
     }
 
     /// `extractItem`: the supply, up to a stack.
     fn extract_at(
         &self,
         host: &mut dyn ServerHost,
-        _tx: &Transaction,
+        _tx: &TransactionContext,
         index: usize,
         resource: &ItemResource,
         amount: u32,
-    ) -> u32 {
+    ) -> Result<u32, TransactionError<Overanswered>> {
         if index != 0 {
-            return 0;
+            return Ok(0);
         }
         let Some((supply, max)) = self.supply(host) else {
-            return 0;
+            return Ok(0);
         };
         if supply.item() != resource.item() {
-            return 0;
+            return Ok(0);
         }
         let id = supply.item().name(&*host);
-        decor::crate_extract(Some(&id), amount, max).map_or(0, |(_, n)| n)
+        Ok(decor::crate_extract(Some(&id), amount, max).map_or(0, |(_, n)| n))
     }
 }

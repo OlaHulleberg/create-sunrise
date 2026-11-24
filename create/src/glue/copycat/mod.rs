@@ -358,7 +358,7 @@ impl Subsystem for Copycats {
             ),
             None => format!("no copycat at {} {} {}", pos[0], pos[1], pos[2]),
         };
-        let _ = host.commands().feedback(Text::literal(line));
+        let _ = host.commands().feedback(Text::literal(line), false);
         Flow::Cancel
     }
 }
