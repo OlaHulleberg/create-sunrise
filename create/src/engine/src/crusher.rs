@@ -78,7 +78,6 @@ pub fn recipe<'a>(
 
 /// `intakeItem` + `itemInserted`: the stack goes into slot 0; its recipe's time, else 100.
 pub fn intake(c: &mut Crusher, item: &str, count: u8, time: Option<i32>) {
-    c.entity = None;
     c.slots = vec![(item.to_owned(), count)];
     c.remaining = time.map_or(100.0, |t| t as f32);
     c.applied = false;
@@ -177,56 +176,49 @@ pub fn ejected(c: &mut Crusher) -> Vec<(String, u8)> {
     std::mem::take(&mut c.slots)
 }
 
-/// `tick` for the held entity: its motion (toward the middle, sinking at up to half a block a
-/// tick along the facing), and whether it is far enough in to take (a quarter past the middle).
+/// `CrushingWheelControllerBlockEntity.tick`.
+pub fn overlaps(controller: [i32; 3], inflate: f64, [min, max]: [[f64; 3]; 2]) -> bool {
+    (0..3).all(|a| {
+        let base = f64::from(controller[a]);
+        min[a] < base + 1.0 + inflate && max[a] > base - inflate
+    })
+}
+
+/// `CrushingWheelControllerBlock.entityInside`.
+pub fn stuck_multiplier(facing: Dir) -> [f64; 3] {
+    let mut multiplier = [0.25; 3];
+    multiplier[axis_index(facing)] = f64::from(0.05_f32);
+    multiplier
+}
+
+fn axis_index(facing: Dir) -> usize {
+    match facing.axis() {
+        Axis::X => 0,
+        Axis::Y => 1,
+        Axis::Z => 2,
+    }
+}
+
+/// `CrushingWheelControllerBlockEntity.tick`.
 pub fn hold(
     controller: [i32; 3],
     facing: Dir,
     crushing_speed: f32,
     at: [f64; 3],
+    sneaking: bool,
 ) -> ([f64; 3], bool) {
     let centre = controller.map(|c| f64::from(c) + 0.5);
     let offset = if facing.positive() { 1.0 } else { -1.0 };
-    let speed = f64::from(crushing_speed * 4.0);
-    let movement = (-speed / 4.0).max(-0.5) * -offset;
-    let (xm, zm) = ((centre[0] - at[0]) / 2.0, (centre[2] - at[2]) / 2.0);
-    let a = match facing.axis() {
-        Axis::X => 0,
-        Axis::Y => 1,
-        Axis::Z => 2,
-    };
-    let motion = [
-        if a == 0 { movement } else { xm },
-        if a == 1 { movement } else { 0.0 },
-        if a == 2 { movement } else { zm },
-    ];
+    let movement = f64::from((-(crushing_speed * 4.0) / 4.0).max(-0.5)) * -offset;
+    let mut motion = [0.0; 3];
+    if !sneaking {
+        motion[0] = (f64::from(controller[0] as f32 + 0.5) - at[0]) / 2.0;
+        motion[2] = (f64::from(controller[2] as f32 + 0.5) - at[2]) / 2.0;
+    }
+    let a = axis_index(facing);
+    motion[a] = movement;
     let taken = at[a] * -offset < (centre[a] - 0.25) * -offset;
     (motion, taken)
-}
-
-/// Whether a dropped item at `at` (its feet) rests against the controller's collision for items
-/// (`CRUSHING_WHEEL_CONTROLLER_COLLISION`, 13 px from the facing side): the item the controller
-/// holds can't be drawn through it, so it is taken there.
-pub fn on_shelf(controller: [i32; 3], facing: Dir, at: [f64; 3]) -> bool {
-    const DEPTH: f64 = 13.0 / 16.0;
-    const EPS: f64 = 0.05;
-    let a = match facing.axis() {
-        Axis::X => 0,
-        Axis::Y => 1,
-        Axis::Z => 2,
-    };
-    // The item's extent along the axis (0.25 square, feet at `at`).
-    let (lo, hi) = if a == 1 {
-        (at[1], at[1] + 0.25)
-    } else {
-        (at[a] - 0.125, at[a] + 0.125)
-    };
-    let base = f64::from(controller[a]);
-    if facing.positive() {
-        hi >= base + 1.0 - DEPTH - EPS
-    } else {
-        lo <= base + DEPTH + EPS
-    }
 }
 
 /// Where (the dropped item's feet) and how fast the results leave (`outPos`, `outSpeed`): 0.55
@@ -248,12 +240,32 @@ mod tests {
     use crate::processing::{Output, Recipe};
 
     #[test]
-    fn an_item_resting_on_a_downward_controller_is_on_its_shelf() {
-        let c = [0, 64, 0];
-        // Resting on the 13 px collision for items.
-        assert!(on_shelf(c, Dir::Down, [0.5, 64.8125, 0.5]));
-        // Still falling through the top of the cell.
-        assert!(!on_shelf(c, Dir::Down, [0.5, 64.95, 0.5]));
+    fn downward_intake_waits_until_the_item_crosses_the_threshold() {
+        let pos = [0, 64, 0];
+        let (motion, taken) = hold(pos, Dir::Down, 0.32, [0.75, 64.8125, 0.25], false);
+        assert_eq!(motion, [-0.125, -f64::from(0.32_f32), 0.125]);
+        assert!(!taken);
+        assert!(!hold(pos, Dir::Down, 0.32, [0.5, 64.25, 0.5], false).1);
+        assert!(hold(pos, Dir::Down, 0.32, [0.5, 64.24, 0.5], false).1);
+    }
+
+    #[test]
+    fn intake_leaves_the_entity_for_the_next_ticks_loss_check() {
+        let mut c = Crusher {
+            entity: Some(42),
+            ..Crusher::default()
+        };
+        intake(&mut c, "minecraft:iron_ore", 2, Some(250));
+        assert_eq!(c.entity, Some(42));
+        assert_eq!(c.slots, vec![("minecraft:iron_ore".into(), 2)]);
+        assert_eq!(c.remaining, 250.0);
+    }
+
+    #[test]
+    fn held_entity_is_lost_when_its_box_stops_overlapping() {
+        let pos = [0, 64, 0];
+        assert!(overlaps(pos, 0.5, [[0.25, 63.25, 0.25], [0.5, 63.51, 0.5]]));
+        assert!(!overlaps(pos, 0.5, [[0.25, 63.25, 0.25], [0.5, 63.5, 0.5]]));
     }
 
     #[test]
@@ -392,10 +404,10 @@ mod tests {
 
     #[test]
     fn a_falling_item_is_held_and_taken() {
-        let (v, taken) = hold([0, 0, 0], Dir::Down, 1.28, [0.7, 0.6, 0.5]);
+        let (v, taken) = hold([0, 0, 0], Dir::Down, 1.28, [0.7, 0.6, 0.5], false);
         assert_eq!(v, [-0.09999999999999998, -0.5, 0.0]);
         assert!(!taken);
-        assert!(hold([0, 0, 0], Dir::Down, 1.28, [0.5, 0.2, 0.5]).1);
+        assert!(hold([0, 0, 0], Dir::Down, 1.28, [0.5, 0.2, 0.5], false).1);
         assert_eq!(
             output([0, 0, 0], Dir::Down),
             ([0.5, 0.5 - f64::from(0.55f32), 0.5], [0.0; 3])
