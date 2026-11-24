@@ -322,6 +322,9 @@ pub enum OperatorAsk {
 pub struct Mixer {
     pub running: bool,
     pub running_ticks: i32,
+    /// `processingTicks`: 0 on a new mixer, whose first time at the bottom spends a tick going
+    /// to −1; −1 again once the recipe was applied. A start leaves it, so a cycle resumed
+    /// after a pause counts on from where it stopped.
     pub processing_ticks: i32,
 }
 
@@ -348,7 +351,6 @@ impl Mixer {
         }
         self.running = true;
         self.running_ticks = 0;
-        self.processing_ticks = -1;
     }
 
     /// `continueWithPreviousRecipe`: the head stays down for the next recipe.
@@ -907,8 +909,9 @@ mod tests {
             match m.tick(64.0, 0) {
                 MixStep::Apply => applied_at = Some(t),
                 MixStep::Done => {
-                    // 64 rpm: log2(8) × 15 + 1 = 46 ticks at the bottom.
-                    assert_eq!(applied_at, Some(20 + 46));
+                    // 64 rpm: log2(8) × 15 + 1 = 46 ticks at the bottom, after the tick a new
+                    // mixer's count (0) takes to go below zero.
+                    assert_eq!(applied_at, Some(20 + 1 + 46));
                     // The applying tick moves on twice (21, then 22): 19 more ticks up.
                     assert_eq!(t, applied_at.unwrap() + 19);
                     return;
@@ -917,6 +920,46 @@ mod tests {
             }
         }
         panic!("the cycle never ended");
+    }
+
+    /// `processing-basin-mixer-timing`: a new mixer's first time at the bottom takes one tick
+    /// more (`processingTicks` starts at 0), and a mixer stopped mid-cycle and started again
+    /// counts on from the ticks it had left (`startProcessingBasin` leaves it).
+    #[test]
+    fn a_mixer_started_again_keeps_its_processing_ticks() {
+        let mut m = Mixer::default();
+        m.start_processing_basin();
+        for _ in 0..20 {
+            assert_eq!(m.tick(256.0, 0), MixStep::None);
+        }
+        assert_eq!((m.running_ticks, m.processing_ticks), (20, 0));
+        assert_eq!(m.tick(256.0, 0), MixStep::None);
+        assert_eq!(m.processing_ticks, -1);
+        m.tick(256.0, 0);
+        assert_eq!(m.processing_ticks, 16);
+        for _ in 0..10 {
+            assert_eq!(m.tick(256.0, 0), MixStep::None);
+        }
+        assert_eq!((m.running_ticks, m.processing_ticks), (20, 6));
+        // Too slow: the head leaves the bottom and climbs back to rest.
+        assert_eq!(m.tick(16.0, 0), MixStep::None);
+        assert_eq!(m.running_ticks, 22);
+        for _ in 0..18 {
+            assert_eq!(m.tick(16.0, 0), MixStep::None);
+        }
+        assert_eq!(m.running_ticks, 40);
+        assert_eq!(m.tick(256.0, 0), MixStep::Done);
+        assert_eq!(
+            (m.running, m.running_ticks, m.processing_ticks),
+            (false, 0, 6)
+        );
+        m.start_processing_basin();
+        for _ in 0..25 {
+            assert_eq!(m.tick(256.0, 0), MixStep::None);
+        }
+        assert_eq!((m.running_ticks, m.processing_ticks), (20, 1));
+        assert_eq!(m.tick(256.0, 0), MixStep::Apply);
+        assert_eq!(m.processing_ticks, -1);
     }
 }
 
