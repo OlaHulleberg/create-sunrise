@@ -201,6 +201,7 @@ impl Subsystem for Processing {
             r.block_part(super::states::key(block), saw::Blades);
         }
         r.block_part(super::states::key(Block::BlazeBurner), BurnerPlacement);
+        r.block_part(super::states::key(Block::MechanicalCrafter), CrafterUse);
         toolbelt::register(r);
         operator::register(r);
         for b in Block::ALL
@@ -693,9 +694,33 @@ impl BlockPart for BurnerPlacement {
     }
 }
 
-/// `useItemOn` of the machines a player clicks: the millstone, the
-/// mechanical crafter, the deployer and the blaze burner. Cancelled as used when it took the
-/// click.
+/// `MechanicalCrafterBlock.useItemOn`: runs after `ItemPart::on_item_use_first` so a cogwheel
+/// clicked off-centre on an idle crafter's front face places beside it before the crafter takes
+/// the held item.
+struct CrafterUse;
+
+#[mod_api::sunrise_part]
+impl BlockPart for CrafterUse {
+    fn use_item_on(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut mod_api::UseItemOnEvent<'_>,
+    ) -> Option<mod_api::InteractionResult> {
+        let click = event.click;
+        let dimension = click.dimension.key().id().to_owned();
+        let mut lv = ServerLevel::new(host, &dimension)?;
+        let player = lv.host.players().acting_player()?;
+        if player.entity().spectator(&*lv.host) == Some(true) {
+            return None;
+        }
+        let main = click.hand == mod_api::Hand::Main;
+        crafter::use_crafter(&mut lv, click.pos, click, player, main)
+            .then_some(mod_api::InteractionResult::Success)
+    }
+}
+
+/// `useItemOn` of the machines a player clicks in `right_click_block`: the millstone, the
+/// deployer, the blaze burner and the basin. Cancelled as used when it took the click.
 fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) -> mod_api::Flow {
     let click = event.click;
     let dimension = click.dimension.key().id().to_owned();
@@ -740,7 +765,6 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
     }
     let used = match block {
         Block::Millstone => millstone::use_millstone(&mut lv, pos, player, click.stack),
-        Block::MechanicalCrafter => crafter::use_crafter(&mut lv, pos, click, player, main),
         Block::Deployer => info
             .facing
             .is_some_and(|f| deployer::use_deployer(&mut lv, pos, f, click, player, main)),
