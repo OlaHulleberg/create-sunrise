@@ -108,7 +108,14 @@ is `create:blaze_burner[blaze]`, a magma block or a lit campfire (`BasinBlockEnt
   being the outputs then the inputs (:154-162); a recipe filter; the spout's waiting items and
   fluids (`spoutputBuffer`, `spoutputFluidBuffer`) and the sides the wrench chose and shut.
 - `tick` (:344), in the basin's block entity turn: what waits at the spout goes out, then its
-  operator is told that the contents changed (`basinChecker.scheduleUpdate`, :361).
+  operator is told that the contents changed (`basinChecker.scheduleUpdate`, :361). The operator
+  sees to it at its own turn (`DeferralBehaviour.tick`, :40 → `updateBasin`, :69), and a look is
+  spent whatever it finds: a basin is told again whenever its contents, tanks or filter change,
+  its spout moves anything, or the burner under it gets a new state (`BlazeBurnerBlock.onPlace`,
+  :88). A basin emptied or taken away has its operator's base tick return early
+  (`BasinOperatingBlockEntity`, :58): a press's cycle, a behaviour's, stops there, while a
+  mixer's own `tick` goes on and rests a head just sent to 40 at once
+  (`MechanicalMixerBlockEntity`, :129).
   `SmartBlockEntity.initialize` calls a basin's `lazyTick` at its first tick, and its counter (10)
   every 11 ticks after; `lazyTick` (:253) turns the spout (`updateSpoutput`) and, on its 21st call
   and every 20th after, has a non-empty basin looked at again (`recipeBackupCheck`, :258).
@@ -194,6 +201,11 @@ Fixed, each with an engine test carrying Create's numbers and a case in `cases/`
 | `processing-saw-broken` | A broken saw cutting a log drops it, scattered in its block | Discarded it with the block entity (and would have spawned it at the middle, still) | `SawBlockEntity.java:284`, `ItemHelper.dropContents` |
 | `processing-crusher-removed` | A controller holding 8 cobblestone drops them when a wheel goes | Dropped nothing | `CrushingWheelControllerBlock.java:197` |
 | `processing-saw-depot-turn` | A depot placed after the saw moves the result 0.125 in the tick it arrives | Moved it a tick later (saws ticked after the transport walk) | `SawBlockEntity.java:170` in the level's block-entity order |
+| `processing-basin-press-start` | A press placed before its basin starts in its own turn, the tick after the items arrive; a mixer placed after its basin starts in the tick the basin was told, and rests a tick between two cycles | Started a tick early; placed after its basin, a mixer ran a tick late and restarted without resting; a press's result reached the depot a tick late | `BasinBlockEntity.java:361` in the basin's turn, `DeferralBehaviour.java:40`, `BasinOperatingBlockEntity.java:58`, `MechanicalMixerBlockEntity.java:129` |
+| `processing-basin-press-restart` | The press starts its next cycle in the tick one ends while its recipe still fits | A tick later | `MechanicalPressBlockEntity.java:171` |
+| `processing-basin-emptied`, `processing-basin-press-removed` | An emptied or removed basin stops its mixer or press at once | The cycle ran on | `BasinBlock.java:127`, `BasinBlockEntity.java:237`, `BasinOperatingBlockEntity.java:59`, `MechanicalMixerBlockEntity.java:287`, `MechanicalPressBlockEntity.java:232` |
+| `processing-basin-heater-lit` | Any new state of the burner under a basin has the basin's operator look at once | Only at the next backup check: every 200 game ticks | `BlazeBurnerBlock.java:88` |
+| `processing-basin-continue` | A mixer goes on with its recipe only when nothing waited at its spout before it applied | Went on whatever waited there | `BasinOperatingBlockEntity.java:118`, `:125` |
 
 The driver spilled a broken millstone's slots as `Block.popResource` does; the game spills a
 mod container as `Containers.dropContents` does, as Create's `destroy` (:144,
@@ -208,12 +220,7 @@ the port, so `./run.sh fuzz check cases/processing-basin-*.json` shows them):
 | `processing-basin-handler` | The handler takes a stack only into the first empty slot and not beside a stack of the same item; it gives from the input slots | Takes into any empty input slot; gives nothing from the inputs | `BasinInventory.java:20`, `:45`, `BasinBlockEntity.java:116` |
 | `processing-basin-bucket` | A bucket emptied into the tanks, and one filled from them, is back in the hand | Goes to the inventory | `FluidHelper.java:141`, `:185` |
 | `processing-basin-spout-turn` | The basin turns its spout 11 ticks after it was placed, then every 11 | Every 10 game ticks: the tick before | `SmartBlockEntity.java:64`, `:80`, `BasinBlockEntity.java:257` |
-| `processing-basin-press-start` | A press placed before its basin starts the tick after the items arrive; a mixer rests a tick between two cycles | Starts at once, and restarts at once; placed after its basin, a mixer starts a tick late | `BasinBlockEntity.java:361` in the basin's turn, `DeferralBehaviour.java:40`, `BasinOperatingBlockEntity.java:58`, `MechanicalMixerBlockEntity.java:129` |
 | `processing-basin-mixer-timing` | A mixer's first time at the bottom takes one tick more, and one resumed after a pause keeps its count | The count is reset at every start | `MechanicalMixerBlockEntity.java:55`, `:149`, `:172`, `:272` |
-| `processing-basin-heater-lit` | A burner lit under a basin has its mixer look at the basin at once | Only at the next backup check: every 200 game ticks | `BlazeBurnerBlock.java:88`, `BasinBlockEntity.java:258` |
-| `processing-basin-emptied`, `processing-basin-press-removed` | An emptied or removed basin stops its mixer or press at once | The cycle runs on | `BasinBlock.java:127`, `BasinBlockEntity.java:237`, `BasinOperatingBlockEntity.java:59`, `MechanicalMixerBlockEntity.java:287`, `MechanicalPressBlockEntity.java:232` |
-| `processing-basin-press-restart` | A press starts its next cycle in the tick one ends while its recipe still fits | One tick later | `MechanicalPressBlockEntity.java:171` |
-| `processing-basin-continue` | A mixer goes on with its recipe only when nothing waited at its spout before it applied | Goes on whatever waits there | `BasinOperatingBlockEntity.java:118`, `:125` |
 | `processing-basin-spout-pop` | A broken basin drops the items waiting at its spout | They are lost | `BasinBlockEntity.java:228` |
 | `processing-basin-recipe-order` (with the bucket row: its water comes from a bucket) | With dirt, water, mud and wheat in the basin the mixer packs mud first: its recipe trie hands `minecraft:packed_mud` out before `create:mixing/mud_by_mixing` | Lists Create's mixing recipes before the shapeless ones and mixes mud first | `BasinOperatingBlockEntity.java:160`, `IntArrayTrie.java:64` |
 
