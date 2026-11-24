@@ -144,7 +144,12 @@ impl Hooks for Create {
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
         if old == 0 && new == 0 {
-            world::with_world(|w| w.fluid_neighbour_changed(dim, pos));
+            world::with_world(|w| {
+                w.fluid_neighbour_changed(dim, pos);
+                if event.old != event.new {
+                    w.funnel_neighbour_changed(dim, pos);
+                }
+            });
             return;
         }
         for s in SUBSYSTEMS {
