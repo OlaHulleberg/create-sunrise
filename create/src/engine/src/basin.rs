@@ -222,21 +222,50 @@ pub fn apply(
     Some(results)
 }
 
-/// `ItemHandlerHelper.insertItemStacked` into a `BasinInventory`, whose `insertItem` refuses an
-/// item another slot holds and puts a new one only in the first empty slot: one slot per item.
-/// What did not fit.
-pub fn insert_one_stack(slots: &mut [Slot], item: &str, count: u8, max: u8) -> u8 {
-    let mut holding =
-        (0..slots.len()).filter(|&i| slots[i].as_ref().is_some_and(|(x, _)| x == item));
-    let at = match (holding.next(), holding.next()) {
-        (Some(_), Some(_)) => return count,
-        (Some(i), None) => i,
-        (None, _) => match slots.iter().position(Option::is_none) {
-            Some(i) => i,
-            None => return count,
-        },
+/// `BasinInventory.insertItem`'s own checks, before `ItemStackHandler.insertItem`: no other slot
+/// of the inventory holds the offered item (`same`, as `ItemStack.isSameItemSameComponents`
+/// says), and an empty slot is the first empty one.
+pub fn insert_admits<S>(
+    slots: &[S],
+    slot: usize,
+    empty: impl Fn(&S) -> bool,
+    same: impl Fn(&S) -> bool,
+) -> bool {
+    let Some(held) = slots.get(slot) else {
+        return false;
     };
-    insert_stacked(&mut slots[at..at + 1], item, count, max)
+    let beside = slots.iter().enumerate().any(|(i, s)| i != slot && same(s));
+    let first_free = slots.iter().position(&empty);
+    !beside && !(empty(held) && first_free != Some(slot))
+}
+
+/// `BasinInventory.insertItem` into `slot` of the inventory `slots` (one of a basin's two):
+/// `ItemStackHandler.insertItem` there once `insert_admits` says so, onto the stack of the item,
+/// else into the empty slot, up to `max`. What did not fit.
+pub fn insert_item(slots: &mut [Slot], slot: usize, item: &str, count: u8, max: u8) -> u8 {
+    if !insert_admits(slots, slot, Option::is_none, |s| {
+        s.as_ref().is_some_and(|(held, _)| held == item)
+    }) {
+        return count;
+    }
+    insert_stacked(&mut slots[slot..slot + 1], item, count, max)
+}
+
+/// `ItemHandlerHelper.insertItemStacked` into a `BasinInventory`: `insert_item` into the slots
+/// holding the item first, then into the empty ones; the item in one slot only. What did not fit.
+pub fn insert_one_stack(slots: &mut [Slot], item: &str, mut count: u8, max: u8) -> u8 {
+    for filled in [true, false] {
+        for slot in 0..slots.len() {
+            if slots[slot].is_some() != filled {
+                continue;
+            }
+            count = insert_item(slots, slot, item, count, max);
+            if count == 0 {
+                return 0;
+            }
+        }
+    }
+    count
 }
 
 /// `getMatchingRecipes`: the recipes that would apply now, those with the most ingredients first.
@@ -821,6 +850,36 @@ mod tests {
         assert_eq!(outputs[0], None);
         outputs[4] = Some(("x".into(), 1));
         assert_eq!(insert_one_stack(&mut outputs, "x", 1, 64), 1);
+    }
+
+    /// `processing-basin-handler`: through its handler a basin takes a stack only into the slot
+    /// holding its item, or into the first empty one, never beside a stack of the same item.
+    #[test]
+    fn a_handler_inserts_only_into_the_first_empty_slot_and_beside_nothing() {
+        let mut inputs: Vec<Slot> = vec![None; 9];
+        assert_eq!(insert_item(&mut inputs, 0, "minecraft:andesite", 4, 64), 0);
+        assert_eq!(insert_item(&mut inputs, 2, "minecraft:andesite", 4, 64), 4);
+        assert_eq!(
+            insert_item(&mut inputs, 1, "minecraft:iron_nugget", 4, 64),
+            0
+        );
+        assert_eq!(insert_item(&mut inputs, 3, "minecraft:diorite", 4, 64), 4);
+        assert_eq!(
+            insert_item(&mut inputs, 1, "minecraft:iron_nugget", 60, 64),
+            0
+        );
+        assert_eq!(
+            insert_item(&mut inputs, 1, "minecraft:iron_nugget", 1, 64),
+            1
+        );
+        assert_eq!(insert_item(&mut inputs, 9, "minecraft:diorite", 4, 64), 4);
+        let mut expected: Vec<Slot> = vec![None; 9];
+        expected[0] = Some(("minecraft:andesite".into(), 4));
+        expected[1] = Some(("minecraft:iron_nugget".into(), 64));
+        assert_eq!(inputs, expected);
+        assert_eq!(insert_item(&mut inputs, 2, "minecraft:diorite", 70, 64), 6);
+        assert_eq!(inputs[2], Some(("minecraft:diorite".into(), 64)));
+        assert_eq!(inputs[3], None);
     }
 
     #[test]

@@ -40,6 +40,10 @@ pub fn register(r: &mut dyn Registrar) {
     if let Err(e) = r.block_entity_part(&kind, ToolboxDraw) {
         crate::create_log!("[create] the toolboxes' drawing part was refused: {e:?}");
     }
+    let kind = r.block_entity_type_key(super::super::kinetics::TYPE);
+    if let Err(e) = r.block_entity_part(&kind, BasinInventory) {
+        crate::create_log!("[create] the basin's insert rule was refused: {e:?}");
+    }
 }
 
 /// `ToolboxRenderer`: a toolbox's lid in its colour and its two drawers, turned to its back, shut
@@ -156,7 +160,8 @@ fn containers() -> Vec<(Block, ModContainer)> {
             menu: None,
         },
     ));
-    // The basin's inventories: hoppers put into the nine inputs and take from the nine outputs.
+    // The basin's inventories: hoppers put into the nine inputs as `BasinInventory.insertItem`
+    // admits (the `BasinInventory` part) and take from all eighteen (`CombinedInvWrapper`).
     let all: Vec<usize> = (0..basin::SLOTS).collect();
     out.push((
         Block::Basin,
@@ -165,7 +170,7 @@ fn containers() -> Vec<(Block, ModContainer)> {
             slots: basin::SLOTS,
             faces: every(&all),
             inputs: basin::INPUTS.collect(),
-            outputs: basin::OUTPUTS.collect(),
+            outputs: all,
             menu: None,
         },
     ));
@@ -184,6 +189,36 @@ fn containers() -> Vec<(Block, ModContainer)> {
         },
     ));
     out
+}
+
+/// `BasinInventory.insertItem`'s own checks for the basin's container (`can_place_item`): an
+/// input slot takes a stack only if no other input slot holds it, and an empty one only if it is
+/// the first empty; an output slot takes none (`forbidInsertion`).
+struct BasinInventory;
+
+#[mod_api::sunrise_part]
+impl mod_api::BlockPart for BasinInventory {}
+
+#[mod_api::sunrise_part]
+impl mod_api::BlockEntityPart for BasinInventory {
+    fn can_place_item(&self, event: &mut mod_api::CanPlaceItemEvent<'_>) -> Option<bool> {
+        let block = states::id(event.state)
+            .and_then(|id| with_world(|w| w.table.get(id).map(|(b, _)| b)).flatten());
+        if block != Some(Block::Basin) {
+            return None;
+        }
+        let offered = event.stack;
+        let same = |slot: &Option<mod_api::ItemStack>| {
+            slot.as_ref()
+                .is_some_and(|held| held.same_item(offered) && held.same_components(offered))
+        };
+        Some(basin::insert_admits(
+            event.entity.items.get(..basin::INPUTS.end)?,
+            event.slot,
+            Option::is_none,
+            same,
+        ))
+    }
 }
 
 /// The part of every block with a container: a hopper (or anything moving items through the

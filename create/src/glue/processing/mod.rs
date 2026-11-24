@@ -927,7 +927,18 @@ fn belt_input_room(
                 count - 1
             }
         }
-        Block::Basin => stacked(lv, create_engine::basin::INPUTS),
+        Block::Basin => {
+            // `ItemHandlerHelper.insertItemStacked` into its `BasinInventory`.
+            let max = stacks::limit(&*lv.host, &item.item);
+            let Some(mut inputs) = lv.read_slots(
+                pos,
+                create_engine::basin::INPUTS.start,
+                create_engine::basin::INPUTS.end,
+            ) else {
+                return count;
+            };
+            create_engine::basin::insert_one_stack(&mut inputs, &item.item, count, max)
+        }
         Block::Millstone => {
             let mills = recipes::with(|r| r.milling.find_single(&item.item))
                 .flatten()

@@ -264,8 +264,10 @@ impl Run {
         self.basin_at(p).then(|| self.basin_use(p, stack))
     }
 
-    /// The basin's item handler: the game's container (`ModContainer`), its nine inputs
-    /// taking a stack through any face, its nine outputs giving.
+    /// The basin's item handler (`CombinedInvWrapper` of its two `BasinInventory`s): an insert
+    /// into an input slot as `BasinInventory.insertItem` admits it (the game's container asks
+    /// the glue's `BasinInventory` part), into an output slot never; an extract gives from any
+    /// slot.
     pub(super) fn basin_handler(
         &mut self,
         p: Pos,
@@ -279,44 +281,39 @@ impl Run {
             return false;
         }
         outcome.handler = Some(true);
-        let Some(slots) = self.basin_slots(p) else {
+        let Some(before) = self.basin_slots(p) else {
             return true;
         };
-        let Some(before) = slots.get(usize::from(slot)).cloned() else {
-            return true;
-        };
-        let mut after = before.clone();
+        let mut slots = before.clone();
         if let Some(s) = insert {
-            if basin::INPUTS.contains(&usize::from(slot)) {
-                let mut one = [before.clone()];
-                let left = create_engine::processing::insert_stacked(
-                    &mut one,
+            let left = if basin::INPUTS.contains(&usize::from(slot)) {
+                basin::insert_item(
+                    &mut slots[basin::INPUTS],
+                    usize::from(slot),
                     &s.item,
                     s.count,
                     crate::basin::limit(&s.item),
-                );
-                after = one[0].take();
-                outcome.remainder = (left > 0).then(|| Stack {
-                    item: s.item.clone(),
-                    count: left,
-                });
-            }
+                )
+            } else {
+                s.count
+            };
+            outcome.remainder = (left > 0).then(|| Stack {
+                item: s.item.clone(),
+                count: left,
+            });
         } else if let Some(n) = extract
-            && basin::OUTPUTS.contains(&usize::from(slot))
-            && let Some((item, count)) = before.clone()
+            && let Some((item, count)) = slots.get(usize::from(slot)).cloned().flatten()
         {
             let k = n.min(count);
             outcome.taken.push(Stack {
                 item: item.clone(),
                 count: k,
             });
-            after = (count > k).then_some((item, count - k));
+            slots[usize::from(slot)] = (count > k).then_some((item, count - k));
         }
-        if simulate || after == before {
+        if simulate || slots == before {
             return true;
         }
-        let mut slots = slots;
-        slots[usize::from(slot)] = after;
         self.basin_slots.insert(p, slots);
         self.w.basin_contents_changed(0, p);
         true

@@ -239,8 +239,8 @@ pub fn downward_controllers(s: &Snapshot) -> Controllers {
 ///
 /// `MillstoneBlockEntity.MillstoneInventoryHandler.insertItem` (`:236`) refuses a stack for the
 /// input slot that `isItemValid` (`:229`) rejects: `canProcess` (`:211`), no milling recipe takes
-/// it. The port's container has no per-item rule for a millstone, since the hook sees the
-/// entity's slots but not its block, so the port's handler takes it. Measured on seed 2765
+/// it. The port's container has no per-item rule for a millstone, so the port's handler takes
+/// it. Measured on seed 2765
 /// (`processing/millstone`): 19 dirt put into slot 0 through the handler, refused whole in
 /// Java and taken in the port, which then holds it and waits (timer 100) while Java's millstone
 /// stays empty.

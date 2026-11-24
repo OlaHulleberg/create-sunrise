@@ -731,3 +731,58 @@ fn a_broken_millstone_spills_its_slots_as_the_game_spills_a_container() {
         ))
     );
 }
+
+/// `processing-basin-handler`: `BasinInventory.insertItem` takes a stack only into the slot
+/// holding its item, or into the first empty one, never beside a stack of the same item; the
+/// handler gives from the input slots.
+#[test]
+fn a_basin_handler_takes_into_the_first_empty_slot_and_gives_from_its_inputs() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/processing-basin-handler.json")).unwrap();
+    let snap = super::run(&sc);
+    let basin = snap.blocks["0,6,0"].processing.as_ref().unwrap();
+    assert_eq!(
+        basin.input.as_deref(),
+        Some(
+            &[crate::processing::Slot {
+                item: "minecraft:iron_nugget".into(),
+                count: 4,
+                slot: 1
+            }][..]
+        )
+    );
+    assert_eq!(basin.outputs.as_deref(), Some(&[][..]));
+    let outcomes: Vec<_> = snap
+        .item_outcomes
+        .iter()
+        .map(|o| {
+            (
+                o.offered.as_ref().map(|s| s.item.clone()),
+                o.remainder.as_ref().map(|s| (s.item.clone(), s.count)),
+                o.taken
+                    .iter()
+                    .map(|s| (s.item.clone(), s.count))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (Some("minecraft:andesite".into()), None, vec![]),
+            (
+                Some("minecraft:andesite".into()),
+                Some(("minecraft:andesite".into(), 4)),
+                vec![]
+            ),
+            (Some("minecraft:iron_nugget".into()), None, vec![]),
+            (
+                Some("minecraft:diorite".into()),
+                Some(("minecraft:diorite".into(), 4)),
+                vec![]
+            ),
+            (None, None, vec![("minecraft:andesite".into(), 4)]),
+            (None, None, vec![]),
+        ]
+    );
+}
