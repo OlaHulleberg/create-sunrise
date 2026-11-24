@@ -26,7 +26,8 @@ use create_engine::deployer::{self, Deployer};
 use create_engine::kinetics::Dir;
 use create_engine::{belt, processing};
 use mod_api::{
-    BlockClick, BlockHit, Hand, ItemStack, PlayerAction, PlayerActionSetup, PlayerRef, ServerHost,
+    BlockClick, BlockHit, Hand, HostBlockStates as _, ItemStack, PlayerAction, PlayerActionSetup,
+    PlayerRef, ServerHost,
 };
 
 /// `DeployerFakePlayer`'s fallback profile: `9e2faded-cafe-4ec2-c314-dad129ae971d`, "Deployer".
@@ -1080,6 +1081,110 @@ fn punch(
         deployer::Punch::Crack(None) | deployer::Punch::Stop => {}
     }
     Vec::new()
+}
+
+/// `BeehiveBlockMixin`: a deployer harvesting a full beehive or bee nest (`honey_level` 5)
+/// counts as smoked — honey is taken, `honey_level` resets to 0 and the bees stay calm.
+/// Returns true when the event was handled and cancelled with `InteractionResult::Success`.
+pub fn calm_hive_harvest(
+    host: &mut dyn ServerHost,
+    event: &mut mod_api::RightClickBlockEvent<'_>,
+) -> bool {
+    let click = event.click;
+    if click.player != FAKE_UUID || *event.use_block == mod_api::TriState::False {
+        return false;
+    }
+    let Some(stack) = click.stack else {
+        return false;
+    };
+    let item = stacks::id(&*host, stack);
+    if !matches!(item.as_str(), "minecraft:shears" | "minecraft:glass_bottle") {
+        return false;
+    }
+    let dimension = click.dimension.key().id().to_owned();
+    let Some(mut lv) = ServerLevel::new(host, &dimension) else {
+        return false;
+    };
+    let pos = click.pos;
+    let Some(state) = lv.block_state(pos) else {
+        return false;
+    };
+    let Some(block) = lv.block_name(pos) else {
+        return false;
+    };
+    let Some(honey_level) = lv
+        .property(pos, "honey_level")
+        .and_then(|v| v.parse::<u8>().ok())
+    else {
+        return false;
+    };
+    let Some(harvest) = deployer::hive_harvest(&block, honey_level, &item) else {
+        return false;
+    };
+    let Ok(empty_hive) = state.with(&lv.host.block_states(), "honey_level", "0") else {
+        return false;
+    };
+    if empty_hive == state {
+        return false;
+    }
+    let Some(player) = lv.host.player(click.player) else {
+        return false;
+    };
+    let context = mod_api::GameEventContext {
+        source_entity: Some(player.entity()),
+        ..Default::default()
+    };
+    match harvest {
+        deployer::HiveHarvest::Shear => {
+            lv.play_block_sound("minecraft:block.beehive.shear", pos, 1.0, 1.0);
+            if let Ok(Some(drops)) = lv.level.roll_loot(
+                &mut *lv.host,
+                "minecraft:harvest/beehive",
+                centre(pos),
+                Some(stack),
+                Some(player.entity()),
+            ) {
+                for drop in drops {
+                    let _ = lv.level.pop_resource(&mut *lv.host, pos, drop);
+                }
+            }
+            if let Some(living) = lv.host.living(player.entity()) {
+                let slot = match click.hand {
+                    Hand::Main => mod_api::EquipmentSlot::MainHand,
+                    Hand::Off => mod_api::EquipmentSlot::OffHand,
+                };
+                living.hurt_and_break(&mut *lv.host, slot, 1);
+            }
+            lv.level
+                .game_event(&mut *lv.host, "minecraft:shear", centre(pos), context);
+        }
+        deployer::HiveHarvest::Bottle => {
+            let Some(honey) = stacks::stack(&*lv.host, "minecraft:honey_bottle", 1) else {
+                return false;
+            };
+            lv.play_block_sound("minecraft:item.bottle.fill", pos, 1.0, 1.0);
+            match stack.clone().shrink(1) {
+                None => {
+                    crate::glue::items::set_held(&mut *lv.host, player, click.hand, Some(honey));
+                }
+                Some(rest) => {
+                    crate::glue::items::set_held(&mut *lv.host, player, click.hand, Some(rest));
+                    if let Ok(Some(overflow)) = player.give_stack(&mut *lv.host, honey) {
+                        let _ = lv.level.pop_resource(&mut *lv.host, pos, overflow);
+                    }
+                }
+            }
+            lv.level.game_event(
+                &mut *lv.host,
+                "minecraft:fluid_pickup",
+                centre(pos),
+                context,
+            );
+        }
+    }
+    lv.set_state(pos, empty_hive, crate::glue::server::update_all());
+    *event.cancellation_result = mod_api::InteractionResult::Success;
+    true
 }
 
 /// `DeployerBlockEntity.tick`: cracks on a block that is gone since are cleared.

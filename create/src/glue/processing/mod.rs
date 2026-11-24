@@ -504,7 +504,9 @@ impl Subsystem for Processing {
     ) -> mod_api::Flow {
         match host {
             HostSide::Server(host) => {
-                if application::apply_in_world(host, event) {
+                if deployer::calm_hive_harvest(host, event)
+                    || application::apply_in_world(host, event)
+                {
                     return mod_api::Flow::Cancel;
                 }
                 use_block(host, event)
