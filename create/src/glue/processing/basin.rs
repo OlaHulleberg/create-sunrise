@@ -335,21 +335,21 @@ pub fn use_basin(
         .unwrap_or_else(|| stacks::id(&*lv.host, stack));
     let mut tanks = basin_tanks(dim, pos);
     let emptying = crate::glue::fluids::clicks::emptying(&held);
-    // `tryEmptyItemIntoBE`: all of it into an input tank, or nothing.
+    // `tryEmptyItemIntoBE`: all of it into an input tank, or nothing; its container is left in
+    // the hand.
     if let Some(e) = &emptying {
         let mut inputs = tanks.input;
         if basin::fill(&mut inputs, e.fluid, e.amount) == e.amount {
             tanks.input = inputs;
             with_world(|w| w.set_basin_fluids(dim, pos, tanks));
             if !creative {
-                lv.take_held(player, 1);
-                if let Some(left) = e
-                    .leftover
-                    .as_deref()
-                    .and_then(|l| crate::glue::logistics::items::stack_of(&*lv.host, l, 1))
-                {
-                    lv.give(player, left);
-                }
+                crate::glue::fluids::clicks::emptied_hand(
+                    lv,
+                    player,
+                    mod_api::Hand::Main,
+                    stack,
+                    e.leftover.as_deref(),
+                );
             }
             return true;
         }

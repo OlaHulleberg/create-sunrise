@@ -217,13 +217,22 @@ impl Run {
             return (None, given);
         };
         let mut tanks = self.basin_tanks(pos);
-        // `tryEmptyItemIntoBE`: all of it into an input tank, or nothing.
+        // `tryEmptyItemIntoBE`: all of it into an input tank, or nothing; in survival the
+        // container is left in the hand.
         if let Some(e) = crate::fluid_recipes::contents(&s.item) {
             let mut inputs = tanks.input;
             if basin::fill(&mut inputs, e.fluid, e.amount) == e.amount {
                 tanks.input = inputs;
                 self.w.set_basin_fluids(0, pos, tanks);
-                spend(self.creative, &mut hand, &mut given, e.leftover);
+                if !self.creative {
+                    super::fluid_machines::emptied_hand(
+                        &mut hand,
+                        &mut given,
+                        &s.item,
+                        s.count,
+                        e.leftover.as_deref(),
+                    );
+                }
                 return (hand, given);
             }
         }

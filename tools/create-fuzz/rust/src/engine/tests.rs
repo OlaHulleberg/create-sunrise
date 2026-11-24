@@ -786,3 +786,42 @@ fn a_basin_handler_takes_into_the_first_empty_slot_and_gives_from_its_inputs() {
         ]
     );
 }
+
+/// `processing-basin-bucket`: a bucket emptied into a basin's tanks leaves the empty bucket in
+/// the hand (`tryEmptyItemIntoBE`), and one filled from them lands back in it
+/// (`tryFillItemFromBE`'s `placeItemBackInInventory`: the empty selected slot).
+#[test]
+fn a_bucket_emptied_into_a_basin_is_back_in_the_hand() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/processing-basin-bucket.json")).unwrap();
+    let snap = super::run(&sc);
+    let outcomes: Vec<_> = snap
+        .item_outcomes
+        .iter()
+        .map(|o| {
+            (
+                o.offered.as_ref().map(|s| (s.item.clone(), s.count)),
+                o.remainder.as_ref().map(|s| (s.item.clone(), s.count)),
+                o.taken
+                    .iter()
+                    .map(|s| (s.item.clone(), s.count))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (
+                Some(("minecraft:water_bucket".into(), 1)),
+                Some(("minecraft:bucket".into(), 1)),
+                vec![]
+            ),
+            (
+                Some(("minecraft:bucket".into(), 1)),
+                Some(("minecraft:water_bucket".into(), 1)),
+                vec![]
+            ),
+        ]
+    );
+}

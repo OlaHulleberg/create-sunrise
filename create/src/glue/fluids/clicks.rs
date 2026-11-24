@@ -261,15 +261,7 @@ fn use_drain(
         .unwrap_or(false);
         if took {
             if !items::creative(&*lv.host, player) {
-                let left = e.leftover.as_deref().and_then(|l| stack(lv, l, 1));
-                if held.count() <= 1 {
-                    items::set_held(lv.host, player, hand, left);
-                } else {
-                    items::shrink_held(lv.host, player, hand, 1);
-                    if let Some(left) = left {
-                        items::give_back(lv.host, player, left);
-                    }
-                }
+                emptied_hand(lv, player, hand, held, e.leftover.as_deref());
             }
             return true;
         }
@@ -277,6 +269,28 @@ fn use_drain(
     }
     super::machines::give_back_drained(lv, pos, player);
     true
+}
+
+/// The end of `FluidHelper.tryEmptyItemIntoBE` for a player who is not creative: the one item
+/// used up leaves its container in the hand (`copyOfHeld` is empty), and a stack of more keeps
+/// its rest there while the container goes back into the inventory
+/// (`placeItemBackInInventory`).
+pub(crate) fn emptied_hand(
+    lv: &mut ServerLevel<'_>,
+    player: PlayerRef,
+    hand: Hand,
+    held: &ItemStack,
+    leftover: Option<&str>,
+) {
+    let left = leftover.and_then(|l| stack(lv, l, 1));
+    if held.count() <= 1 {
+        items::set_held(lv.host, player, hand, left);
+    } else {
+        items::shrink_held(lv.host, player, hand, 1);
+        if let Some(left) = left {
+            items::give_back(lv.host, player, left);
+        }
+    }
 }
 
 /// `EncasableBlock.tryEncase` with copper casing: a pipe becomes an encased pipe open where it

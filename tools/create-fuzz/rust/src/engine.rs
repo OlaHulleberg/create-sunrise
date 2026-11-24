@@ -24,6 +24,7 @@ mod observation;
 mod outputs;
 mod persistence;
 mod pipes;
+mod player;
 mod presses;
 mod processing;
 mod pumps;
@@ -215,6 +216,8 @@ pub struct Run {
     depot_stacks: HashMap<Pos, crate::transport::Stack>,
     depot_outputs: HashMap<Pos, outputs::Outputs>,
     item_outcomes: Vec<crate::transport::Outcome>,
+    /// The actor's inventory, as `ItemInputs.apply` moves it.
+    inventory: player::Inventory,
     item_entities: Vec<items::ItemEntity>,
     drops: Vec<crate::transport::DroppedItem>,
     /// The level's entity pass has run this tick: what joins now waits until the next.
@@ -317,6 +320,7 @@ impl Run {
             depot_stacks: HashMap::new(),
             depot_outputs: HashMap::new(),
             item_outcomes: Vec::new(),
+            inventory: player::Inventory::new(),
             item_entities: Vec::new(),
             drops: Vec::new(),
             entity_pass_done: false,

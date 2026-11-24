@@ -41,7 +41,10 @@ impl Run {
         }
     }
     pub(super) fn item_input(&mut self, p: Pos, input: &Input) {
+        // `ItemInputs.apply`: the offered stack goes into the main hand first.
+        let before = self.inventory.begin(input);
         if let Some(outcome) = self.fluid_item_input(p, input) {
+            let outcome = self.inventory.outcome(input, outcome, &before);
             self.item_outcomes.push(outcome);
             return;
         }
@@ -126,8 +129,6 @@ impl Run {
                     let mut inventory = DepotUse {
                         run: self,
                         pos: p,
-                        hand: stack.clone(),
-                        taken: Vec::new(),
                         facing: depot::Side::of_yaw(*yaw),
                     };
                     depot::use_top(
@@ -137,8 +138,7 @@ impl Run {
                             .as_ref()
                             .is_some_and(|s| s.item == "create:mechanical_arm"),
                     );
-                    remainder = inventory.hand;
-                    taken = inventory.taken;
+                    remainder = inventory.run.inventory.hand();
                 }
                 // The remaining blocks in the bounded contract have no stack-transfer
                 // handler for these plain items. A refused use leaves the offered stack.
@@ -150,7 +150,7 @@ impl Run {
         for s in taken {
             *merged.entry(s.item).or_default() += s.count;
         }
-        self.item_outcomes.push(Outcome {
+        let outcome = Outcome {
             pos: p,
             offered,
             remainder,
@@ -159,7 +159,9 @@ impl Run {
                 .map(|(item, count)| Stack { item, count })
                 .collect(),
             handler: None,
-        });
+        };
+        let outcome = self.inventory.outcome(input, outcome, &before);
+        self.item_outcomes.push(outcome);
     }
     /// `funnel_direct_input`: only an inserting, unpowered funnel facing up takes the stack, into
     /// the inventory under it (`handleDirectBeltInput`); the count left.
@@ -883,8 +885,6 @@ impl Run {
 struct DepotUse<'a> {
     run: &'a mut Run,
     pos: Pos,
-    hand: Option<Stack>,
-    taken: Vec<Stack>,
     facing: depot::Side,
 }
 impl depot::PlayerUse for DepotUse<'_> {
@@ -902,23 +902,12 @@ impl depot::PlayerUse for DepotUse<'_> {
         Some(contents)
     }
 
-    fn give_back(&mut self, mut stack: Stack) {
-        if let Some(hand) = &mut self.hand
-            && hand.item == stack.item
-        {
-            let count = stack.count.min(hand.limit() - hand.count);
-            hand.count += count;
-            stack.count -= count;
-        }
-        // An initially empty hand only collects. Its refunds are reported as
-        // taken rather than as a remainder, as ItemInputs measures on Java.
-        if stack.count > 0 {
-            self.taken.push(stack);
-        }
+    fn give_back(&mut self, stack: Stack) {
+        self.run.inventory.give(stack);
     }
 
     fn place_hand(&mut self) {
-        if let Some(stack) = self.hand.take() {
+        if let Some(stack) = self.run.inventory.take_hand() {
             self.run.depot_stacks.insert(self.pos, stack);
             self.run.w.depot_put(
                 0,
