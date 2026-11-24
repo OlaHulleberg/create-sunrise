@@ -1,0 +1,110 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 222,
+  "checkpoints": [
+    220,
+    221
+  ],
+  "blocks": [
+    {
+      "pos": [
+        -1,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:cogwheel[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_mixer"
+    },
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    },
+    {
+      "pos": [
+        1,
+        5,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 3
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "minecraft:iron_nugget",
+          "count": 3
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 200,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 201,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}
