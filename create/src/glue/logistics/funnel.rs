@@ -371,6 +371,9 @@ fn pull_from_depot(
 ) -> Option<Option<bool>> {
     let below = [pos[0], pos[1] - 1, pos[2]];
     let dim = lv.dim;
+    if with_world(|w| w.funnel_inv_ready(dim, pos)) != Some(true) {
+        return Some(None);
+    }
     // An ejector keeps the funnel facing its back for its launches (`canFunnelsPullFrom`).
     if let Some((Block::WeightedEjector, info)) = info_at(lv, below)
         && let Some(f) = funnel_at(lv, pos)
@@ -704,6 +707,9 @@ pub fn collect_inside(lv: &mut ServerLevel<'_>) {
             continue;
         };
         if f.belt.is_some() || f.powered || f.extracting {
+            continue;
+        }
+        if with_world(|w| w.funnel_inv_ready(dim, pos)) != Some(true) {
             continue;
         }
         let Some(e) = lv.host.entity(id) else {
