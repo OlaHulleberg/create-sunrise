@@ -1,23 +1,25 @@
 //! The basin and what works on it: the mechanical mixer (`MechanicalMixerBlockEntity`), the
 //! press compacting (`MechanicalPressBlockEntity` as a basin operator), and the blaze burner
 //! heating it (`BlazeBurnerBlockEntity`).
+//!
+//! A basin, a mixer and a press each take their turn in logistics' walk, in the level's
+//! block-entity order (`tick_basin`, `tick_mixer`, `press::tick_press`). What an operator knows
+//! of its basin is the engine's (`create_engine::basin::BasinOperatingBlockEntity`): it looks at
+//! the basin only when told, at its own next turn.
 
 use super::{recipes, stacks};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
-use create_engine::basin::{self, MixStep};
+use create_engine::basin::{self, MixStep, OperatorAsk};
 use create_engine::fan::Heat;
 use create_engine::kinetics::Dir;
 use create_engine::processing::{Output, Rng, Slot};
-use create_engine::{Block, burner, press};
+use create_engine::{Block, burner};
 use mod_api::{Compound, ItemStack, PlayerRef, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
 thread_local! {
-    /// The square crafting recipe a press is compacting with, by dimension and press.
-    static PRESS_CRAFTED: RefCell<HashMap<(usize, [i32; 3]), basin::Recipe>> =
-        RefCell::new(HashMap::new());
     /// `canCompress` answers by item: its 3×3 and 2×2 crafting recipes of only it. Forgotten
     /// with the recipes (a data reload or the world closing).
     static COMPRESSED: RefCell<HashMap<String, Vec<basin::Recipe>>> = RefCell::new(HashMap::new());
@@ -25,7 +27,6 @@ thread_local! {
 
 /// Forgets what was kept for the world.
 pub fn clear() {
-    PRESS_CRAFTED.with_borrow_mut(HashMap::clear);
     COMPRESSED.with_borrow_mut(HashMap::clear);
     MIXER_SHOWN.with_borrow_mut(HashMap::clear);
 }
@@ -198,8 +199,11 @@ pub fn basin_changed(dim: usize, pos: [i32; 3]) {
 /// Tells a mixer's clients its cycle (`MIXER_KEY`) when they would work out another one than
 /// the server's (`basin::shown_ticks`): when it starts, leaves the bottom, stays down for the
 /// next recipe or stops.
-fn show_mixer(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: &basin::Mixer) {
+fn show_mixer(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
+    let Some(m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
+        return;
+    };
     let now = lv.game_time();
     let told = MIXER_SHOWN.with_borrow(|s| s.get(&(dim, pos)).copied());
     let value = if !m.running {
@@ -276,8 +280,12 @@ pub fn basin_take(lv: &mut ServerLevel<'_>, pos: [i32; 3], stack: &mut Option<It
     }
     write_basin(lv, pos, &before, &inputs);
     *stack = stack.take().and_then(|s| s.shrink(u32::from(count - left)));
-    let dim = lv.dim;
-    with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+    contents_changed(lv.dim, pos);
+}
+
+/// `BasinBlockEntity`'s `contentsChanged = true`: its operator is told at the basin's turn.
+pub(crate) fn contents_changed(dim: usize, basin: [i32; 3]) {
+    with_world(|w| w.basin_contents_changed(dim, basin));
 }
 
 /// `BasinBlock.useItemOn`: an empty hand takes every stack out (inputs and outputs, into the
@@ -306,6 +314,7 @@ pub fn use_basin(
             .collect();
         if !taken.is_empty() && lv.set_slots(pos, &taken) {
             basin_changed(dim, pos);
+            contents_changed(dim, pos);
             for s in slots.into_iter().flatten() {
                 lv.give(player, s);
             }
@@ -318,6 +327,8 @@ pub fn use_basin(
                 1.5,
             );
         }
+        // `be.onEmptied()`, empty or not: the operator over it is stopped.
+        with_world(|w| w.basin_emptied(dim, pos));
         return true;
     };
     let creative = lv.creative(player);
@@ -379,264 +390,186 @@ pub fn use_basin(
         || recipes::with(|r| create_engine::spout::fillable(&held, &r.filling)).unwrap_or(false)
 }
 
-/// Mechanical mixers: those asked to look at their basin (`updateBasin`: turning, not running,
-/// a recipe the basin can do), then the running ones' cycle (`tick`), mixing at the bottom
-/// (`applyBasinRecipe`) and going on with the same recipe while it still fits.
-pub fn tick_mixers(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
-    let mut checks =
-        with_world(|w| std::mem::take(&mut w.dims[dim].mixer_checks)).unwrap_or_default();
-    // `BasinBlockEntity.lazyTick`'s `recipeBackupCheck`: every 200 ticks a basin that holds
-    // something has its mixer or press look for a recipe again, so a burner lit (or a recipe
-    // reloaded) after the items went in still gets them going.
-    if lv.game_time() % BACKUP_CHECK == 0 {
-        let machines: Vec<[i32; 3]> = with_world(|w| {
-            let d = &w.dims[dim];
-            d.mixers
-                .iter()
-                .filter(|(_, m)| !m.running)
-                .map(|(p, _)| *p)
-                .chain(d.presses.keys().copied())
-                .collect()
-        })
-        .unwrap_or_default();
-        for pos in machines {
-            let basin_pos = [pos[0], pos[1] - 2, pos[2]];
-            let tanks = basin_tanks(dim, basin_pos);
-            let filled = basin_slots(lv, basin_pos).is_some_and(|s| s.iter().any(Option::is_some))
-                || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
-            if filled {
-                checks.push(pos);
-            }
-        }
-    }
-    let running = with_world(|w| w.dims[dim].mixing.clone()).unwrap_or_default();
-    if checks.is_empty() && running.is_empty() {
-        return;
-    }
-    if !recipes::ready() {
-        return;
-    }
-    for pos in running {
-        let speed = lv.speed(pos);
-        let Some(mut m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
-            continue;
-        };
-        let time = recipes::with(|r| m.recipe.and_then(|i| r.mixing.get(i)).map(|x| x.time))
-            .flatten()
-            .unwrap_or(0);
-        let basin_pos = [pos[0], pos[1] - 2, pos[2]];
-        match m.tick(speed, time) {
-            MixStep::None => {}
-            MixStep::Done => checks.push(pos),
-            MixStep::Apply => {
-                let heat = basin_heat(lv, basin_pos);
-                let mut rng = Rng::new(lv.seed_at(pos));
-                // `acceptOutputs(.., true)`: a basin spouting to a side needs a taker there.
-                let gives_items = recipes::with(|r| {
-                    m.recipe
-                        .and_then(|i| r.mixing.get(i))
-                        .is_some_and(|x| !x.results.is_empty())
-                })
-                .unwrap_or(false);
-                let can_output = !gives_items || super::spoutput::accepts(lv, basin_pos);
-                if let (Some(before), Some(i), true) =
-                    (basin_slots(lv, basin_pos), m.recipe, can_output)
-                {
-                    let mut slots = before.clone();
-                    let fluids_before = basin_tanks(dim, basin_pos);
-                    let mut tanks = fluids_before;
-                    let spout = super::spoutput::facing(lv, basin_pos) != Dir::Down;
-                    let made = {
-                        let host = &*lv.host;
-                        let limit = |i: &str| stacks::limit(host, i);
-                        let remainder = |i: &str| stacks::remainder(host, i);
-                        let cx = basin::Context {
-                            heat,
-                            max: &limit,
-                            remainder: &remainder,
-                            spout,
-                        };
-                        recipes::with(|r| {
-                            let recipe = r.mixing.get(i)?;
-                            let made =
-                                basin::apply(&mut slots, &mut tanks, recipe, &cx, &mut rng, false)?;
-                            let again = basin::apply(
-                                &mut slots.clone(),
-                                &mut tanks.clone(),
-                                recipe,
-                                &cx,
-                                &mut rng,
-                                true,
-                            )
-                            .is_some();
-                            Some((made, again))
-                        })
-                        .flatten()
-                    };
-                    let again = made.as_ref().is_some_and(|(_, again)| *again);
-                    let applied = Applied {
-                        before,
-                        slots,
-                        fluids_before,
-                        tanks,
-                        made: made.map(|m| m.0),
-                    };
-                    write_applied(lv, pos, basin_pos, "mechanical_mixer", applied);
-                    // `continueWithPreviousRecipe`: stays down for the next one.
-                    if again {
-                        m.running_ticks = 20;
-                    }
-                }
-            }
-        }
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            d.mixers.insert(pos, m);
-            if !m.running {
-                d.mixing.retain(|p| *p != pos);
-            }
-        });
-        show_mixer(lv, pos, &m);
-    }
-    checks.sort();
-    checks.dedup();
-    for pos in checks {
-        let Some(mut m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
-            press_on_basin(lv, pos);
-            continue;
-        };
-        let speed = lv.speed(pos);
-        let basin_pos = [pos[0], pos[1] - 2, pos[2]];
-        if !basin_at(lv, basin_pos) {
-            // `onBasinRemoved`.
-            if m.running {
-                m.running = false;
-                m.running_ticks = 0;
-                with_world(|w| {
-                    w.dims[dim].mixers.insert(pos, m);
-                    w.dims[dim].mixing.retain(|p| *p != pos);
-                });
-                show_mixer(lv, pos, &m);
-            }
-            continue;
-        }
-        // `canContinueProcessing`: not while results wait at the spout.
-        // `updateBasin`: `isSpeedRequirementFulfilled` (medium speed) first.
-        if speed.abs() < basin::MIXER_MIN_SPEED
-            || m.running
-            || !super::spoutput::can_continue(lv, basin_pos)
-        {
-            continue;
-        }
-        let Some(slots) = basin_slots(lv, basin_pos) else {
-            continue;
-        };
-        let tanks = basin_tanks(dim, basin_pos);
-        let spout = super::spoutput::facing(lv, basin_pos) != Dir::Down;
-        let heat = basin_heat(lv, basin_pos);
-        let host = &*lv.host;
-        let limit = |i: &str| stacks::limit(host, i);
-        let remainder = |i: &str| stacks::remainder(host, i);
-        let cx = basin::Context {
-            heat,
-            max: &limit,
-            remainder: &remainder,
-            spout,
-        };
-        // `matchBasinRecipe`: the basin's filter on the recipe's result.
-        let filter = super::filtering::filter_at(dim, basin_pos);
-        let found = recipes::with(|r| {
-            basin::matching(&r.mixing, &slots, &tanks, &cx)
-                .into_iter()
-                .find(|&i| {
-                    super::filtering::basin_recipe_passes(host, filter.as_ref(), &r.mixing[i])
-                })
-        })
-        .flatten();
-        if let Some(i) = found {
-            m.start(i);
-            with_world(|w| {
-                let d = &mut w.dims[dim];
-                d.mixers.insert(pos, m);
-                if !d.mixing.contains(&pos) {
-                    d.mixing.push(pos);
-                }
-            });
-            show_mixer(lv, pos, &m);
-        }
-    }
+fn below(pos: [i32; 3], n: i32) -> [i32; 3] {
+    [pos[0], pos[1] - n, pos[2]]
 }
 
-/// `MechanicalPressBlockEntity` as a basin operator (`updateBasin`): a turning press with a
-/// basin two below starts a cycle over it (`Mode.BASIN`) for the compacting recipe with the most
-/// ingredients the basin can do.
-fn press_on_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let dim = lv.dim;
-    let Some(p) = with_world(|w| w.dims[dim].presses.get(&pos).copied()).flatten() else {
-        return;
-    };
-    let speed = lv.speed(pos);
-    if p.running || speed == 0.0 {
-        return;
-    }
-    let basin_pos = [pos[0], pos[1] - 2, pos[2]];
-    if !basin_at(lv, basin_pos) || !super::spoutput::can_continue(lv, basin_pos) {
-        return;
-    }
-    let Some(slots) = basin_slots(lv, basin_pos) else {
-        return;
-    };
-    let heat = basin_heat(lv, basin_pos);
-    let tanks = basin_tanks(dim, basin_pos);
-    let crafted = compressible(lv, &slots);
-    let spout = super::spoutput::facing(lv, basin_pos) != Dir::Down;
+/// Runs `f` with what a basin recipe reads of the basin at `at` (`basin::Context`).
+fn with_context<R>(
+    lv: &ServerLevel<'_>,
+    at: [i32; 3],
+    f: impl FnOnce(&basin::Context<'_>) -> R,
+) -> R {
     let host = &*lv.host;
     let limit = |i: &str| stacks::limit(host, i);
     let remainder = |i: &str| stacks::remainder(host, i);
     let cx = basin::Context {
-        heat,
+        heat: basin_heat(lv, at),
         max: &limit,
         remainder: &remainder,
-        spout,
+        spout: super::spoutput::facing(lv, at) != Dir::Down,
     };
-    // `matchBasinRecipe`: the basin's filter on the recipe's result.
-    let filter = super::filtering::filter_at(dim, basin_pos);
-    let passes =
-        |c: &basin::Recipe| super::filtering::basin_recipe_passes(host, filter.as_ref(), c);
-    let found = recipes::with(|r| {
-        let i = basin::matching(&r.compacting, &slots, &tanks, &cx)
-            .into_iter()
-            .find(|&i| passes(&r.compacting[i]))?;
-        Some((i, r.compacting[i].ingredients.len()))
+    f(&cx)
+}
+
+/// `matchBasinRecipe` as the basin at `at` stands: its filter passes the recipe, the recipe
+/// applies now (`BasinRecipe.match`) and its item results can go where the basin spouts
+/// (`accepts`: `acceptOutputs` simulated).
+fn recipe_fits(
+    lv: &ServerLevel<'_>,
+    at: [i32; 3],
+    accepts: bool,
+    recipe: &basin::Recipe,
+    slots: &[Slot],
+    tanks: &basin::Tanks,
+    cx: &basin::Context<'_>,
+) -> bool {
+    let filter = super::filtering::filter_at(lv.dim, at);
+    super::filtering::basin_recipe_passes(&*lv.host, filter.as_ref(), recipe)
+        && (recipe.results.is_empty() || accepts)
+        && !basin::matching(std::slice::from_ref(recipe), slots, tanks, cx).is_empty()
+}
+
+/// `getMatchingRecipes` of the operator at `operator`: the fitting recipe with the most
+/// ingredients. A mixer's are its book's (Create's mixing, then the shapeless crafting ones); a
+/// press's are the compacting ones, or a square crafting recipe of one item (`canCompress`)
+/// that has more ingredients (`MechanicalPressBlockEntity`).
+fn matching_recipe(
+    lv: &mut ServerLevel<'_>,
+    operator: [i32; 3],
+    at: [i32; 3],
+) -> Option<basin::Recipe> {
+    let accepts = super::spoutput::accepts(lv, at);
+    let dim = lv.dim;
+    let slots = basin_slots(lv, at)?;
+    let tanks = basin_tanks(dim, at);
+    with_context(lv, at, |cx| {
+        let fits = |r: &basin::Recipe| recipe_fits(lv, at, accepts, r, &slots, &tanks, cx);
+        if lv
+            .info(operator)
+            .is_some_and(|(b, _)| b == Block::MechanicalPress)
+        {
+            let compacting = recipes::with(|r| {
+                basin::matching(&r.compacting, &slots, &tanks, cx)
+                    .into_iter()
+                    .map(|i| &r.compacting[i])
+                    .find(|r| fits(r))
+                    .cloned()
+            })
+            .flatten();
+            let most = compacting.as_ref().map_or(0, |c| c.ingredients.len());
+            compressible(lv, &slots)
+                .into_iter()
+                .find(|c| c.ingredients.len() > most && fits(c))
+                .or(compacting)
+        } else {
+            recipes::with(|r| {
+                basin::matching(&r.mixing, &slots, &tanks, cx)
+                    .into_iter()
+                    .map(|i| &r.mixing[i])
+                    .find(|r| fits(r))
+                    .cloned()
+            })
+            .flatten()
+        }
     })
-    .flatten();
-    // Square crafting recipes of one item (`canCompress`), with the compacting ones: the one
-    // with the most ingredients first (`getMatchingRecipes`' order).
-    let crafted = crafted
-        .into_iter()
-        .filter(|c| passes(c))
-        .find(|c| !basin::matching(std::slice::from_ref(c), &slots, &tanks, &cx).is_empty())
-        .filter(|c| found.is_none_or(|(_, n)| c.ingredients.len() > n));
-    PRESS_CRAFTED.with_borrow_mut(|m| match &crafted {
-        Some(c) => {
-            m.insert((dim, pos), c.clone());
-        }
-        None => {
-            m.remove(&(dim, pos));
-        }
-    });
-    let found = found.map(|f| f.0).or(crafted.as_ref().map(|_| usize::MAX));
-    if let Some(i) = found {
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            if let Some(p) = d.presses.get_mut(&pos) {
-                p.start(press::Mode::Basin);
-            }
-            d.press_basin.insert(pos, i);
-            d.press_changes.push(pos);
-        });
+}
+
+/// `BasinBlockEntity.tick`, at the basin's turn in the transport walk: its spout (`lazyTick`'s
+/// `updateSpoutput`, `tryClearingSpoutputOverflow`), then every 200 game ticks a basin that
+/// holds something has its contents changed (`recipeBackupCheck`: every 20 lazy ticks, in
+/// Java), so a burner lit after the items went in still gets them going; last, what changed
+/// since its last turn is told to its operator.
+pub(crate) fn tick_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    if !lv.is_loaded(pos) || !basin_at(lv, pos) {
+        return;
     }
+    super::spoutput::tick_basin(lv, pos);
+    if lv.game_time() % BACKUP_CHECK == 0 {
+        let tanks = basin_tanks(dim, pos);
+        let filled = basin_slots(lv, pos).is_some_and(|s| s.iter().any(Option::is_some))
+            || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
+        if filled {
+            contents_changed(dim, pos);
+        }
+    }
+    with_world(|w| w.basin_turn(dim, pos));
+}
+
+/// `BasinOperatingBlockEntity.tick`, at the operator's turn and before its own: a basin
+/// emptied or taken away stops it there (`onBasinRemoved`), the base's tick ending early; else,
+/// told of its basin, it looks once (`updateBasin`) and may start on a basin whose spout is
+/// free.
+pub(super) fn operator_tick(lv: &mut ServerLevel<'_>, operator: [i32; 3]) -> OperatorAsk {
+    let dim = lv.dim;
+    let asked = with_world(|w| w.operator_ask(dim, operator)).unwrap_or(OperatorAsk::None);
+    if asked == OperatorAsk::Basin {
+        let at = below(operator, 2);
+        let recipe = super::spoutput::can_continue(lv, at)
+            .then(|| matching_recipe(lv, operator, at))
+            .flatten();
+        with_world(|w| w.operator_start(dim, operator, recipe));
+    }
+    asked
+}
+
+/// `MechanicalMixerBlockEntity.tick`, at the mixer's turn in the transport walk: the base's
+/// tick first, then the head's cycle, its recipe applied at the bottom.
+pub(crate) fn tick_mixer(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    if !recipes::ready() {
+        return;
+    }
+    // The base alone returns early there: the mixer's own code follows, and rests a head sent
+    // to the top of its climb.
+    operator_tick(lv, pos);
+    let speed = lv.speed(pos);
+    let step = with_world(|w| w.mixer_turn(dim, pos, speed)).flatten();
+    if let Some((MixStep::Apply, Some(recipe))) = step {
+        apply_recipe(lv, pos, &recipe, "mechanical_mixer");
+    }
+    show_mixer(lv, pos);
+}
+
+/// `applyBasinRecipe`: the operator at `machine`'s recipe on the basin two below it,
+/// `BasinRecipe.apply` for real with its results routed; then the basin is told, and a mixer
+/// stays down for the next one when nothing waited at its spout before and the recipe still
+/// fits (`continueWithPreviousRecipe`).
+fn apply_recipe(
+    lv: &mut ServerLevel<'_>,
+    machine: [i32; 3],
+    recipe: &basin::Recipe,
+    advancement: &str,
+) {
+    let dim = lv.dim;
+    let at = below(machine, 2);
+    let was_empty = super::spoutput::can_continue(lv, at);
+    // `acceptOutputs(.., true)`: a basin spouting to a side needs a taker there.
+    let accepts = recipe.results.is_empty() || super::spoutput::accepts(lv, at);
+    let Some(before) = accepts.then(|| basin_slots(lv, at)).flatten() else {
+        return;
+    };
+    let mut slots = before.clone();
+    let fluids_before = basin_tanks(dim, at);
+    let mut tanks = fluids_before;
+    let mut rng = Rng::new(lv.seed_at(machine));
+    let made = with_context(lv, at, |cx| {
+        basin::apply(&mut slots, &mut tanks, recipe, cx, &mut rng, false)
+    });
+    let again = made.is_some()
+        && with_context(lv, at, |cx| {
+            recipe_fits(lv, at, accepts, recipe, &slots, &tanks, cx)
+        });
+    let applied = Applied {
+        before,
+        slots,
+        fluids_before,
+        tanks,
+        made,
+    };
+    write_applied(lv, machine, at, advancement, applied);
+    with_world(|w| w.recipe_applied(dim, machine, was_empty && again));
 }
 
 /// The crafting recipes made of 9, else 4, of one item in the basin, its outputs too
@@ -679,54 +612,45 @@ fn compressible(lv: &ServerLevel<'_>, slots: &[Slot]) -> Vec<basin::Recipe> {
     out
 }
 
-/// `tryProcessInBasin` at the head's lowest point: the press's compacting recipe on the basin.
-pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+/// `tryProcessInBasin` at the head's lowest point: the press's recipe (`currentRecipe`) on the
+/// basin.
+pub(super) fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let Some(recipe) = current_recipe(lv.dim, pos) else {
+        return;
+    };
+    apply_recipe(lv, pos, &recipe, "compacting");
+}
+
+/// The operator at `pos`'s `currentRecipe`.
+fn current_recipe(dim: usize, pos: [i32; 3]) -> Option<basin::Recipe> {
+    with_world(|w| {
+        w.dims[dim]
+            .basin_operators
+            .by_pos
+            .get(&pos)
+            .and_then(|o| o.current_recipe.clone())
+    })
+    .flatten()
+}
+
+/// `MechanicalPressBlockEntity.onPressingCompleted` on a basin: its recipe still matches
+/// (`matchBasinRecipe(currentRecipe)`) and the basin can go on (`canContinueProcessing`), so
+/// the next cycle starts now.
+pub(super) fn restarts_in_basin(lv: &mut ServerLevel<'_>, press: [i32; 3]) -> bool {
     let dim = lv.dim;
-    let Some(i) = with_world(|w| w.dims[dim].press_basin.get(&pos).copied()).flatten() else {
-        return;
+    let at = below(press, 2);
+    let Some(recipe) = current_recipe(dim, press) else {
+        return false;
     };
-    let basin_pos = [pos[0], pos[1] - 2, pos[2]];
-    // `acceptOutputs(.., true)`: compacting always gives items.
-    if !super::spoutput::accepts(lv, basin_pos) {
-        return;
-    }
-    let Some(before) = basin_slots(lv, basin_pos) else {
-        return;
+    let accepts = super::spoutput::accepts(lv, at);
+    let Some(slots) = basin_slots(lv, at) else {
+        return false;
     };
-    let mut slots = before.clone();
-    let heat = basin_heat(lv, basin_pos);
-    let mut rng = Rng::new(lv.seed_at(pos));
-    let fluids_before = basin_tanks(dim, basin_pos);
-    let mut tanks = fluids_before;
-    let crafted = PRESS_CRAFTED.with_borrow(|m| m.get(&(dim, pos)).cloned());
-    let spout = super::spoutput::facing(lv, basin_pos) != Dir::Down;
-    let made = {
-        let host = &*lv.host;
-        let limit = |i: &str| stacks::limit(host, i);
-        let remainder = |i: &str| stacks::remainder(host, i);
-        let cx = basin::Context {
-            heat,
-            max: &limit,
-            remainder: &remainder,
-            spout,
-        };
-        match crafted.filter(|_| i == usize::MAX) {
-            Some(recipe) => basin::apply(&mut slots, &mut tanks, &recipe, &cx, &mut rng, false),
-            None => recipes::with(|r| {
-                let recipe = r.compacting.get(i)?;
-                basin::apply(&mut slots, &mut tanks, recipe, &cx, &mut rng, false)
-            })
-            .flatten(),
-        }
-    };
-    let applied = Applied {
-        before,
-        slots,
-        fluids_before,
-        tanks,
-        made,
-    };
-    write_applied(lv, pos, basin_pos, "compacting", applied);
+    let tanks = basin_tanks(dim, at);
+    super::spoutput::can_continue(lv, at)
+        && with_context(lv, at, |cx| {
+            recipe_fits(lv, at, accepts, &recipe, &slots, &tanks, cx)
+        })
 }
 
 /// A basin before and after `basin::apply`, and the item results when it succeeded.

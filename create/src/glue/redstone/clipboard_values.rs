@@ -253,11 +253,11 @@ fn set_filter(
                     None => d.chute_filters.remove(&pos),
                 };
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-                // `withCallback`: a basin's mixer or press looks again.
-                if block == Block::Basin {
-                    d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
-                }
             });
+            // `withCallback`: a basin's contents changed.
+            if block == Block::Basin {
+                crate::glue::processing::basin::contents_changed(dim, pos);
+            }
             if matches!(block, Block::BrassFunnel | Block::BrassBeltFunnel) {
                 crate::glue::logistics::funnel::wake_funnel(dim, pos);
             }

@@ -273,9 +273,7 @@ pub struct Run {
     spouts: HashMap<Pos, basin::Spout>,
     /// Basins whose spout has results waiting (`spoutput`'s `BUSY`).
     spout_busy: BTreeSet<Pos>,
-    /// The square crafting recipe a press is compacting with (`PRESS_CRAFTED`), and
     /// `canCompress` by item (`COMPRESSED`).
-    press_crafted: HashMap<Pos, create_engine::basin::Recipe>,
     compressed: HashMap<String, Vec<create_engine::basin::Recipe>>,
     /// The glue's `SAW_INDEX` and `SAW_DURATION`: an upward saw's recipe index between items
     /// and the time it started its cut with.
@@ -359,7 +357,6 @@ impl Run {
             basin_slots: HashMap::new(),
             spouts: HashMap::new(),
             spout_busy: BTreeSet::new(),
-            press_crafted: HashMap::new(),
             compressed: HashMap::new(),
             saw_index: HashMap::new(),
             saw_duration: HashMap::new(),

@@ -30,9 +30,11 @@ fn entity_view(block: Block) -> Option<View> {
         | Block::BrassFunnel
         | Block::AndesiteBeltFunnel
         | Block::BrassBeltFunnel => Some(View::Transport),
-        // `PressingBehaviour.tick` moves a running press's head at its own turn: a press after
-        // the depot or belt that started it moves in that tick.
-        Block::MechanicalPress => Some(View::Transport),
+        // A basin, its mixer and its press decide at their own turns (`BasinBlockEntity.tick`,
+        // `BasinOperatingBlockEntity.tick`, `MechanicalMixerBlockEntity.tick`,
+        // `PressingBehaviour.tick`), in order with the depots and belts they hand to and take
+        // from.
+        Block::Basin | Block::MechanicalMixer | Block::MechanicalPress => Some(View::Transport),
         // `SawBlockEntity.tick` hands an upward saw's results to the belt or depot beside it at
         // its own turn: one after the saw moves them in that tick.
         Block::MechanicalSaw => Some(View::Transport),
@@ -393,6 +395,9 @@ pub struct Dimension {
     pub basin_fluids: HashMap<[i32; 3], crate::basin::Tanks>,
     /// Basins whose tanks changed: their clients are told (taken by the glue).
     pub basin_changes: Vec<[i32; 3]>,
+    /// Each basin's `contentsChanged` and each operator's `BasinOperatingBlockEntity`
+    /// (`crate::basin::Operators`).
+    pub basin_operators: crate::basin::Operators,
     /// Linear chassis ranges set with the wrench (`ChassisScrollValueBehaviour`; others 8).
     pub chassis_range: HashMap<[i32; 3], i32>,
     /// The option picked on a contraption anchor's value box (`ScrollOptionBehaviour`): a
@@ -400,13 +405,8 @@ pub struct Dimension {
     /// first option) when none is kept.
     pub scroll_options: HashMap<[i32; 3], u8>,
     pub tunnels_new: Vec<[i32; 3]>,
-    /// Mechanical mixers and their cycle, the running ones (the only ones that tick), and those
-    /// to look at their basin again (`basinChecker`: placed, speed changed, basin changed).
+    /// Mechanical mixers and their cycle.
     pub mixers: HashMap<[i32; 3], crate::basin::Mixer>,
-    pub mixing: Vec<[i32; 3]>,
-    pub mixer_checks: Vec<[i32; 3]>,
-    /// Presses compacting in the basin below them, with the recipe (`currentRecipe`).
-    pub press_basin: HashMap<[i32; 3], usize>,
     /// Pumps and what their pipes reach, the turning ones (the only ones that tick), pipes to
     /// connect again, and whether pipes, pumps or tanks changed since the ends were found.
     pub fluid_transport: crate::fluids::runtime::Transport,
@@ -827,7 +827,13 @@ pub enum TransportTick {
     Brass([i32; 3]),
     /// `FunnelBlockEntity.tick`: one whose extraction cooldown has run out.
     Funnel([i32; 3]),
-    /// `PressingBehaviour.tick` of a running press ([`CreateWorld::tick_press`]).
+    /// `BasinBlockEntity.tick` ([`CreateWorld::basin_turn`]).
+    Basin([i32; 3]),
+    /// `MechanicalMixerBlockEntity.tick` ([`CreateWorld::operator_ask`], then
+    /// [`CreateWorld::mixer_turn`]).
+    Mixer([i32; 3]),
+    /// `BasinOperatingBlockEntity.tick` then `PressingBehaviour.tick` of a press
+    /// ([`CreateWorld::operator_ask`], [`CreateWorld::tick_press`]).
     Press([i32; 3]),
     /// `SawBlockEntity.tick` of a saw holding items.
     Saw([i32; 3]),
@@ -863,16 +869,9 @@ impl TransportTicks {
                 }
                 Some(Block::Spout) => return Some(TransportTick::Spout(p)),
                 Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
-                Some(Block::MechanicalPress) => {
-                    if world.dims[self.dim]
-                        .presses
-                        .get(&p)
-                        .is_some_and(|x| x.running)
-                    {
-                        return Some(TransportTick::Press(p));
-                    }
-                    continue;
-                }
+                Some(Block::Basin) => return Some(TransportTick::Basin(p)),
+                Some(Block::MechanicalMixer) => return Some(TransportTick::Mixer(p)),
+                Some(Block::MechanicalPress) => return Some(TransportTick::Press(p)),
                 Some(Block::MechanicalSaw) => {
                     if world.dims[self.dim].saws.contains_key(&p) {
                         return Some(TransportTick::Saw(p));
@@ -1047,8 +1046,9 @@ impl CreateWorld {
         if block == Block::Millstone {
             d.millstones.entry(pos).or_default();
         }
-        if block == Block::Basin {
-            d.basins.insert(pos);
+        if block == Block::Basin && d.basins.insert(pos) {
+            // A new `BasinBlockEntity` starts with `contentsChanged = true`.
+            d.basin_operators.contents_changed.insert(pos);
         }
         if matches!(block, Block::CopperBacktank | Block::NetheriteBacktank)
             && !d.backtanks.contains_key(&pos)
@@ -1066,8 +1066,7 @@ impl CreateWorld {
         }
         if block == Block::MechanicalPress && !d.presses.contains_key(&pos) {
             d.presses.insert(pos, crate::press::Press::default());
-            // A press placed over a basin looks at it (`basinChecker`).
-            d.mixer_checks.push(pos);
+            d.basin_operators.by_pos.entry(pos).or_default();
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
@@ -1284,10 +1283,7 @@ impl CreateWorld {
         }
         if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
             d.mixers.insert(pos, Default::default());
-            d.mixer_checks.push(pos);
-        }
-        if block == Block::Basin {
-            d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+            d.basin_operators.by_pos.entry(pos).or_default();
         }
         if block == Block::BlazeBurner && !d.burners.contains_key(&pos) {
             let b = d.burner_saved.remove(&pos).unwrap_or_default();
@@ -1358,7 +1354,10 @@ impl CreateWorld {
         }
         if block == Block::BlazeBurner {
             // A burner's heat changed under a boiler (`FluidTankBlock.updateShape`).
-            self.boiler_heat_changed(dim, [pos[0], pos[1] + 1, pos[2]]);
+            let above = [pos[0], pos[1] + 1, pos[2]];
+            self.boiler_heat_changed(dim, above);
+            // `BlazeBurnerBlock.onPlace`, for any new state of the burner.
+            self.basin_contents_changed(dim, above);
         }
         let d = &mut self.dims[dim];
         if block == Block::FluidTank {
@@ -1834,9 +1833,6 @@ impl CreateWorld {
             if self.table.get(new).map(|(b, _)| b) == Some(Block::Millstone) {
                 self.dims[dim].millstones.entry(pos).or_default();
             }
-            if self.table.get(new).map(|(b, _)| b) == Some(Block::Basin) {
-                self.dims[dim].basins.insert(pos);
-            }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::WaterWheel)
                 && self.table.get(old).map(|(b, _)| b) != Some(Block::WaterWheel)
             {
@@ -1880,7 +1876,9 @@ impl CreateWorld {
             d.wheels.retain(|p| *p != pos);
             d.millstones.remove(&pos);
             d.basins.remove(&pos);
+            d.basin_operators.contents_changed.remove(&pos);
             d.presses.remove(&pos);
+            d.basin_operators.by_pos.remove(&pos);
             d.backtanks.remove(&pos);
             self.diode_removed(dim, pos);
             let d = &mut self.dims[dim];
@@ -1930,12 +1928,14 @@ impl CreateWorld {
             if d.drills.remove(&pos).is_some() {
                 d.drilling.retain(|p| *p != pos);
             }
-            if d.mixers.remove(&pos).is_some() {
-                d.mixing.retain(|p| *p != pos);
-            }
+            d.mixers.remove(&pos);
             if self.table.get(old).map(|(b, _)| b) == Some(Block::Basin) {
-                // `onBasinRemoved`: a mixer over it stops.
-                d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+                // `BasinBlockEntity.remove` -> `onEmptied`: the operator over it is stopped at
+                // its next turn.
+                let operator = [pos[0], pos[1] + 2, pos[2]];
+                if let Some(op) = d.basin_operators.by_pos.get_mut(&operator) {
+                    op.basin_removed = true;
+                }
             }
             if d.links.links.contains_key(&pos) {
                 let changed = d.links.remove(pos);
@@ -2238,8 +2238,11 @@ impl CreateWorld {
             // FluidTransportBehaviour.read restores pressure. Unloading a column
             // does not call FluidPropagator.propagateChangedPipe on surviving pipes.
             d.plumbing.column_unloaded(cx, cz);
-            d.mixing.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.mixer_checks
+            d.basin_operators
+                .by_pos
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.basin_operators
+                .contents_changed
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burning.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burner_saved
@@ -2549,10 +2552,11 @@ impl CreateWorld {
             {
                 d.plumbing.hose_speeds.push((pos, speed));
             }
+            // `BasinOperatingBlockEntity.onSpeedChanged`: its two `basinRemoved` lines cancel.
             if let Event::Speed { pos, .. } = *e
-                && (d.mixers.contains_key(&pos) || d.presses.contains_key(&pos))
+                && let Some(op) = d.basin_operators.by_pos.get_mut(&pos)
             {
-                d.mixer_checks.push(pos);
+                op.basin_checker.schedule_update();
             }
             if let Event::Speed { pos, speed, .. } = *e
                 && let Some(fan) = d.fans.get_mut(&pos)
@@ -4394,8 +4398,8 @@ impl CreateWorld {
         }
     }
 
-    /// A basin's tanks changed: its mixer or press looks again, its clients are told, its
-    /// column is saved.
+    /// A basin's tanks changed: its contents changed, its clients are told, its column is
+    /// saved.
     pub fn set_basin_fluids(&mut self, dim: usize, pos: [i32; 3], t: crate::basin::Tanks) {
         let d = &mut self.dims[dim];
         if t == crate::basin::Tanks::default() {
@@ -4403,7 +4407,7 @@ impl CreateWorld {
         } else {
             d.basin_fluids.insert(pos, t);
         }
-        d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+        d.basin_operators.contents_changed.insert(pos);
         d.basin_changes.push(pos);
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }

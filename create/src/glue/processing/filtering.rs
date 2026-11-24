@@ -185,13 +185,13 @@ pub fn click(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &mod_api::BlockClic
             None => d.chute_filters.remove(&pos),
         };
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
-        // `withCallback`: a basin's mixer or press looks again.
-        if block == Block::Basin {
-            d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
-        }
         old
     })
     .flatten();
+    // `withCallback`: a basin's contents changed.
+    if block == Block::Basin {
+        super::basin::contents_changed(dim, pos);
+    }
     let now = filter_at(dim, pos);
     crate::glue::logistics::show_filter(lv, pos, now.as_ref());
     filters::return_filter(lv, p, pos, old);

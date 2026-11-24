@@ -442,7 +442,17 @@ impl Run {
                     self.tick_ejector(p);
                     continue;
                 }
-                // The glue's `tick_press` (`PressingBehaviour.tick` at the press's turn).
+                // The basin's, the mixer's and the press's turns (`BasinBlockEntity.tick`,
+                // `MechanicalMixerBlockEntity.tick`, and a press's `BasinOperatingBlockEntity.tick`
+                // with `PressingBehaviour.tick`).
+                create_engine::world::TransportTick::Basin(p) => {
+                    self.tick_basin(p);
+                    continue;
+                }
+                create_engine::world::TransportTick::Mixer(p) => {
+                    self.tick_mixer(p);
+                    continue;
+                }
                 create_engine::world::TransportTick::Press(p) => {
                     self.tick_press(p);
                     continue;

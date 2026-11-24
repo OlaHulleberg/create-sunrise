@@ -232,20 +232,27 @@ pub(crate) fn depot_turn(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     });
 }
 
-/// `PressingBehaviour.tick` of the running press at `at`, at its turn in the transport walk:
-/// its head moves; on the ground it presses at the bottom (`applyInWorld`), over a basin it
-/// compacts there (`tryProcessInBasin`) and looks again when done (`onPressingCompleted`).
+/// The press at `at`'s turn in the transport walk: `BasinOperatingBlockEntity.tick` first,
+/// which ends the turn when the basin was emptied or taken away; then `PressingBehaviour.tick`:
+/// on the ground it presses at the bottom (`applyInWorld`), over a basin it compacts there
+/// (`tryProcessInBasin`), and its cycle ended, it starts the next at once if its recipe still
+/// fits (`onPressingCompleted`).
 pub(crate) fn tick_press(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
     use press::{Mode, Tick};
     let dim = lv.dim;
     if !recipes::ready() {
         return;
     }
+    if super::basin::operator_tick(lv, at) == create_engine::basin::OperatorAsk::Removed {
+        with_world(|w| w.dims[dim].press_changes.push(at));
+        return;
+    }
     match with_world(|w| w.tick_press(dim, at)).flatten() {
         Some((Mode::World, Tick::Down)) => press_in_world(lv, at),
         Some((Mode::Basin, Tick::Down)) => super::basin::compact_in_basin(lv, at),
         Some((Mode::Basin, Tick::Done)) => {
-            with_world(|w| w.dims[dim].mixer_checks.push(at));
+            let restart = super::basin::restarts_in_basin(lv, at);
+            with_world(|w| w.pressing_completed(dim, at, restart));
         }
         _ => {}
     }

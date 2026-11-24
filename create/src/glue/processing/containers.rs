@@ -224,7 +224,7 @@ fn contents_changed(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             with_world(|w| w.dims[dim].crafter_checks.push(pos));
         }
         Block::Basin => {
-            with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+            super::basin::contents_changed(dim, pos);
             super::basin::basin_changed(dim, pos);
         }
         b if create_engine::dye::is_toolbox(b) => super::toolbelt::contents_changed(lv, pos),

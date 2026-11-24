@@ -84,13 +84,15 @@ pub(crate) fn item_name_message(
 /// - `Controller` (linked controllers), `Display` (display links), `Contraptions` (bearings,
 ///   their actors, gantries, windmills, stickers, pistons, mounted interfaces, lifts) and its
 ///   `Drawing`.
-/// - `Processing`: crafters, millstones, fans, crushers, blaze burners, mixers.
+/// - `Processing`: crafters, millstones, fans, crushers, blaze burners.
 /// - `Fluids`: pipes and pumps, boilers, valves and hoses, tank states, spouts, drains.
 /// - `Carts`, then `Trains` (the controls, the trains, the HUD, curves) and `TrainControls`.
 /// - `Logistics`: vaults, chutes, funnels, tunnels, brass tunnels, depots, belts (whose
-///   machines answer `belt_process`), and `Entities`, its part of the kinetic type.
+///   machines answer `belt_process`), and `Entities`, its part of the kinetic type. In its walk,
+///   basins and the mixers and presses over them take their turns too (processing's).
 /// - `processing::Tools`: drills, broken saws' drops, then presses and deployers on what the
-///   depots and belts did this tick (saws holding items tick in logistics' walk).
+///   depots and belts did this tick (saws holding items tick in logistics' walk), then the
+///   basins whose slots or tanks changed are shown.
 /// - `Arms`: mechanical arms, weighted ejectors.
 /// - `redstone::Detectors`: smart observers and threshold switches, reading this tick's tank
 ///   changes before `fluids::Tanks` hands them on (and drains them).

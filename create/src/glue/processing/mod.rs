@@ -70,7 +70,8 @@ pub(crate) use deployer::activate as activate_deployer;
 pub(crate) use deployer::set_held_stack as set_deployer_held;
 pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
-// The press's depot callbacks and its head's tick, at their turns in logistics' transport walk.
+// The basins', the mixers' and the presses' turns in logistics' transport walk.
+pub(crate) use basin::{tick_basin, tick_mixer};
 pub(crate) use press::{depot_turn as press_depot_turn, tick_press};
 pub(crate) use saw::saw_turn;
 // What the other subsystems call: fluids (the spout on a belt
@@ -235,17 +236,30 @@ impl Subsystem for Processing {
         persist::live_fields(dim, pos, block, fields);
     }
 
-    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
-    /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
+    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners. The
+    /// basins, the mixers and the presses take their turns in logistics' walk.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
         fan::tick_fans(lv);
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
-        basin::tick_mixers(lv);
-        spoutput::tick(lv);
-        basin::show_basins(lv);
+    }
+
+    /// A basin gone: nothing is kept for its spout any more.
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        old: u32,
+        new: u32,
+        _flags: mod_api::BlockUpdateFlags,
+    ) {
+        let was = with_world(|w| w.table.get(old).map(|(b, _)| b)).flatten();
+        let is = with_world(|w| w.table.get(new).map(|(b, _)| b)).flatten();
+        if was == Some(Block::Basin) && is != Some(Block::Basin) {
+            spoutput::forget(dim, pos);
+        }
     }
 
     /// `BeltProcessingBehaviour` of the machine two above belt segment `segment`
@@ -521,7 +535,7 @@ fn passes_item_use(
 
 /// The drills and saws (after the vaults and chutes), then the presses and
 /// deployers, which work the depots and belts logistics moved this tick (`DepotBehaviour.tick`
-/// before `PressingBehaviour.tick`).
+/// before `PressingBehaviour.tick`), and the basins whose slots or tanks changed in the walk.
 pub struct Tools;
 
 impl Subsystem for Tools {
@@ -531,6 +545,7 @@ impl Subsystem for Tools {
         saw::hurt_inside(lv);
         press::tick_presses(lv);
         deployer::tick_deployers(lv);
+        basin::show_basins(lv);
     }
 }
 

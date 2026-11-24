@@ -394,7 +394,8 @@ fn preferred_of(d: &Compound) -> Option<Dir> {
 }
 
 /// `updateSpoutput`: faces the last side it may output to and isn't shut (the chosen one if it
-/// may), else down; turned to a side, what its outputs hold goes out through the spout.
+/// may), else down; turned to a side, what its outputs hold goes out through the spout and its
+/// operator is told.
 fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let current = facing(lv, pos);
     let d = data(lv, pos).unwrap_or_default();
@@ -415,66 +416,56 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         return;
     }
     lv.set_property(pos, "facing", dir_name(next), update_all());
-    if next == Dir::Down || !has_target(lv, pos, next) {
+    if next == Dir::Down {
         return;
     }
-    let Some(before) = lv.read_slots(pos, 0, basin::SLOTS) else {
-        return;
-    };
-    let mut after = before.clone();
-    let mut list = overflow(&d);
-    for i in basin::OUTPUTS {
-        if let Some((id, n)) = after[i].take() {
-            list.push((id, n));
+    if has_target(lv, pos, next)
+        && let Some(before) = lv.read_slots(pos, 0, basin::SLOTS)
+    {
+        let mut after = before.clone();
+        let mut list = overflow(&d);
+        for i in basin::OUTPUTS {
+            if let Some((id, n)) = after[i].take() {
+                list.push((id, n));
+            }
+        }
+        if after != before {
+            let changes: Vec<(usize, Option<mod_api::ItemStack>)> = basin::OUTPUTS
+                .filter(|&i| before[i].is_some())
+                .map(|i| (i, None))
+                .collect();
+            lv.set_slots(pos, &changes);
+            super::basin::basin_changed(lv.dim, pos);
+            super::basin::set_shown(lv, pos, &[(OVERFLOW_KEY, Some(overflow_tag(&list)))]);
+            BUSY.with_borrow_mut(|b| b.insert((lv.dim, pos), ()));
         }
     }
-    if after != before {
-        let changes: Vec<(usize, Option<mod_api::ItemStack>)> = basin::OUTPUTS
-            .filter(|&i| before[i].is_some())
-            .map(|i| (i, None))
-            .collect();
-        lv.set_slots(pos, &changes);
-        super::basin::basin_changed(lv.dim, pos);
-        super::basin::set_shown(lv, pos, &[(OVERFLOW_KEY, Some(overflow_tag(&list)))]);
-        BUSY.with_borrow_mut(|b| b.insert((lv.dim, pos), ()));
-    }
+    super::basin::contents_changed(lv.dim, pos);
 }
 
-/// Each tick: every lazy tick the loaded basins look where to put their results; those with
-/// results waiting put them out (`tryClearingSpoutputOverflow`), and the items seen leaving are
-/// let go after their moment.
-pub fn tick(lv: &mut ServerLevel<'_>) {
+/// The spout's part of `BasinBlockEntity.tick`, at the basin's turn in the transport walk:
+/// every 10 game ticks the basin looks where to put its results (`lazyTick`); what waits at the
+/// spout goes out (`tryClearingSpoutputOverflow`), and the items seen leaving are let go after
+/// their moment.
+pub fn tick_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let now = lv.game_time();
     if now % LAZY_RATE == 0 {
-        let basins: Vec<[i32; 3]> =
-            with_world(|w| w.dims[dim].basins.iter().copied().collect()).unwrap_or_default();
-        for pos in basins {
-            if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
-                continue;
-            }
-            update(lv, pos);
-            // A buffer read back from a save.
-            if !can_continue(lv, pos) {
-                BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
-            }
+        update(lv, pos);
+        // A buffer read back from a save.
+        if !can_continue(lv, pos) {
+            BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
         }
     }
-    let busy: Vec<[i32; 3]> = BUSY.with_borrow(|b| {
-        b.keys()
-            .filter(|(d, _)| *d == dim)
-            .map(|(_, p)| *p)
-            .collect()
-    });
-    for pos in busy {
-        if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
-            BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
-            continue;
-        }
-        if !clear_overflow(lv, pos, now) {
-            BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
-        }
+    let busy = BUSY.with_borrow(|b| b.contains_key(&(dim, pos)));
+    if busy && !clear_overflow(lv, pos, now) {
+        BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
     }
+}
+
+/// A basin gone: nothing is kept for its spout any more.
+pub fn forget(dim: usize, pos: [i32; 3]) {
+    BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
 }
 
 /// `tryClearingSpoutputOverflow`: each waiting stack into the target as far as it takes it
@@ -535,26 +526,15 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
     if fluids_left != fluids {
         let values = fluid_overflow_values(&fluids_left);
         set_values(lv, pos, &values);
-        if list.is_empty() && fluids_left.is_empty() {
-            with_world(|w| {
-                w.dims[lv.dim]
-                    .mixer_checks
-                    .push([pos[0], pos[1] + 2, pos[2]])
-            });
-        }
     }
     seen.retain(|(_, at)| now - at < OUTPUT_ANIMATION_TIME);
     let mut values = Vec::new();
     if list != before {
         values.push((OVERFLOW_KEY, Some(overflow_tag(&list))));
-        if list.is_empty() && fluids_left.is_empty() {
-            // `notifyChangeOfContents`: its mixer or press may go on.
-            with_world(|w| {
-                w.dims[lv.dim]
-                    .mixer_checks
-                    .push([pos[0], pos[1] + 2, pos[2]])
-            });
-        }
+    }
+    // `notifyChangeOfContents`: its operator is told.
+    if list != before || fluids_left != fluids {
+        super::basin::contents_changed(lv.dim, pos);
     }
     if seen != seen_before {
         let tag = Tag::List(

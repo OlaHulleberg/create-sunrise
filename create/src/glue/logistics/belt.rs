@@ -785,6 +785,17 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 super::arms::tick_ejector(lv, p);
                 continue;
             }
+            // The basin's, the mixer's and the press's turns (`BasinBlockEntity.tick`,
+            // `MechanicalMixerBlockEntity.tick`, and a press's `BasinOperatingBlockEntity.tick`
+            // with `PressingBehaviour.tick`).
+            create_engine::world::TransportTick::Basin(p) => {
+                crate::glue::processing::tick_basin(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Mixer(p) => {
+                crate::glue::processing::tick_mixer(lv, p);
+                continue;
+            }
             create_engine::world::TransportTick::Press(p) => {
                 crate::glue::processing::tick_press(lv, p);
                 continue;
