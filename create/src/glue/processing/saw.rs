@@ -35,14 +35,13 @@ pub fn clear() {
 /// breaks in steps (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`; for a
 /// saw also `isSawable`), its cracks showing (`destroyBlockProgress`), its drops left in its
 /// middle; a saw fells what stood on it (`TreeCutter`). A breaker that broke one looks again at
-/// its next lazy tick (every 10 ticks).
+/// its next `SmartBlockEntity` lazy tick (rate 10).
 pub fn tick_drills(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
     if drills.is_empty() {
         return;
     }
-    let lazy = lv.game_time() % 10 == 0;
     for pos in drills {
         let Some((block, facing)) = lv.info(pos).and_then(|(b, i)| Some((b, i.facing?))) else {
             continue;
@@ -71,7 +70,7 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
         let speed = lv.speed(pos);
         let Some(step) = with_world(|w| {
             let d = w.dims[dim].drills.get_mut(&pos)?;
-            if lazy {
+            if d.lazy.tick() {
                 d.lazy();
             }
             Some(d.tick(speed, hardness))
