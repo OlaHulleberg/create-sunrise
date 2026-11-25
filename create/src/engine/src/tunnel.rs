@@ -992,6 +992,22 @@ mod tests {
     }
 
     #[test]
+    fn synced_empty_tunnel_refuses_its_own_belt_but_takes_side_inserts() {
+        // `canTakeItems` (own belt, item handler) also needs `!syncedOutputActive`;
+        // `BeltBlockEntity.tryInsertingFromSide` checks only `getStackToDistribute().isEmpty()`.
+        let mut b = Brass::default();
+        assert!(b.can_take() && b.holds_nothing());
+
+        b.synced = true;
+        assert!(!b.can_take());
+        assert!(b.holds_nothing());
+
+        b.stack = Some(("minecraft:iron_ingot".into(), 3));
+        assert!(!b.can_take());
+        assert!(!b.holds_nothing());
+    }
+
+    #[test]
     fn non_distributing_tunnel_passes_handler_inserts_to_belt() {
         // Observed in t7-brass-item-handler-belt: a straight brass tunnel with nothing beside it
         // (`hasDistributionBehaviour() == false`) delegates item-handler inserts to its belt
