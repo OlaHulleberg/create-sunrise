@@ -314,38 +314,26 @@ pub(crate) fn show_diode(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 // ---------------------------------------------------------------------------------------------
 // Rose quartz lamps
 
-/// Rose quartz lamps: those just placed (`getStateForPlacement`: `powered` as placed), their
-/// due ticks (`tick`), then the ones whose neighbours changed (`neighborChanged`): a new signal
-/// turns off the rest of the lamp's cluster and lights it at its next tick. Nothing runs
-/// without any of these.
+/// Rose quartz lamps: their due ticks (`tick`), then the ones whose neighbours changed
+/// (`neighborChanged`): a new signal turns off the rest of the lamp's cluster and lights it at
+/// its next tick. Nothing runs without any of these.
 pub(super) fn tick_lamps(lv: &mut ServerLevel<'_>) {
     use create_engine::lamp;
     let dim = lv.dim;
     let now = lv.game_time();
-    let Some((placed, due, checks)) = with_world(|w| {
+    let Some((due, checks)) = with_world(|w| {
         let d = &mut w.dims[dim];
         let (due, later): (Vec<_>, Vec<_>) = d.lamp_ticks.drain(..).partition(|t| t.1 <= now);
         d.lamp_ticks = later;
-        (
-            std::mem::take(&mut d.lamp_placed),
-            due,
-            std::mem::take(&mut d.lamp_checks),
-        )
+        (due, std::mem::take(&mut d.lamp_checks))
     }) else {
         return;
     };
-    if placed.is_empty() && due.is_empty() && checks.is_empty() {
+    if due.is_empty() && checks.is_empty() {
         return;
     }
     let lamp_at =
         |lv: &ServerLevel<'_>, p: [i32; 3]| block_at(lv, p).and_then(|(b, i)| lamp_of(b, &i));
-    for pos in placed {
-        if lamp_at(lv, pos).is_none() {
-            continue;
-        }
-        let signal = lv.has_neighbor_signal(pos);
-        lv.set_flags(pos, &[("powered", signal)], UPDATE_CLIENTS);
-    }
     for (pos, _) in due {
         let Some(l) = lamp_at(lv, pos) else {
             continue;
