@@ -1,0 +1,26 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:andesite_encased_cogwheel",
+      "state": {
+        "axis": [
+          "x"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/andesite_encased_cogwheel_side"
+  ],
+  "faces": [
+    "north",
+    "south",
+    "up",
+    "down"
+  ],
+  "connect": "state",
+  "sheet": "create:block/andesite_encased_cogwheel_side_connected",
+  "table": "horizontal_by_texture_uncovered",
+  "orient": "texture"
+}

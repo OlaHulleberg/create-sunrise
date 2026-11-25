@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:spruce_window_pane"
+  ],
+  "sprites": [
+    "create:block/palettes/spruce_window"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/spruce_window_connected",
+  "table": "vertical_uncovered"
+}

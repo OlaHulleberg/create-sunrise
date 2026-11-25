@@ -163,14 +163,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         put(path, bytes)?;
         copied += 1;
     }
-    // Connected textures, as OptiFine's: a ctm properties file per block and sheet, the tiles.
-    let read = |p: &str| -> Option<Vec<u8>> {
-        fs::read(tmp.join(p)).ok().or_else(|| files.get(p).cloned())
-    };
-    let (ct_files, ct_left_out) = crate::ct::files(&read);
-    for (rel, bytes) in &ct_files {
-        put(rel, bytes)?;
-    }
     // The committed registry definitions are already in `ours`; only make the rest locally.
     for (path, model) in models {
         if !ours.contains_key(&path) {
@@ -188,8 +180,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         json!((copied as usize).saturating_sub(from_jar)),
     );
     report.insert("files_left_to_the_jar_layer".into(), json!(from_jar));
-    report.insert("connected_texture_files".into(), json!(ct_files.len()));
-    report.insert("connected_textures_left_out".into(), json!(ct_left_out));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
 }
 

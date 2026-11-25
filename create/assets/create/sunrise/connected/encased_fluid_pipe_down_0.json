@@ -1,0 +1,22 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:encased_fluid_pipe",
+      "state": {
+        "down": [
+          "false"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/copper_casing"
+  ],
+  "faces": [
+    "down"
+  ],
+  "connect": "state",
+  "sheet": "create:block/copper_casing_connected",
+  "table": "omni"
+}

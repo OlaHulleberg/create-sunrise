@@ -1,0 +1,25 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:andesite_encased_shaft",
+      "state": {
+        "axis": [
+          "z"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/andesite_casing"
+  ],
+  "faces": [
+    "east",
+    "west",
+    "up",
+    "down"
+  ],
+  "connect": "state",
+  "sheet": "create:block/andesite_casing_connected",
+  "table": "omni"
+}

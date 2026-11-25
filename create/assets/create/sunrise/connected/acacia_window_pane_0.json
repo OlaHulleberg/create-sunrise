@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:acacia_window_pane"
+  ],
+  "sprites": [
+    "create:block/palettes/acacia_window"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/acacia_window_connected",
+  "table": "vertical_uncovered"
+}

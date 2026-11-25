@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:railway_casing"
+  ],
+  "sprites": [
+    "create:block/railway_casing_side"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/railway_casing_side_connected",
+  "table": "omni"
+}

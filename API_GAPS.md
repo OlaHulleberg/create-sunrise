@@ -59,7 +59,8 @@ API, and remove it once the API has it and the port uses it.
   `Block.skipRendering` ([`ConnectedGlassBlock.java:20`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/palettes/ConnectedGlassBlock.java#L20)) and `hidesNeighborFace` ([`CopycatPanelBlock.java:176`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatPanelBlock.java#L176)). sunrise-org/sunrise#5080
 - **Connected-texture rules that read a neighbour's state per face, a neighbour's appearance (`getAppearance`), a rule
   that block-entity data turns off, and position-seeded random sheets**: casings join only their own block, a brass
-  tunnel without distribution still connects, and the weathered window doesn't pick its sheet per position.
+  tunnel without distribution still connects, and the weathered iron window keeps its plain texture, as no rule
+  picks its sheet per position.
   Create uses: Create's own `ConnectedTextureBehaviour`, calling `BlockState.getAppearance` ([`ConnectedTextureBehaviour.java:79`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/block/connected/ConnectedTextureBehaviour.java#L79)).
   sunrise-org/sunrise#5081, sunrise-org/sunrise#1106
 - **Mining cracks on positions beyond 8 blocks of the broken block**: large multiblocks crack only near the broken part.

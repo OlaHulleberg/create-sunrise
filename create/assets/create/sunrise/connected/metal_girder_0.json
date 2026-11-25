@@ -1,0 +1,26 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:metal_girder",
+      "state": {
+        "x": [
+          "false"
+        ],
+        "z": [
+          "false"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/girder_pole_side"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "block",
+  "sheet": "create:block/girder_pole_side_connected",
+  "table": "vertical_uncovered",
+  "orient": "texture"
+}

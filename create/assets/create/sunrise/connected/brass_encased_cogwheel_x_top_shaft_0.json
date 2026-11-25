@@ -1,0 +1,26 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:brass_encased_cogwheel",
+      "state": {
+        "axis": [
+          "x"
+        ],
+        "top_shaft": [
+          "false"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/brass_casing"
+  ],
+  "faces": [
+    "east"
+  ],
+  "connect": "state",
+  "sheet": "create:block/brass_casing_connected",
+  "table": "omni",
+  "orient": "texture"
+}

@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:copper_casing"
+  ],
+  "sprites": [
+    "create:block/copper_casing"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/copper_casing_connected",
+  "table": "omni"
+}

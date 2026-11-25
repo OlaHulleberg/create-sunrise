@@ -1,0 +1,17 @@
+{
+  "tests": [
+    "left",
+    "right"
+  ],
+  "cover": false,
+  "grid": [
+    2,
+    2
+  ],
+  "tiles": [
+    0,
+    2,
+    1,
+    3
+  ]
+}

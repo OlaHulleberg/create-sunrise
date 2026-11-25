@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:diorite_pillar"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/pillar/diorite_cut_pillar"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/pillar/diorite_cut_pillar_connected",
+  "table": "rectangle_uncovered",
+  "orient": "texture"
+}

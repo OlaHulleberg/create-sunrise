@@ -110,6 +110,26 @@
     },
     {
       "type": "minecraft:single",
+      "resource": "create:block/andesite_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/andesite_encased_cogwheel_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/brass_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/brass_encased_cogwheel_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/copper_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
       "resource": "create:block/creative_casing_connected"
     },
     {
@@ -127,6 +147,22 @@
     {
       "type": "minecraft:single",
       "resource": "create:block/fluid_tank_top_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/girder_pole_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/linear_chassis_end_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/linear_chassis_end_sticky_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/linear_chassis_side_connected"
     },
     {
       "type": "minecraft:single",
@@ -298,11 +334,111 @@
     },
     {
       "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/andesite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/asurine_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/calcite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/crimsite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/deepslate_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/diorite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/dripstone_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/granite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/limestone_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/ochrum_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/scorchia_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/scoria_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/tuff_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/veridium_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
       "resource": "create:block/palettes/vertical_framed_glass_connected"
     },
     {
       "type": "minecraft:single",
       "resource": "create:block/palettes/warped_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/railway_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/railway_casing_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/refined_radiance_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/andesite_scaffold_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/andesite_scaffold_inside_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/brass_scaffold_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/brass_scaffold_inside_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/copper_scaffold_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/copper_scaffold_inside_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/secondary_linear_chassis_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/shadow_steel_casing_connected"
     },
     {
       "type": "minecraft:single",

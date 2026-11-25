@@ -1,0 +1,22 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:brass_encased_shaft",
+      "state": {
+        "axis": [
+          "y"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/brass_casing"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "state",
+  "sheet": "create:block/brass_casing_connected",
+  "table": "omni"
+}
