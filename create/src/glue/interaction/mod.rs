@@ -18,7 +18,6 @@ mod board;
 mod commands;
 mod crank;
 mod ghost;
-mod ghost_models;
 mod hud;
 mod item_use_overrides;
 mod placement;
@@ -40,7 +39,7 @@ pub struct Interaction;
 /// default state (`PlacementOffset.withTransform`), for the ghost.
 pub(crate) type HelperTarget = ([i32; 3], Vec<(&'static str, String)>);
 
-/// The placement ghosts' world pipelines, one a sprite (`ghost.rs`).
+/// The copycat placement ghost's world pipeline (`ghost.rs`).
 pub(crate) fn register_pipelines(event: &mut mod_api::RegisterRenderPipelinesEvent<'_>) {
     ghost::register(event);
 }
