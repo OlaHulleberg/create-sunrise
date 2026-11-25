@@ -64,8 +64,8 @@ glass kinds. The full list: **[API_GAPS.md](API_GAPS.md)**.
 > machine downloads Create's official jar from Modrinth, where the Create Team publishes it, and checks it
 > against the hash pinned here. This repository ships MIT data, asset references and the port's own assets,
 > never the jar or its protected assets. Full framed glass and nonrandom windows connect using the original jar's
-> sheets by reference. Local `prepare` is still needed for the other connected textures, tinted copies,
-> model-derived placement ghosts and other assets not yet supplied by references.
+> sheets by reference. Local `prepare` is still needed for the other connected textures, tinted copies
+> and other assets not yet supplied by references.
 
 You need:
 

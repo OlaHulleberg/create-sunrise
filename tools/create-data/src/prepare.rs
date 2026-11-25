@@ -430,9 +430,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             put(&path, &crate::pretty(&model.definition()))?;
         }
     }
-    // The placement helpers' ghosts, baked from the jar's models (`ghosts.rs`).
-    let (ghost_models, ghosts) = crate::ghosts::source_file(&files)?;
-    put(crate::ghosts::RS, ghost_models.as_bytes())?;
     let _ = fs::remove_dir_all(out);
     fs::rename(&tmp, out).map_err(|e| format!("{}: {e}", out.display()))?;
     let mut report = Map::new();
@@ -446,7 +443,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     report.insert("files_left_to_the_jar_layer".into(), json!(from_jar));
     report.insert("connected_texture_files".into(), json!(ct_files.len()));
     report.insert("connected_textures_left_out".into(), json!(ct_left_out));
-    report.insert("placement_ghosts".into(), json!(ghosts));
     Ok(serde_json::to_string_pretty(&Value::Object(report)).unwrap())
 }
 

@@ -19,8 +19,8 @@
 //! logistics' (`stock::shop`); their placement helper is here.
 //!
 //! The placement helpers' targets (cloths, sails, girders, metal ladders) are offered to the
-//! indicator round the crosshair (`interaction::placement`); their ghost of the block a click
-//! would place is left out for want of API (`API_GAPS.md`, Client). A haunted bell's souls are
+//! indicator round the crosshair (`interaction::placement`), with a translucent ghost of the block
+//! a click would place (`interaction::ghost`). A haunted bell's souls are
 //! `souls`'.
 //!
 //! Lightning clears Create's copper as vanilla's: the glue gives the server's data Create's
