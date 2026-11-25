@@ -271,6 +271,24 @@ impl Subsystem for Kinetics {
 pub struct Solve;
 
 impl Subsystem for Solve {
+    /// The save hook: the kinetic fields and a handle's state as the engine holds them now, which
+    /// the solve and the handles' journal may have changed since publication.
+    fn live_fields(
+        &self,
+        dim: usize,
+        _now: i64,
+        pos: [i32; 3],
+        _block: Block,
+        fields: &mut Compound,
+    ) {
+        for (key, value) in saved_fields(dim, pos) {
+            fields.insert(key.into(), value);
+        }
+        if let Some(saved) = with_world(|w| w.saved_handle(dim, pos)).flatten() {
+            fields.insert("HandleState".into(), Tag::Compound(handle_to_nbt(saved)));
+        }
+    }
+
     fn write_entities(&self, lv: &mut ServerLevel<'_>) {
         publish_saved(lv);
         let positions = with_world(|w| {
@@ -653,54 +671,74 @@ fn publish_saved(lv: &mut ServerLevel<'_>) {
     }
     let changed = with_world(|w| w.dims[dim].kinetics.take_saved_changes()).unwrap_or_default();
     for pos in changed {
-        if let Some(pointer) = with_world(|w| w.saved_valve_pointer(dim, pos)).flatten() {
-            lv.write_entity_field(pos, "Pointer", valve_pointer_to_nbt(pointer));
-        }
-        let Some(states) = with_world(|w| {
-            (!w.dims[dim].kinetics.awaiting_legacy_load(pos)).then(|| {
-                [
-                    w.dims[dim].kinetics.saved_state(pos, 0),
-                    w.dims[dim].kinetics.saved_state(pos, 1),
-                ]
-            })
-        })
-        .flatten() else {
-            continue;
-        };
-        let ports: Compound = states
-            .into_iter()
-            .enumerate()
-            .filter_map(|(i, state)| {
-                state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
-            })
-            .collect();
-        // KineticBlockEntity.write: a `Source` or `Network` the entity no longer has is gone.
-        lv.write_entity_field(pos, SAVED_KINETICS, ports);
-        // `WaterWheelBlockEntity.write`: the flow score its first tick after a load reads back.
-        if matches!(
-            with_world(|w| w.block_at(dim, pos)).flatten(),
-            Some(Block::WaterWheel | Block::LargeWaterWheel)
-        ) && let Some(flow) = with_world(|w| w.wheel_flow(dim, pos)).flatten()
-        {
-            let flow = Compound::from([("FlowScore".into(), Tag::Int(i32::from(flow)))]);
-            lv.write_entity_field(pos, WHEEL, flow);
-        }
-        // `PoweredShaftBlockEntity.write`: the engine it is powered by.
-        if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::PoweredShaft) {
-            let out = with_world(|w| w.shaft_steam(dim, pos)).unwrap_or_default();
-            let engine = Compound::from([
-                ("Direction".into(), Tag::Int(i32::from(out.direction))),
-                ("EnginePower".into(), Tag::Float(out.efficiency.to_bits())),
-            ]);
-            lv.write_entity_field(pos, ENGINE, engine);
-        }
-        if let Some(signal) = with_world(|w| w.saved_chain_signal(dim, pos)).flatten()
-            && let Some(entity) = lv.host.block_entity(lv.level, pos)
-        {
-            let data = Compound::from([("Signal".into(), Tag::Int(signal))]);
-            let _ = entity.merge_data(&mut *lv.host, data);
+        for (key, value) in saved_fields(dim, pos) {
+            match value {
+                Tag::Compound(value) => {
+                    lv.write_entity_field(pos, key, value);
+                }
+                value => {
+                    if let Some(entity) = lv.host.block_entity(lv.level, pos) {
+                        let data = Compound::from([(key.into(), value)]);
+                        let _ = entity.merge_data(&mut *lv.host, data);
+                    }
+                }
+            }
         }
     }
+}
+
+/// `KineticBlockEntity.write` and its subclasses' of the block at `pos` of level `dim`, from the
+/// engine's live state: the valve's `Pointer`, the ports' `KineticState` (a `Source` or
+/// `Network` the entity no longer has is gone), a water wheel's `FlowScore`, a powered shaft's
+/// engine and a chain drive's `Signal`. Nothing past `Pointer` while the block still waits for
+/// its legacy load, which must not be overwritten with an invented empty state. Shared by
+/// publication and the save hook.
+fn saved_fields(dim: usize, pos: [i32; 3]) -> Vec<(&'static str, Tag)> {
+    let mut fields = Vec::new();
+    if let Some(pointer) = with_world(|w| w.saved_valve_pointer(dim, pos)).flatten() {
+        fields.push(("Pointer", Tag::Compound(valve_pointer_to_nbt(pointer))));
+    }
+    let Some(states) = with_world(|w| {
+        (!w.dims[dim].kinetics.awaiting_legacy_load(pos)).then(|| {
+            [
+                w.dims[dim].kinetics.saved_state(pos, 0),
+                w.dims[dim].kinetics.saved_state(pos, 1),
+            ]
+        })
+    })
+    .flatten() else {
+        return fields;
+    };
+    let ports: Compound = states
+        .into_iter()
+        .enumerate()
+        .filter_map(|(i, state)| {
+            state.map(|s| (["0", "1"][i].into(), Tag::Compound(saved_to_nbt(s))))
+        })
+        .collect();
+    fields.push((SAVED_KINETICS, Tag::Compound(ports)));
+    // `WaterWheelBlockEntity.write`: the flow score its first tick after a load reads back.
+    if matches!(
+        with_world(|w| w.block_at(dim, pos)).flatten(),
+        Some(Block::WaterWheel | Block::LargeWaterWheel)
+    ) && let Some(flow) = with_world(|w| w.wheel_flow(dim, pos)).flatten()
+    {
+        let flow = Compound::from([("FlowScore".into(), Tag::Int(i32::from(flow)))]);
+        fields.push((WHEEL, Tag::Compound(flow)));
+    }
+    // `PoweredShaftBlockEntity.write`: the engine it is powered by.
+    if with_world(|w| w.block_at(dim, pos)).flatten() == Some(Block::PoweredShaft) {
+        let out = with_world(|w| w.shaft_steam(dim, pos)).unwrap_or_default();
+        let engine = Compound::from([
+            ("Direction".into(), Tag::Int(i32::from(out.direction))),
+            ("EnginePower".into(), Tag::Float(out.efficiency.to_bits())),
+        ]);
+        fields.push((ENGINE, Tag::Compound(engine)));
+    }
+    if let Some(signal) = with_world(|w| w.saved_chain_signal(dim, pos)).flatten() {
+        fields.push(("Signal", Tag::Int(signal)));
+    }
+    fields
 }
 
 /// Sequenced gearshifts: those whose neighbour changed look at their power
