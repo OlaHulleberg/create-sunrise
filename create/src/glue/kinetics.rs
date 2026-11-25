@@ -1032,7 +1032,7 @@ impl BlockEntityPart for KineticEntity {
         else {
             return;
         };
-        let speeds = speeds_of(&event.entity.nbt());
+        let speeds = speeds_of(event.entity.nbt());
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
         // Parts another subsystem draws itself (a gauge's dials, a flywheel's wheel) are left

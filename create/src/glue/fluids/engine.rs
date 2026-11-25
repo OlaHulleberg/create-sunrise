@@ -12,7 +12,7 @@ use super::super::states;
 use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
-use mod_api::{ClientHost, Compound, ModBlockEntity, Tag};
+use mod_api::{ClientHost, Compound, Tag};
 
 /// The key of the speed of an engine's shaft in the engine's block entity data, for its
 /// clients (the engine's drawing follows the shaft).
@@ -179,7 +179,7 @@ fn shaft(host: &dyn ClientHost, pos: [i32; 3], info: &StateInfo) -> Option<(Dir,
 
 /// Whether an engine moves this frame (its shaft turns).
 pub(super) fn animated(entity: crate::glue::EntityData<'_>) -> bool {
-    shown_speed(&entity.nbt()) != 0.0
+    shown_speed(entity.nbt()) != 0.0
 }
 
 /// `AngleHelper.horizontalAngle`.
@@ -206,7 +206,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, i
     let Some((facing, at, axis)) = shaft(host, event.pos, info) else {
         return;
     };
-    let speed = shown_speed(&event.entity.nbt());
+    let speed = shown_speed(event.entity.nbt());
     // `getTargetAngle`: the shaft's turn (`getAngleForBe`).
     if axis == facing.axis() {
         return;
@@ -338,10 +338,7 @@ fn spawn_jet(host: &dyn ClientHost, at: [f64; 3], motion: [f32; 3]) {
 
 /// `SteamJetParticle.render` for every live jet: four quads turned along the jet, each a
 /// quarter turn about it from the last, the frame its age picks (`setSpriteFromAge`).
-pub(super) fn render_jets(event: &mut mod_api::RenderLevelStageEvent<'_>) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+pub(super) fn render_jets(event: &mut mod_api::SubmitCustomGeometryEvent<'_>) {
     let now = event.view.game_time;
     let mut quads: [Vec<_>; STEAM_JET_FRAMES] = std::array::from_fn(|_| Vec::new());
     JETS.with_borrow_mut(|jets| {

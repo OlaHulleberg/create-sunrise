@@ -204,9 +204,9 @@ impl create_engine::hose::Level for HoseLevel<'_, '_> {
         {
             return Space::Liquid(fluid, source);
         }
-        let open = crate::glue::block_shape(lv
-            .level, &*lv.host, state, p, BlockShapeKind::Collision)
-            .is_some_and(|s| s.is_empty());
+        let open =
+            crate::glue::block_shape(lv.level, &*lv.host, state, p, BlockShapeKind::Collision)
+                .is_some_and(|s| s.is_empty());
         if let Some((fluid, _)) = fluid {
             return if open {
                 Space::Holding(fluid)

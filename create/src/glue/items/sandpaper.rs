@@ -242,7 +242,7 @@ fn pick_up(
     set_held(host, player, event.hand, Some(paper));
     match stack.shrink(1) {
         Some(rest) => {
-            let _ = item.set_stack(host, rest);
+            let _ = item.set_stack(host, Some(rest));
         }
         None => {
             e.discard(host);

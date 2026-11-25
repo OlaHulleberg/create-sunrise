@@ -7,6 +7,7 @@ use super::super::states;
 use super::railway::decode_state_names;
 use create_engine::train_controls::{Frame, Target, ray_trace};
 use create_engine::trains::{Motion, Pose};
+use mod_api::HostBlockStates as _;
 use mod_api::{BlockState, ClientHost};
 use std::cell::RefCell;
 use std::collections::HashMap;

@@ -531,9 +531,9 @@ impl Subsystem for Equipment {
         if event.attacker == 0 || event.source.direct != event.attacker {
             return;
         }
-        let holds = [event.attacker_main, event.attacker_off]
-            .iter()
-            .any(|s| s.is_some_and(|s| s.item() == *grip));
+        let holds = [&event.attacker_main, &event.attacker_off]
+            .into_iter()
+            .any(|s| s.as_ref().is_some_and(|s| s.item() == *grip));
         if holds {
             event.strength += 2.0;
         }
@@ -1282,7 +1282,11 @@ impl mod_api::BlockEntityPart for BacktankCogs {
             speed / 4.0,
             0.0,
         );
-        crate::glue::states::draw_block(&mut *draw, part, &[("facing", super::kinetics::dir_name(facing))]);
+        crate::glue::states::draw_block(
+            &mut *draw,
+            part,
+            &[("facing", super::kinetics::dir_name(facing))],
+        );
         draw.still();
     }
 }

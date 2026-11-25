@@ -650,8 +650,7 @@ pub fn has_collision(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         f64::from(pos[1]) + 1.0 - 1e-4,
         f64::from(pos[2]) + 1.0 - 1e-4,
     ];
-    crate::glue::collision_boxes(lv.level, &*lv.host, cell)
-        .is_some_and(|b| !b.is_empty())
+    crate::glue::collision_boxes(lv.level, &*lv.host, cell).is_some_and(|b| !b.is_empty())
 }
 
 /// Arms using the point `pos` look again.

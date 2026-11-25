@@ -13,7 +13,7 @@ use create_engine::parts::StateInfo;
 use create_engine::tank::Fluid;
 use mod_api::{
     BlockEntityClientTickEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart,
-    ClientHost, FluidBoxOptions, FluidStack, ModBlockEntity, Registrar, Tag,
+    ClientHost, FluidBoxOptions, FluidStack, Registrar, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -94,7 +94,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>
         Block::ItemDrain => super::drawn::animated(entity),
         Block::SteamEngine => super::engine::animated(entity),
         Block::Spout => super::spouted::animated(entity),
-        Block::SteamWhistle => whistle_blows(&entity.nbt()).is_some_and(|(on, _)| on),
+        Block::SteamWhistle => whistle_blows(entity.nbt()).is_some_and(|(on, _)| on),
         Block::FluidTank => GAUGES.with_borrow(|g| g.get(&pos).is_some_and(|g| !g.settled)),
         Block::GlassFluidPipe => super::flows::animated(entity),
         _ => false,
@@ -202,13 +202,13 @@ impl BlockEntityPart for FluidEntity {
         };
         match block {
             Block::FluidTank | Block::CreativeFluidTank => {
-                if let Some(m) = shown_tank(event.entity) {
+                if let Some(m) = shown_tank(event.entity.into()) {
                     let (w, h) = (f32::from(m.width), f32::from(m.height));
                     *event.bounds = [-1.0, -1.0, -1.0, w + 1.0, h + 1.0, w + 1.0];
                 }
             }
             Block::HosePulley => {
-                if let Some((offset, _, _)) = shown_hose(event.entity) {
+                if let Some((offset, _, _)) = shown_hose(event.entity.into()) {
                     event.bounds[1] = event.bounds[1].min(-offset - 2.0);
                 }
             }
@@ -495,7 +495,7 @@ fn draw_whistle(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     };
     let draw = &mut *event.draw;
     let now = draw.game_time() as f32 + draw.partial();
-    let (on, at) = whistle_blows(&event.entity.nbt()).unwrap_or((false, 0));
+    let (on, at) = whistle_blows(event.entity.nbt()).unwrap_or((false, 0));
     let t = (now - at as f32).max(0.0);
     let mut offset = if on {
         1.0 - 0.5f32.powf(t)

@@ -26,8 +26,8 @@ use create_engine::symmetry::{self, ENABLE_KEY, Kind, MIRROR_KEY, Wand};
 use mod_api::{
     BlockState, BreakBlockEvent, ClientHost, Compound, Hand, Host, HostBlockStates, HostSide,
     Identifier, InteractionResult, ItemPart, ItemStack, LightCoords, LightLayer, ModelInstance,
-    ModelRef, Overlay, ParticleKey, ParticleOptions, PlayerRef, RenderLevelStage,
-    RenderLevelStageEvent, ServerHost, Tag, UseItemEvent, UseOnEvent,
+    ModelRef, Overlay, ParticleKey, ParticleOptions, PlayerRef, ServerHost,
+    SubmitCustomGeometryEvent, Tag, UseItemEvent, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
@@ -282,9 +282,13 @@ pub(super) fn placed(host: &mut dyn ServerHost, event: &Placed) -> Option<()> {
 /// collision shape `state` would have at `pos`.
 pub(crate) fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
     let host = &*lv.host;
-    let Some(shape) = crate::glue::block_shape(lv
-        .level, host, state, pos, mod_api::BlockShapeKind::Collision)
-    else {
+    let Some(shape) = crate::glue::block_shape(
+        lv.level,
+        host,
+        state,
+        pos,
+        mod_api::BlockShapeKind::Collision,
+    ) else {
         return false;
     };
     if shape.is_empty() {
@@ -605,10 +609,10 @@ fn model_turn(degrees: f32) -> [f32; 12] {
 
 /// `SymmetryHandler.onRenderWorld`: each mirror's model over its block, `sin(t / 16) / 5`
 /// plus 0.2 up, turned to its orientation.
-pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage != RenderLevelStage::AfterOpaqueBlocks {
-        return;
-    }
+pub(super) fn submit_custom_geometry(
+    host: &dyn ClientHost,
+    event: &mut SubmitCustomGeometryEvent<'_>,
+) {
     CLIENT.with_borrow(|c| {
         if c.mirrors.is_empty() {
             return;

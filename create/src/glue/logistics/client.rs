@@ -17,6 +17,7 @@ use create_engine::ejector;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::math::{Mat4, Vec3};
 use create_engine::place::mth_sin;
+use mod_api::HostBlockStates as _;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart,
     ClientHost, Compound, Host, ItemDisplayContext, Tag,
@@ -310,10 +311,7 @@ const DEPOSIT_COLOR: u32 = 0xFFDD_C166;
 /// `ArmInteractionPointHandler.drawOutlines`: with the arm item in the main hand, the points
 /// chosen for it; with a wrench, the points of the arm looked at (`checkForWrench`). Each is
 /// outlined by its block's shape, in its mode's colour.
-pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::RenderLevelStageEvent<'_>) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::SubmitCustomGeometryEvent<'_>) {
     let Some(player) = host.local_player() else {
         return;
     };

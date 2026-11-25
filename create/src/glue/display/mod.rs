@@ -244,12 +244,12 @@ impl Subsystem for Display {
     }
 
     /// The display link bulbs' and the nixie signals' glows (additive world quads).
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        bulb::render_level_stage(host, event);
+        bulb::submit_custom_geometry(host, event);
         client::render_signal_glows(host, event);
     }
 
@@ -364,7 +364,9 @@ pub(crate) fn item_name(id: &str) -> String {
 
 /// The value of property `key` of the block at `pos`.
 fn property(lv: &ServerLevel<'_>, pos: [i32; 3], key: &str) -> Option<String> {
-    lv.level.block_property(&*lv.host, pos, key)
+    lv.level
+        .block_property(&*lv.host, pos, key)
+        .map(str::to_owned)
 }
 
 /// The block's name at `pos` (`minecraft:target`).
@@ -795,8 +797,9 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
                 return Reading::Count(None);
             }
             let tagged = |p: [i32; 3], tag: &str| {
-                lv.block_state(p)
-                    .is_some_and(|s| crate::glue::block_in_tag(lv.host.tags(), s.block(), tag) == Some(true))
+                lv.block_state(p).is_some_and(|s| {
+                    crate::glue::block_in_tag(lv.host.tags(), s.block(), tag) == Some(true)
+                })
             };
             let power = display::bookshelf_offsets()
                 .into_iter()

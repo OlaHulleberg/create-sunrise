@@ -13,9 +13,8 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, crusher, processing};
 use mod_api::{
     AttachmentCodec, AttachmentDescriptor, AttachmentError, AttachmentKey, BlockPart, BlockState,
-    CollisionShapeEvent, Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityRef, EntityWrite,
-    Holder, HostBlockStates as _, InsideEffect, LevelRandomHost, LoopContext, Registrar,
-    ServerHost, Tag,
+    CollisionShapeEvent, Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityRef, Holder,
+    HostBlockStates as _, InsideEffect, LevelRandomHost, LoopContext, Registrar, ServerHost, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -135,9 +134,11 @@ pub(super) fn item_joined(host: &mut dyn ServerHost, event: &EntityJoinLevelEven
         && event.kind == "minecraft:item"
         && let Some(key) = key
         && let Ok(Some(Some(controller))) =
-            key.get_existing(host, Holder::Entity(event.entity), |value| value.copied())
+            key.get_existing(host, Holder::Entity(event.subject.id()), |value| {
+                value.copied()
+            })
     {
-        BYPASSING.with_borrow_mut(|m| m.insert(event.entity, controller));
+        BYPASSING.with_borrow_mut(|m| m.insert(event.subject.id(), controller));
     }
 }
 
@@ -159,7 +160,7 @@ impl BlockPart for Passage {
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
         if bypassing(entity) == Some(pos) && *facing != Dir::Up {
-            *event.shape = Some(Vec::new());
+            *event.shape = Some(mod_api::VoxelShape::empty());
             return;
         }
         if try_with_world(|w| {
@@ -170,7 +171,7 @@ impl BlockPart for Passage {
             })
         }) == Some(true)
         {
-            *event.shape = Some(Vec::new());
+            *event.shape = Some(mod_api::VoxelShape::empty());
         }
     }
 
@@ -190,10 +191,10 @@ impl BlockPart for Passage {
                 .is_some_and(|(c, _)| c.entity == Some(event.entity as u32))
         }) == Some(true)
         {
-            event.effects.run_before(
-                InsideEffect::Freeze,
-                EntityWrite::StuckIn(crusher::stuck_multiplier(facing)),
-            );
+            let multiplier = crusher::stuck_multiplier(facing);
+            event.run_before(InsideEffect::Freeze, move |view| {
+                view.make_stuck_in_block(multiplier);
+            });
         }
     }
 }

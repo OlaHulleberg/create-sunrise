@@ -178,7 +178,7 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
 /// Whether the board at `pos` has flaps turning on a running board: drawn again every frame
 /// (`FlapDisplayRenderer` turns them by the render time), its last frame kept once they settle.
 pub(super) fn animated(pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
-    speed_of(&entity.nbt()).abs() >= create_engine::gauge::MEDIUM_SPEED
+    speed_of(entity.nbt()).abs() >= create_engine::gauge::MEDIUM_SPEED
         && DISPLAYS.with_borrow(|d| d.active.contains(&pos))
 }
 
@@ -312,7 +312,7 @@ impl BlockEntityPart for DisplayEntity {
             };
             draw_nixie(host, event.draw, event.state, block, facing, pos);
         } else if block == Block::DisplayBoard {
-            let speed = speed_of(&event.entity.nbt());
+            let speed = speed_of(event.entity.nbt());
             let known = DISPLAYS.with_borrow_mut(|d| {
                 d.boards.get_mut(&pos).map(|b| {
                     b.speed = speed;
@@ -508,13 +508,10 @@ const GLOW_VIEW_DISTANCE: f64 = 96.0;
 /// blends over the lights inside it instead of hiding them.
 pub(super) fn render_signal_glows(
     host: &dyn ClientHost,
-    event: &mut mod_api::RenderLevelStageEvent<'_>,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
 ) {
-    if event.stage != mod_api::RenderLevelStage::AfterOpaqueBlocks {
-        return;
-    }
     let time = event.view.game_time as f64 + f64::from(event.view.partial_tick);
-    let eye = event.view.camera;
+    let eye = event.view.camera_position();
     let Some(level) = host.level(host.dimension()) else {
         return;
     };
@@ -701,7 +698,8 @@ pub(super) fn draw_carried(
     event: &mut crate::glue::Submit<'_>,
 ) {
     let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
-    let Some(Tag::Compound(c)) = event.entity.nbt().get(&carried.into()) else {
+    let entity = event.entity;
+    let Some(Tag::Compound(c)) = entity.nbt().get(&carried.into()) else {
         return;
     };
     if block == Block::DisplayBoard {

@@ -96,7 +96,7 @@ impl Subsystem for Seats {
         if event.kind == ENTITY_TYPE
             && let Some(dim) = level_index(event.dimension)
         {
-            LOADED.with_borrow_mut(|l| l.push((dim, event.entity)));
+            LOADED.with_borrow_mut(|l| l.push((dim, event.subject.id())));
         }
         Flow::Continue
     }
@@ -139,7 +139,9 @@ pub(crate) fn rider_name(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> 
     let dim = lv.dim;
     let seat = SEATS.with_borrow(|s| s.get(&(dim, pos)).copied())?;
     let stand = lv.host.entity(seat.id)?;
-    let rider = crate::glue::passengers(stand, &*lv.host)?.into_iter().next()?;
+    let rider = crate::glue::passengers(stand, &*lv.host)?
+        .into_iter()
+        .next()?;
     rider.name(&*lv.host)
 }
 
@@ -337,7 +339,11 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     });
     for (pos, s) in seats {
         let stand = lv.host.entity(s.id);
-        let ridden = stand.is_some_and(|e| !crate::glue::passengers(e, &*lv.host).unwrap_or_default().is_empty());
+        let ridden = stand.is_some_and(|e| {
+            !crate::glue::passengers(e, &*lv.host)
+                .unwrap_or_default()
+                .is_empty()
+        });
         if is_seat(lv, pos) && ridden {
             continue;
         }

@@ -283,13 +283,13 @@ impl Subsystem for Schematics {
         tools::mouse_scrolling(host, event)
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        quill::render_level_stage(host, event);
-        tools::render_level_stage(host, event);
+        quill::submit_custom_geometry(host, event);
+        tools::submit_custom_geometry(host, event);
     }
 
     fn screen_render_post(
@@ -1352,7 +1352,7 @@ fn run_uploads(lv: &mut ServerLevel<'_>) {
 /// `ConfigureSchematicannonPacket` from the cannon's screen, and its confirm button.
 fn cannon_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
     if context.id == screens::CONFIRM {
-        host.close_menu(context.player);
+        crate::glue::close_menu(host, context.player);
         return;
     }
     let Some(player) = host.player(context.player) else {

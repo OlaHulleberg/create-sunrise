@@ -19,9 +19,9 @@ use create_engine::kinetics::Dir;
 use create_engine::worldshaper as ws;
 use mod_api::{
     BlockFace, BlockState, ClientHost, ClipBlock, ClipFluid, Hand, Host, HostBlockStates, HostSide,
-    InteractionResult, ItemPart, ItemStack, LevelRef, PipelineQuad, PlayerRef, RenderLevelStage,
-    RenderLevelStageEvent, ServerHost, SoundSource, SupportType, Tag, UseItemEvent, UseOnEvent,
-    WorldDepth, WorldLine,
+    InteractionResult, ItemPart, ItemStack, LevelRef, PipelineQuad, PlayerRef, ServerHost,
+    SoundSource, SubmitCustomGeometryEvent, SupportType, Tag, UseItemEvent, UseOnEvent, WorldDepth,
+    WorldLine,
 };
 use std::collections::{BTreeMap, HashSet};
 
@@ -368,7 +368,10 @@ impl ws::FlattenWorld for Flattening<'_, '_> {
     /// waterlogged block gives a source, anything dry air.
     fn fluid_block(&mut self, state: &BlockState) -> BlockState {
         let host = &*self.lv.host;
-        let Some(f) = state.fluid_state(&host.block_states()).filter(|f| !f.is_empty()) else {
+        let Some(f) = state
+            .fluid_state(&host.block_states())
+            .filter(|f| !f.is_empty())
+        else {
             return self.air;
         };
         let id = f.fluid.name(host);
@@ -519,10 +522,10 @@ fn outlined(host: &dyn ClientHost) -> Option<Vec<[i32; 3]>> {
 
 /// `Outliner.showCluster(..).colored(0xbfbfbf).lineWidth(1 / 32f)`: the outer edges of the
 /// blocks' union, and its outer faces.
-pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+pub(super) fn submit_custom_geometry(
+    host: &dyn ClientHost,
+    event: &mut SubmitCustomGeometryEvent<'_>,
+) {
     OUTLINED.with_borrow(|cells| {
         if cells.is_empty() {
             return;

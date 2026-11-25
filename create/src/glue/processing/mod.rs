@@ -110,7 +110,7 @@ pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) 
         })
         .flatten();
         if let Some(stack) = dp.and_then(|dp| deployer::held_stack(&dp, stacks::known_stack)) {
-            event.drops.push(Some(stack));
+            let _ = event.effects.drop_slot(Some(stack));
         }
         return;
     }
@@ -127,11 +127,11 @@ pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) 
     })
     .flatten()
     .unwrap_or_else(|| vec![None; create_engine::processing::INVENTORY_SLOTS]);
-    event.drops.extend(
-        slots
-            .into_iter()
-            .map(|s| s.and_then(|(item, n)| stacks::known_stack(&item, u32::from(n)))),
-    );
+    for slot in slots {
+        let _ = event
+            .effects
+            .drop_slot(slot.and_then(|(item, n)| stacks::known_stack(&item, u32::from(n))));
+    }
 }
 
 pub struct Processing;
@@ -849,7 +849,9 @@ impl ServerLevel<'_> {
 
     /// A property of the block at `p`.
     pub fn property(&self, p: [i32; 3], key: &str) -> Option<String> {
-        self.level.block_property(&*self.host, p, key)
+        self.level
+            .block_property(&*self.host, p, key)
+            .map(str::to_owned)
     }
 
     /// The boxes of the block's shape at `p` (`kind`), in blocks from its corner.

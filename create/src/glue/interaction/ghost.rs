@@ -262,7 +262,7 @@ fn breathing_alpha() -> f32 {
 /// fade-in (`PlacementClient.getCurrentAlpha`).
 pub(super) fn draw(
     host: &dyn ClientHost,
-    event: &mut mod_api::RenderLevelStageEvent<'_>,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     state: &str,
     pos: [i32; 3],
     progress: f32,

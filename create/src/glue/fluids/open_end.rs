@@ -246,7 +246,8 @@ fn dowse_fire(lv: &mut ServerLevel<'_>, p: [i32; 3]) {
     let Some(state) = lv.block_state(p) else {
         return;
     };
-    let in_tag = |tag: &str| crate::glue::block_in_tag(lv.host.tags(), state.block(), tag) == Some(true);
+    let in_tag =
+        |tag: &str| crate::glue::block_in_tag(lv.host.tags(), state.block(), tag) == Some(true);
     if in_tag("minecraft:fire") {
         if let Some(air) = state_with(lv, "minecraft:air", &[]) {
             lv.set_state(p, air, all());

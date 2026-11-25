@@ -563,12 +563,12 @@ impl Subsystem for Stock {
         models.extend(gauge_client::DOTS.iter().map(|m| (*m).to_owned()));
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        gauge_client::render_level_stage(host, event);
+        gauge_client::submit_custom_geometry(host, event);
     }
 
     /// A shop's trade overlay (`TableClothOverlayRenderer`).

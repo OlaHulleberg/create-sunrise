@@ -129,12 +129,9 @@ pub(super) fn from_server(data: &[u8]) {
 /// sneaking to discard).
 pub(super) fn render(
     host: &dyn mod_api::ClientHost,
-    event: &mut mod_api::RenderLevelStageEvent<'_>,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
 ) {
-    use mod_api::{CrosshairTarget, RenderLevelStage};
-    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+    use mod_api::CrosshairTarget;
     let Some(player) = host.local_player() else {
         return;
     };

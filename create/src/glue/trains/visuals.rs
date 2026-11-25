@@ -662,10 +662,7 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             let floats = Tag::List(scale.iter().map(|f| Tag::Float(f.to_bits())).collect());
             tr.insert("scale".into(), floats);
         }
-        if let Ok(Some(entity)) = lv
-            .level
-            .summon(&mut *lv.host, e.kind, place(n, part), nbt)
-        {
+        if let Ok(Some(entity)) = lv.level.summon(&mut *lv.host, e.kind, place(n, part), nbt) {
             displays.push((entity.id(), part));
         }
     }

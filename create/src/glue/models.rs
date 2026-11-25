@@ -73,8 +73,10 @@ pub fn get(host: &dyn ClientHost, id: &'static str) -> Option<Rc<Model>> {
     let read = |id: &str| -> Option<Map<String, Value>> {
         let (ns, path) = id.split_once(':').unwrap_or(("minecraft", id));
         let name = Identifier::parse(&format!("{ns}:models/{path}.json")).ok()?;
-        let bytes = host.resource(PackType::ClientResources, &name)?;
-        match mod_api::serde_json::from_slice(&bytes).ok()? {
+        let reader = host
+            .open_resource(PackType::ClientResources, &name)
+            .ok()??;
+        match mod_api::serde_json::from_reader(reader).ok()? {
             Value::Object(o) => Some(o),
             _ => None,
         }

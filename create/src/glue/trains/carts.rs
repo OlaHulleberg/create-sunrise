@@ -43,8 +43,8 @@ use mod_api::{
     EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, EntityUuid, Flow,
     GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Host, HostSide,
     HostTransaction, InteractionResult, ItemPart, ItemStack, MinecartPassEvent, Registrar,
-    RegistrationContext, RemovalReason, RenderLevelStageEvent, ServerHost, SoundSource, SpawnBody,
-    Tag, Text, UseItemOnEvent, UseOnEvent,
+    RegistrationContext, RemovalReason, ServerHost, SoundSource, SpawnBody,
+    SubmitCustomGeometryEvent, Tag, Text, UseItemOnEvent, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -576,8 +576,12 @@ impl Subsystem for Carts {
         coupling_draw::reset();
     }
 
-    fn render_level_stage(&self, host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-        coupling_draw::render_level_stage(host, event);
+    fn submit_custom_geometry(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut SubmitCustomGeometryEvent<'_>,
+    ) {
+        coupling_draw::submit_custom_geometry(host, event);
     }
 
     /// An assembler gone from the world forgets its mode.
@@ -606,8 +610,7 @@ impl Subsystem for Carts {
     ) -> Flow {
         if event.kind.ends_with("minecart")
             && let Some(dim) = level_index(event.dimension)
-            && let Some(entity) = host.entity(event.entity)
-            && let Some(uuid) = entity.uuid(host)
+            && let Some(uuid) = event.subject.uuid(host)
         {
             CARTS.with_borrow_mut(|c| {
                 if c.couplings.carts.contains_key(&uuid) {
@@ -615,7 +618,7 @@ impl Subsystem for Carts {
                         uuid,
                         Known {
                             dim,
-                            entity,
+                            entity: event.subject,
                             rider: None,
                             pos: event.pos,
                             prev: event.pos,
@@ -700,8 +703,7 @@ fn wrench_controller_rail(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let solid = |p: [i32; 3]| {
         let cell = [0, 1, 2, 3, 4, 5].map(|k| f64::from(p[k % 3] + i32::from(k >= 3)));
-        crate::glue::collision_boxes(lv.level, host, cell)
-            .is_some_and(|b| !b.is_empty())
+        crate::glue::collision_boxes(lv.level, host, cell).is_some_and(|b| !b.is_empty())
     };
     let stable = |s: Shape| {
         let high = match s {

@@ -569,13 +569,13 @@ impl Hooks for Create {
         }
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         for s in SUBSYSTEMS {
-            s.render_level_stage(host, event);
+            s.submit_custom_geometry(host, event);
         }
     }
 

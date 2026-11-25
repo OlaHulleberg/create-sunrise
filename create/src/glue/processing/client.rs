@@ -23,7 +23,7 @@ use create_engine::tank::Fluid;
 use create_engine::{Block, deployer, press};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockKey, BlockPart, ClientHost, Compound,
-    ItemDisplayContext, ModBlockEntity, Registrar, Tag,
+    ItemDisplayContext, Registrar, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -94,8 +94,8 @@ pub fn animated(block: Block, entity: crate::glue::EntityData<'_>) -> bool {
         ),
         Block::Basin => {
             // Items bob on fluid or swirl under a mixer.
-            !basin_items(&entity.nbt()).is_empty()
-                || !super::spoutput::visualized(&entity.nbt()).is_empty()
+            !basin_items(entity.nbt()).is_empty()
+                || !super::spoutput::visualized(entity.nbt()).is_empty()
         }
         _ => false,
     }
@@ -455,17 +455,17 @@ impl MachineDraw {
         match block {
             Block::MechanicalPress => {
                 if let Some(f) = info.facing {
-                    let speed = kinetics::speeds_of(&event.entity.nbt())[0];
+                    let speed = kinetics::speeds_of(event.entity.nbt())[0];
                     draw_press_head(event.draw, event.pos, f, speed);
                 }
             }
             Block::Deployer => {
-                let rpm = kinetics::speeds_of(&event.entity.nbt())[0];
+                let rpm = kinetics::speeds_of(event.entity.nbt())[0];
                 draw_deployer(host, event.draw, event.pos, rpm);
             }
             Block::MechanicalMixer => {
-                let speeds = kinetics::speeds_of(&event.entity.nbt());
-                let offset = mixer_head_offset(&event.entity.nbt(), &*event.draw);
+                let speeds = kinetics::speeds_of(event.entity.nbt());
+                let offset = mixer_head_offset(event.entity.nbt(), &*event.draw);
                 for d in parts::draws(block, &info, event.pos, speeds) {
                     if matches!(d.model, Model::MixerPole | Model::MixerHead) {
                         draw_mixer_part(event.draw, &d, offset);
@@ -473,9 +473,9 @@ impl MachineDraw {
                 }
             }
             Block::Basin => {
-                draw_basin(host, event.draw, event.pos, &event.entity.nbt());
+                draw_basin(host, event.draw, event.pos, event.entity.nbt());
                 let facing = info.facing.unwrap_or(Dir::Down);
-                draw_spout_items(host, event.draw, event.pos, facing, &event.entity.nbt());
+                draw_spout_items(host, event.draw, event.pos, facing, event.entity.nbt());
             }
             Block::BlazeBurner => super::burner_draw::draw(
                 event.draw,
@@ -491,12 +491,12 @@ impl MachineDraw {
                         == Some(&Tag::Byte(1)),
             ),
             Block::MechanicalCrafter => {
-                draw_crafter(host, event.draw, event.pos, &event.entity.nbt());
+                draw_crafter(host, event.draw, event.pos, event.entity.nbt());
             }
             Block::MechanicalSaw => {
-                let speed = kinetics::speeds_of(&event.entity.nbt())[0];
+                let speed = kinetics::speeds_of(event.entity.nbt())[0];
                 draw_saw_blade(event.draw, &info, speed);
-                draw_saw_items(host, event.draw, &info, speed, &event.entity.nbt());
+                draw_saw_items(host, event.draw, &info, speed, event.entity.nbt());
             }
             _ => {}
         }
@@ -507,7 +507,7 @@ impl MachineDraw {
                 block,
                 &info,
                 event.state,
-                &event.entity.nbt(),
+                event.entity.nbt(),
             );
         }
     }

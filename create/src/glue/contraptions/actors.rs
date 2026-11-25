@@ -1622,9 +1622,14 @@ fn valid_pave_material(lv: &ServerLevel<'_>, item: &str) -> bool {
         .block_states()
         .has_block_entity(state)
         .unwrap_or(true);
-    let shape = crate::glue::block_shape(lv
-        .level, &*lv.host, state, [0, 0, 0], BlockShapeKind::Collision)
-        .unwrap_or_default();
+    let shape = crate::glue::block_shape(
+        lv.level,
+        &*lv.host,
+        state,
+        [0, 0, 0],
+        BlockShapeKind::Collision,
+    )
+    .unwrap_or_default();
     let full = shape == [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]];
     !block_entity && full && !name.ends_with("_stairs")
 }
@@ -2149,7 +2154,7 @@ fn apply(lv: &mut ServerLevel<'_>, key: [i32; 3], a: &Actor, e: Effect) -> Optio
             {
                 lv.level.play_sound(
                     &mut *lv.host,
-                    &sound.hit,
+                    sound.hit.as_str(),
                     center(p),
                     SoundSource::Neutral,
                     0.25,

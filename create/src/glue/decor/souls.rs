@@ -134,21 +134,21 @@ fn soul_fits(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
     }
     let empty = |p: [i32; 3]| {
         let lo = p.map(f64::from);
-        let full = crate::glue::collision_boxes(lv
-            .level, 
-                host,
-                [lo[0], lo[1], lo[2], lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0],
-            )
-            .unwrap_or_default()
-            .iter()
-            .any(|b| {
-                b[0] <= lo[0]
-                    && b[1] <= lo[1]
-                    && b[2] <= lo[2]
-                    && b[3] >= lo[0] + 1.0
-                    && b[4] >= lo[1] + 1.0
-                    && b[5] >= lo[2] + 1.0
-            });
+        let full = crate::glue::collision_boxes(
+            lv.level,
+            host,
+            [lo[0], lo[1], lo[2], lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0],
+        )
+        .unwrap_or_default()
+        .iter()
+        .any(|b| {
+            b[0] <= lo[0]
+                && b[1] <= lo[1]
+                && b[2] <= lo[2]
+                && b[3] >= lo[0] + 1.0
+                && b[4] >= lo[1] + 1.0
+                && b[5] >= lo[2] + 1.0
+        });
         let fluid = lv.level.fluid_state(host, p).is_some_and(|f| !f.is_empty());
         !full && !fluid
     };
@@ -160,8 +160,12 @@ fn soul_fits(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         f64::from(at[1]),
         f64::from(at[2]) + 0.5,
     );
-    crate::glue::collision_boxes(lv.level, host, [x - 0.1, y, z - 0.1, x + 0.1, y + 0.75, z + 0.1])
-        .is_some_and(|b| b.is_empty())
+    crate::glue::collision_boxes(
+        lv.level,
+        host,
+        [x - 0.1, y, z - 0.1, x + 0.1, y + 0.75, z + 0.1],
+    )
+    .is_some_and(|b| b.is_empty())
 }
 
 fn send(lv: &mut ServerLevel<'_>, options: &ParticleOptions, at: [f64; 3], v: [f64; 3]) {
@@ -373,7 +377,7 @@ impl mod_api::CustomParticle for SoulBaseInstance {
             return;
         }
         // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
-        let age = particle.age() as i32;
+        let age = particle.age();
         particle.set_sprite_index(((age % self.loop_length) * 7 / self.loop_length) as usize);
         if !dark_at(level, particle.position()) {
             particle.remove();

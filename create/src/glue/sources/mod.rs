@@ -150,12 +150,7 @@ impl Subsystem for Sources {
         waterwheels::draws_itself(block, part) || handles::draws_itself(block, part)
     }
 
-    fn animated(
-        &self,
-        block: Block,
-        pos: [i32; 3],
-        entity: crate::glue::EntityData<'_>,
-    ) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         handles::animated(block, pos, entity) || stress::flash_color(pos).is_some()
     }
 

@@ -158,7 +158,7 @@ pub fn exists(host: &dyn Host, rel: &str) -> bool {
 
 pub fn size(host: &dyn Host, rel: &str) -> Option<u64> {
     let meta = std::fs::metadata(path(host, rel)?).ok()?;
-    meta.is_file().then(|| meta.len())
+    meta.is_file().then_some(meta.len())
 }
 
 /// Store a local schematic as its owner's upload, evicting the oldest at the cap.

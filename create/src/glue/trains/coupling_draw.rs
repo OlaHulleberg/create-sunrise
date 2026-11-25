@@ -9,7 +9,7 @@ use create_engine::coupling;
 use create_engine::mounted::RailShape;
 use mod_api::{
     ClientHost, Identifier, LightCoords, LightLayer, ModelInstance, ModelRef, Overlay,
-    RenderLevelStage, RenderLevelStageEvent,
+    SubmitCustomGeometryEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -146,10 +146,7 @@ fn turn(yaw: f32, pitch: f32, stretch: f32) -> [f32; 12] {
 }
 
 /// `CouplingRenderer.renderAll`, after the opaque terrain.
-pub fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage != RenderLevelStage::AfterOpaqueBlocks {
-        return;
-    }
+pub fn submit_custom_geometry(host: &dyn ClientHost, event: &mut SubmitCustomGeometryEvent<'_>) {
     let t = f64::from(event.view.partial_tick);
     CLIENT.with_borrow(|c| {
         let Some([attachment, ring, connector]) = c.models else {

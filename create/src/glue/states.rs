@@ -342,6 +342,9 @@ impl Hasher for SlotHasher {
 
 type SlotMap<V> = HashMap<BlockKey, V, BuildHasherDefault<SlotHasher>>;
 
+/// A state and its properties.
+type Variant = (BlockState, Vec<(String, String)>);
+
 /// Both directions of the numbering, once a world has opened.
 pub struct States {
     /// Each block's first id and its state count.
@@ -350,7 +353,7 @@ pub struct States {
     by_id: Vec<BlockState>,
     /// Each block's and partial's states with their properties, for the draws that name a state
     /// by its properties.
-    variants: SlotMap<Vec<(BlockState, Vec<(String, String)>)>>,
+    variants: SlotMap<Vec<Variant>>,
 }
 
 static STATES: RwLock<Option<States>> = RwLock::new(None);

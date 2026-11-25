@@ -20,7 +20,6 @@
 
 use super::super::server::ServerLevel;
 use super::super::states;
-use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::math::{Mat4, Vec3};
 use mod_api::{Compound, Tag};

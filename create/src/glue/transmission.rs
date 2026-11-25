@@ -105,7 +105,7 @@ impl ServerLevel<'_> {
         let at = [0, 1, 2].map(|i| f64::from(pos[i]) + 0.5);
         let _ = self.level.play_sound(
             &mut *self.host,
-            &sound.place,
+            sound.place.as_str(),
             at,
             SoundSource::Blocks,
             (sound.volume + 1.0) / 2.0,

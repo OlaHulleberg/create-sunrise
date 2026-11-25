@@ -206,7 +206,8 @@ fn draw_closed(
     half: &str,
     hinge: &str,
 ) {
-    crate::glue::states::draw_block(&mut *draw, 
+    crate::glue::states::draw_block(
+        &mut *draw,
         key,
         &[
             ("facing", facing),

@@ -10,7 +10,7 @@ use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use mod_api::{
     ClientHost, Identifier, LightCoords, LightLayer, ModelInstance, ModelRef, Overlay,
-    RenderLevelStage, RenderLevelStageEvent,
+    SubmitCustomGeometryEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -197,10 +197,7 @@ fn light(host: &dyn ClientHost, at: [f64; 3]) -> LightCoords {
 }
 
 /// `CarriageCouplingRenderer.renderAll`.
-pub fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage != RenderLevelStage::AfterOpaqueBlocks {
-        return;
-    }
+pub fn submit_custom_geometry(host: &dyn ClientHost, event: &mut SubmitCustomGeometryEvent<'_>) {
     let t = f64::from(event.view.partial_tick);
     CLIENT.with_borrow(|(prev, now, models)| {
         let Some([head, cable]) = *models else {

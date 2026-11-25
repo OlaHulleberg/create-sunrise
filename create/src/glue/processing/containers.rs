@@ -63,7 +63,7 @@ impl mod_api::BlockEntityPart for ToolboxDraw {
         event: &mut mod_api::PreRemoveSideEffectsEvent<'_>,
     ) {
         // `ToolboxBlock.onRemove` does not spill. Its loot table carries the contents instead.
-        event.keep_contents = true;
+        event.effects.set_keep_contents(true);
     }
 
     fn block_entity_submit(

@@ -1003,7 +1003,10 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
     request.extra = opened.encode();
     request.opening_hand = Some(Hand::Main);
     request.replace = mod_api::MenuReplace::CloseFirst;
-    let Ok(Some(window)) = player.open_mod_menu(host, request) else {
+    let Ok(Some(menu)) = player.open_mod_menu(host, request) else {
+        return;
+    };
+    let Some(window) = menu.container_id(&*host) else {
         return;
     };
     let menu = ghost_menu::Menu::new(kind, ghost, Vec::new(), selected);
@@ -1039,7 +1042,9 @@ fn show_ghosts(
             .ghost
             .iter()
             .map(|g| g.as_ref().map(|g| g.stack.clone()));
-        let _ = host.menu_set_items(uuid, session.window, items.collect());
+        if let Some(menu) = crate::glue::open_menu(&*host, uuid, session.window) {
+            let _ = menu.set_items(host, items.collect());
+        }
     }
 }
 
@@ -1110,7 +1115,7 @@ pub(super) fn menu_clicked(
     let Some(player) = host.player(uuid) else {
         return mod_api::Flow::Cancel;
     };
-    let Some(menu) = host.menu(uuid, session.window) else {
+    let Some(menu) = crate::glue::open_menu(&*host, uuid, session.window) else {
         return mod_api::Flow::Cancel;
     };
     let size = session.menu.ghost.len();
@@ -1118,7 +1123,7 @@ pub(super) fn menu_clicked(
     refresh(&*host, player, cursor, &mut session.menu);
     if !still_valid(&*host, player, &session) {
         SESSIONS.with_borrow_mut(|m| m.insert(uuid, session));
-        host.close_menu(uuid);
+        crate::glue::close_menu(host, uuid);
         return mod_api::Flow::Cancel;
     }
     let Some(click) = ghost_menu::Click::of(event.mode) else {
@@ -1208,7 +1213,7 @@ pub(super) fn player_tick(host: &mut dyn ServerHost, player: PlayerRef) {
             .map(|s| !still_valid(&*host, player, s))
     });
     if invalid == Some(true) {
-        host.close_menu(player.uuid());
+        crate::glue::close_menu(host, player.uuid());
     }
 }
 

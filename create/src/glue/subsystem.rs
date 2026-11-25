@@ -489,11 +489,11 @@ pub trait Subsystem: Sync {
     ) {
     }
 
-    /// `Hooks::render_level_stage`: draw in the world at one stage of the frame.
-    fn render_level_stage(
+    /// `Hooks::submit_custom_geometry`: draw in the world at one stage of the frame.
+    fn submit_custom_geometry(
         &self,
         _host: &dyn ClientHost,
-        _event: &mut mod_api::RenderLevelStageEvent<'_>,
+        _event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
     }
 

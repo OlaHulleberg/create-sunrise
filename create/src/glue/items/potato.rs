@@ -43,9 +43,12 @@ struct Ammo {
     kind: &'static Type,
 }
 
+/// A stuck potato's shared state.
+type StuckCell = Arc<Mutex<Option<Stuck>>>;
+
 /// The keys the registrar issued for this load's attachments (a reinstall issues new ones).
 static AMMO: RwLock<Option<AttachmentKey<Option<Arc<Ammo>>>>> = RwLock::new(None);
-static STUCK: RwLock<Option<AttachmentKey<Arc<Mutex<Option<Stuck>>>>>> = RwLock::new(None);
+static STUCK: RwLock<Option<AttachmentKey<StuckCell>>> = RwLock::new(None);
 static FLIGHT: RwLock<Option<AttachmentKey<Flight>>> = RwLock::new(None);
 
 /// The issued key in `slot`, once registration has run.
@@ -1174,9 +1177,9 @@ fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipH
         })
     };
     let replaceable = is_air(host, place)
-        || level
-            .block(host, place)
-            .is_some_and(|b| crate::glue::block_in_tag(host.tags(), b, "minecraft:replaceable") == Some(true));
+        || level.block(host, place).is_some_and(|b| {
+            crate::glue::block_in_tag(host.tags(), b, "minecraft:replaceable") == Some(true)
+        });
     match kind {
         // `PlantCrop`: on top of farmland.
         "plant_crop" => {

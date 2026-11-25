@@ -204,11 +204,11 @@ impl Subsystem for Colliders {
         if event.loaded_from_disk
             && [STATIONARY, GANTRY, CARRIAGE].contains(&event.kind)
             && let Some(dim) = level_index(event.dimension)
-            && let Some(entity) = host.entity(event.entity)
         {
+            let entity = event.subject;
             let owner = carrying()
                 .and_then(|key| {
-                    key.get_existing(host, Holder::Entity(event.entity), |value| value.copied())
+                    key.get_existing(host, Holder::Entity(entity.id()), |value| value.copied())
                         .ok()
                 })
                 .flatten()
@@ -583,7 +583,13 @@ fn boxes(
                 .map(|v| v.floor() as i32);
             let shape = state(*s)
                 .and_then(|state| {
-                    crate::glue::block_shape(lv.level, &*lv.host, state, cell, BlockShapeKind::Collision)
+                    crate::glue::block_shape(
+                        lv.level,
+                        &*lv.host,
+                        state,
+                        cell,
+                        BlockShapeKind::Collision,
+                    )
                 })
                 .unwrap_or_default();
             (*o, shape)

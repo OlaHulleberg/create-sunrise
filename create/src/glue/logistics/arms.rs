@@ -278,10 +278,10 @@ impl Subsystem for Arms {
         super::client::arms_message(host, channel, data)
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         super::client::draw_arm_points(host, event);
     }

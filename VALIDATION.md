@@ -1,16 +1,12 @@
 # Validation
 
-Checked on 2026-11-24 on branch `create-sunrise-pin-3d34bbe` (Linux x86_64, Rust 1.99.1), pinned to the Sunrise
-Dev build `dev-2026-11-24-3d34bbe` (main at `3d34bbe63d71bb24c098c1e4021ef866be12fe2d`) in `create/sunrise-mod.toml`.
-A Dev build is a test build with no stable mod API. `cargo sunrise-mod` uses the signature-verified release tool and
-SDK from `sdk-3d34bbe63d71bb24c098c1e4021ef866be12fe2d`, with the published release key.
-No SDK mirror or trusted-key override is used. Mixins stays at
-`e59da9094f0c2fdda6c627fe9eff22dec6a906f0`, as the release SDK specifies.
+Checked on 2026-11-25 on branch `create-sunrise-pin-bdad86d` (Linux x86_64, Rust 1.99.1), pinned to the Sunrise
+Dev build at main `bdad86d2d398ff9293002d2dc08702822aea7265` in `create/sunrise-mod.toml`. A Dev build is a test
+build with no stable mod API. `cargo sunrise-mod` uses the signature-verified release tool and SDK from
+`sdk-bdad86d2d398ff9293002d2dc08702822aea7265`, with the published release key.
 
-On `3d34bbe`, only #261-#264 and #266 have been checked in game (the section below), and `tools/create-fuzz/` has not
-been run. Earlier in-game results are historical: `b680a0f` on the Dev build `7cfdf81` passed the in-game checks in "Dev build `7cfdf81` in game" below, `684e89b` on `9425651` passed the in-game smoke test below, `c6f9470` was tried in game for the fixes merged
-since (#203-#224), `11c43ca` for those merged after (#227-#234), `6373106` ran on `520fc48`, the developer build was `b77574e`,
-the first nightly smoke test used `2d81263`, and the registry smoke tests used `ed3ac19`.
+Nothing was run in game on `bdad86d`, and `tools/create-fuzz/` has not been run. Earlier in-game results below are
+historical, from the builds named in their headings.
 
 ## Checks
 
@@ -21,20 +17,20 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 |---|---|---|
 | `create/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
-| `create/` | `cargo +1.99.1 test` | Pass (121 glue tests) |
-| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (919 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official `3d34bbe63d` SDK) |
+| `create/` | `cargo +1.99.1 test` | Pass (124 glue tests) |
+| `create/` | `cargo +1.99.1 test -p create-engine` | Pass (923 engine tests) |
+| `create/` | `cargo sunrise-mod check` | Pass (official `bdad86d2d3` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
-| `create/` | `cargo sunrise-mod check target/sunrise-mod/create.smod --build 3d34bbe63d71bb24c098c1e4021ef866be12fe2d` | Pass (`made for`) |
+| `create/` | `cargo sunrise-mod check target/sunrise-mod/create.smod --build bdad86d2d398ff9293002d2dc08702822aea7265` | Pass (`made for`) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (55 tests) |
 | `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
-| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Not run on `3d34bbe` |
-| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `3d34bbe` |
-| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `3d34bbe` |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Not run on `bdad86d` |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `bdad86d` |
+| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `bdad86d` |
 
 ## #261-#264 and #266 in game on Dev `3d34bbe` (main `46eb2c2`)
 

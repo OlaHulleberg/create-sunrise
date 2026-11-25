@@ -8,7 +8,7 @@ use super::TANK;
 use super::client::fluid_box;
 use create_engine::kinetics::Dir;
 use create_engine::tank::Codes;
-use mod_api::{ClientHost, Compound, ItemDisplayContext, ModBlockEntity, Tag};
+use mod_api::{ClientHost, Compound, ItemDisplayContext, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -104,7 +104,7 @@ pub(super) fn animated(entity: crate::glue::EntityData<'_>) -> bool {
 pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
     if let Some(Tag::IntArray(v)) = event.entity.nbt().get(&TANK.into()).cloned()
         && let &[fluid, amount, capacity] = v.as_slice()
-        && let Some(fluid) = Codes::fluid(&super::fluid_keys(&event.entity.nbt(), TANK), fluid)
+        && let Some(fluid) = Codes::fluid(&super::fluid_keys(event.entity.nbt(), TANK), fluid)
         && amount > 0
         && capacity > 0
     {

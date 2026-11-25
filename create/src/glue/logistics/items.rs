@@ -498,7 +498,7 @@ pub fn drop_stack(
         at[2],
         stack,
         motion,
-        pickup_delay,
+        pickup_delay as i32,
     );
 }
 

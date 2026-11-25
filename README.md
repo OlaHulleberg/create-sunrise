@@ -97,9 +97,8 @@ The folder in `target/create-mod` holds files made from Create's assets. It is f
 > The port follows Create 6.0.11's source. Its assets come from the newest published jar, 1.21.1-6.0.10
 > (6.0.11 isn't released yet); the two differ in only two textures.
 
-> The pin is the Sunrise Dev build `dev-2026-11-24-3d34bbe`, a test build with no stable mod API. Install it
-> with `sunrise-launcher install dev-2026-11-24-3d34bbe` (launcher 1.1.3 or newer) and build into an instance
-> on it. Its official signed SDK is fetched automatically by `cargo sunrise-mod`.
+> The pin is the Sunrise Dev build at main `bdad86d`, a test build with no stable mod API. Its official signed SDK
+> (`sdk-bdad86d2d398ff9293002d2dc08702822aea7265`) is fetched automatically by `cargo sunrise-mod`. The port has not been run in game on this build.
 
 ## See it running
 
@@ -137,8 +136,8 @@ Every capture is in game on Sunrise, with every machine running. Nothing is pain
 
 Install Rust 1.99.1 with the `wasm32-unknown-unknown` target and the signed `cargo sunrise-mod` tool from the
 SDK release for `[native] sunrise` in [create/sunrise-mod.toml](create/sunrise-mod.toml). Follow Sunrise's
-[tool installation guide](https://github.com/sunrise-org/sunrise/blob/3d34bbe63d71bb24c098c1e4021ef866be12fe2d/docs/modding/src/start/install-tool.md),
-setting `RELEASE=sdk-3d34bbe63d71bb24c098c1e4021ef866be12fe2d` to install and verify that release's tool.
+[tool installation guide](https://github.com/sunrise-org/sunrise/blob/bdad86d2d398ff9293002d2dc08702822aea7265/docs/modding/src/start/install-tool.md),
+setting `RELEASE=sdk-bdad86d2d398ff9293002d2dc08702822aea7265` to install and verify that release's tool.
 
 ```sh
 rustup toolchain install 1.99.1 --target wasm32-unknown-unknown

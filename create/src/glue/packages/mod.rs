@@ -224,12 +224,7 @@ pub struct Packages;
 impl Subsystem for Packages {
     /// A chain conveyor carrying packages is drawn every frame, as they move along it (its
     /// drawing is otherwise kept, and drawn anew only when its data changes).
-    fn animated(
-        &self,
-        block: Block,
-        pos: [i32; 3],
-        entity: crate::glue::EntityData<'_>,
-    ) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         if block == Block::PackageFrogport {
             return frog_draw::animated(entity.nbt());
         }
@@ -605,12 +600,12 @@ impl Subsystem for Packages {
         port_screen::screen_closing(host, event);
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        frog_target::render_level_stage(host, event);
+        frog_target::submit_custom_geometry(host, event);
     }
 
     /// `PackagePortPlacementPacket`: a frogport placed by a player takes the point chosen.

@@ -4,8 +4,8 @@
 //! copycats it shows (`show`), by level; a client's from what its copycats' block entities draw.
 
 use mod_api::{
-    BlockPart, BlockSoundType, ClientHost, Flow, LoopContext, LoopSide, PlayHitSoundEvent,
-    SoundPlay, SoundTypeEvent,
+    BlockPart, BlockSoundType, ClientHost, Flow, LevelSide, PlayHitSoundEvent, SoundPlay,
+    SoundTypeEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -70,15 +70,14 @@ pub(super) struct CopycatSound;
 
 #[mod_api::sunrise_part]
 impl BlockPart for CopycatSound {
-    fn sound_type(&self, context: &dyn LoopContext, event: &mut SoundTypeEvent<'_>) {
+    fn sound_type(&self, context: LevelSide<'_>, event: &mut SoundTypeEvent<'_>) {
         let pos = [event.pos.x, event.pos.y, event.pos.z];
-        let found = match context.side() {
+        let found = match context {
             // The hook names no level: the first level with a copycat holding a material there.
-            LoopSide::Server => {
+            LevelSide::Server(_) => {
                 SERVER.with_borrow(|m| m.get(&pos).and_then(|l| l.first()).map(|s| s.1.clone()))
             }
-            LoopSide::Client => CLIENT.with_borrow(|m| m.get(&pos).map(|s| s.1.clone())),
-            _ => None,
+            LevelSide::Client(_) => CLIENT.with_borrow(|m| m.get(&pos).map(|s| s.1.clone())),
         };
         if let Some(s) = found {
             *event.sound = s;
@@ -93,7 +92,7 @@ impl BlockPart for CopycatSound {
             return Flow::Continue;
         };
         let at = pos.map(|v| f64::from(v) + 0.5);
-        let play = SoundPlay::at(&s.hit, mod_api::SoundSource::Blocks, at)
+        let play = SoundPlay::at(s.hit.as_str(), mod_api::SoundSource::Blocks, at)
             .with_volume((s.volume + 1.0) / 8.0)
             .with_pitch(s.pitch * 0.5);
         host.play_local_sound(&play, 0);

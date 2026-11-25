@@ -7,7 +7,7 @@ use super::client::fluid_box;
 use super::{SPOUT_START, TANK};
 use create_engine::spout::FILLING_TIME;
 use create_engine::tank::Codes;
-use mod_api::{ClientHost, ModBlockEntity, Tag};
+use mod_api::{ClientHost, Tag};
 
 /// The game time the spout's cycle started, while it runs.
 fn start(entity: crate::glue::EntityData<'_>) -> Option<i64> {
@@ -26,7 +26,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
     let tank = match event.entity.nbt().get(&TANK.into()) {
         Some(Tag::IntArray(v)) => match v.as_slice() {
             &[fluid, amount, capacity] if amount > 0 && capacity > 0 => {
-                let keys = super::fluid_keys(&event.entity.nbt(), TANK);
+                let keys = super::fluid_keys(event.entity.nbt(), TANK);
                 Codes::fluid(&keys, fluid).map(|f| (f, amount, capacity))
             }
             _ => None,

@@ -155,10 +155,10 @@ impl Subsystem for Interaction {
     }
 
     /// The highlighted value box's outline and the placement helper's ghost.
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         hud::value_box_outline(host, event);
         placement::draw_ghost(host, event);

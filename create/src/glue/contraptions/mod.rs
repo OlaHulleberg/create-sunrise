@@ -377,10 +377,10 @@ impl Subsystem for Contraptions {
         superglue::client_reset();
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         superglue::render(host, event);
     }
@@ -710,7 +710,7 @@ impl ServerLevel<'_> {
             at[2],
             stack,
             motion,
-            delay,
+            delay as i32,
         );
     }
 

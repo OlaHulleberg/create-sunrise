@@ -138,11 +138,7 @@ pub(super) fn draws_itself(block: Block, part: &Draw) -> bool {
 
 /// Whether the handle of `block` at `pos` moves this frame: a crank's while it turns or slows, a
 /// valve handle's while its use lasts.
-pub(super) fn animated(
-    block: Block,
-    pos: [i32; 3],
-    entity: crate::glue::EntityData<'_>,
-) -> bool {
+pub(super) fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         Block::HandCrank => {
             let turning = speeds_of(entity.nbt())[0] != 0.0;
@@ -201,7 +197,13 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
         let empty = lv
             .block_state(behind)
             .and_then(|state| {
-                crate::glue::block_shape(lv.level, &*lv.host, state, behind, mod_api::BlockShapeKind::Collision)
+                crate::glue::block_shape(
+                    lv.level,
+                    &*lv.host,
+                    state,
+                    behind,
+                    mod_api::BlockShapeKind::Collision,
+                )
             })
             .is_some_and(|boxes| boxes.is_empty());
         if empty {

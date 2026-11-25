@@ -19,8 +19,8 @@ use create_engine::client::{Draw, Model, WheelSpin};
 use create_engine::gauge::{Needle, Shown, dial_faces, dial_pose};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityPart, BlockPart, ClientHost,
-    Compound, ParticleOptions, Registrar, RegistrationContext, Tag,
+    BlockEntityClientTickEvent, BlockEntityPart, BlockPart, ClientHost, Compound, ParticleOptions,
+    Registrar, RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;

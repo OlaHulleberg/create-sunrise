@@ -13,7 +13,7 @@ use crate::glue::names::Named as _;
 use create_engine::schematic::{self as sch, Mirror, Rotation, Structure};
 use mod_api::{
     BlockState, ClientHost, Direction, HostBlockStates, LightCoords, LightLayer, ModelInstance,
-    ModelRef, Overlay, RenderLevelStage, RenderLevelStageEvent,
+    ModelRef, Overlay, SubmitCustomGeometryEvent,
 };
 use std::collections::{HashMap, HashSet};
 
@@ -153,12 +153,9 @@ impl Preview {
     pub(super) fn render(
         &mut self,
         host: &dyn ClientHost,
-        event: &mut RenderLevelStageEvent<'_>,
+        event: &mut SubmitCustomGeometryEvent<'_>,
         placing: &Placing,
     ) {
-        if event.stage != RenderLevelStage::AfterOpaqueBlocks {
-            return;
-        }
         let pt = event.view.partial_tick;
         let (fb, lr) = placing.scales(pt);
         let variant_idx = variant_index(fb, lr);
@@ -169,36 +166,22 @@ impl Preview {
         let level = host.level(host.dimension());
         let mut batch: Vec<ModelInstance> = Vec::new();
 
-        'groups: for ((_, emission, cells), model) in
-            variant.groups.iter().zip(variant.models.iter())
-        {
+        for ((_, emission, cells), model) in variant.groups.iter().zip(variant.models.iter()) {
             let Some(model) = *model else {
                 continue;
             };
-            let mut offset = 0;
-            while offset < cells.len() {
-                let usage = event.draw.usage();
-                let remaining = usage
-                    .instances_capacity
-                    .saturating_sub(usage.instances_used) as usize;
-                if remaining == 0 {
-                    break 'groups;
-                }
-                let end = (offset + remaining).min(cells.len());
-                batch.clear();
-                batch.reserve(end - offset);
-                for &(local, hidden_faces) in &cells[offset..end] {
-                    let (world_origin, center) = instance_origin_and_center(origin, linear, local);
-                    let light = sample_light(host, level, center, *emission);
-                    batch.push(
-                        ModelInstance::new(world_origin, linear, 0xFFFF_FFFF, light, Overlay::NONE)
-                            .with_hidden_faces(hidden_faces),
-                    );
-                }
-                if event.draw.draw_model_instances(model, &batch).is_err() {
-                    break 'groups;
-                }
-                offset = end;
+            batch.clear();
+            batch.reserve(cells.len());
+            for &(local, hidden_faces) in cells {
+                let (world_origin, center) = instance_origin_and_center(origin, linear, local);
+                let light = sample_light(host, level, center, *emission);
+                batch.push(
+                    ModelInstance::new(world_origin, linear, 0xFFFF_FFFF, light, Overlay::NONE)
+                        .with_hidden_faces(hidden_faces),
+                );
+            }
+            if event.draw.draw_model_instances(model, &batch).is_err() {
+                break;
             }
         }
     }

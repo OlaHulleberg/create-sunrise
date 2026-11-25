@@ -520,7 +520,8 @@ impl CopycatEntity {
                 crate::glue::states::draw_block(&mut *draw, material.block(), &props);
             }
             Drawn::Bars(f) => {
-                crate::glue::states::draw_block(&mut *draw, 
+                crate::glue::states::draw_block(
+                    &mut *draw,
                     states::key(Block::CopycatBars),
                     &[("facing", cc::dir_name(f))],
                 );

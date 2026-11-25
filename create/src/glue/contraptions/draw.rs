@@ -11,6 +11,7 @@ use super::super::subsystem::Subsystem;
 use super::super::world::{level_index, with_world};
 use super::actor_draw::{self, Frame, Motion};
 use super::state_text;
+use crate::glue::EntityData;
 use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::client::{self, Draw, Model};
@@ -67,8 +68,8 @@ impl Subsystem for Drawing {
     }
 
     fn animated(&self, block: Block, _pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
-        redraws_each_frame(&entity.nbt())
-            || (holds_structure(&entity.nbt()) && actor_draw::view(&entity.nbt()).is_some())
+        redraws_each_frame(entity.nbt())
+            || (holds_structure(entity.nbt()) && actor_draw::view(entity.nbt()).is_some())
             || actor_draw::animated(block, entity)
     }
 
@@ -414,7 +415,7 @@ struct Drawn {
     at: [f32; 3],
     state: mod_api::BlockState,
     /// What its block entity showed when the structure took it (`Contraption.updateTags`).
-    entity: Option<mod_api::ModBlockEntity>,
+    entity: Option<Compound>,
     block: BlockKey,
     props: Vec<(String, String)>,
     /// The Create block and facts of its state.
@@ -445,11 +446,7 @@ fn drawn_blocks(host: &dyn Host, c: &Compound, suffix: &str) -> Vec<Drawn> {
                 super::super::client_table(host, |t| t.get(id).map(|(b, i)| (b, *i))).flatten()
             });
             let entity = match entities.get(i) {
-                Some(Tag::Compound(e)) if !e.is_empty() => {
-                    let mut entity = mod_api::ModBlockEntity::default();
-                    entity.nbt = e.clone();
-                    Some(entity)
-                }
+                Some(Tag::Compound(e)) if !e.is_empty() => Some(e.clone()),
                 _ => None,
             };
             Some(Drawn {
@@ -795,7 +792,7 @@ fn draw_blocks(
         // What its block entity holds first: a translucent model (a nixie tube's glass) then
         // blends over it rather than hiding it.
         if let (Some((block, _)), Some(entity)) = (b.create, &b.entity) {
-            draw_carried(host, draw, anchor, b, block, entity);
+            draw_carried(host, draw, anchor, b, block, EntityData::new(entity));
         }
         draw.block(b.state);
         if let Some((block, info)) = b.create {
@@ -823,7 +820,7 @@ fn draw_blocks(
             if let Some(entity) = &b.entity {
                 let id = b.block.name(host);
                 if super::vanilla_draw::draws(&id) {
-                    super::vanilla_draw::draw(host, draw, &id, &props, &entity.nbt);
+                    super::vanilla_draw::draw(host, draw, &id, &props, entity);
                 }
             }
         }
@@ -1746,7 +1743,7 @@ fn draw_resting(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
         "create:elevator_pulley" => true,
         _ => return,
     };
-    let offset = match super::super::kinetics::synced(&event.entity.nbt(), PULLEY_REST) {
+    let offset = match super::super::kinetics::synced(event.entity.nbt(), PULLEY_REST) {
         Some(Tag::Int(v)) => *v as f32,
         _ => 0.0,
     };
@@ -1830,7 +1827,8 @@ impl BlockEntityPart for StructurePart {
             }),
             _ => None,
         };
-        let Some(Tag::Compound(structure)) = super::super::kinetics::synced(&event.entity.nbt(), KEY)
+        let entity = event.entity;
+        let Some(Tag::Compound(structure)) = super::super::kinetics::synced(entity.nbt(), KEY)
         else {
             draw_bearing_top(host, event.draw, top);
             if SHOWN.with_borrow_mut(|s| s.remove(&event.pos).is_some()) {

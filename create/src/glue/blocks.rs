@@ -655,7 +655,9 @@ impl MenuPart for ToolboxButtons {
             return;
         }
         match event.context.id {
-            TOOLBOX_CONFIRM_BUTTON => event.subject.host().close_menu(event.context.player),
+            TOOLBOX_CONFIRM_BUTTON => {
+                crate::glue::close_menu(event.subject.host(), event.context.player)
+            }
             TOOLBOX_DEPOSIT_BUTTON => deposit_all(event),
             _ => {}
         }

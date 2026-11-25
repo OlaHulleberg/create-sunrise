@@ -15,6 +15,7 @@ use create_engine::factory::{self as fx, SLOTS};
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
 use create_engine::stock::PanelPos;
+use mod_api::HostBlockStates as _;
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, Host,
     ItemDisplayContext, ItemStack, Tag, TerrainModelOptions,
@@ -526,13 +527,10 @@ pub(super) fn animated(pos: [i32; 3], nbt: &Compound, host: &dyn Host) -> bool {
 }
 
 /// The outline of the panel being joined (`Outliner.showAABB`, green blinking).
-pub(super) fn render_level_stage(
+pub(super) fn submit_custom_geometry(
     host: &dyn ClientHost,
-    event: &mut mod_api::RenderLevelStageEvent<'_>,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
 ) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
     let Some((pp, t)) = CLIENT.with_borrow(|c| c.connecting) else {
         return;
     };
@@ -681,7 +679,9 @@ fn blocked(host: &dyn ClientHost, at: [f64; 3]) -> bool {
         return false;
     };
     let local = [0, 1, 2].map(|i| at[i] - f64::from(b[i]));
-    state.outline(&host.block_states()).map(<[_]>::to_vec)
+    state
+        .outline(&host.block_states())
+        .map(<[_]>::to_vec)
         .unwrap_or_default()
         .iter()
         .any(|x| (0..3).all(|i| local[i] > x[i] && local[i] < x[i + 3]))

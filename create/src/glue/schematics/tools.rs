@@ -29,7 +29,7 @@ use create_engine::schematic::{Mirror, Rotation, SchematicData};
 use mod_api::{
     ClientHost, DrawContext, Flow, GameMode, Hand, InputKeyEvent, InteractionAttempt,
     InteractionKey, InteractionKeyMappingTriggeredEvent, ItemStack, KeyAction, MouseScrollingEvent,
-    PipelineQuad, RenderLevelStage, RenderLevelStageEvent, WorldDepth, WorldQuad,
+    PipelineQuad, SubmitCustomGeometryEvent, WorldDepth, WorldQuad,
 };
 use std::cell::RefCell;
 
@@ -894,26 +894,22 @@ fn contains(min: [f64; 3], max: [f64; 3], p: [f64; 3]) -> bool {
     (0..3).all(|i| p[i] >= min[i] && p[i] < max[i])
 }
 
-/// `SchematicHandler.render`: the deployed schematic's blocks in `AfterOpaqueBlocks`, and
-/// the tool's own drawing, the deployed schematic's outline and tool guides in
-/// `AfterTranslucentBlocks`.
-pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage == RenderLevelStage::AfterOpaqueBlocks {
-        HANDLER.with_borrow_mut(|h| {
-            if !h.active || !h.deployed {
-                return;
-            }
-            if let Some(preview) = h.preview.as_mut() {
-                preview.render(host, event, &h.transformation);
-            }
-        });
-        return;
-    }
-    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+/// `SchematicHandler.render`: the deployed schematic's blocks, and the tool's own drawing, the
+/// deployed schematic's outline and tool guides.
+pub(super) fn submit_custom_geometry(
+    host: &dyn ClientHost,
+    event: &mut SubmitCustomGeometryEvent<'_>,
+) {
+    HANDLER.with_borrow_mut(|h| {
+        if !h.active || !h.deployed {
+            return;
+        }
+        if let Some(preview) = h.preview.as_mut() {
+            preview.render(host, event, &h.transformation);
+        }
+    });
     let pt = event.view.partial_tick;
-    let eye = event.view.camera;
+    let eye = event.view.camera_position();
     let mut g = Geometry::default();
     let drew = HANDLER.with_borrow(|h| {
         if !h.active {
