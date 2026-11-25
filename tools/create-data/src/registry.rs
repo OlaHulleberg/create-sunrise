@@ -132,9 +132,9 @@ fn gearbox_drops(doc: &mut Value) {
     };
     if let Some(conditions) = pool.get_mut("conditions").and_then(Value::as_array_mut) {
         conditions.push(serde_json::json!({
-            "type": "minecraft:block_state_property",
-            "block": "create:gearbox",
-            "properties": { "axis": "y" }
+            "type": "minecraft:match_block",
+            "blocks": "create:gearbox",
+            "state": { "axis": "y" }
         }));
     }
     let horizontal = serde_json::json!({
@@ -142,9 +142,9 @@ fn gearbox_drops(doc: &mut Value) {
         "conditions": [{
             "type": "minecraft:inverted",
             "term": {
-                "type": "minecraft:block_state_property",
-                "block": "create:gearbox",
-                "properties": { "axis": "y" }
+                "type": "minecraft:match_block",
+                "blocks": "create:gearbox",
+                "state": { "axis": "y" }
             }
         }],
         "entries": [{ "type": "minecraft:item", "name": "create:vertical_gearbox" }],
@@ -193,6 +193,17 @@ fn convert_loot(v: &mut Value) {
                 {
                     o.remove(key);
                     o.insert("type".into(), Value::String(kind));
+                }
+            }
+            // 26.3 has no `block_state_property`: `match_block` takes a `BlockPredicate`, whose
+            // `blocks` is the block and `state` its property matchers.
+            if o.get("type").and_then(Value::as_str) == Some("minecraft:block_state_property") {
+                o.insert("type".into(), Value::String("minecraft:match_block".into()));
+                if let Some(block) = o.remove("block") {
+                    o.insert("blocks".into(), block);
+                }
+                if let Some(properties) = o.remove("properties") {
+                    o.insert("state".into(), properties);
                 }
             }
             for child in o.values_mut() {
@@ -832,6 +843,18 @@ mod tests {
             "minecraft:random_chance"
         );
         assert!(pool["entries"][0].get("functions").is_none());
+    }
+
+    #[test]
+    fn block_state_property_becomes_match_block() {
+        let mut t = json!({"conditions": [{"condition": "minecraft:block_state_property",
+            "block": "create:cut_limestone_slab", "properties": {"type": "double"}}]});
+        convert_loot(&mut t);
+        assert_eq!(
+            t["conditions"][0],
+            json!({"type": "minecraft:match_block", "blocks": "create:cut_limestone_slab",
+                "state": {"type": "double"}})
+        );
     }
 
     #[test]
