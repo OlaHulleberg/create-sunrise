@@ -42,7 +42,7 @@ Further general mod-API gaps found by a parity audit are tracked in sunrise-org/
 | A choice of render stage for overlay drawing (lines, quads, model instances) | Everything now goes through `submit_custom_geometry`, so the old after-opaque and after-translucent ordering is gone. Overlays draw before opaque terrain, unlit. |
 | The batch capacity query on the draw context | Schematic previews draw in one batch, with no chunking by capacity. |
 | An opt-in poll for block-entity client ticks | The client tickers (gauges, redstone links and the rest) bind for every kinetic state and filter by block. |
-| Menu-removed hook per menu part | Filter and toolbox cleanup runs from the player container close hook, which fires after logout and only for menus with a supported menu reference. |
+| A menu-removed event for menus the port does not own a `MenuPart` for | The filter menu cleans up through `MenuPart::menu_removed`. The postbox shuts through the player container close hook, which fires after logout and does nothing for a menu without a container id. |
 | Client-side prediction of `use_item_on` and `use_without_item` | Both return nothing on the client. |
 | Draws of a block by properties for blocks that are not Create's | `draw_block` resolves Create's own blocks and partials from a table built when a world opens. |
 | Building a `TagKey` or a block-entity data view in tests | The copycat test `a_copycat_panel_accepts_iron_bars_but_not_create_window_panes` was removed: the fake host cannot supply tags. Structure-carried block-entity copies use the port's own `EntityData` wrapper. |

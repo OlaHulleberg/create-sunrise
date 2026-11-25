@@ -131,5 +131,6 @@ pub(super) fn cycle_of(host: &dyn Host, state: BlockState) -> Option<(&'static s
 
 /// `getSoundType().getPlaceSound()` of `state`.
 pub(super) fn place_sound(host: &dyn Host, state: BlockState) -> Option<String> {
-    Some(host.block_states().sound(state)?.place.as_str().to_owned())
+    let place = host.block_states().sound(state)?.place.as_str();
+    (!place.is_empty()).then(|| place.to_owned())
 }
