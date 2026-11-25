@@ -697,6 +697,32 @@ fn a_tunnel_joining_its_group_as_the_world_saves_keeps_the_group_mode() {
 }
 
 #[test]
+fn a_tunnel_set_over_an_uncased_belt_stays_until_the_block_below_changes() {
+    // `BeltTunnelBlock.neighborChanged` asks `canSurvive` only from the block below; a tunnel
+    // set by `/setblock` over a belt with no casing survives `onPlace` and the shape updates,
+    // and breaks when the belt under it is replaced.
+    let sc: crate::scenario::Scenario = serde_json::from_value(serde_json::json!({
+        "version":3,"ticks":30,"checkpoints":[15,25],"blocks":[
+            {"pos":[0,8,0],"state":"create:shaft[axis=x,waterlogged=false]"},
+            {"pos":[0,8,5],"state":"create:shaft[axis=x,waterlogged=false]"}
+        ],"events":[
+            {"tick":4,"pos":[0,8,0],"action":{"kind":"use","item":"create:belt_connector","face":"up","hit":[0.5,1.0,0.5],"yaw":0.0,"pitch":0.0,"sneaking":false}},
+            {"tick":6,"pos":[0,8,5],"action":{"kind":"use","item":"create:belt_connector","face":"up","hit":[0.5,1.0,0.5],"yaw":0.0,"pitch":0.0,"sneaking":false}},
+            {"tick":10,"pos":[0,9,2],"state":"create:brass_tunnel[axis=z,shape=straight]"},
+            {"tick":20,"pos":[0,8,2],"state":"minecraft:air"}
+        ]
+    }))
+    .unwrap();
+    let snap = super::run(&sc);
+    assert!(
+        snap.checkpoints[&15].blocks["0,9,2"]
+            .state
+            .starts_with("create:brass_tunnel[")
+    );
+    assert_eq!(snap.checkpoints[&25].blocks["0,9,2"].state, "minecraft:air");
+}
+
+#[test]
 fn a_mixer_reports_the_port_s_idle_cycle() {
     let sc: crate::scenario::Scenario =
         serde_json::from_value(serde_json::json!({"version":3,"ticks":20,"blocks":[

@@ -254,7 +254,7 @@ impl mod_api::ItemPart for TunnelItem {
         if !cased {
             super::belt::set_casing(&mut lv, below, Some(kind));
         }
-        shape_tunnel(&mut lv, pos, true);
+        shape_tunnel(&mut lv, pos, true, false);
         // `onPlace`: its connections, before the save that can follow the placement at once.
         update_brass_connections(&lv, vec![pos]);
         super::super::persist::publish(&mut lv);
@@ -278,10 +278,13 @@ fn keep_side_filters(lv: &mut ServerLevel<'_>, pos: [i32; 3], open: (Axis, tunne
     }
 }
 
-/// `BeltTunnelBlock.canSurvive` and `getTunnelState` for the tunnel at `pos`: it breaks without a
-/// cased, flat belt below, else takes the shape its segment's outputs give (`at_once`: as placed
-/// or `updateTunnel`; otherwise `updateShape`, keeping a state whose window still fits).
-fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool) {
+/// `BeltTunnelBlock.getTunnelState` for the tunnel at `pos`: it takes the shape its segment's
+/// outputs give (`at_once`: as placed or `updateTunnel`; otherwise `updateShape`, keeping a state
+/// whose window still fits). With `check_survive` (`neighborChanged` from the block below, the
+/// one place `canSurvive` is asked) it breaks without a cased, flat belt below; `onPlace`,
+/// `getStateForPlacement` and `updateShape` never break it, and without a belt below it keeps
+/// its axis (`getTunnelState` sets the axis only for a belt).
+fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool, check_survive: bool) {
     let belt_below = |lv: &ServerLevel<'_>, p: [i32; 3]| {
         info_at(lv, [p[0], p[1] - 1, p[2]]).and_then(|(_, i)| i.belt)
     };
@@ -296,11 +299,11 @@ fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool) {
         return;
     };
     let seg = belt_below(lv, pos).filter(|s| s.slope == Slope::Horizontal);
-    let Some(seg) = seg.filter(|_| cased(lv, pos)) else {
+    if check_survive && (seg.is_none() || !cased(lv, pos)) {
         lv.destroy_block(pos, true);
         return;
-    };
-    let axis = seg.facing.axis();
+    }
+    let axis = seg.map_or(now.0, |s| s.facing.axis());
     // `hasValidOutput` beside the belt segment: a belt across it, or anything taking items
     // from that side (`DirectBeltInputBehaviour.canInsertFromSide`: a depot, an ejector, a
     // floor funnel, a chute, an item drain, a processing machine).
@@ -356,35 +359,50 @@ fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool) {
     }
 }
 
-/// Andesite tunnels: those whose surroundings changed break without a cased, flat belt below (`canSurvive`) or take the shape
-/// the belts and depots beside their segment give (`updateShape`, `getTunnelState`).
+/// Andesite tunnels: those whose block below changed break without a cased, flat belt below
+/// (`neighborChanged`, `canSurvive`); those whose surroundings changed take the shape the belts
+/// and depots beside their segment give (`updateShape`, `getTunnelState`).
 pub fn tick_tunnels(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let Some((new, kept, fresh, initialized)) = with_world(|w| {
+    let Some((new, kept, fresh, survive, initialized)) = with_world(|w| {
         let d = &mut w.dims[dim];
         (
             std::mem::take(&mut d.tunnels_new),
             std::mem::take(&mut d.tunnel_checks),
             std::mem::take(&mut d.tunnel_fresh),
+            std::mem::take(&mut d.tunnel_survive),
             std::mem::take(&mut d.brass_initialize),
         )
     }) else {
         return;
     };
-    if new.is_empty() && kept.is_empty() && fresh.is_empty() && initialized.is_empty() {
+    if new.is_empty()
+        && kept.is_empty()
+        && fresh.is_empty()
+        && survive.is_empty()
+        && initialized.is_empty()
+    {
         return;
     }
-    let mut checks: Vec<([i32; 3], bool)> = fresh
+    let mut checks: Vec<([i32; 3], bool, bool)> = fresh
         .into_iter()
-        .map(|p| (p, true))
-        .chain(kept.into_iter().map(|p| (p, false)))
+        .map(|p| (p, true, false))
+        .chain(kept.into_iter().map(|p| (p, false, false)))
+        .chain(survive.into_iter().map(|p| (p, false, true)))
         .collect();
-    // A fresh look wins over a kept one for the same tunnel.
-    checks.sort_by_key(|c| (c.0, !c.1));
-    checks.dedup_by_key(|c| c.0);
+    // One look per tunnel: a fresh look wins over a kept one, and any survival ask stays.
+    checks.sort_by_key(|c| c.0);
+    checks.dedup_by(|cur, prev| {
+        if cur.0 != prev.0 {
+            return false;
+        }
+        prev.1 |= cur.1;
+        prev.2 |= cur.2;
+        true
+    });
     let check_positions: Vec<[i32; 3]> = checks.iter().map(|c| c.0).collect();
-    for (pos, at_once) in checks {
-        shape_tunnel(lv, pos, at_once);
+    for (pos, at_once, check_survive) in checks {
+        shape_tunnel(lv, pos, at_once, check_survive);
     }
     // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before neighbour
     // shape updates (matching `onPlace` before `updateShape`), so a joining tunnel takes the
