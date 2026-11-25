@@ -374,8 +374,8 @@ pub struct Arm {
     /// `redstoneLocked`.
     pub powered: bool,
     pub ceiling: bool,
-    /// `lazyTickCounter`.
-    pub lazy: i8,
+    /// `SmartBlockEntity`'s lazy tick (`initialized`, `lazyTickCounter`).
+    pub lazy: crate::block_entity::SmartBlockEntity,
     /// The pose the arm comes from (`previousTarget`, None for `NO_TARGET`) and its base's yaw
     /// (`previousBaseAngle`), as clients take them when the target changes.
     pub from: Option<Angles>,
@@ -394,7 +394,7 @@ impl Arm {
             last_input: -1,
             last_output: -1,
             ceiling,
-            lazy: LAZY_RATE as i8,
+            lazy: crate::block_entity::SmartBlockEntity::new(i32::from(LAZY_RATE)),
             ..Default::default()
         }
     }
@@ -454,10 +454,7 @@ impl Arm {
     pub fn tick(&mut self, pos: [i32; 3], speed: f32, world: &mut impl World) -> bool {
         let mut changed = false;
         // SmartBlockEntity.tick: the lazy tick first.
-        let lazy = self.lazy <= 0;
-        self.lazy -= 1;
-        if lazy {
-            self.lazy = LAZY_RATE as i8;
+        if self.lazy.tick() {
             changed |= self.lazy_tick(pos, world);
         }
         let reached = self.tick_movement(speed);
@@ -1327,7 +1324,8 @@ mod tests {
         let at_input = Angles::of(pos, &depot([2, 0, 0]), false);
         assert_eq!(arm.from, Some(at_input));
         assert_eq!(arm.from_base, at_input.base);
-        // Folding back, it looks for an output at its lazy tick (every 11 ticks, from its 11th):
+        // Folding back, it looks for an output at its lazy tick (on its first tick, then every 11
+        // ticks from its 11th):
         // the 44th tick of its life, 12 into this move (progress 12/16, past half way), so it
         // turns to the output before reaching rest; 16 ticks later it puts the stack down.
         let mut ticks = 0;
