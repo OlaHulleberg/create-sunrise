@@ -425,7 +425,9 @@ pub(super) fn value_settings_from_client(
             let n = m.entry(pos).or_insert(0);
             *n = n.wrapping_add(1);
         });
-        lv.host.block_entity_sync(pos);
+        if let Some(holder) = lv.host.block_entity(lv.level, pos) {
+            let _ = holder.sync(&mut *lv.host);
+        }
     }
     net::send_to_player(
         lv.host,
