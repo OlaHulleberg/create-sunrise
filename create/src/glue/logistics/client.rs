@@ -435,12 +435,12 @@ fn table_info(
 /// ejector or arm (they move their own parts), a depot whose held stack slides, a belt's
 /// controller carrying items. The server touches the block entity (`SHOWN`) when what a kept
 /// drawing shows changes, so it is drawn once more from the contents it sent first.
-pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::BlockEntityDataView<'_>) -> bool {
     match block {
         Block::MechanicalArm | Block::WeightedEjector => true,
         // A windowed chute's stack moves (`chute::CHUTE_MOTION`).
         Block::Chute => matches!(
-            entity.nbt.get(&super::chute::CHUTE_MOTION.into()),
+            entity.nbt().get(&super::chute::CHUTE_MOTION.into()),
             Some(Tag::Float(b)) if f32::from_bits(*b) != 0.0
         ),
         Block::AndesiteFunnel
@@ -454,7 +454,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -
         }
         // A turning belt scrolls its texture every frame.
         Block::Belt => CLIENT.with_borrow(|c| {
-            speeds_of(&entity.nbt)[0] != 0.0
+            speeds_of(entity.nbt())[0] != 0.0
                 || c.belts
                     .get(&pos)
                     .is_some_and(|b| !b.contents.items.is_empty())
@@ -1191,16 +1191,16 @@ impl LogisticsEntity {
         let Some((block, info)) = table_info(host, event.state) else {
             return;
         };
-        new_flaps(event.pos, &event.entity.nbt);
+        new_flaps(event.pos, event.entity.nbt());
         if block == Block::Chute {
-            draw_chute_item(&mut *event.draw, host, &event.entity.nbt);
+            draw_chute_item(&mut *event.draw, host, event.entity.nbt());
         }
         draw_block_flaps(&mut *event.draw, host, block, &info, event.pos);
         if matches!(
             block,
             Block::BrassFunnel | Block::BrassBeltFunnel | Block::SmartChute | Block::BrassTunnel
         ) {
-            draw_filter(&mut *event.draw, host, block, &info, &event.entity.nbt);
+            draw_filter(&mut *event.draw, host, block, &info, event.entity.nbt());
             return;
         }
         if !matches!(
@@ -1210,7 +1210,7 @@ impl LogisticsEntity {
             return;
         }
         let pos = event.pos;
-        let speeds = speeds_of(&event.entity.nbt);
+        let speeds = speeds_of(event.entity.nbt());
         CLIENT.with_borrow_mut(|c| c.speeds.insert(pos, speeds[0]));
         let draw = &mut *event.draw;
         let partial_tick = draw.partial();
@@ -1220,7 +1220,7 @@ impl LogisticsEntity {
             .map(|c| [0, 1, 2].map(|k| (c.position[k] - f64::from(pos[k])) as f32));
         match block {
             Block::Belt => {
-                let color = match event.entity.nbt.get(&BELT_COLOR.into()) {
+                let color = match event.entity.nbt().get(&BELT_COLOR.into()) {
                     Some(Tag::String(c)) => Some(c.to_string_lossy().to_string()),
                     _ => None,
                 }
@@ -1240,7 +1240,7 @@ impl LogisticsEntity {
                     .flatten()
                     == Some("true");
                 if cased && let Some(seg) = info.belt {
-                    draw_casing(draw, host, &seg, &event.entity.nbt);
+                    draw_casing(draw, host, &seg, event.entity.nbt());
                 }
                 draw_belt_items(draw, host, pos, partial_tick, eye);
             }
@@ -1379,7 +1379,7 @@ fn terrain(
         };
         match draw.terrain_model(model, options) {
             Ok(()) => return true,
-            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) if !fresh => continue,
             Err(_) => return false,
         }
     }
@@ -1964,7 +1964,7 @@ pub(crate) fn draw_carried(
                 host,
                 &ClientItemLayout(host),
                 block,
-                &event.entity.nbt,
+                event.entity.nbt(),
             );
         }
         Block::Chute
@@ -1978,7 +1978,7 @@ pub(crate) fn draw_carried(
             let Some((_, info)) = table_info(host, event.state) else {
                 return;
             };
-            let nbt = &event.entity.nbt;
+            let nbt = event.entity.nbt();
             let color = match nbt.get(&BELT_COLOR.into()) {
                 Some(Tag::String(c)) => Some(c.to_string_lossy().to_string()),
                 _ => None,
@@ -2009,7 +2009,7 @@ pub(crate) fn draw_carried(
         // riding: no turning, no dance).
         Block::MechanicalArm => {
             let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
-            let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
+            let Some(Tag::Compound(c)) = event.entity.nbt().get(&carried.into()) else {
                 return;
             };
             let Some(Tag::Compound(a)) = c.get(&super::arms::CARRIED_ARM.into()) else {

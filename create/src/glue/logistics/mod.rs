@@ -562,7 +562,7 @@ impl Subsystem for Entities {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        entity: &mod_api::ModBlockEntity,
+        entity: &mod_api::BlockEntityDataView<'_>,
     ) -> bool {
         client::animated(block, pos, entity)
     }
@@ -736,17 +736,23 @@ impl BlockPart for LogisticsBlock {
 
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         use_block(host, event.state, event.click)
     }
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         // Create's blocks open no menu: an unused click passes, so the held item is used (a
         // block placed against a depot's side), never the barrel template's menu.
         Some(use_block(host, event.state, event.click).unwrap_or(InteractionResult::Pass))

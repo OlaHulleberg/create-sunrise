@@ -1516,7 +1516,7 @@ impl BlockEntityPart for SchematicEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let aim = event.entity.nbt.get(&AIM.into())?.clone();
+        let aim = event.entity.nbt().get(&AIM.into())?.clone();
         Some(Compound::from([(AIM.into(), aim)]))
     }
 
@@ -1532,7 +1532,7 @@ impl BlockEntityPart for SchematicEntity {
         let Some(&(connector, pipe)) = BARREL.get() else {
             return;
         };
-        let a = ints(event.entity.nbt.get(&AIM.into()));
+        let a = ints(event.entity.nbt().get(&AIM.into()));
         let (target, default_yaw) = match a.as_slice() {
             [has, x, y, z, yaw] => (
                 (*has != 0).then_some([*x, *y, *z]),
