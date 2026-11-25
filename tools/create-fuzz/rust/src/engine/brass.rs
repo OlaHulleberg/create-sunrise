@@ -80,6 +80,13 @@ impl Run {
             .get(&p)
             .is_some_and(tunnel::Brass::can_take)
     }
+    /// `holds_nothing` (`getStackToDistribute().isEmpty()`).
+    pub(super) fn brass_holds_nothing(&self, p: Pos) -> bool {
+        self.w.dims[0]
+            .brass
+            .get(&p)
+            .is_some_and(tunnel::Brass::holds_nothing)
+    }
     /// `set_stack` (`setStackToDistribute`).
     pub(super) fn brass_set_stack(&mut self, p: Pos, item: &belt::Item, from: Option<Dir>) {
         let d = &mut self.w.dims[0];

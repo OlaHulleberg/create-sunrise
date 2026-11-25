@@ -356,10 +356,15 @@ impl Brass {
         filter_passes && (!distributing || self.stack.is_none())
     }
 
+    /// `getStackToDistribute().isEmpty()`.
+    pub fn holds_nothing(&self) -> bool {
+        self.stack.is_none()
+    }
+
     /// `BrassTunnelBlockEntity.canTakeItems`: holds no stack and is not handing out with a
     /// synchronized group.
     pub fn can_take(&self) -> bool {
-        self.stack.is_none() && !self.synced
+        self.holds_nothing() && !self.synced
     }
 
     /// `BrassTunnelItemHandler.insertItem` (`:33-49`): where an item-handler insert goes.
