@@ -309,8 +309,8 @@ pub(crate) fn fluid_box(
     // Create's virtual fluids: their still texture tinted, builder's tea as it is and a potion
     // in its colour (`PotionFluidType.getTintColor`).
     let tinted = match fluid {
-        Fluid::Tea => Some(("create:block/fluid/tea_still", 0xFF_FFFF)),
-        Fluid::Potion(p) => Some(("create:block/fluid/potion_still", p.color())),
+        Fluid::Tea => Some(("create:fluid/tea_still", 0xFF_FFFF)),
+        Fluid::Potion(p) => Some(("create:fluid/potion_still", p.color())),
         _ => None,
     };
     if let Some((sprite, tint)) = tinted {

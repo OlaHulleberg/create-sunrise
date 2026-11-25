@@ -10,6 +10,16 @@ const SHADER: &str = "assets/create/shaders/core/textured.fsh";
 const CONNECTED: &str = "assets/create/sunrise/connected/";
 const CONNECTED_TABLES: &str = "assets/create/sunrise/connected_tables/";
 
+/// The jar's textures the glue samples from the block atlas that its own atlas doesn't stitch:
+/// the outliner's faces, the value boxes' icons (`AllSpecialTextures`, `AllIcons`) and milk's
+/// still texture (`create:fluid/<name>_still`, which the jar's atlas lists for its own fluids).
+const BLOCK_ATLAS_SPRITES: &[&str] = &[
+    "create:special/checkerboard",
+    "create:special/glue",
+    "create:gui/icons",
+    "create:fluid/milk_still",
+];
+
 pub(crate) const SPINNING_TOOLS: [(&str, &[&str]); 3] = [
     ("wrench", &["item", "gear"]),
     ("potato_cannon", &["item", "cog"]),
@@ -37,7 +47,7 @@ pub(super) fn owns(path: &str) -> bool {
                 .any(|dir| path.starts_with(dir)))
 }
 
-/// The jar supplies the coupling and spinning tools' models and its 23 original steam sprites.
+/// The jar supplies the coupling and spinning tools' models and the block atlas's sprites.
 /// Check the references by entry name only; this generator never reads their bytes.
 pub(super) fn assets(contains: impl Fn(&str) -> bool) -> Result<BTreeMap<String, Vec<u8>>, String> {
     let mut out = BTreeMap::new();
@@ -68,31 +78,22 @@ pub(super) fn assets(contains: impl Fn(&str) -> bool) -> Result<BTreeMap<String,
             crate::pretty(&spinner_definition(item)),
         );
     }
-    let mut sources = Vec::new();
-    for frame in 0..23 {
-        let name = format!("steam_jet_{frame}");
-        let texture = format!("assets/create/textures/particle/{name}.png");
-        if !contains(&texture) {
-            return Err(format!("{texture}: missing steam frame in the pinned jar"));
-        }
-        sources.push(json!({
-            "type": "minecraft:single",
-            "resource": format!("create:particle/{name}"),
-            "sprite": format!("create:block/special/{name}"),
-        }));
-    }
+    let mut sprites: Vec<String> = (0..23)
+        .map(|frame| format!("create:particle/steam_jet_{frame}"))
+        .collect();
+    sprites.extend(BLOCK_ATLAS_SPRITES.iter().map(|s| (*s).to_owned()));
     let (connected, sheets) = crate::ct::native_assets();
-    for sheet in sheets {
+    sprites.extend(sheets);
+    let mut sources = Vec::new();
+    for sprite in sprites {
         let path = format!(
             "assets/create/textures/{}.png",
-            sheet.trim_start_matches("create:")
+            sprite.trim_start_matches("create:")
         );
         if !contains(&path) {
-            return Err(format!(
-                "{path}: missing connected texture sheet in the pinned jar"
-            ));
+            return Err(format!("{path}: missing sprite in the pinned jar"));
         }
-        sources.push(json!({ "type": "minecraft:single", "resource": sheet }));
+        sources.push(json!({ "type": "minecraft:single", "resource": sprite }));
     }
     out.extend(connected);
     out.insert(
@@ -179,7 +180,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_registry_names_every_steam_sprite_without_packing_pixels() {
+    fn the_registry_names_every_atlas_sprite_by_its_jar_id_without_packing_pixels() {
         let generated = assets(|_| true).unwrap();
         let atlas: Value = serde_json::from_slice(&generated[BLOCK_ATLAS]).unwrap();
         let sources = atlas["sources"].as_array().unwrap();
@@ -189,16 +190,27 @@ mod tests {
                 &json!({
                     "type": "minecraft:single",
                     "resource": format!("create:particle/steam_jet_{frame}"),
-                    "sprite": format!("create:block/special/steam_jet_{frame}"),
                 })
             );
         }
+        for (source, sprite) in sources[23..].iter().zip(BLOCK_ATLAS_SPRITES) {
+            assert_eq!(
+                source,
+                &json!({ "type": "minecraft:single", "resource": sprite })
+            );
+        }
         assert!(!generated.keys().any(|path| path.ends_with(".png")));
-        assert!(
-            assets(|path| !path.ends_with("/steam_jet_12.png"))
-                .unwrap_err()
-                .contains("steam_jet_12.png")
-        );
+        for missing in [
+            "/steam_jet_12.png",
+            "/gui/icons.png",
+            "/fluid/milk_still.png",
+        ] {
+            assert!(
+                assets(|path| !path.ends_with(missing))
+                    .unwrap_err()
+                    .contains(missing)
+            );
+        }
     }
 
     #[test]
@@ -207,7 +219,7 @@ mod tests {
         let atlas: Value = serde_json::from_slice(&generated[BLOCK_ATLAS]).unwrap();
         let sources = atlas["sources"].as_array().unwrap();
         let (rules, sheets) = crate::ct::native_assets();
-        assert_eq!(sources.len(), 23 + sheets.len());
+        assert_eq!(sources.len(), 23 + BLOCK_ATLAS_SPRITES.len() + sheets.len());
         for sheet in sheets {
             let expected = json!({ "type": "minecraft:single", "resource": sheet });
             assert_eq!(sources.iter().filter(|s| **s == expected).count(), 1);

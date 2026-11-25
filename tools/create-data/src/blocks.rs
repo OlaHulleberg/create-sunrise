@@ -2397,7 +2397,7 @@ pub const HEATS: &[&str] = &["none", "smouldering", "fading", "kindled", "seethi
 pub fn fluid_declarations() -> [(&'static str, Value); 2] {
     let fluid = |name: &str| {
         json!({
-            "sprite": format!("create:block/fluid/{name}_still"),
+            "sprite": format!("create:fluid/{name}_still"),
             "tint": 0xFFFF_FFFF_u32,
             "world": {
                 "tick_delay": 25,
@@ -3493,20 +3493,14 @@ pub fn fluid_models() -> [(&'static str, Value); 5] {
             cube("minecraft:block/water_still", true),
         ),
         ("part_fluid_lava", cube("minecraft:block/lava_still", false)),
-        // Create's own still textures (`AllFluids`), not tinted; `prepare` puts them under
-        // `textures/block/fluid/`, on the block atlas (where Create's `FluidRenderer` reads them).
-        (
-            "part_fluid_honey",
-            cube("create:block/fluid/honey_still", false),
-        ),
+        // Create's own still textures (`AllFluids`), not tinted, on the block atlas (where
+        // Create's `FluidRenderer` reads them).
+        ("part_fluid_honey", cube("create:fluid/honey_still", false)),
         (
             "part_fluid_chocolate",
-            cube("create:block/fluid/chocolate_still", false),
+            cube("create:fluid/chocolate_still", false),
         ),
-        (
-            "part_fluid_milk",
-            cube("create:block/fluid/milk_still", false),
-        ),
+        ("part_fluid_milk", cube("create:fluid/milk_still", false)),
     ]
 }
 

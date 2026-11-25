@@ -54,9 +54,9 @@ impl Textured {
 
     fn sprite(self) -> &'static str {
         match self {
-            Textured::Checkered => "create:block/special/checkerboard",
-            Textured::Glue => "create:block/special/glue",
-            Textured::Icons => "create:block/special/gui_icons",
+            Textured::Checkered => "create:special/checkerboard",
+            Textured::Glue => "create:special/glue",
+            Textured::Icons => "create:gui/icons",
             Textured::LinkGlow => "create:block/link_details",
             Textured::SignalGlow | Textured::SignalCube => "create:block/signal_glow",
             Textured::SignalGlow2 => "create:block/signal_glow_2",
@@ -74,7 +74,7 @@ impl Textured {
     }
 }
 
-/// The sprite count in Create's `steam_jet` particle, aliased by the registry's blocks atlas.
+/// The sprite count in Create's `steam_jet` particle, which the registry's block atlas stitches.
 pub const STEAM_JET_FRAMES: usize = 23;
 
 thread_local! {
@@ -118,7 +118,7 @@ pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
         );
     }
     for frame in 0..STEAM_JET_FRAMES {
-        let sprite = Identifier::parse(&format!("create:block/special/steam_jet_{frame}"))
+        let sprite = Identifier::parse(&format!("create:particle/steam_jet_{frame}"))
             .expect("steam jet sprite id");
         event.register(
             RenderPipeline::new(

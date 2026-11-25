@@ -299,11 +299,11 @@ fn still_sprite(fluid: Fluid) -> &'static str {
     match fluid {
         Fluid::Water => "block/water_still",
         Fluid::Lava => "block/lava_still",
-        Fluid::Honey => "create:block/fluid/honey_still",
-        Fluid::Chocolate => "create:block/fluid/chocolate_still",
-        Fluid::Milk => "create:block/fluid/milk_still",
-        Fluid::Tea => "create:block/fluid/tea_still",
-        Fluid::Potion(_) => "create:block/fluid/potion_still",
+        Fluid::Honey => "create:fluid/honey_still",
+        Fluid::Chocolate => "create:fluid/chocolate_still",
+        Fluid::Milk => "create:fluid/milk_still",
+        Fluid::Tea => "create:fluid/tea_still",
+        Fluid::Potion(_) => "create:fluid/potion_still",
     }
 }
 

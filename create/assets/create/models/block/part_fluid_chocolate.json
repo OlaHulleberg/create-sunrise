@@ -1,7 +1,7 @@
 {
   "textures": {
-    "fluid": "create:block/fluid/chocolate_still",
-    "particle": "create:block/fluid/chocolate_still"
+    "fluid": "create:fluid/chocolate_still",
+    "particle": "create:fluid/chocolate_still"
   },
   "elements": [
     {

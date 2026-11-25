@@ -382,24 +382,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         } else {
             put(path, bytes)?;
             copied += 1;
-            // Fluid textures go on the block atlas too (Create's `FluidRenderer` reads fluid
-            // sprites from the block atlas; vanilla's atlas reads `textures/block/`): the
-            // tanks' fluid parts use them.
-            if let Some(rest) = path.strip_prefix("assets/create/textures/fluid/") {
-                put(&format!("assets/create/textures/block/fluid/{rest}"), bytes)?;
-            }
-            // Create's special textures (`AllSpecialTextures`: the outliner's checkered and glue
-            // faces) on the block atlas too, where a world pipeline samples them.
-            if let Some(rest) = path.strip_prefix("assets/create/textures/special/") {
-                put(
-                    &format!("assets/create/textures/block/special/{rest}"),
-                    bytes,
-                )?;
-            }
-            // The icon atlas (`AllIcons`), for the value boxes' frames and icons in the world.
-            if path == "assets/create/textures/gui/icons.png" {
-                put("assets/create/textures/block/special/gui_icons.png", bytes)?;
-            }
         }
     }
     // Tinted copies of the models the glue colours as Create does (`SuperByteBuffer.color`): a
