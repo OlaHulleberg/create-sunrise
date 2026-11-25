@@ -1,6 +1,6 @@
 # API gaps
 
-What the port is missing as of 2026-11-25, at the Sunrise Dev build `bdad86d2d3` in `create/sunrise-mod.toml`.
+What the port is missing as of 2026-11-25, at the interim Sunrise Dev build `6a02076` (a test build with no stable mod API, not yet run in game) in `create/sunrise-mod.toml`.
 Each row is an operation the pinned SDK does not offer and the port cannot write itself, with its upstream issue or PR where one exists. APIs the pin already has but the port has not adopted are port work and not listed. The port uses no `[[native.mixin]]` (`docs/architecture.md`), so vanilla behaviour only a mixin could change is listed as a gap. Better APIs wait until after parity. Since `94256510f7`, `Compound` keys iterate in Java's HashMap order (`compound-traversal`): output that relies on sorted keys sorts them itself.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 
@@ -47,7 +47,7 @@ Further general mod-API gaps found by a parity audit are tracked in sunrise-org/
 | Draws of a block by properties for blocks that are not Create's | `draw_block` resolves Create's own blocks and partials from a table built when a world opens. |
 | Building a `TagKey` or a block-entity data view in tests | The copycat test `a_copycat_panel_accepts_iron_bars_but_not_create_window_panes` was removed: the fake host cannot supply tags. Structure-carried block-entity copies use the port's own `EntityData` wrapper. |
 
-## Tags that name things the port does not declare (Dev `bdad86d`)
+## Tags that name things the port does not declare (Dev `6a02076`)
 
 The jar's tags are loaded as they are, so three of them log a missing member at every start. None of them changes play.
 

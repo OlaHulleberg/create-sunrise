@@ -5,9 +5,9 @@
 //!
 //! The placement two above is `BlockItem.place` with the click moved there
 //! (`AssemblyOperatorUseContext`: the top face of that spot): the state Create gives the block
-//! there (`logistics::placement::placed_state`), the spot free of entities, the placement told
-//! to the subsystems (`entity_place`: the placer's ownership, the symmetry wand), the place
-//! sound, one used up outside creative.
+//! there (`logistics::placement::placed_state`), the spot free of entities, the placement's
+//! `entity_place` (the placer's ownership, the symmetry wand) coming from `place_block`, the
+//! place sound, one used up outside creative.
 
 use super::super::items::{creative, obstructed, sneaking};
 use super::super::server::ServerLevel;
@@ -18,7 +18,7 @@ use create_engine::belt::Slope;
 use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockState, ClientHost, Flow, HostBlockStates, HostSide, InteractionResult, ItemPart,
+    BlockFace, BlockState, ClientHost, HostBlockStates, HostSide, InteractionResult, ItemPart,
     Registrar, ServerHost, UseOnEvent,
 };
 
@@ -153,22 +153,11 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
     if obstructed(&lv, state, up) {
         return Some(InteractionResult::Fail);
     }
-    // `BlockItem.placeBlock`, heard by the subsystems as the game's placement is.
-    lv.block_state([up[0], up[1] - 1, up[2]])?;
-    let mut placed = crate::glue::subsystem::Placed {
-        placer: Some(player.entity()),
-        pos: mod_api::BlockPos::new(up[0], up[1], up[2]),
-        state,
-        cancelled: false,
-    };
-    for s in super::super::SUBSYSTEMS {
-        if let Flow::Cancel = s.entity_place(&mut *lv.host, &mut placed) {
-            return Some(InteractionResult::Fail);
-        }
-    }
+    // `BlockItem.placeBlock`; `place_block` tells every `entity_place` listener, a veto comes
+    // back as `Canceled`.
     let level = lv.level;
     if player
-        .place_block(&mut *lv.host, level, up, state, true)
+        .place_block(&mut *lv.host, level, up, state, BlockFace::Up, true)
         .is_err()
     {
         return Some(InteractionResult::Fail);
