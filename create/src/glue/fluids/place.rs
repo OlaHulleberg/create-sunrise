@@ -203,7 +203,8 @@ impl BlockPart for Placement {
                 let facing = create_engine::hose::placement(shaft, joins, horizontal);
                 set(level, state, &[("facing", dir_name(facing))])
             }
-            // WhistleBlock.getStateForPlacement: on the tank it is attached to, or not at all.
+            // WhistleBlock.getStateForPlacement: on the tank it is attached to, or not at all;
+            // `powered` from `hasNeighborSignal`.
             Block::SteamWhistle => {
                 let (wall, facing) = create_engine::whistle::placement(clicked, horizontal);
                 let tank = offset(pos, create_engine::whistle::attached(wall, facing));
@@ -213,10 +214,15 @@ impl BlockPart for Placement {
                 if !on_tank {
                     return Some(None);
                 }
+                let powered = level.has_neighbor_signal(pos).unwrap_or_default();
                 set(
                     level,
                     state,
-                    &[("wall", flag(wall)), ("facing", dir_name(facing))],
+                    &[
+                        ("wall", flag(wall)),
+                        ("facing", dir_name(facing)),
+                        ("powered", flag(powered)),
+                    ],
                 )
             }
             // SteamEngineBlock: on the tank nearest the view, or not at all (`canSurvive`).
