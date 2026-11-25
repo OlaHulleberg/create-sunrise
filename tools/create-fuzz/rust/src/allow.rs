@@ -55,6 +55,30 @@ pub fn trig_state(java: &str, port: &str, measured: Option<&MeasuredTrigState>) 
     })
 }
 
+/// Whether two saved network sizes agree. They always do: the field is left out of the comparison.
+///
+/// `KineticBlockEntity.networkSize` (saved as `Size`, `KineticBlockEntity.java:226`) is the member
+/// count at the entity's last `updateFromNetwork`: its `KineticNetwork.add` (:58-66), or a `sync`
+/// of its network. `KineticNetwork.remove` (:92-95) makes whichever member its `HashMap` yields
+/// first `networkDirty`; only that member's `KineticBlockEntity.tick` (:120-124) runs
+/// `updateNetwork`, which syncs the others only when stress or capacity changed (:123-131). Once
+/// a member has left a network that stays, which sizes the others save is not specified.
+///
+/// Measured on Java 6.0.11 (`b62e837`), the case of `persistence/network-size-case.json` (seed
+/// 44387: two belts joined, then split at tick 114), each run alone in the same slot: the motor at
+/// -1,8,0 and segments 0,8,0 and 0,8,1 saved 3, 3, 3 in 14 of 20 runs and 2, 2, 3 in 6, the
+/// network having 3 members. The port picks the same way: `TorquePropagator::remove` hands the
+/// sync to `members.iter().next()` of a `HashMap` seeded per process (`kinetics/networks.rs`), and
+/// 12 runs of the port gave 2, 2, 3 eight times and 3, 3, 3 four times.
+///
+/// Not a port bug: Create's code does not define the value, and no pick of the port's is Java's
+/// (identity hashes). A member can leave and rejoin a network within one tick, which no snapshot
+/// shows, so the comparison cannot tell where a saved size is still specified, and leaves the
+/// field out. The live `networks.sizes` (`KineticNetwork.getSize`) are compared.
+pub fn saved_network_size(_java: u32, _port: u32) -> bool {
+    true
+}
+
 #[cfg(test)]
 mod measured_tests {
     #[test]
@@ -152,5 +176,57 @@ mod measured_tests {
             .sizes
             .insert("2,8,0".into(), 99);
         assert!(crate::compare::diff(&j, &snap).contains(&"network sizes differ".into()));
+    }
+    #[test]
+    fn saved_network_size_is_not_compared() {
+        let sc = serde_json::from_str(include_str!("persistence/network-size-case.json")).unwrap();
+        let snap = crate::engine::run(&sc);
+        let motor = "-1,8,0";
+        assert_eq!(
+            snap.networks.as_ref().unwrap().partitions,
+            vec![
+                ["-1,8,0", "0,8,0", "0,8,1"].map(String::from).to_vec(),
+                std::iter::once("-1,8,9".to_owned())
+                    .chain((2..=9).map(|z| format!("0,8,{z}")))
+                    .collect(),
+            ]
+        );
+        assert!(snap.blocks[motor].saved.as_ref().unwrap().network.is_some());
+        let mut other = snap.clone();
+        for block in other.blocks.values_mut().chain(
+            other
+                .checkpoints
+                .values_mut()
+                .flat_map(|c| c.blocks.values_mut()),
+        ) {
+            if let Some(network) = block.saved.as_mut().and_then(|s| s.network.as_mut()) {
+                network.size += 1;
+            }
+        }
+        assert!(crate::compare::diff(&other, &snap).is_empty());
+        other
+            .blocks
+            .get_mut(motor)
+            .unwrap()
+            .saved
+            .as_mut()
+            .unwrap()
+            .network
+            .as_mut()
+            .unwrap()
+            .capacity *= 2.;
+        assert!(
+            crate::compare::diff(&other, &snap)
+                .iter()
+                .any(|d| d.contains("saved kinetic data"))
+        );
+        other = snap.clone();
+        other
+            .networks
+            .as_mut()
+            .unwrap()
+            .sizes
+            .insert(motor.into(), 99);
+        assert!(crate::compare::diff(&other, &snap).contains(&"network sizes differ".into()));
     }
 }

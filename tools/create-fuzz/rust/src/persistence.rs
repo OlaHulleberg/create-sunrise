@@ -49,7 +49,7 @@ pub fn equal(a: &Option<Saved>, b: &Option<Saved>) -> bool {
                 && match (&a.network, &b.network) {
                     (None, None) => true,
                     (Some(a), Some(b)) => {
-                        a.size == b.size
+                        crate::allow::saved_network_size(a.size, b.size)
                             && close(a.stress, b.stress)
                             && close(a.capacity, b.capacity)
                             && close(a.added_stress, b.added_stress)
@@ -119,7 +119,10 @@ mod tests {
         let a = Some(Saved::from(saved(1)));
         let mut b = Some(Saved::from(saved(9999)));
         assert!(equal(&a, &b));
+        // `allow::saved_network_size`: Create's own value is unspecified.
         b.as_mut().unwrap().network.as_mut().unwrap().size = 3;
+        assert!(equal(&a, &b));
+        b.as_mut().unwrap().network.as_mut().unwrap().capacity = 513.;
         assert!(!equal(&a, &b));
         assert!(!equal(&a, &None));
     }

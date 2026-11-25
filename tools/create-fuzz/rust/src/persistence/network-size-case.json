@@ -1,0 +1,376 @@
+{
+  "version": 3,
+  "seed": 44387,
+  "checkpoints": [
+    35,
+    36,
+    37,
+    38,
+    39,
+    40,
+    50,
+    51,
+    53,
+    62,
+    63,
+    65,
+    74,
+    75,
+    76,
+    79,
+    94,
+    99,
+    100,
+    102,
+    114,
+    115,
+    117,
+    199
+  ],
+  "ticks": 200,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        6
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        9
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        10
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        9
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 16,
+      "pos": [
+        0,
+        8,
+        6
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 22,
+      "pos": [
+        0,
+        8,
+        10
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 28,
+      "pos": [
+        0,
+        8,
+        9
+      ]
+    },
+    {
+      "action": {
+        "kind": "game_mode",
+        "creative": true
+      },
+      "tick": 30,
+      "pos": [
+        0,
+        8,
+        0
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:iron_ingot",
+            "count": 11
+          }
+        }
+      },
+      "tick": 32,
+      "pos": [
+        0,
+        8,
+        6
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 2
+          }
+        }
+      },
+      "tick": 34,
+      "pos": [
+        0,
+        8,
+        5
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:gold_ingot",
+            "count": 7
+          }
+        }
+      },
+      "tick": 38,
+      "pos": [
+        0,
+        8,
+        9
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 15
+          }
+        }
+      },
+      "tick": 40,
+      "pos": [
+        0,
+        8,
+        10
+      ]
+    },
+    {
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "item": "minecraft:diamond",
+            "count": 2
+          }
+        }
+      },
+      "tick": 42,
+      "pos": [
+        0,
+        8,
+        10
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.04999999999999999
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 50,
+      "pos": [
+        0,
+        8,
+        9
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.04999999999999999
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 62,
+      "pos": [
+        0,
+        8,
+        8
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:belt_connector",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.04999999999999999
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 74,
+      "pos": [
+        0,
+        8,
+        7
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.95
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 99,
+      "pos": [
+        0,
+        8,
+        10
+      ]
+    },
+    {
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.2
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      },
+      "tick": 114,
+      "pos": [
+        0,
+        8,
+        2
+      ]
+    }
+  ]
+}
