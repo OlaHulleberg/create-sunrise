@@ -29,7 +29,8 @@ use create_engine::schematic::{Mirror, Rotation, SchematicData};
 use mod_api::{
     ClientHost, DrawContext, Flow, GameMode, Hand, InputKeyEvent, InteractionAttempt,
     InteractionKey, InteractionKeyMappingTriggeredEvent, ItemStack, KeyAction, MouseScrollingEvent,
-    PipelineQuad, SubmitCustomGeometryEvent, WorldDepth, WorldQuad,
+    PipelineQuad, PrepareRenderBuffersEvent, RenderLevelStage, SubmitCustomGeometryEvent,
+    WorldDepth, WorldQuad, WorldRenderView,
 };
 use std::cell::RefCell;
 
@@ -894,22 +895,11 @@ fn contains(min: [f64; 3], max: [f64; 3], p: [f64; 3]) -> bool {
     (0..3).all(|i| p[i] >= min[i] && p[i] < max[i])
 }
 
-/// `SchematicHandler.render`: the deployed schematic's blocks, and the tool's own drawing, the
-/// deployed schematic's outline and tool guides.
-pub(super) fn submit_custom_geometry(
-    host: &dyn ClientHost,
-    event: &mut SubmitCustomGeometryEvent<'_>,
-) {
-    HANDLER.with_borrow_mut(|h| {
-        if !h.active || !h.deployed {
-            return;
-        }
-        if let Some(preview) = h.preview.as_mut() {
-            preview.render(host, event, &h.transformation);
-        }
-    });
-    let pt = event.view.partial_tick;
-    let eye = event.view.camera_position();
+/// `SchematicHandler.render`: the tool's own drawing, the deployed schematic's outline and tool
+/// guides, for this view; none when no tool is active.
+fn geometry(view: &WorldRenderView<'_>) -> Option<Geometry> {
+    let pt = view.partial_tick;
+    let eye = view.camera_position();
     let mut g = Geometry::default();
     let drew = HANDLER.with_borrow(|h| {
         if !h.active {
@@ -1002,10 +992,26 @@ pub(super) fn submit_custom_geometry(
         }
         true
     });
-    if !drew {
+    drew.then_some(g)
+}
+
+/// `SchematicHandler.render`: the deployed schematic's blocks, and the checkered faces of the
+/// tool's drawing.
+pub(super) fn submit_custom_geometry(
+    host: &dyn ClientHost,
+    event: &mut SubmitCustomGeometryEvent<'_>,
+) {
+    HANDLER.with_borrow_mut(|h| {
+        if !h.active || !h.deployed {
+            return;
+        }
+        if let Some(preview) = h.preview.as_mut() {
+            preview.render(host, event, &h.transformation);
+        }
+    });
+    let Some(g) = geometry(event.view) else {
         return;
-    }
-    let _ = event.draw.quads(&g.solid);
+    };
     if g.checkered.is_empty() {
         return;
     }
@@ -1019,6 +1025,22 @@ pub(super) fn submit_custom_geometry(
         if let Err(e) = event.draw.pipeline_quads(p, &quads) {
             crate::create_log!("[create] the schematic's checkered faces were refused: {e:?}");
         }
+    }
+}
+
+/// The tool's solid faces, prepared for `AfterTranslucentBlocks`.
+pub(super) fn prepare_render_buffers(event: &mut PrepareRenderBuffersEvent<'_>) {
+    let Some(g) = geometry(event.view) else {
+        return;
+    };
+    if g.solid.is_empty() {
+        return;
+    }
+    if let Ok(batch) = event
+        .context
+        .quads(RenderLevelStage::AfterTranslucentBlocks, &g.solid)
+    {
+        super::PREPARED.with_borrow_mut(|p| p.push(batch));
     }
 }
 
