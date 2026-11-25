@@ -163,6 +163,15 @@ impl Subsystem for Interaction {
         placement::draw_ghost(host, event);
     }
 
+    /// The highlighted value box's white lines.
+    fn prepare_render_buffers(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+        hud::prepare_render_buffers(host, event);
+    }
+
     fn register_commands(&self, _host: &mut dyn ServerHost, commands: &mut Vec<mod_api::Command>) {
         commands::register(commands);
     }

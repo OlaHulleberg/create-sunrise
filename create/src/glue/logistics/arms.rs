@@ -278,12 +278,12 @@ impl Subsystem for Arms {
         super::client::arms_message(host, channel, data)
     }
 
-    fn submit_custom_geometry(
+    fn prepare_render_buffers(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
     ) {
-        super::client::draw_arm_points(host, event);
+        super::client::prepare_arm_points(host, event);
     }
 
     fn client_tick(&self, host: &mut dyn mod_api::ClientHost) {

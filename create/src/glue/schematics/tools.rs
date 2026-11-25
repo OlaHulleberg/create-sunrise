@@ -1036,7 +1036,7 @@ pub(super) fn prepare_render_buffers(event: &mut PrepareRenderBuffersEvent<'_>) 
     if g.solid.is_empty() {
         return;
     }
-    super::prepare_quads(event, &g.solid);
+    crate::glue::subsystem::prepare_quads(event, &g.solid);
 }
 
 // ---------------------------------------------------------------------------------------------

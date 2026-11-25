@@ -382,6 +382,14 @@ impl Subsystem for Contraptions {
         superglue::render(host, event);
     }
 
+    fn prepare_render_buffers(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+        superglue::prepare_render_buffers(host, event);
+    }
+
     /// A right click with super glue in hand picks a corner, not the block hit.
     fn right_click_block(
         &self,
