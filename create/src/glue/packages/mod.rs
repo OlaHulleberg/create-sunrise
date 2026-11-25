@@ -20,10 +20,6 @@
 //! packages through block entity slots mirroring them (`automation`).
 //!
 //! Left out, for want of API:
-//! - A frogport is not told when the inventory below it changes (`contents_changed` is a Part
-//!   of the changed block only, with no hook for every container's `setChanged`): a frogport
-//!   with an inventory below looks at it on Create's own lazy tick, every 11 ticks, instead of
-//!   at once.
 //! - A dropped package is an item, not Create's package entity (`PackageEntity`, API_GAPS.md).
 
 mod automation;
@@ -1556,7 +1552,8 @@ fn redstone_mode(lv: &ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> bool {
 /// into the inventory below (`tryPushingToAdjacentInventories`), then a package not for it,
 /// its own or from below, is sent onto its chain (`tryPullingFromOwnAndAdjacentInventories`).
 /// It looks again at its next lazy tick (every 11 ticks) while something waits, and while an
-/// inventory is below it (that inventory's changes are not told: Create's lazy tick).
+/// inventory is below it (Create's `SmartBlockEntity` lazy tick), and at once when the
+/// inventory below changes: it watches it (`watch_contents`, told by `contents_changed`).
 fn frogport(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
     let Some(animating) = with(dim, |pk| pk.ports.get(&pos).map(|p| p.is_animating())) else {
         return;
@@ -1566,6 +1563,13 @@ fn frogport(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
     }
     let below = [pos[0], pos[1] - 1, pos[2]];
     let below_is_frog = with(dim, |pk| pk.ports.get(&below).is_some_and(|p| p.frog));
+    if let Some(be) = lv.host.block_entity(lv.level, pos) {
+        let _ = be.watch_contents(
+            &mut *lv.host,
+            mod_api::BlockPos::new(below[0], below[1], below[2]),
+            !below_is_frog,
+        );
+    }
     let inv = if below_is_frog {
         None
     } else {
@@ -1838,6 +1842,7 @@ struct PackageBlock;
 #[mod_api::sunrise_part]
 impl BlockPart for PackageBlock {
     /// A packager's slots changed: automation took its box or put a package in (`automation`).
+    /// A frogport's watched inventory below it changed: the frogport looks at it at once.
     fn contents_changed(
         &self,
         host: &mut dyn ServerHost,
@@ -1855,6 +1860,15 @@ impl BlockPart for PackageBlock {
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
             return;
         };
+        if let Some(obs) = event.observer {
+            let Some(frog_pos) = obs.position(&*lv.host) else {
+                return;
+            };
+            if with(lv.dim, |pk| pk.ports.get(&frog_pos).is_some_and(|p| p.frog)) {
+                with(lv.dim, |pk| pk.wake(frog_pos));
+            }
+            return;
+        }
         let pos = [event.pos.x, event.pos.y, event.pos.z];
         let (packager, port) = with(lv.dim, |pk| {
             (pk.packagers.contains_key(&pos), pk.ports.contains_key(&pos))
