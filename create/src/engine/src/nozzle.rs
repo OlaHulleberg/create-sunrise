@@ -32,7 +32,7 @@ pub struct Nozzle {
     pub facing: Dir,
     pub range: f32,
     pub pushing: bool,
-    pub lazy: i32,
+    pub lazy: crate::block_entity::SmartBlockEntity,
     pub entities: Vec<Target>,
 }
 
@@ -42,19 +42,14 @@ impl Nozzle {
             facing,
             range: 0.0,
             pushing: false,
-            lazy: LAZY_RATE,
+            lazy: crate::block_entity::SmartBlockEntity::new(LAZY_RATE),
             entities: Vec::new(),
         }
     }
 
-    /// `SmartBlockEntity.tick`'s countdown: whether the lazy tick runs this tick.
+    /// `SmartBlockEntity.tick`: whether the lazy tick runs this tick.
     pub fn lazy_due(&mut self) -> bool {
-        let due = self.lazy <= 0;
-        self.lazy -= 1;
-        if due {
-            self.lazy = LAZY_RATE;
-        }
-        due
+        self.lazy.tick()
     }
 
     /// `lazyTick` for one entity in its search box at `at` (sneaking ones are skipped): out of
@@ -267,12 +262,12 @@ mod tests {
     }
 
     #[test]
-    fn the_search_box_is_half_the_range_and_the_lazy_tick_runs_every_sixth_tick() {
+    fn the_search_box_is_half_the_range_and_the_lazy_tick_runs_at_initialize_then_every_sixth_tick()
+    {
         assert_eq!(search_box([0, 0, 0], 20.0), ([-9.5; 3], [10.5; 3]));
         let mut n = Nozzle::new(Dir::Up);
-        let runs: Vec<bool> = (0..12).map(|_| n.lazy_due()).collect();
-        assert_eq!(runs.iter().filter(|r| **r).count(), 2);
-        assert!(runs[5] && runs[11]);
+        let runs: Vec<i32> = (1..=18).filter(|_| n.lazy_due()).collect();
+        assert_eq!(runs, [1, 6, 12, 18]);
     }
 
     #[test]

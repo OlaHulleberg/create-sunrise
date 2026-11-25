@@ -6,6 +6,8 @@
 pub struct Breaker {
     pub ticks_until: i32,
     pub progress: i32,
+    /// `SmartBlockEntity`'s lazy tick (the default rate, 10).
+    pub lazy: crate::block_entity::SmartBlockEntity,
 }
 
 impl Default for Breaker {
@@ -13,6 +15,7 @@ impl Default for Breaker {
         Breaker {
             ticks_until: -1,
             progress: 0,
+            lazy: crate::block_entity::SmartBlockEntity::default(),
         }
     }
 }
@@ -30,7 +33,7 @@ pub enum Step {
 }
 
 impl Breaker {
-    /// `lazyTick` (every 10 ticks): a breaker that finished looks again.
+    /// `lazyTick` (`SmartBlockEntity`'s, rate 10): a breaker that finished looks again.
     pub fn lazy(&mut self) {
         if self.ticks_until == -1 {
             self.ticks_until = 1;
@@ -100,6 +103,13 @@ mod tests {
         // A mob standing on an upright saw (12 px tall) is inside; one on a full block above is not.
         assert!(inside([0, 0, 0], [0.2, 0.75, 0.2], [0.8, 2.5, 0.8]));
         assert!(!inside([0, 0, 0], [0.2, 0.95, 0.2], [0.8, 2.5, 0.8]));
+    }
+
+    #[test]
+    fn the_lazy_tick_runs_at_initialize_then_every_eleven_ticks() {
+        let mut b = Breaker::default();
+        let runs: Vec<i32> = (1..=33).filter(|_| b.lazy.tick()).collect();
+        assert_eq!(runs, [1, 11, 22, 33]);
     }
 
     #[test]
