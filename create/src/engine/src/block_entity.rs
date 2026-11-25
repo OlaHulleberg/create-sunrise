@@ -20,6 +20,16 @@ impl SmartBlockEntity {
         }
     }
 
+    /// `BlockEntityBehaviour`'s lazy tick: unlike `SmartBlockEntity`, a behaviour has no
+    /// initialize-time lazy tick, so it first fires after `rate + 1` ticks.
+    pub fn behaviour(rate: i32) -> Self {
+        Self {
+            initialized: true,
+            lazy_tick_rate: rate,
+            lazy_tick_counter: rate,
+        }
+    }
+
     /// `SmartBlockEntity.tick`: whether `lazyTick` runs this tick.
     pub fn tick(&mut self) -> bool {
         let mut lazy = false;
