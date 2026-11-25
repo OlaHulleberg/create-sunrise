@@ -53,9 +53,9 @@ Every subsystem of Create is ported to the mod API. Highlights:
 - **Schematics.** Schematic tools, the schematic table and schematicannon.
 - **Advancements.** Create's advancement tree, awarded where Create awards them.
 
-Some things need API that the game doesn't have yet, so they are left out for now. Examples: standing on or
-bumping into moving contraptions and trains, Create's own enchantments at enchanting tables, and hoppers
-reaching into belts and tanks. The full list, with what would fix each one: **[API_GAPS.md](API_GAPS.md)**.
+Some things need API that the game doesn't have yet, so they are left out for now. Examples: turning
+contraptions pushing what they move into, potato cannon shots hitting other shots, and culling between different
+glass kinds. The full list: **[API_GAPS.md](API_GAPS.md)**.
 
 ## Install
 
@@ -192,7 +192,7 @@ docs/                   Architecture and README media
 ## Documentation
 
 - [docs/architecture.md](docs/architecture.md): how the mod is put together, and how to add to it.
-- [API_GAPS.md](API_GAPS.md): what the mod SDK can't do yet, and what the mod leaves out because of it.
+- [API_GAPS.md](API_GAPS.md): what the port still needs from Sunrise's mod API.
 - [VALIDATION.md](VALIDATION.md): what was checked, on which build, and what was not.
 - [tools/create-fuzz](tools/create-fuzz/README.md): how the engine is compared with Create's Java.
 
