@@ -38,12 +38,14 @@ impl Mode {
     }
 }
 
-/// The press's state: `running`, `runningTicks`, `mode`.
+/// The press's state: `running`, `runningTicks`, `mode`, `finished`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Press {
     pub running: bool,
     pub ticks: i32,
     pub mode: Mode,
+    /// `PressingBehaviour.finished`: the last cycle ran to its end; saved, not sent to clients.
+    pub finished: bool,
 }
 
 /// What a tick of a running press did.
@@ -82,6 +84,7 @@ impl Press {
             running: true,
             ticks: 0,
             mode,
+            finished: false,
         };
     }
 
@@ -92,6 +95,7 @@ impl Press {
         }
         let down = self.ticks == CYCLE / 2 && speed != 0.0;
         if self.ticks > CYCLE {
+            self.finished = true;
             self.running = false;
             return Tick::Done;
         }
@@ -189,6 +193,7 @@ pub fn decode(data: &[u8]) -> Vec<([i32; 3], Press)> {
                     running: r[12] != 0,
                     ticks: i(&r[13..17]),
                     mode: Mode::from_index(r[17]),
+                    finished: false,
                 },
             )
         })
@@ -265,6 +270,7 @@ mod tests {
             running: true,
             ticks: CYCLE / 2 - 4,
             mode: Mode::Belt,
+            finished: false,
         };
         assert_eq!(depot_step(&mut held, &press, 32.0, false), Step::Wait);
         assert!(held.locked);
@@ -277,6 +283,21 @@ mod tests {
     }
 
     #[test]
+    fn finished_is_set_when_the_cycle_ends_and_cleared_on_start() {
+        let mut press = Press::default();
+        press.start(Mode::Belt);
+        assert!(!press.finished);
+        let mut last = Tick::Moving;
+        while press.running {
+            last = press.tick(512.0);
+        }
+        assert_eq!(last, Tick::Done);
+        assert!(press.finished);
+        press.start(Mode::World);
+        assert!(!press.finished);
+    }
+
+    #[test]
     fn cycles_round_trip() {
         let all = vec![(
             [-3, 64, 9],
@@ -284,6 +305,7 @@ mod tests {
                 running: true,
                 ticks: 120,
                 mode: Mode::Belt,
+                finished: false,
             },
         )];
         assert_eq!(decode(&encode(&all)[0]), all);

@@ -731,3 +731,59 @@ fn a_broken_millstone_spills_its_slots_as_the_game_spills_a_container() {
         ))
     );
 }
+
+#[test]
+fn a_press_mid_cycle_over_a_depot_survives_a_reload_and_finishes() {
+    // glue/processing/persist.rs: `PressingBehaviour.write` saves `Running`, `Mode`, `Finished`
+    // and `Ticks`; the reloaded press carries on its cycle and presses the stack.
+    let sc: crate::scenario::Scenario = serde_json::from_value(serde_json::json!({"version":3,
+        "ticks":200,"blocks":[
+            {"pos":[0,8,0],"state":"create:depot[waterlogged=false]"},
+            {"pos":[0,10,0],"state":"create:mechanical_press[facing=north]"},
+            {"motor":32,"pos":[0,10,-1],"state":"create:creative_motor[facing=south]"}]}))
+    .unwrap();
+    let mut r = super::Run::new(&sc);
+    for (t, b) in sc.blocks.iter().enumerate() {
+        r.place(b);
+        if t > 0 {
+            r.set_motor(&sc.blocks[t - 1]);
+        }
+        r.tick();
+    }
+    r.set_motor(&sc.blocks[2]);
+    let depot = [0, 8, 0];
+    let press = [0, 10, 0];
+    for _ in 0..30 {
+        r.tick();
+    }
+    r.item_input(
+        depot,
+        &crate::transport::Input::DropOn {
+            stack: crate::transport::Stack {
+                item: "minecraft:iron_ingot".into(),
+                count: 1,
+            },
+        },
+    );
+    let mut guard = 0;
+    while !(r.w.dims[0].presses[&press].running && r.w.dims[0].presses[&press].ticks > 40) {
+        r.tick();
+        guard += 1;
+        assert!(guard < 200, "the press never started");
+    }
+    let before = r.w.dims[0].presses[&press];
+    assert!(before.running && !before.finished && before.ticks < create_engine::press::CYCLE / 2);
+    r.reload();
+    let after = r.w.dims[0].presses[&press];
+    assert_eq!(
+        (after.running, after.mode, after.ticks, after.finished),
+        (true, before.mode, before.ticks, false)
+    );
+    guard = 0;
+    while r.w.dims[0].presses[&press].running {
+        r.tick();
+        guard += 1;
+        assert!(guard < 200, "the press never finished");
+    }
+    assert!(r.w.dims[0].presses[&press].finished);
+}
