@@ -244,6 +244,9 @@ fn compile(create: &Path, repo: &Path) {
         &states_dir.join("blaze_burner.json"),
         &pretty(&blocks::blaze_burner_states()),
     );
+    for (name, states) in blocks::sliding_door_states() {
+        write(&states_dir.join(format!("{name}.json")), &pretty(&states));
+    }
     let models_dir = out.join("assets/create/models/block");
     for (name, model) in blocks::fluid_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));

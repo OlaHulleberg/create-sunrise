@@ -2425,6 +2425,55 @@ pub fn flame_scroll_model() -> Value {
     })
 }
 
+/// The sliding doors whose block entity draws them while they are not `visible`.
+const SLIDING_DOORS: [&str; 5] = [
+    "andesite_door",
+    "brass_door",
+    "copper_door",
+    "train_door",
+    "framed_glass_door",
+];
+
+/// The sliding doors' blockstates, as `BuilderTransformers.slidingDoor` declares them (`doorBlock`
+/// with the door's `block_bottom` model for every lower half and `block_top` for every upper one,
+/// turned as vanilla turns a door: by its facing, and a quarter more when open, toward its hinge),
+/// without the states `SlidingDoorBlock.getRenderShape` hides (`visible=false`: its block entity
+/// draws it sliding).
+pub fn sliding_door_states() -> Vec<(&'static str, Value)> {
+    SLIDING_DOORS
+        .iter()
+        .map(|name| (*name, door_cases(name)))
+        .collect()
+}
+
+fn door_cases(name: &str) -> Value {
+    let mut cases = Vec::new();
+    for (facing, turn) in [("east", 0), ("south", 90), ("west", 180), ("north", 270)] {
+        for (half, part) in [("lower", "bottom"), ("upper", "top")] {
+            for (hinge, opening) in [("left", 90), ("right", 270)] {
+                for open in [false, true] {
+                    let y = (turn + if open { opening } else { 0 }) % 360;
+                    let mut model = json!({ "model": format!("create:block/{name}/block_{part}") });
+                    if y != 0 {
+                        model["y"] = json!(y);
+                    }
+                    cases.push(json!({
+                        "when": {
+                            "facing": facing,
+                            "half": half,
+                            "hinge": hinge,
+                            "open": open.to_string(),
+                            "visible": "true",
+                        },
+                        "apply": model,
+                    }));
+                }
+            }
+        }
+    }
+    json!({ "multipart": cases })
+}
+
 /// The blaze burner's blockstate: Create's, the cage alone in every state. The blaze, its rods
 /// and flame are drawn by the block entity (`BlazeBurnerRenderer`, the processing glue's client).
 pub fn blaze_burner_states() -> Value {
@@ -4167,6 +4216,32 @@ pub fn fork_states(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn sliding_doors_turn_as_doors_and_hide_when_not_visible() {
+        let door = door_cases("brass_door");
+        let cases = door["multipart"].as_array().unwrap();
+        assert_eq!(cases.len(), 32);
+        assert!(cases.iter().all(|c| c["when"]["visible"] == "true"));
+        let find = |facing: &str, hinge: &str, open: &str| {
+            cases
+                .iter()
+                .find(|c| {
+                    c["when"]["facing"] == facing
+                        && c["when"]["half"] == "upper"
+                        && c["when"]["hinge"] == hinge
+                        && c["when"]["open"] == open
+                })
+                .unwrap()["apply"]
+                .clone()
+        };
+        assert_eq!(
+            find("east", "left", "false"),
+            json!({ "model": "create:block/brass_door/block_top" })
+        );
+        assert_eq!(find("north", "right", "true")["y"], json!(180));
+        assert_eq!(find("south", "right", "true").get("y"), None);
+    }
 
     fn pending_properties(doc: &Value, defaults: &Map<String, Value>) -> Vec<String> {
         let template = template_properties(doc["template"].as_str().unwrap());

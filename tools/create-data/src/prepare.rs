@@ -124,42 +124,6 @@ fn custom_rendered(name: &str) -> Option<Value> {
     }))
 }
 
-/// The sliding doors whose block entity draws them while they are not `visible`.
-const SLIDING_DOORS: [&str; 5] = [
-    "andesite_door",
-    "brass_door",
-    "copper_door",
-    "train_door",
-    "framed_glass_door",
-];
-
-/// A sliding door's blockstate (`SlidingDoorBlock.getRenderShape`: `ENTITYBLOCK_ANIMATED` while
-/// not `visible`): Create's variants as multipart cases, without those of hidden states, so a
-/// hidden door draws nothing of its own (its block entity draws it sliding).
-fn sliding_door_states(path: &str, bytes: &[u8]) -> Option<Value> {
-    let name = path
-        .strip_prefix("assets/create/blockstates/")?
-        .strip_suffix(".json")?;
-    if !SLIDING_DOORS.contains(&name) {
-        return None;
-    }
-    let doc: Value = serde_json::from_slice(bytes).ok()?;
-    let cases: Vec<Value> = doc["variants"]
-        .as_object()?
-        .iter()
-        .filter(|(key, _)| !key.split(',').any(|kv| kv == "visible=false"))
-        .map(|(key, model)| {
-            let when: serde_json::Map<String, Value> = key
-                .split(',')
-                .filter_map(|kv| kv.split_once('='))
-                .map(|(k, v)| (k.to_owned(), json!(v)))
-                .collect();
-            json!({ "when": when, "apply": model })
-        })
-        .collect();
-    Some(json!({ "multipart": cases }))
-}
-
 pub(crate) struct ItemModel {
     target: String,
     pub(crate) custom: Option<Value>,
@@ -320,13 +284,8 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
         if !kept_asset(path) || ours.contains_key(path) {
             continue;
         }
-        if let Some(door) = sliding_door_states(path, bytes) {
-            put(path, &serde_json::to_vec_pretty(&door).unwrap())?;
-            copied += 1;
-        } else {
-            put(path, bytes)?;
-            copied += 1;
-        }
+        put(path, bytes)?;
+        copied += 1;
     }
     // Connected textures, as OptiFine's: a ctm properties file per block and sheet, the tiles.
     let read = |p: &str| -> Option<Vec<u8>> {
@@ -366,20 +325,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
 mod tests {
 
     use super::*;
-
-    #[test]
-    fn hidden_sliding_doors_have_no_model() {
-        let states = json!({ "variants": {
-            "facing=north,half=lower,open=false,visible=true": { "model": "a" },
-            "facing=north,half=lower,open=true,visible=false": { "model": "a", "y": 90 }
-        }});
-        let bytes = serde_json::to_vec(&states).unwrap();
-        let door =
-            sliding_door_states("assets/create/blockstates/brass_door.json", &bytes).unwrap();
-        assert_eq!(door["multipart"].as_array().unwrap().len(), 1);
-        assert_eq!(door["multipart"][0]["when"]["visible"], "true");
-        assert!(sliding_door_states("assets/create/blockstates/oak_window.json", &bytes).is_none());
-    }
 
     #[test]
     fn keeps_only_local_asset_types() {
