@@ -3,9 +3,12 @@
 //! fields are the entities' own (`entity_data`).
 //!
 //! The game saves a chunk's attachments with it, and saves the chunk before it unloads. There
-//! is no moment just before a chunk is saved, so a column whose state changed is written into
-//! its attachment, and its block entities' fields published, at the end of the level tick that
-//! changed it and when an interaction is accepted. A column that did not change is not written.
+//! is no moment just before a chunk is saved to write an attachment in, so a column whose state
+//! changed is written into its attachment, and its block entities' fields published, at the end
+//! of the level tick that changed it and when an interaction is accepted. A column that did not
+//! change is not written. A block entity's own save (`block_entity_save_additional`) refreshes
+//! the fields that are numbers from the engine as it is then (`Subsystem::live_fields`); fields
+//! that need the item registry stay as last published.
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;

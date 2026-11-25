@@ -103,7 +103,7 @@ pub trait Subsystem: Sync {
     /// fields of `block` at `pos` in level `dim` that count down without a change of their own
     /// (a cooldown, a timer) are written over `fields` from the live state at game time `now`,
     /// as the record [`save_entities`](Self::save_entities) made may be older. Numbers only: the
-    /// save hook reaches no registry.
+    /// save hook reaches no registry, and it only reads the engine (the host is read-only).
     fn live_fields(
         &self,
         _dim: usize,
