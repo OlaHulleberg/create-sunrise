@@ -1,5 +1,6 @@
 //! Deterministic Sunrise 26.3 overlays from Create's pinned, MIT-licensed data.
 
+pub(crate) mod items;
 pub(crate) mod visuals;
 
 use serde_json::{Value, json};
@@ -602,35 +603,41 @@ pub fn generate(
         &mod_dir.join("data/create/sunrise"),
         &mut declarations,
     )?;
-    let models = crate::prepare::item_models(&declarations, |p| jar.index_for_name(p).is_some());
+    let models = items::item_models(&declarations, |p| jar.index_for_name(p).is_some());
     let mut audit = String::from(
-        "# Create registry item-definition licence audit\n\nPinned jar: Create 6.0.10 for Minecraft 1.21.1, Modrinth `UjX6dr61`. Source: `mc1.21.1-6.0.10` (`ac0c444d9828da3453ae8cc65338e8de063286fb`), MIT `src/generated` tree `a537ebce356393ce32d5fbcf209c5c447a53683f`. Create's `LICENSE.md` excludes `src/main/resources/assets/`, which is not used. Simple `minecraft:model` wrappers name only a model id, not model geometry or textures. For these wrappers the pinned jar model must be byte-identical to a Git blob in the generated MIT tree. The port's three special tool models name original parts by id. Dependent art remains a runtime reference in both cases. The remaining custom definitions, tinted models and connected texture tiles remain local to `prepare`.\n\n| Definition | Decision | Evidence or reason |\n|---|---|---|\n",
+        "# Create registry item-definition licence audit\n\nPinned jar: Create 6.0.10 for Minecraft 1.21.1, Modrinth `UjX6dr61`. Source: `mc1.21.1-6.0.10` (`ac0c444d9828da3453ae8cc65338e8de063286fb`), MIT `src/generated` tree `a537ebce356393ce32d5fbcf209c5c447a53683f`. Create's `LICENSE.md` excludes `src/main/resources/assets/`, which is not used. An item definition names models by id only, never their geometry or textures, and every model it names must be in the pinned jar, where it stays: the player's game reads it from there. The audit notes where a named model is also an MIT generated blob.\n\n| Definition | Decision | Evidence or reason |\n|---|---|---|\n",
     );
     use std::fmt::Write as _;
     for (path, model) in models {
-        let target = model.jar_path();
-        let blob = tree.get(&target);
         let (decision, reason) = if visual_assets.contains_key(&path) {
             (
                 "In",
                 "Port-authored special model; only references original part IDs".to_owned(),
             )
-        } else if model.custom.is_some() {
-            (
-                "Out",
-                "Custom rendering needs local asset preparation".to_owned(),
-            )
-        } else if jar.index_for_name(&target).is_none() {
-            ("Out", format!("No `{target}` in the pinned jar"))
-        } else if let Some(blob) = blob {
-            if git_blob(&jar_bytes(&mut jar, &target)?) == *blob {
-                output.insert(path.clone(), crate::pretty(&model.definition()));
-                ("In", format!("`{target}` matches MIT blob `{blob}`"))
-            } else {
-                ("Out", format!("`{target}` differs from MIT blob `{blob}`"))
-            }
         } else {
-            ("Out", format!("`{target}` not in the MIT generated tree"))
+            let definition = model.definition();
+            let named = items::named_models(&definition);
+            match named
+                .iter()
+                .map(|id| items::model_path(id))
+                .find(|target| jar.index_for_name(target).is_none())
+            {
+                Some(target) => ("Out", format!("No `{target}` in the pinned jar")),
+                None => {
+                    let mut reasons = Vec::new();
+                    for id in &named {
+                        let target = items::model_path(id);
+                        reasons.push(match tree.get(&target) {
+                            Some(blob) if git_blob(&jar_bytes(&mut jar, &target)?) == *blob => {
+                                format!("`{target}` matches MIT blob `{blob}`")
+                            }
+                            _ => format!("names `{target}` by id"),
+                        });
+                    }
+                    output.insert(path.clone(), crate::pretty(&definition));
+                    ("In", reasons.join("; "))
+                }
+            }
         };
         writeln!(audit, "| `{path}` | {decision} | {reason} |").unwrap();
     }

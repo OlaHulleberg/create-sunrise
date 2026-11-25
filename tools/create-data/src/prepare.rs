@@ -63,125 +63,6 @@ pub(crate) fn walk(
     Ok(())
 }
 
-/// The item models of Create's `CustomRenderedItemModelRenderer`s, as 26.3 item definitions: the
-/// item's own model with the partial models its renderer draws over it, and the cardboard
-/// sword's held model outside the GUI. The wand's bits stand still. None for an item drawn by
-/// its plain model.
-fn custom_rendered(name: &str) -> Option<Value> {
-    let model =
-        |m: &str| json!({ "type": "minecraft:model", "model": format!("create:item/{name}/{m}") });
-    let parts: &[&str] = match name {
-        // `SymmetryWandItemRenderer`: CORE, CORE_GLOW, BITS.
-        "wand_of_symmetry" => &["item", "core", "core_glow", "bits"],
-        // `ExtendoGripItemRenderer`: its arms, hand and cog posed by the mod's special model
-        // renderer (`create:extendo_grip`, `glue/equipment.rs`).
-        // The glue's `create:extendo_grip_pose` node picks one by where it is drawn and the
-        // time (its per-stack callback): at rest away from a first-person hand, else as the swing
-        // left it; the cog turned to a 1/10 of its 45° repeat; the hand pointing, punching or
-        // holding.
-        "extendo_grip" => {
-            let special = |animation: f64, cog: f64, hand: &str| {
-                json!({
-                    "type": "minecraft:special",
-                    "base": "create:item/extendo_grip",
-                    "model": {
-                        "type": "create:extendo_grip",
-                        "animation": animation,
-                        "cog": cog,
-                        "hand": hand,
-                    },
-                })
-            };
-            let mut models = Map::new();
-            for c in 0..GRIP_COG_STEPS {
-                let cog = c as f64 * 45.0 / GRIP_COG_STEPS as f64;
-                models.insert(format!("rest_{c}"), special(0.25, cog, "pointing"));
-                for a in 0..GRIP_SWING_STEPS {
-                    let animation = a as f64 / (GRIP_SWING_STEPS - 1) as f64;
-                    for hand in ["punching", "holding"] {
-                        models.insert(
-                            format!("hand_{a}_{c}_{hand}"),
-                            special(animation, cog, hand),
-                        );
-                    }
-                }
-            }
-            return Some(json!({ "type": "create:extendo_grip_pose", "models": models }));
-        }
-        "cardboard_sword" => {
-            return Some(json!({
-                "type": "minecraft:select",
-                "property": "minecraft:display_context",
-                "cases": [{ "when": "gui", "model": model("item") }],
-                "fallback": model("item_in_hand"),
-            }));
-        }
-        _ => return None,
-    };
-    Some(json!({
-        "type": "minecraft:composite",
-        "models": parts.iter().map(|part| model(part)).collect::<Vec<_>>(),
-    }))
-}
-
-pub(crate) struct ItemModel {
-    target: String,
-    pub(crate) custom: Option<Value>,
-}
-
-impl ItemModel {
-    pub(crate) fn jar_path(&self) -> String {
-        format!("assets/create/models/{}.json", self.target)
-    }
-
-    pub(crate) fn definition(&self) -> Value {
-        json!({ "model": self.custom.clone().unwrap_or_else(|| json!({ "type": "minecraft:model", "model": format!("create:{}", self.target) })) })
-    }
-}
-
-/// 26.3 looks up `assets/<namespace>/items/<id>.json`, which 1.21.1 did not use.
-/// A world fluid adds a bucket item; the hidden partial-block declarations add no items.
-pub(crate) fn item_models(
-    files: &BTreeMap<String, Vec<u8>>,
-    has_asset: impl Fn(&str) -> bool,
-) -> BTreeMap<String, ItemModel> {
-    let mut models = BTreeMap::new();
-    for path in files.keys() {
-        let block_or_item = path
-            .strip_prefix("data/create/sunrise/block/")
-            .or_else(|| path.strip_prefix("data/create/sunrise/item/"));
-        let fluid = path.strip_prefix("data/create/sunrise/fluid/");
-        let Some(name) = block_or_item
-            .or(fluid)
-            .and_then(|n| n.strip_suffix(".json"))
-        else {
-            continue;
-        };
-        if name.starts_with("part_") {
-            continue;
-        }
-        let name = if fluid.is_some() {
-            format!("{name}_bucket")
-        } else {
-            name.to_owned()
-        };
-        let kind =
-            if fluid.is_some() || has_asset(&format!("assets/create/models/item/{name}.json")) {
-                "item"
-            } else {
-                "block"
-            };
-        models.insert(
-            format!("assets/create/items/{name}.json"),
-            ItemModel {
-                target: format!("{kind}/{name}"),
-                custom: custom_rendered(&name),
-            },
-        );
-    }
-    models
-}
-
 fn kept_asset(path: &str) -> bool {
     let Some(rest) = path.strip_prefix("assets/") else {
         return false;
@@ -222,11 +103,6 @@ fn layered(sources: &[PathBuf]) -> Result<bool, String> {
     }
     Ok(hash == crate::jar::CREATE.sha512)
 }
-
-/// The extendo grip's cog angles within its 45° repeat, and its swing's steps (the glue's
-/// `GRIP_COG_STEPS`, `GRIP_SWING_STEPS`).
-const GRIP_COG_STEPS: usize = 10;
-const GRIP_SWING_STEPS: usize = 8;
 
 pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, String> {
     let layered = layered(sources)?;
@@ -276,7 +152,7 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     for (rel, bytes) in &ours {
         put(rel, bytes)?;
     }
-    let models = item_models(&ours, |path| files.contains_key(path));
+    let models = crate::registry::items::item_models(&ours, |path| files.contains_key(path));
     let model_count = models.len();
     let mut copied = 0;
     for (path, bytes) in &files {
@@ -349,6 +225,7 @@ mod tests {
 /// all of a jar asset's JSON at its own path, with keys added, counts as a copy).
 #[cfg(test)]
 mod committed_assets {
+    use crate::registry::items::custom_definition;
     use crate::registry::visuals::{SPINNING_TOOLS, spinner_definition};
     use serde_json::Value;
     use std::collections::{BTreeMap, HashSet};
@@ -389,6 +266,9 @@ mod committed_assets {
                     let Ok(doc) = serde_json::from_slice::<Value>(&bytes) else { return true };
                     if SPINNING_TOOLS.iter().any(|(item, _)| *item == name) {
                         return doc != spinner_definition(name);
+                    }
+                    if let Some(custom) = custom_definition(name) {
+                        return doc != custom;
                     }
                     return !["block", "item"].into_iter().any(|kind| {
                         doc == serde_json::json!({ "model": { "type": "minecraft:model", "model": format!("create:{kind}/{name}") } })
