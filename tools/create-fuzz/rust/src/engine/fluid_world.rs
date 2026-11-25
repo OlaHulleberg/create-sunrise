@@ -174,22 +174,35 @@ impl Run {
             self.fluid_facts
                 .insert(state.pos, (state.state.clone(), state.facts));
             let current = self.name(self.at(state.pos));
-            let (old_name, _) = parse_state(&current);
-            let (new_name, new_props) = parse_state(&state.state);
-            // Native environment may waterlog Create blocks. Their topology and block-entity
-            // behavior remain owned by the Rust engine, never imported from Java Create.
-            let next = if self.w.table.get(self.at(state.pos)).is_some() && old_name == new_name {
-                if let Some((_, water)) = new_props.iter().find(|(k, _)| k == "waterlogged") {
-                    with_prop(&current, "waterlogged", water)
-                } else {
-                    continue;
-                }
-            } else {
-                state.state
-            };
-            if next != current {
+            if let Some(next) = self.native_state(&current, &state.state)
+                && next != current
+            {
                 self.set_world_state(state.pos, &next);
             }
+        }
+    }
+    /// What a frame's cell leaves in the engine's world. Create blocks are the engine's, never
+    /// the host's to create or replace: where the engine holds one, only the host's waterlogging
+    /// of that block is taken; where it holds none, the host's block unless that is one.
+    fn native_state(&self, current: &str, host: &str) -> Option<String> {
+        if !self.owned(current) {
+            return (!self.owned(host)).then(|| host.to_owned());
+        }
+        let (name, props) = parse_state(host);
+        (parse_state(current).0 == name).then(|| {
+            props
+                .iter()
+                .find(|(k, _)| k == "waterlogged")
+                .map_or(current.to_owned(), |(_, v)| {
+                    with_prop(current, "waterlogged", v)
+                })
+        })
+    }
+    /// A state of the engine's table; a Create block it has no state for is the engine's too.
+    fn owned(&self, state: &str) -> bool {
+        match self.id(state) {
+            OTHER => state.starts_with("create:"),
+            id => self.w.table.get(id).is_some(),
         }
     }
 }
@@ -331,6 +344,36 @@ mod tests {
         }
         .take_source();
         assert_eq!(r.world_fluid(p), Some((Fluid::Water, 0)));
+    }
+    #[test]
+    fn a_frame_never_creates_or_replaces_a_create_block() {
+        let r = run();
+        let shaft = "create:shaft[axis=x,waterlogged=false]";
+        let wet = "create:shaft[axis=x,waterlogged=true]";
+        // The engine's Create block: only its waterlogging is taken.
+        assert_eq!(r.native_state(shaft, wet).as_deref(), Some(wet));
+        assert_eq!(r.native_state(shaft, shaft).as_deref(), Some(shaft));
+        for host in [
+            "minecraft:air",
+            "minecraft:water[level=0]",
+            "create:belt[casing=false,facing=north,part=middle,slope=horizontal,waterlogged=true]",
+        ] {
+            assert_eq!(r.native_state(shaft, host), None, "{host}");
+        }
+        // An environment block: the host's, unless it is one the engine has rules for.
+        assert_eq!(
+            r.native_state("minecraft:air", "minecraft:water[level=0]")
+                .as_deref(),
+            Some("minecraft:water[level=0]")
+        );
+        assert_eq!(
+            r.native_state("minecraft:stone", "create:limestone")
+                .as_deref(),
+            Some("create:limestone")
+        );
+        for host in [shaft, "create:cogwheel[axis=y,waterlogged=false]"] {
+            assert_eq!(r.native_state("minecraft:air", host), None, "{host}");
+        }
     }
     #[test]
     fn waterlogging_cauldron_and_spill_callbacks_use_real_states() {

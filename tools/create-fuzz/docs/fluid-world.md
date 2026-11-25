@@ -18,9 +18,15 @@ Each Rust case owns a suspended namespace. Its blocks and pending native fluid t
 materialized only during a synchronous request; only the public native fluid scheduler
 is advanced explicitly. The shared server keeps ticking between requests. Java Create block-entity ticks, scheduled block ticks, kinetic
 solves and fluid-network transfers do not run in this region. Rust owns those Create
-subsystems. Java's normal placement/shape callbacks may run when a host state changes;
-only native block changes and waterlogging are returned to Rust. Other Create state
-properties, tank contents, pressures and flows are never imported.
+subsystems and every Create block. A mirrored change of one is applied as a move, since
+Create's own rules for it (a belt's chain destruction, a bracket) already ran in Rust. A
+Create block that Java Create's callbacks then change, or put where Rust has none, is put
+back to Rust's block: those callbacks run at once (`GearshiftBlock.neighborChanged` cycles
+`powered`, `FluidTankBlock.onPlace` joins a tank) where the engine commits the same change
+in its own phase, a frame later. The frame fails if the block does not stay. Only native
+block changes and waterlogging are returned to Rust, which never lets a frame create or
+replace a Create block. Other Create state properties, tank contents, pressures and flows
+are never imported.
 
 Each frame applies Rust's ordered host writes at the preceding completed tick, advances
 the native fluid scheduler once, then applies the glue's explicit due fluid ticks. The
