@@ -7,8 +7,6 @@ const COUPLING: &str = "assets/create/models/block/minecart_coupling/";
 const CHAIN: &str = "assets/create/models/block/chain_conveyor/chain_";
 const BLOCK_ATLAS: &str = "assets/minecraft/atlases/blocks.json";
 const SHADER: &str = "assets/create/shaders/core/textured.fsh";
-/// The WGSL shader earlier builds wrote; owned so the generator deletes it.
-const OBSOLETE_SHADER: &str = "assets/create/shaders/pipeline/textured.wgsl";
 const CONNECTED: &str = "assets/create/sunrise/connected/";
 const CONNECTED_TABLES: &str = "assets/create/sunrise/connected_tables/";
 
@@ -32,7 +30,7 @@ pub(crate) fn spinner_definition(item: &str) -> Value {
 
 /// The asset paths this generator owns, including obsolete generated frames.
 pub(super) fn owns(path: &str) -> bool {
-    matches!(path, BLOCK_ATLAS | SHADER | OBSOLETE_SHADER)
+    matches!(path, BLOCK_ATLAS | SHADER)
         || (path.ends_with(".json")
             && [COUPLING, CHAIN, CONNECTED, CONNECTED_TABLES]
                 .iter()
