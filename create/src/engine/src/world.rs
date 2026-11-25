@@ -1691,12 +1691,6 @@ impl CreateWorld {
                     .push([pos[0] + o[0], pos[1] + 1, pos[2] + o[2]]);
             }
         }
-        // A still hose turning forwards waits for the block below its end (`lazyTick`).
-        if !self.dims[dim].plumbing.hose_waits.is_empty()
-            && let Some(hose) = self.dims[dim].plumbing.hose_waits.remove(&pos)
-        {
-            self.dims[dim].plumbing.hose_speeds.push((hose, f32::NAN));
-        }
         if old != new {
             self.funnel_neighbour_changed(dim, pos);
         }

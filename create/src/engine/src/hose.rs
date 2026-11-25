@@ -853,6 +853,8 @@ pub struct Hose {
     pub tank: Tank,
     pub drainer: Drainer,
     pub filler: Filler,
+    /// The `SmartBlockEntity` lazy tick (default rate 10) that wakes a still hose.
+    pub lazy: crate::block_entity::SmartBlockEntity,
 }
 
 impl Hose {
@@ -866,9 +868,10 @@ impl Hose {
         below(pos, self.offset.ceil() as i32)
     }
 
-    /// Whether it ticks: moving, or searching.
+    /// Whether it ticks: moving, searching, or still but turning forwards (its lazy tick waits
+    /// for the block below its end to be passable).
     pub fn busy(&self) -> bool {
-        self.moving || self.drainer.searching() || self.filler.searching()
+        self.moving || self.movement() > 0.0 || self.drainer.searching() || self.filler.searching()
     }
 
     /// `onSpeedChanged`: it moves unless still, at the top going up, or blocked below;
@@ -892,30 +895,33 @@ impl Hose {
         }
     }
 
-    /// `tick` while moving: the hose goes down (or up) until the top, or a block it can't pass
-    /// (it stops on a whole block). Its searches go on.
+    /// `SmartBlockEntity.tick` then `HosePulleyBlockEntity.tick`: the lazy tick runs first
+    /// (`wake`), then `offset` advances whenever turning (even before `lazyTick` sets `moving`
+    /// back on) until the top or a block it can't pass (stopping on a whole block). Its searches
+    /// go on.
     pub fn tick(&mut self, level: &mut impl Level, pos: [i32; 3], now: i64) {
-        if self.moving {
-            let mut next = self.offset + self.movement();
-            if next < 0.0 {
-                next = 0.0;
-                self.moving = false;
-            }
-            if !level.passable(below(pos, next.ceil() as i32)) {
-                next = next.trunc();
-                self.moving = false;
-            }
-            if self.speed == 0.0 {
-                self.moving = false;
-            }
-            self.offset = next;
+        if self.lazy.tick() {
+            self.wake(&*level, pos, now);
         }
+        let mut next = self.offset + self.movement();
+        if next < 0.0 {
+            next = 0.0;
+            self.moving = false;
+        }
+        if !level.passable(below(pos, next.ceil() as i32)) {
+            next = next.trunc();
+            self.moving = false;
+        }
+        if self.speed == 0.0 {
+            self.moving = false;
+        }
+        self.offset = next;
         self.drainer.tick(level, now);
         self.filler.tick(level, now);
     }
 
     /// `lazyTick` of a still hose turning forwards: it moves again once the block below its end
-    /// can be passed (the glue asks when that block changes).
+    /// can be passed.
     pub fn wake(&mut self, level: &impl Level, pos: [i32; 3], now: i64) -> bool {
         if self.moving || self.movement() <= 0.0 {
             return false;
@@ -1169,7 +1175,11 @@ mod tests {
         assert_eq!(h.offset, 5.0);
         assert_eq!(h.root([0, 0, 0]), [0, -5, 0]);
         assert_eq!(ticks, 11);
-        assert!(!h.busy(), "a still hose has nothing to do");
+        assert!(!h.moving);
+        assert!(
+            h.busy(),
+            "a still hose turning forwards waits on its lazy tick"
+        );
         // Backwards it goes back up to the top.
         let mut h = h;
         let mut now = ticks;
@@ -1187,6 +1197,35 @@ mod tests {
         }
         h.speed_changed(&w, [0, 0, 0], 0.0, 9);
         assert_eq!((h.offset, h.moving), (2.0, false));
+    }
+
+    #[test]
+    fn a_stalled_hose_wakes_on_its_next_lazy_tick() {
+        let mut w = World::default();
+        let mut h = Hose {
+            offset: 5.0,
+            ..Default::default()
+        };
+        // Half a block a tick, blocked by the solid floor below its end.
+        h.speed_changed(&w, [0, 0, 0], 256.0, 0);
+        assert!(!h.moving && h.busy());
+        // The first tick is the lazy tick of `initialize`: still blocked.
+        h.tick(&mut w, [0, 0, 0], 1);
+        assert!(!h.moving);
+        assert_eq!(h.offset, 5.0);
+        for d in 6..=12 {
+            w.blocks.insert([0, -d, 0], Space::Replaceable);
+        }
+        // `tick` advances `offset` at once, while `moving` (drainer/filler gate) waits for the
+        // next lazy tick ten ticks on.
+        for t in 2..=10 {
+            h.tick(&mut w, [0, 0, 0], t);
+            assert!(!h.moving, "tick {t}");
+            assert_eq!(h.offset, 5.0 + 0.5 * (t - 1) as f32, "tick {t}");
+        }
+        h.tick(&mut w, [0, 0, 0], 11);
+        assert!(h.moving);
+        assert_eq!(h.offset, 10.0);
     }
 
     /// Drains `n` mB a tick from a still hose (as a pump does: simulate, then take), ticking

@@ -25,13 +25,12 @@ pub struct Plumbing {
     pub filters: HashMap<[i32; 3], crate::fluids::SmartFilter>,
     /// Smart pipes whose filter clients must draw again.
     pub filter_changes: Vec<[i32; 3]>,
-    /// Hose pulleys, those moving or searching (the only ones that tick), the speeds they were
-    /// given in a solve (their `onSpeedChanged` reads the world: the glue's), and the blocks
-    /// under still hoses turning forwards that wake them when they change (`lazyTick`).
+    /// Hose pulleys, those moving, searching or still but turning forwards (the only ones that
+    /// tick), and the speeds they were given in a solve (their `onSpeedChanged` reads the world:
+    /// the glue's).
     pub hoses: HashMap<[i32; 3], Hose>,
     pub hose_busy: Vec<[i32; 3]>,
     pub hose_speeds: Vec<([i32; 3], f32)>,
-    pub hose_waits: HashMap<[i32; 3], [i32; 3]>,
     /// What was saved for hoses not loaded yet: offset and tank.
     pub hose_saved: HashMap<[i32; 3], (f32, Tank)>,
     /// Hoses whose hose clients must draw again.
@@ -102,7 +101,6 @@ impl Plumbing {
         }
         if self.hoses.remove(&pos).is_some() {
             self.hose_busy.retain(|p| *p != pos);
-            self.hose_waits.retain(|_, h| *h != pos);
             self.hose_changes.push(pos);
             saved = true;
         }
@@ -125,7 +123,6 @@ impl Plumbing {
         self.creative_saved.retain(|p, _| out(p));
         self.hoses.retain(|p, _| out(p));
         self.hose_busy.retain(out);
-        self.hose_waits.retain(|_, h| out(h));
         self.creative.retain(|p, _| out(p));
         self.whistles.retain(|p, _| out(p));
         self.whistling.retain(out);
