@@ -281,7 +281,7 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
                 burner::Burner {
                     fuel: burner::Fuel::from_index(fuel),
                     remaining,
-                    creative: None,
+                    ..burner::Burner::default()
                 }
             };
             w.read_burner(dim, pos, b);
@@ -513,7 +513,7 @@ fn burners_from_nbt(data: &Compound) -> Vec<([i32; 3], burner::Burner)> {
                 burner::Burner {
                     fuel: burner::Fuel::from_index(c[3]),
                     remaining: c[4],
-                    creative: None,
+                    ..burner::Burner::default()
                 }
             };
             ([c[0], c[1], c[2]], b)
