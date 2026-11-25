@@ -47,6 +47,16 @@ Further general mod-API gaps found by a parity audit are tracked in sunrise-org/
 | Draws of a block by properties for blocks that are not Create's | `draw_block` resolves Create's own blocks and partials from a table built when a world opens. |
 | Building a `TagKey` or a block-entity data view in tests | The copycat test `a_copycat_panel_accepts_iron_bars_but_not_create_window_panes` was removed: the fake host cannot supply tags. Structure-carried block-entity copies use the port's own `EntityData` wrapper. |
 
+## Tags that name things the port does not declare (Dev `bdad86d`)
+
+The jar's tags are loaded as they are, so three of them log a missing member at every start. None of them changes play.
+
+| Tag | Missing member |
+|---|---|
+| `c:tea` | `create:tea`: the port declares no tea fluid. |
+| `c:teleporting_not_supported` | `create:contraption` and `create:carriage_contraption`: the port's contraptions are not entity types of those names. |
+| `create:ignore_seat` | `#c:capturing_not_supported`: no such tag exists. |
+
 ## Not used by Create (out of scope until after parity)
 
 | Gap | Why |
