@@ -133,6 +133,10 @@ pub fn depot_step(held: &mut Held, press: &Press, speed: f32, fits: bool) -> Ste
         if press.ticks != CYCLE / 2 {
             return Step::Wait;
         }
+        if !fits {
+            held.locked = false;
+            return Step::Wait;
+        }
         return Step::Process;
     }
     if speed == 0.0 {
@@ -248,6 +252,28 @@ mod tests {
             depot_step(&mut other, &Press::default(), 0.0, true),
             Step::Wait
         );
+    }
+
+    /// `whenItemHeld`: a held stack no recipe takes, at the head's lowest point, is let go.
+    #[test]
+    fn a_held_stack_without_a_recipe_is_let_go_at_the_bottom() {
+        let mut held = Held {
+            locked: true,
+            ..Held::new(0, false)
+        };
+        let press = Press {
+            running: true,
+            ticks: CYCLE / 2 - 4,
+            mode: Mode::Belt,
+        };
+        assert_eq!(depot_step(&mut held, &press, 32.0, false), Step::Wait);
+        assert!(held.locked);
+        let press = Press {
+            ticks: CYCLE / 2,
+            ..press
+        };
+        assert_eq!(depot_step(&mut held, &press, 32.0, false), Step::Wait);
+        assert!(!held.locked);
     }
 
     #[test]

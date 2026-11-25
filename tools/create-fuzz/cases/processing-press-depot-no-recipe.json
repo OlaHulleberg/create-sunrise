@@ -1,0 +1,94 @@
+{
+  "version": 3,
+  "seed": 29902,
+  "checkpoints": [
+    120,
+    123,
+    124,
+    125
+  ],
+  "ticks": 130,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:mechanical_press[facing=north]"
+    },
+    {
+      "motor": 32,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    }
+  ],
+  "events": [
+    {
+      "action": {
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "count": 11,
+            "item": "minecraft:iron_ingot"
+          }
+        },
+        "kind": "item"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 30
+    },
+    {
+      "action": {
+        "input": {
+          "face": "up",
+          "kind": "use",
+          "sneaking": false,
+          "stack": null,
+          "yaw": 0.0
+        },
+        "kind": "item"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 102
+    },
+    {
+      "action": {
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "count": 2,
+            "item": "minecraft:diamond"
+          }
+        },
+        "kind": "item"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 107
+    }
+  ]
+}
