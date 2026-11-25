@@ -16,7 +16,7 @@ API, and remove it once the API has it and the port uses it.
   seats bounce by vanilla's formula, and ejectors launch at the end of the tick, not on contact. Create uses: overrides
   vanilla `Block.updateEntityAfterFallOn` ([`SeatBlock.java:89`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/actors/seat/SeatBlock.java#L89), [`EjectorBlock.java:101`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/depot/EjectorBlock.java#L101)), with Create mixin `EntityMixin` on `Entity.move` at
   `getOnPosLegacy` ([`EntityMixin.java:33`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/EntityMixin.java#L33)). sunrise-org/sunrise#5076
-- **A velocity edit after the lava move and before lava drag** (`LivingEntity.travelInLava`): netherite diving boots
+- **A velocity edit after the lava move and before lava drag** (the lava branch of `LivingEntity.travel`): netherite diving boots
   don't speed walking or jumping in lava. Create uses: Create mixin `LavaSwimmingMixin` on `LivingEntity.travel`, after
   its first `move` in the `isInLava` slice ([`LavaSwimmingMixin.java:26`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/LavaSwimmingMixin.java#L26)). sunrise-org/sunrise#5074
 - **Placing each passenger at its own point on its vehicle** (`positionRider`): riders can't sit on a moving
@@ -79,9 +79,6 @@ API, and remove it once the API has it and the port uses it.
 
 ## Blocks and world
 
-- **A per-position answer to whether a fluid may flow toward a side** (`FlowingFluid.canPassThrough`): water still
-  picks a water wheel's axle when finding a slope. Create uses: Create mixin `WaterWheelFluidSpreadMixin` at the head
-  of `FlowingFluid.canPassThrough` ([`WaterWheelFluidSpreadMixin.java:23`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/WaterWheelFluidSpreadMixin.java#L23)). sunrise-org/sunrise#5087
 - **A rail block's velocity edit inside the minecart rail step, with the cart's speed cap**: a controller rail sets the
   cart's speed outside the rail step. Create uses: overrides `onMinecartPass`, reading
   `AbstractMinecart.getMaxSpeedWithRail` ([`ControllerRailBlock.java:144`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/rail/ControllerRailBlock.java#L144)). sunrise-org/sunrise#5075
