@@ -127,7 +127,13 @@ pub struct Elevator {
     pub min_contact: i32,
     pub max_contact: i32,
     pub blocks: Vec<([i32; 3], u32)>,
+    /// `LinearActuatorBlockEntity`'s lazy tick (`setLazyTickRate(3)`): once at initialize, then
+    /// every 4 ticks.
+    pub lazy: crate::block_entity::SmartBlockEntity,
 }
+
+/// `LinearActuatorBlockEntity`: `setLazyTickRate(3)`.
+pub const LAZY_TICK_RATE: i32 = 3;
 
 /// What a tick did.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
@@ -164,6 +170,7 @@ impl Elevator {
             min_contact: max_contact - crate::pulley::MAX_ROPE_LENGTH,
             max_contact,
             blocks,
+            lazy: crate::block_entity::SmartBlockEntity::new(LAZY_TICK_RATE),
         }
     }
 
@@ -233,6 +240,23 @@ impl Elevator {
             reached,
             moved: self.y - before,
         }
+    }
+
+    /// `SmartBlockEntity.tick`'s lazy tick, then `ElevatorPulleyBlockEntity.lazyTick`: standing
+    /// at its floor (arrived, with its target offset its own), it lights the contact at the
+    /// height its contact is at (`triggerContact(ec, floor(0.5 + y))`). Called once a tick
+    /// before `tick`, while it runs.
+    pub fn lazy_tick(&mut self, pulley_y: i32, target: Option<i32>) -> Option<i32> {
+        if !self.lazy.tick() || !self.arrived {
+            return None;
+        }
+        let target_offset = self
+            .reachable(target)
+            .map_or(self.offset as i32, |t| pulley_y - t + self.contact_y - 1);
+        if target_offset != self.offset as i32 {
+            return None;
+        }
+        Some((0.5 + self.y).floor() as i32 + self.contact_y)
     }
 
     /// Nothing more to do until it is called elsewhere: there, level with its floor, still.
@@ -559,6 +583,31 @@ mod tests {
         let before = e.clone();
         e.tick(20, 64.0, Some(40));
         assert_eq!(e.y, before.y);
+    }
+
+    #[test]
+    fn a_standing_elevator_lights_its_contact_on_each_lazy_tick() {
+        let mut e = elevator();
+        // Level with the floor at y 14, its contact (1 up from the car's origin).
+        let lit: Vec<i32> = (1..=12)
+            .filter_map(|t| e.lazy_tick(20, None).map(|_| t))
+            .collect();
+        assert_eq!(
+            lit,
+            [1, 4, 8, 12],
+            "once on its first tick, then every 4 ticks (LinearActuatorBlockEntity rate 3)"
+        );
+        // The floor it stands at: its contact's height, `floor(0.5 + y) + contactYOffset`.
+        let mut e = elevator();
+        assert_eq!(e.lazy_tick(20, None), Some(14));
+        assert_eq!(e.lazy_tick(20, Some(14)), None, "between lazy ticks");
+        // Called elsewhere, it is not at its target offset: nothing lights.
+        let mut e = elevator();
+        assert_eq!(e.lazy_tick(20, Some(3)), None);
+        // Moving (not arrived): nothing lights even on a lazy tick.
+        let mut e = elevator();
+        e.arrived = false;
+        assert_eq!(e.lazy_tick(20, None), None);
     }
 
     #[test]
