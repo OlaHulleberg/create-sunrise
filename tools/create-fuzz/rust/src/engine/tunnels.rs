@@ -67,19 +67,19 @@ impl Run {
             self.w.mark_unsaved(0, pos);
         }
     }
-    /// `BeltTunnelBlock.canSurvive` and `getTunnelState` (glue `shape_tunnel`).
-    fn shape_tunnel(&mut self, pos: Pos, at_once: bool) {
+    /// `BeltTunnelBlock.getTunnelState`, and `canSurvive` with `check_survive` (glue
+    /// `shape_tunnel`).
+    fn shape_tunnel(&mut self, pos: Pos, at_once: bool, check_survive: bool) {
         let Some(now) = self.tunnel_state(pos) else {
             return;
         };
-        let seg = self
-            .belt_below(pos)
-            .filter(|s| s.slope == belt::Slope::Horizontal);
-        let Some(seg) = seg.filter(|_| self.cased_below(pos)) else {
+        let belt = self.belt_below(pos);
+        let horizontal = belt.is_some_and(|s| s.slope == belt::Slope::Horizontal);
+        if check_survive && (!horizontal || !self.cased_below(pos)) {
             self.break_block(pos, false);
             return;
-        };
-        let axis = seg.facing.axis();
+        }
+        let axis = belt.map_or(Axis::X, |s| s.facing.axis());
         let output = |side: Dir| {
             let q = add([pos[0], pos[1] - 1, pos[2]], side.offset());
             if let Some((Block::Belt, i)) = self.w.table.get(self.at(q)) {
@@ -119,23 +119,32 @@ impl Run {
         self.set(pos, self.id(&next));
     }
     /// `tick_tunnels`: tunnels placed or whose neighbours changed take the shape their outputs
-    /// give, and break when no cased horizontal belt holds them.
+    /// give, and break when the block below changed and no cased horizontal belt holds them.
     pub(super) fn tick_tunnels(&mut self) {
         let d = &mut self.w.dims[0];
         let new = std::mem::take(&mut d.tunnels_new);
         let kept = std::mem::take(&mut d.tunnel_checks);
         let fresh = std::mem::take(&mut d.tunnel_fresh);
+        let survive = std::mem::take(&mut d.tunnel_survive);
         let initialized = std::mem::take(&mut d.brass_initialize);
-        let mut checks: Vec<(Pos, bool)> = fresh
+        let mut checks: Vec<(Pos, bool, bool)> = fresh
             .into_iter()
-            .map(|p| (p, true))
-            .chain(kept.into_iter().map(|p| (p, false)))
+            .map(|p| (p, true, false))
+            .chain(kept.into_iter().map(|p| (p, false, false)))
+            .chain(survive.into_iter().map(|p| (p, false, true)))
             .collect();
-        checks.sort_by_key(|c| (c.0, !c.1));
-        checks.dedup_by_key(|c| c.0);
+        checks.sort_by_key(|c| c.0);
+        checks.dedup_by(|cur, prev| {
+            if cur.0 != prev.0 {
+                return false;
+            }
+            prev.1 |= cur.1;
+            prev.2 |= cur.2;
+            true
+        });
         let check_positions: Vec<Pos> = checks.iter().map(|c| c.0).collect();
-        for (pos, at_once) in checks {
-            self.shape_tunnel(pos, at_once);
+        for (pos, at_once, check_survive) in checks {
+            self.shape_tunnel(pos, at_once, check_survive);
         }
         // `BrassTunnelBlockEntity.updateTunnelConnections`: newly placed tunnels run before
         // neighbour shape updates (matching `onPlace` before `updateShape`), so a joining
@@ -242,7 +251,7 @@ impl Run {
                 };
                 self.set_belt_casing(below, Some(kind));
             }
-            self.shape_tunnel(at, true);
+            self.shape_tunnel(at, true, false);
             self.update_brass_connections(vec![at]);
             self.publish_interaction();
         }

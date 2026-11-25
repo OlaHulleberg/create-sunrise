@@ -383,6 +383,9 @@ pub struct Dimension {
     /// `assembleNextTick`) or that were right-clicked.
     pub bearing_checks: Vec<[i32; 3]>,
     pub tunnel_fresh: Vec<[i32; 3]>,
+    /// Tunnels whose block below changed (`BeltTunnelBlock.neighborChanged` from below, the one
+    /// place `canSurvive` is checked).
+    pub tunnel_survive: Vec<[i32; 3]>,
     /// Brass tunnels and what they hold to hand out.
     pub brass: HashMap<[i32; 3], crate::tunnel::Brass>,
     /// Brass tunnels whose block entity was just created, placed or loaded
@@ -1785,6 +1788,20 @@ impl CreateWorld {
         {
             self.dims[dim].railway.remove(pos);
         }
+        // `BeltTunnelBlock.neighborChanged`: only a change of the block below asks `canSurvive`.
+        if old != new {
+            let above = [pos[0], pos[1] + 1, pos[2]];
+            if matches!(
+                self.dims[dim]
+                    .states
+                    .get(&above)
+                    .and_then(|s| self.table.get(*s))
+                    .map(|(b, _)| b),
+                Some(Block::AndesiteTunnel | Block::BrassTunnel)
+            ) {
+                self.dims[dim].tunnel_survive.push(above);
+            }
+        }
         let kind = |s: u32| self.table.get(s).map(|(b, _)| b);
         if kind(old) == Some(Block::ItemVault) && kind(new) != Some(Block::ItemVault) {
             // `ItemVaultBlock.onRemove`: its vault splits.
@@ -2367,6 +2384,8 @@ impl CreateWorld {
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnels_new.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.tunnel_fresh
+                .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.tunnel_survive
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.brass_initialize
@@ -6168,6 +6187,31 @@ mod tests {
         w.neighbor_changed(0, at, 12);
         assert!(w.dims[0].tunnel_fresh.is_empty());
         assert_eq!(w.dims[0].tunnel_checks, vec![at]);
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_tunnel_asks_can_survive_only_when_the_block_below_changes() {
+        // `BeltTunnelBlock.neighborChanged` (`:95-107`) checks `canSurvive` only for
+        // `fromPos.equals(pos.below())`; `onPlace` and `getStateForPlacement` never destroy.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let names = [(
+            "create:andesite_tunnel",
+            [("axis", "z"), ("shape", "straight")],
+        )];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let at = [0, 9, 5];
+        w.apply_block_change(0, at, 0, 10, false);
+        w.dims[0].states.insert(at, 10);
+        assert_eq!(w.dims[0].tunnel_fresh, vec![at]);
+        assert!(w.dims[0].tunnel_survive.is_empty());
+        // The block below it changes (a `/setblock` over the belt).
+        w.apply_block_change(0, [0, 8, 5], 0, 10, false);
+        assert_eq!(w.dims[0].tunnel_survive, vec![at]);
         states::clear_range();
     }
 
