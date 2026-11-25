@@ -497,6 +497,24 @@ pub trait Subsystem: Sync {
     ) {
     }
 
+    /// `Hooks::prepare_render_buffers`: prepare the world lines and quads this frame draws at
+    /// a stage (`render_level_stage` draws them).
+    fn prepare_render_buffers(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+    }
+
+    /// `Hooks::render_level_stage`: a stage of the world view's frame, where what
+    /// `prepare_render_buffers` prepared is drawn.
+    fn render_level_stage(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+    }
+
     /// The wrench used on this subsystem's Create block `block` at `pos`, `clicked` the face at
     /// `point` (`IWrenchable.onWrenched`, or `onSneakWrenched` when `sneaking`), on the server:
     /// true when the block took it its own way, and the wrench then neither turns nor picks it
