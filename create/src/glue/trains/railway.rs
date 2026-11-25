@@ -307,11 +307,11 @@ impl Subsystem for Trains {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        entity: &mod_api::ModBlockEntity,
+        entity: &mod_api::BlockEntityDataView<'_>,
     ) -> bool {
         (block == create_engine::Block::TrackStation
-            && super::station_draw::animating(pos, &entity.nbt))
-            || (block == create_engine::Block::TrackSignal && super::tracks::blinking(&entity.nbt))
+            && super::station_draw::animating(pos, entity.nbt()))
+            || (block == create_engine::Block::TrackSignal && super::tracks::blinking(entity.nbt()))
     }
 
     fn client_reset(&self) {
@@ -783,17 +783,23 @@ struct Observer;
 impl BlockPart for Observer {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         use_observer(host, event.click)
     }
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         use_observer(host, event.click)
     }
 
