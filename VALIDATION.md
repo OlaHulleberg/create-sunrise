@@ -5,8 +5,8 @@ Dev build at main `bdad86d2d398ff9293002d2dc08702822aea7265` in `create/sunrise-
 build with no stable mod API. `cargo sunrise-mod` uses the signature-verified release tool and SDK from
 `sdk-bdad86d2d398ff9293002d2dc08702822aea7265`, with the published release key.
 
-Nothing was run in game on `bdad86d`, and `tools/create-fuzz/` has not been run. Earlier in-game results below are
-historical, from the builds named in their headings.
+In game on `bdad86d` (main `0b0014e6` and `main` with #277): see "Dev build `bdad86d` in game" below. `tools/create-fuzz/` has not
+been run on `bdad86d` (neither its Rust checks nor against a server). Earlier in-game results below are historical, from the builds named in their headings.
 
 ## Checks
 
@@ -31,6 +31,32 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Not run on `bdad86d` |
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `bdad86d` |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `bdad86d` |
+
+## Dev build `bdad86d` in game
+
+Two runs on the Linux build of Dev `bdad86d` (headless, software Vulkan, driven by the control socket). Only the second had
+Create's local `create-data prepare` output; the first had none, so its missing wand icon and sprite warnings and its slow
+schematic preview after relaunch likely came from that. The first run met a startup crash: 26.3 has no `minecraft:block_state_property` loot
+condition (it has `match_block`), and 79 generated block loot tables used it. #277 changed `tools/create-data` to emit
+`match_block` and regenerated them. The second run is on main with #277 and no loot edits.
+
+| Area | Result |
+|---|---|
+| Startup | No error or panic in three launches. |
+| Block drops (survival) | Doors drop one door from either half, a double slab drops 2, a horizontal gearbox drops `vertical_gearbox` and a vertical one `gearbox`; shaft, cogwheel, seat, toolbox and zinc ore drop correctly. |
+| Motor and shafts, belt to depot, pump with tank and valve, bearing and windmill, press, millstone | Pass in the first run, not repeated in the second. |
+| Mechanical crafter, mixer with basin (32 rpm), redstone link, display link (nixie tube shows the cuckoo clock's time) | Pass. |
+| Funnels | A belt funnel on the belt and an upward-facing brass funnel at the belt's end fill a chest. A horizontal funnel at a belt's end takes nothing, as `supportsDirectBeltInput` says. |
+| Cart assembler | The planks ride in the cart and it rolls along powered rails. |
+| Schematic save, deploy, relaunch; wand of symmetry | Pass (second run, after prepare). |
+| Filter, toolbox and postbox menus; potato cannon; save and relaunch | Pass in the first run, not repeated in the second. |
+| Deployer | **Fails.** Its strokes cycle, but every `perform_action_scoped` call is refused with `Busy`, so it places and uses nothing. Earlier Devs (`3d34bbe`) did this work. Logging at the refusal shows an open host transaction when it acts, and the game wraps `level_tick_post` listeners in one; whether removing the wrap fixes it is not tested: sunrise-org/sunrise#5750. |
+| Trains | Not exercised: the track pieces could not be connected through the driver. |
+
+Warnings that remain at startup: the jar's tags `c:tea`, `c:teleporting_not_supported` and `create:ignore_seat` name
+members the port does not declare (see API_GAPS.md), and five entity types have no renderer.
+
+Not tried: schematicannon, mechanical arm, steam, multiplayer, sound, a toolbox's contents when dropped.
 
 ## #261-#264 and #266 in game on Dev `3d34bbe` (main `46eb2c2`)
 
