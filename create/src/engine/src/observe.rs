@@ -20,8 +20,9 @@ use std::collections::{BTreeSet, HashMap, HashSet};
 pub const DEFAULT_DELAY: u8 = 6;
 /// `activate(3)`: the target block itself passes the filter.
 pub const BLOCK_DELAY: u8 = 3;
-/// `SmartObserverBlockEntity`'s `lazyTickRate` (20) and the switch's (10): how often a vanilla
-/// container, which sends no notification, is looked at.
+/// `SmartObserverBlockEntity`'s `lazyTickRate` (20) and the switch's (10), the rates of its
+/// `SmartBlockEntity`: a vanilla container, which sends no notification, is looked at every
+/// `rate + 1` ticks (see `SmartBlockEntity`), so every 21 and every 11.
 pub const OBSERVER_LAZY: i64 = 20;
 pub const SWITCH_LAZY: i64 = 10;
 /// `ThresholdSwitchBlockEntity.scheduleBlockTick`: its output follows two ticks later.
@@ -458,7 +459,8 @@ pub enum Watch {
     Notified,
     /// A belt carrying items: looked at each tick while it has any.
     Belt,
-    /// A container with no notification: looked at every lazy interval.
+    /// A container with no notification: looked at every `SmartBlockEntity` lazy interval
+    /// (`lazyTickRate + 1` ticks).
     Lazy,
     /// A target whose changes are not told (a pipe's flows, a chain conveyor's packages, a
     /// basin's, spout's or hose pulley's tanks): looked at each tick, as Create's observer does.
@@ -593,7 +595,9 @@ impl Detectors {
             self.lazy.remove(&(t, pos));
         }
         if watch == Watch::Lazy {
-            let every = if self.switches.contains_key(&pos) {
+            // `SmartBlockEntity.tick`: the counter runs down from the rate to zero, so the next
+            // `lazyTick` is `rate + 1` ticks on.
+            let every = 1 + if self.switches.contains_key(&pos) {
                 SWITCH_LAZY
             } else {
                 OBSERVER_LAZY
@@ -1010,6 +1014,33 @@ mod tests {
     }
 
     #[test]
+    fn lazy_looks_follow_the_smart_block_entity_cadence() {
+        use crate::block_entity::SmartBlockEntity;
+        let mut d = Detectors::default();
+        let (a, b) = ([0, 64, 0], [5, 64, 0]);
+        d.placed(a, false, [1, 64, 0]);
+        d.placed(b, true, [6, 64, 0]);
+        d.take_checks(0);
+        // The block entity's `lazyTick` ticks after its first (initialize) run, one per period.
+        let fires = |rate: i32| {
+            let mut be = SmartBlockEntity::new(rate);
+            (1..=100).filter(|_| be.tick()).collect::<Vec<i64>>()
+        };
+        for (pos, rate, period) in [(a, OBSERVER_LAZY, 21), (b, SWITCH_LAZY, 11)] {
+            let fired = fires(rate as i32);
+            assert_eq!(fired[2] - fired[1], period);
+            let mut now = 0;
+            d.watch(pos, Watch::Lazy, now);
+            for _ in 0..3 {
+                assert!(d.take_checks(now + period - 1).is_empty());
+                now += period;
+                assert_eq!(d.take_checks(now), [pos]);
+                d.watch(pos, Watch::Lazy, now);
+            }
+        }
+    }
+
+    #[test]
     fn detectors_look_again_when_their_target_changes_or_lazily() {
         let mut d = Detectors::default();
         let (a, b) = ([0, 64, 0], [5, 64, 0]);
@@ -1018,12 +1049,13 @@ mod tests {
         d.take_checks(0);
         d.contents_changed([[1, 64, 0], [9, 9, 9]]);
         assert_eq!(d.take_checks(1), [a]);
-        // A chest beside the switch: every 10 ticks; the observer's every 20.
+        // A chest beside the switch: every 11 ticks (rate 10 + 1); the observer's every 21.
         d.watch(b, Watch::Lazy, 1);
         d.watch(a, Watch::Lazy, 1);
-        assert!(d.take_checks(10).is_empty());
-        assert_eq!(d.take_checks(11), [b]);
-        assert_eq!(d.take_checks(21), [a]);
+        assert!(d.take_checks(11).is_empty());
+        assert_eq!(d.take_checks(12), [b]);
+        assert!(d.take_checks(21).is_empty());
+        assert_eq!(d.take_checks(22), [a]);
         // Turned to another target: watched there instead.
         d.placed(a, false, [0, 63, 0]);
         d.take_checks(22);
