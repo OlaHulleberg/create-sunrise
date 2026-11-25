@@ -160,6 +160,11 @@ fn insert(
     count - left.min(u32::from(count)) as u8
 }
 
+/// The items waiting at a basin's spout (`spoutputBuffer`), as a removed basin's data holds them.
+pub(super) fn overflow_items(data: &Compound) -> Vec<(String, u8)> {
+    overflow(data)
+}
+
 fn overflow(data: &Compound) -> Vec<(String, u8)> {
     let Some(Tag::List(list)) = data.get(&OVERFLOW_KEY.into()) else {
         return Vec::new();
@@ -598,4 +603,32 @@ pub fn visualized(d: &Compound) -> Vec<(String, i64)> {
             Some((id.to_string().ok()?, *at))
         })
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overflow_round_trips_and_skips_malformed_entries() {
+        let mut data = Compound::new();
+        data.insert(
+            OVERFLOW_KEY.into(),
+            overflow_tag(&[("minecraft:stone".into(), 3)]),
+        );
+        assert_eq!(overflow(&data), vec![("minecraft:stone".to_owned(), 3)]);
+        assert_eq!(overflow_items(&data), overflow(&data));
+
+        let Some(Tag::List(mut list)) = data.remove(&OVERFLOW_KEY.into()) else {
+            panic!("overflow_tag writes a list");
+        };
+        list.push(Tag::Int(1));
+        list.push(Tag::Compound(Compound::from([(
+            "id".into(),
+            Tag::String("minecraft:dirt".into()),
+        )])));
+        data.insert(OVERFLOW_KEY.into(), Tag::List(list));
+        assert_eq!(overflow(&data), vec![("minecraft:stone".to_owned(), 3)]);
+        assert!(overflow(&Compound::new()).is_empty());
+    }
 }

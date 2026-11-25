@@ -97,8 +97,9 @@ pub(crate) fn can_place_item(event: &mod_api::CanPlaceItemEvent<'_>) -> Option<b
 }
 
 /// `CrushingWheelControllerBlock.onRemove`, `SawBlockEntity.destroy`
-/// (`ItemHelper.dropContents`) and `DeployerBlockEntity.discardPlayer`: the removed block's
-/// inventory or held stack, with its components and wear.
+/// (`ItemHelper.dropContents`), `BasinBlockEntity.destroy` (`spoutputBuffer`, popped at the
+/// basin's centre) and `DeployerBlockEntity.discardPlayer`: the removed block's inventory,
+/// waiting spout items or held stack, with its components and wear.
 pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) {
     let block = event.state.block();
     let pos = [event.pos.x, event.pos.y, event.pos.z];
@@ -111,6 +112,21 @@ pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) 
         .flatten();
         if let Some(stack) = dp.and_then(|dp| deployer::held_stack(&dp, stacks::known_stack)) {
             let _ = event.effects.drop_slot(Some(stack));
+        }
+        return;
+    }
+    if block == super::states::key(Block::Basin) {
+        for (item, count) in spoutput::overflow_items(event.entity.nbt()) {
+            if let Some(stack) = stacks::known_stack(&item, u32::from(count)) {
+                let _ = event.effects.spawn_item(
+                    stack,
+                    [
+                        f64::from(pos[0]) + 0.5,
+                        f64::from(pos[1]) + 0.5,
+                        f64::from(pos[2]) + 0.5,
+                    ],
+                );
+            }
         }
         return;
     }
