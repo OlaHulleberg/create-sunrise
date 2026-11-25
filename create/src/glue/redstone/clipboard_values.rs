@@ -255,7 +255,7 @@ fn set_filter(
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
                 // `withCallback`: a basin's mixer or press looks again.
                 if block == Block::Basin {
-                    d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+                    d.notify_basin_contents(pos);
                 }
             });
             if matches!(block, Block::BrassFunnel | Block::BrassBeltFunnel) {
