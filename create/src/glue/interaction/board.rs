@@ -37,7 +37,7 @@ struct OpenBoard {
     /// A factory gauge's panel (`FactoryPanelBehaviour`, one of four in its block).
     slot: Option<u8>,
     /// The view when the board opened: it stays there while the board is open, as Create's
-    /// screen takes the mouse (`camera_pose`), and the mouse moves `cursor` instead.
+    /// screen takes the mouse (`compute_camera_angles`), and the mouse moves `cursor` instead.
     frozen: Option<[f32; 2]>,
     /// The board's cursor (`ValueSettingsScreen`'s mouse), in GUI pixels: placed on the pick
     /// when drawn first (None), moved by the mouse's turn, picking the nearest row and column.
@@ -430,8 +430,8 @@ fn board_of(host: &dyn ClientHost, pos: [i32; 3], known: bool) -> Option<OpenBoa
     })
 }
 
-/// While a board is open the camera keeps the view it opened on (`camera_pose`).
-pub(super) fn camera_pose(event: &mut mod_api::CameraPoseEvent<'_>) {
+/// While a board is open the camera keeps the view it opened on (`compute_camera_angles`).
+pub(super) fn camera_angles(event: &mut mod_api::ComputeCameraAnglesEvent) {
     if let Some([yaw, pitch]) = BOARD.with_borrow(|b| b.as_ref().and_then(|o| o.frozen)) {
         event.yaw = yaw;
         event.pitch = pitch;

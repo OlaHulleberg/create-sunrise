@@ -11,7 +11,7 @@ use super::super::world::with_world;
 use super::item_use_overrides;
 use crate::glue::names::Named as _;
 use create_engine::Block;
-use mod_api::{BlockPart, InteractionResult, PlayerRef, Registrar, ServerHost, UseItemOnEvent};
+use mod_api::{BlockPart, HostSide, InteractionResult, PlayerRef, Registrar, UseItemOnEvent};
 
 pub(super) fn register(r: &mut dyn Registrar) {
     r.block_part(states::key(Block::HandCrank), Crank);
@@ -25,9 +25,13 @@ impl BlockPart for Crank {
     /// `HandCrankBlock.useItemOn`, the game's own use of the block.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        // The turn is the server's; the client's prediction is `board::right_click`.
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.player(click.player)?;
         let held = click.stack.map(|s| s.item().name(&*host));

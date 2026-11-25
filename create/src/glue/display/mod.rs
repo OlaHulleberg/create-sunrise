@@ -62,7 +62,7 @@ use create_engine::display::{
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockPart, BlockState, ClientHost, Command, CommandArgumentValue, Compound, Flow,
-    Host, InteractionResult, ItemStack, PlayerRef, Registrar, RegistrationContext,
+    Host, HostSide, InteractionResult, ItemStack, PlayerRef, Registrar, RegistrationContext,
     ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
     ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StateForPlacementEvent, Tag,
@@ -1707,9 +1707,13 @@ struct NixieBlock;
 impl BlockPart for NixieBlock {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        // Writes are the server's; the client leaves the click to the template's prediction.
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let Some(stack) = event.click.stack.cloned() else {
             return Some(InteractionResult::TryWithEmptyHand);
         };
@@ -1718,9 +1722,12 @@ impl BlockPart for NixieBlock {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         use_nixie(host, event.click, None)
     }
 }
@@ -1843,13 +1850,13 @@ impl BlockPart for DisplayBlock {
     /// display board takes a click on one of its lines (`FlapDisplayBlock.useItemOn`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
         let (block, _) = states::id(event.state).and_then(info)?;
-        match block {
-            Block::DisplayLink => Some(InteractionResult::TryWithEmptyHand),
-            Block::DisplayBoard => use_board(host, event.click),
+        match (block, host) {
+            (Block::DisplayLink, _) => Some(InteractionResult::TryWithEmptyHand),
+            (Block::DisplayBoard, HostSide::Server(host)) => use_board(host, event.click),
             _ => None,
         }
     }
@@ -1858,9 +1865,12 @@ impl BlockPart for DisplayBlock {
     /// the player is told it has no target.
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let (block, _) = states::id(event.state).and_then(info)?;
         if block != Block::DisplayLink {
             return None;
