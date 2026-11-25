@@ -8,8 +8,8 @@
 //!
 //! The game sweeps entities against the boxes and carries the bodies standing on them. It reads a
 //! collider's move within the level's entity phase, so each carrier moves in its own tick to
-//! where its structure is going. Left out (`API_GAPS.md`): a structure moving into an entity
-//! does not push it, and its blocks have no contact effects.
+//! where its structure is going. Left out (`API_GAPS.md`): a turning structure moving into an
+//! entity does not push it, and its blocks have no contact effects.
 
 use super::super::server::ServerLevel;
 use super::super::subsystem::Subsystem;
