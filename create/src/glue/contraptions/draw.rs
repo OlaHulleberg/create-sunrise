@@ -20,7 +20,8 @@ use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityOnLoadEvent, BlockEntityPart,
     BlockEntityRenderBoundingBoxEvent, BlockEntityViewDistanceEvent, BlockKey, BlockPart,
-    ClientHost, Compound, Host, LevelRef, Registrar, RegistrationContext, Tag,
+    BlockState, ClientHost, Compound, Host, HostBlockStates, LevelRef, Registrar,
+    RegistrationContext, StateConstraint, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -796,10 +797,10 @@ fn draw_blocks(
         if let (Some((block, _)), Some(entity)) = (b.create, &b.entity) {
             draw_carried(host, draw, anchor, b, block, entity);
         }
-        draw.block(b.block, &props);
+        draw.block(b.state);
         if let Some((block, info)) = b.create {
             let actor = actors.filter(|_| actor_draw::draws(block));
-            draw_parts(draw, block, &info, &props, actor.is_some());
+            draw_parts(host, draw, block, &info, &props, actor.is_some());
             match actor {
                 Some(frame) => {
                     let local = b.at.map(|v| v.round() as i32);
@@ -1018,8 +1019,8 @@ impl BlockEntityDrawContext for Unkept<'_> {
     ) -> bool {
         self.0.cube(from, to, faces, tint)
     }
-    fn block(&mut self, block: BlockKey, properties: &[(&str, &str)]) -> bool {
-        self.0.block(block, properties)
+    fn block(&mut self, state: mod_api::BlockState) -> bool {
+        self.0.block(state)
     }
     fn item(
         &mut self,
@@ -1051,7 +1052,7 @@ impl BlockEntityDrawContext for Unkept<'_> {
         &mut self,
         model: mod_api::ModelRef,
         options: mod_api::TerrainModelOptions<'_>,
-    ) -> Result<(), mod_api::TerrainModelError> {
+    ) -> Result<(), mod_api::ModelError> {
         self.0.terrain_model(model, options)
     }
     fn text(
@@ -1075,8 +1076,8 @@ impl BlockEntityDrawContext for Unkept<'_> {
         stack: &mod_api::FluidStack,
         bounds: [f32; 6],
         options: mod_api::FluidBoxOptions,
-    ) -> Result<(), mod_api::FluidBoxError> {
-        self.0.fluid_box(stack, bounds, options)
+    ) {
+        self.0.fluid_box(stack, bounds, options);
     }
 }
 
@@ -1104,11 +1105,29 @@ fn whole_model(block: create_engine::Block) -> bool {
         )
 }
 
+/// Draws `block` with the given properties set, as its state; nothing when the block has no such
+/// state.
+fn draw_block(
+    host: &dyn Host,
+    draw: &mut dyn BlockEntityDrawContext,
+    block: BlockKey,
+    props: &[(&str, &str)],
+) {
+    let constraints: Vec<StateConstraint> = props
+        .iter()
+        .map(|(k, v)| StateConstraint::new(*k, *v))
+        .collect();
+    if let Ok(state) = BlockState::of(&host.block_states(), block, &constraints) {
+        draw.block(state);
+    }
+}
+
 /// A moving block's kinetic parts at rest (`ContraptionKineticRenderer`: what its block
 /// entity's visual draws in the world, its shafts, cogs, drill head or fan blades), over its
 /// block model; none for a block whose model is already all of it. An actor drawn moving
 /// (`actor`) draws its own drill head.
 fn draw_parts(
+    host: &dyn ClientHost,
     draw: &mut dyn BlockEntityDrawContext,
     block: create_engine::Block,
     info: &create_engine::parts::StateInfo,
@@ -1136,19 +1155,23 @@ fn draw_parts(
             draw.rotate_about(axis, d.phase, [0.5; 3]);
         }
         match prop {
-            Some(p) => draw.block(model, &[p]),
-            None => draw.block(model, props),
-        };
+            Some(p) => draw_block(host, draw, model, &[p]),
+            None => draw_block(host, draw, model, props),
+        }
         draw.pop();
     }
 }
 
 /// The bearing's separate top model, drawn under the same pose as its structure.
-fn draw_bearing_top(draw: &mut dyn BlockEntityDrawContext, top: Option<(Block, Model)>) {
+fn draw_bearing_top(
+    host: &dyn ClientHost,
+    draw: &mut dyn BlockEntityDrawContext,
+    top: Option<(Block, Model)>,
+) {
     if let Some((block, model)) = top
         && let Some((part, Some(facing))) = super::super::kinetics::part_model(block, model)
     {
-        draw.block(part, &[facing]);
+        draw_block(host, draw, part, &[facing]);
     }
 }
 
@@ -1166,7 +1189,7 @@ fn submit(
     let fresh = SHOWN.with_borrow(|s| s.get(&pos).is_none_or(|x| x.rev != rev));
     if fresh {
         let Some(shape) = parse(host, c) else {
-            draw_bearing_top(draw, top);
+            draw_bearing_top(host, draw, top);
             return;
         };
         SHOWN.with_borrow_mut(|s| {
@@ -1232,7 +1255,7 @@ fn submit(
                     };
                     draw.push();
                     draw.rotate_about(*axis, here, [0.5; 3]);
-                    draw_bearing_top(draw, top);
+                    draw_bearing_top(host, draw, top);
                     draw_blocks(
                         host,
                         draw,
@@ -1246,7 +1269,7 @@ fn submit(
                     // A steady turn is kept and spun by the game, which lights it where it turns.
                     let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                     draw.spin(*axis, [0.5; 3], rate, phase as f32);
-                    draw_bearing_top(draw, top);
+                    draw_bearing_top(host, draw, top);
                     draw_blocks(host, draw, pos, blocks, None, Lighting::Host);
                     draw.still();
                     draw.keep();
@@ -1268,7 +1291,7 @@ fn submit(
                     let phase = (f64::from(here) - anim * f64::from(rate)) % 360.0;
                     draw.spin(*axis, [0.5; 3], rate, phase as f32);
                     if is_hour {
-                        draw_bearing_top(draw, top);
+                        draw_bearing_top(host, draw, top);
                     }
                     draw_blocks(host, draw, pos, blocks, None, Lighting::Host);
                     draw.still();
@@ -1668,7 +1691,7 @@ fn draw_hanging(
         if let Some(a) = turn {
             draw.rotate_about([0.0, 1.0, 0.0], a, [0.5; 3]);
         }
-        draw.block(key, props);
+        draw_block(host, draw, key, props);
         draw.pop();
     };
     let part = states::partial;
@@ -1809,7 +1832,7 @@ impl BlockEntityPart for StructurePart {
         };
         let Some(Tag::Compound(structure)) = super::super::kinetics::synced(&event.entity.nbt, KEY)
         else {
-            draw_bearing_top(event.draw, top);
+            draw_bearing_top(host, event.draw, top);
             if SHOWN.with_borrow_mut(|s| s.remove(&event.pos).is_some()) {
                 actor_draw::client_forget(event.pos);
             } else {
@@ -1826,7 +1849,7 @@ impl BlockEntityPart for StructurePart {
         _host: &dyn ClientHost,
         event: &mut BlockEntityRenderBoundingBoxEvent<'_>,
     ) {
-        if holds_structure(&event.entity.nbt) {
+        if holds_structure(event.entity.nbt()) {
             *event.bounds = [
                 f32::NEG_INFINITY,
                 f32::NEG_INFINITY,

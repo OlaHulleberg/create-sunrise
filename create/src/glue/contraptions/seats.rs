@@ -448,9 +448,12 @@ impl BlockPart for SeatPart {
     /// clicking player sits down (taking the seat from a mob on it), at the level's next tick.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = clicker(&*host, event.click);
         let pos = event.click.pos;
         let player = event.click.player;

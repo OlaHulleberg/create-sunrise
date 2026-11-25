@@ -13,7 +13,7 @@ use create_engine::actors::Carried;
 use create_engine::collider::Pose;
 use create_engine::contraption::{self, Turn};
 use create_engine::kinetics::{Axis, Dir};
-use mod_api::{BlockPart, Compound, InteractionResult, Registrar, ServerHost, Tag, UseItemOnEvent};
+use mod_api::{BlockPart, Compound, InteractionResult, Registrar, Tag, UseItemOnEvent};
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
@@ -106,9 +106,12 @@ impl BlockPart for ChassisPart {
     /// (`glueAllowedOnSide`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = clicker(&*host, event.click);
         let pos = event.click.pos;
         let face = event.click.hit.face;
@@ -196,9 +199,12 @@ impl BlockPart for WindmillPart {
     /// apart now; otherwise they assemble on the next tick (`assembleNextTick`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = clicker(&*host, event.click);
         if c.sneaking {
             return Some(InteractionResult::Fail);
@@ -238,9 +244,12 @@ impl BlockPart for MechanicalBearingPart {
     /// (`assembleNextTick`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = clicker(&*host, event.click);
         if c.player.is_none_or(|p| p.may_build(&*host) != Some(true)) || c.sneaking {
             return Some(InteractionResult::Fail);
