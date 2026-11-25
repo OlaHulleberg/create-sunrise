@@ -104,8 +104,7 @@ fn spawn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if speed == 0.0 {
         return;
     }
-    let Some(axis) =
-        create_engine::parts::parts(block, &info, &Default::default())[0].map(|p| p.axis)
+    let Some(axis) = create_engine::parts::parts(block, &info, &Default::default()).map(|p| p.axis)
     else {
         return;
     };
