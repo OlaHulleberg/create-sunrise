@@ -64,7 +64,7 @@ fn keeps_block_entity(old: Block, new: Block) -> bool {
 
 /// `KineticBlock.areStatesKineticallyEquivalent` and its block overrides.
 fn kinetically_equivalent(a: Block, x: &StateInfo, b: Block, y: &StateInfo) -> bool {
-    let axis = |b, s| parts(b, s, &Settings::default())[0].map(|p| p.axis);
+    let axis = |b, s| parts(b, s, &Settings::default()).map(|p| p.axis);
     a == b
         && axis(a, x) == axis(b, y)
         && match b {
@@ -1513,7 +1513,7 @@ impl CreateWorld {
             }
         }
         let settings = d.settings.get(&pos).copied().unwrap_or_default();
-        let [a, b] = parts(block, info, &settings);
+        let part = parts(block, info, &settings);
         if !same {
             d.kinetics.remove(pos);
         }
@@ -1524,14 +1524,11 @@ impl CreateWorld {
                 .or_default()
                 .push(pos);
         }
-        for (sub, part) in [(0, a), (1, b)] {
-            if let Some(part) = part {
-                if same {
-                    d.kinetics
-                        .change_block_state(pos, sub, part, retain_kinetics);
-                } else {
-                    d.kinetics.set(pos, sub, part);
-                }
+        if let Some(part) = part {
+            if same {
+                d.kinetics.change_block_state(pos, 0, part, retain_kinetics);
+            } else {
+                d.kinetics.set(pos, 0, part);
             }
         }
     }
@@ -3047,15 +3044,12 @@ impl CreateWorld {
         // HandCrankBlockEntity.read restores fields without updateGeneratedRotation.
         let settings = Settings { crank, ..old };
         self.dims[dim].settings.insert(pos, settings);
-        if let Some((block, info)) = self.table.get(state) {
-            let [a, b] = parts(block, info, &settings);
-            for (sub, part) in [(0, a), (1, b)] {
-                if let Some(part) = part {
-                    self.dims[dim]
-                        .kinetics
-                        .change_block_state(pos, sub, part, true);
-                }
-            }
+        if let Some((block, info)) = self.table.get(state)
+            && let Some(part) = parts(block, info, &settings)
+        {
+            self.dims[dim]
+                .kinetics
+                .change_block_state(pos, 0, part, true);
         }
     }
 
@@ -3500,8 +3494,8 @@ impl CreateWorld {
         Some(self.dims[dim].sequencers.get(&pos)?.saved_run())
     }
 
-    /// The sequenced gearshift at `pos` loaded mid-sequence: it goes on from `run`, its far half
-    /// at the running instruction's modifier. Restore the saved kinetic state first,
+    /// The sequenced gearshift at `pos` loaded mid-sequence: it goes on from `run`, its output
+    /// face at the running instruction's modifier. Restore the saved kinetic state first,
     /// as the block entity load callback does; its speed and stress are read without
     /// a speed-change notification.
     pub fn restore_sequencer(&mut self, dim: usize, pos: [i32; 3], run: crate::sequencer::Run) {
@@ -3511,6 +3505,16 @@ impl CreateWorld {
             .kinetics
             .theoretical(pos, 0)
             .unwrap_or((0.0, false));
+        // The entity this step's `run` detached shows no speed until it attaches again at the
+        // new modifier; `run` is the one changing it, so it is not a speed change to end on.
+        if speed == 0.0
+            && self.dims[dim]
+                .sequencer_steps
+                .iter()
+                .any(|&(p, _)| p == pos)
+        {
+            return;
+        }
         let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
             return;
         };
@@ -3522,13 +3526,19 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         let settings = d.settings.entry(pos).or_default();
         settings.sequence = modifier;
-        if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state)) {
-            for (sub, part) in parts(block, info, settings).into_iter().enumerate() {
-                if let Some(part) = part {
-                    d.kinetics.read_part(pos, sub as u8, part);
-                }
-            }
+        if let Some((block, info)) = d.states.get(&pos).and_then(|state| self.table.get(*state))
+            && let Some(part) = parts(block, info, settings)
+        {
+            d.kinetics.read_part(pos, 0, part);
         }
+    }
+
+    /// `SequencedGearshiftBlockEntity.getModifier`: the speed its output face turns at relative
+    /// to its source's (0 idle). None where there is no sequenced gearshift.
+    pub fn sequencer_modifier(&self, dim: usize, pos: [i32; 3]) -> Option<f32> {
+        let d = &self.dims[dim];
+        d.sequencers.get(&pos)?;
+        Some(f32::from(d.settings.get(&pos).map_or(0, |s| s.sequence)))
     }
 
     /// The instructions of the sequenced gearshift at `pos`.
@@ -3566,20 +3576,13 @@ impl CreateWorld {
     }
 
     /// The speed the sequenced gearshift at `pos` is turned at (its block entity's theoretical
-    /// `speed`: the half turned, which the other turns at the modifier times) and whether it is
-    /// overstressed, after a solve changed either.
+    /// `speed`, the source's frame; its output face turns at the modifier times it) and whether
+    /// it is overstressed, after a solve changed either.
     fn sequencer_speed(&mut self, dim: usize, pos: [i32; 3]) {
-        let d = &self.dims[dim];
-        let (a, overstressed) = d.kinetics.theoretical(pos, 0).unwrap_or((0.0, false));
-        let b = d.kinetics.theoretical(pos, 1).map_or(0.0, |(b, _)| b);
-        let m = f32::from(d.settings.get(&pos).map_or(0, |s| s.sequence));
-        let speed = if m == 0.0 {
-            if a != 0.0 { a } else { b }
-        } else if (b - a * m).abs() <= 1e-4 * b.abs().max(1.0) {
-            a
-        } else {
-            b
-        };
+        let (speed, overstressed) = self.dims[dim]
+            .kinetics
+            .theoretical(pos, 0)
+            .unwrap_or((0.0, false));
         let Some(s) = self.dims[dim].sequencers.get_mut(&pos) else {
             return;
         };
@@ -3591,7 +3594,7 @@ impl CreateWorld {
         }
     }
 
-    /// After a sequenced gearshift's step: its far half turns at the instruction's modifier
+    /// After a sequenced gearshift's step: its output face turns at the instruction's modifier
     /// (`run`, `getRotationSpeedModifier`).
     fn sequencer_stepped(&mut self, dim: usize, pos: [i32; 3]) {
         let table = &self.table;
@@ -4895,10 +4898,8 @@ impl CreateWorld {
         else {
             return;
         };
-        for (sub, part) in parts(block, info, &settings).into_iter().enumerate() {
-            if let Some(part) = part {
-                d.kinetics.read_part(pos, sub as u8, part);
-            }
+        if let Some(part) = parts(block, info, &settings) {
+            d.kinetics.read_part(pos, 0, part);
         }
     }
 
@@ -5759,7 +5760,7 @@ impl CreateWorld {
 
 /// A block entity's setting changed in place: Create's block entity keeps its speed, source and
 /// network (`updateGeneratedRotation`, `run`), where a new block state starts them again
-/// (`KineticBlock.updateIndirectNeighbourShapes`). False when it has other parts now.
+/// (`KineticBlock.updateIndirectNeighbourShapes`). False when it gained or lost its part.
 fn update_parts_in_place(
     k: &mut Kinetics,
     block: Block,
@@ -5767,20 +5768,18 @@ fn update_parts_in_place(
     pos: [i32; 3],
     settings: &Settings,
 ) -> bool {
-    let [a, b] = parts(block, info, settings);
-    if a.is_some() != k.has_part(pos, 0) || b.is_some() != k.has_part(pos, 1) {
+    let part = parts(block, info, settings);
+    if part.is_some() != k.has_part(pos, 0) {
         return false;
     }
-    for (sub, part) in [(0, a), (1, b)] {
-        if let Some(part) = part {
-            k.set(pos, sub, part);
-        }
+    if let Some(part) = part {
+        k.set(pos, 0, part);
     }
     true
 }
 
 /// The state a sequenced gearshift's step reads and changes besides its own kinetic entity:
-/// `SequencedGearshiftBlockEntity.run`/`onSpeedChanged` make its far half turn at the running
+/// `SequencedGearshiftBlockEntity.run`/`onSpeedChanged` make its output face turn at the running
 /// instruction's modifier (`getRotationSpeedModifier`, a `SplitShaftBlockEntity`).
 struct GearshiftStep<'a> {
     table: &'a StateTable,
@@ -5790,34 +5789,34 @@ struct GearshiftStep<'a> {
     sequencers: &'a HashMap<[i32; 3], crate::sequencer::Sequencer>,
 }
 impl GearshiftStep<'_> {
-    /// A new instruction (or none) changed what the far half turns at; `run` detaches its
-    /// output and re-attaches it at that modifier.
+    /// A new instruction (or none) changed what the output face turns at; `run` detaches the
+    /// entity (`detachKinetics`) and it attaches again at that modifier.
     fn apply(&mut self, k: &mut Kinetics, pos: [i32; 3]) {
         let Some(s) = self.sequencers.get(&pos) else {
             return;
         };
         let (modifier, context) = (s.modifier() as i8, s.context());
         let old = self.settings.get(&pos).copied().unwrap_or_default();
-        let previous = k.saved_state(pos, 1).and_then(|s| s.sequence).map(|s| s.0);
+        let previous = k.saved_state(pos, 0).and_then(|s| s.sequence).map(|s| s.0);
         if (old.sequence != modifier || previous != context)
             && let Some(&state) = self.block_states.get(&pos)
         {
             let speed = k.theoretical(pos, 0).map_or(0.0, |s| s.0) * f32::from(modifier);
             let sequence = context.map(|c| (c, if speed == 0.0 { 0.0 } else { c.value / speed }));
-            // A step that only restarts the same instruction still detaches its output.
-            if old.sequence == modifier {
-                k.restart_sequence_output(pos);
-            }
             let settings = Settings {
                 sequence: modifier,
                 ..old
             };
             self.settings.insert(pos, settings);
             self.generator_changes.push(pos);
-            if let Some((block, info)) = self.table.get(state) {
-                update_parts_in_place(k, block, info, pos, &settings);
+            if let Some((block, info)) = self.table.get(state)
+                && let Some(part) = parts(block, info, &settings)
+            {
+                // `SequencedGearshiftBlockEntity.run`: `detachKinetics()` detaches downstream
+                // dependents while keeping this entity's own speed, source and network.
+                k.detach_sequencer(pos, part);
             }
-            k.set_sequence_context(pos, 1, sequence);
+            k.set_sequence_context(pos, 0, sequence);
         }
     }
 }
@@ -9676,7 +9675,7 @@ mod tests {
         // A hose pulley turns on x (its facing north turned clockwise), its shaft out east.
         w.block_changed(0, hose, 0, 12);
         assert!(w.dims[0].plumbing.hoses.contains_key(&hose));
-        let [p, _] = crate::parts::parts(
+        let p = crate::parts::parts(
             Block::HosePulley,
             &StateInfo::read([("facing", "north")].into_iter()),
             &Settings::default(),
@@ -10969,10 +10968,6 @@ mod tests {
         let mut kinetic = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
         kinetic.speed = 32.0;
         w.dims[0].kinetics.restore_state(pos, 0, kinetic);
-        kinetic.speed = 64.0;
-        kinetic.source = Some(crate::kinetics::PartLocation { pos, sub: 0 });
-        w.dims[0].kinetics.restore_state(pos, 1, kinetic);
-        let far_read_state = w.dims[0].kinetics.saved_state(pos, 1).unwrap();
         let read_state = w.dims[0].kinetics.saved_state(pos, 0).unwrap();
         // Java c37: completed tick 22 saved these fields; read does not call
         // onSpeedChanged. The unchanged 32 RPM report must leave the timer alone.
@@ -10987,7 +10982,6 @@ mod tests {
                 powered_before: true,
             },
         );
-        assert_eq!(w.dims[0].kinetics.saved_state(pos, 1), Some(far_read_state));
         assert_eq!(w.dims[0].kinetics.saved_state(pos, 0), Some(read_state));
         let s = w.dims[0].sequencers.get_mut(&pos).unwrap();
         assert_eq!(s.speed_changed(32.0, false), None);
@@ -11219,12 +11213,7 @@ mod tests {
             .collect();
         let kinetic: Vec<_> = positions
             .iter()
-            .map(|&p| {
-                [
-                    w.dims[0].kinetics.saved_state(p, 0),
-                    w.dims[0].kinetics.saved_state(p, 1),
-                ]
-            })
+            .map(|&p| w.dims[0].kinetics.saved_state(p, 0))
             .collect();
         let handle = w.saved_handle(0, crank_pos).unwrap();
         w.column_unloaded(0, 0, 0);
@@ -11235,10 +11224,8 @@ mod tests {
             if p == crank_pos {
                 w.restore_handle(0, p, handle);
             }
-            for (sub, saved) in kinetic[i].iter().enumerate() {
-                if let Some(saved) = *saved {
-                    assert!(w.dims[0].kinetics.restore_state(p, sub as u8, saved));
-                }
+            if let Some(saved) = kinetic[i] {
+                assert!(w.dims[0].kinetics.restore_state(p, 0, saved));
             }
             if p == gearshift {
                 w.restore_sequencer(0, p, run);
@@ -11247,8 +11234,9 @@ mod tests {
         let steps = level_tick(&mut w);
         assert_eq!(steps, [(gearshift, Step::Ended)]);
         // Java at the reloaded tick: the crank and what it turns still run at 32 RPM and report
-        // the 256 SU the save restored. The gearshift that just ended its run was never
-        // enrolled in that network: it keeps its saved capacity and loses its speed.
+        // the 256 SU the save restored. The gearshift stays powered, so `run(1)` takes
+        // `else sendData()` without `setBlock(STATE 0)` and keeps its speed and network, while
+        // `detachKinetics` detaches only the downstream gearshift (`output`).
         assert_eq!(w.speed(0, crank_pos), Some(-32.0));
         assert_eq!(
             w.dims[0].kinetics.network(crank_pos, 0),
@@ -11273,7 +11261,7 @@ mod tests {
     }
 
     #[test]
-    fn a_sequenced_gearshift_turns_its_far_half_through_its_sequence() {
+    fn a_sequenced_gearshift_turns_its_output_face_through_its_sequence() {
         use crate::sequencer::Step;
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
@@ -11295,7 +11283,7 @@ mod tests {
         assert_eq!(
             w.speed(0, [1, 0, 0]),
             Some(0.0),
-            "idle: the far half is still"
+            "idle: the output face is still"
         );
         // Powered: its neighbour changed, its redstone is looked at; the 90° turn starts.
         w.neighbor_changed(0, [0, 0, 0], 10);
@@ -11305,7 +11293,7 @@ mod tests {
             Some(Step::Run(1))
         );
         w.block_changed(0, [0, 0, 0], 10, 11);
-        // 21 ticks at 16 RPM, then it ends and the far half stops.
+        // 21 ticks at 16 RPM, then it ends and the output face stops.
         for i in 0..21 {
             assert!(w.tick(0, &mut Vec::new()).1.is_empty());
             if i == 0 {
@@ -11316,11 +11304,11 @@ mod tests {
         assert!(w.tick(0, &mut Vec::new()).1.is_empty());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0));
         // SequencedGearshiftBlockEntity.run(-1): Sequence is absent, including on disk.
-        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 1, false), None);
+        assert_eq!(w.dims[0].kinetics.sequence_limit([0, 0, 0], 0, false), None);
         assert_eq!(
             w.dims[0]
                 .kinetics
-                .saved_state([0, 0, 0], 1)
+                .saved_state([0, 0, 0], 0)
                 .unwrap()
                 .sequence,
             None
@@ -11452,7 +11440,6 @@ mod tests {
             .into_iter()
             .map(|p| (p, w.dims[0].kinetics.saved_state(p, 0)))
             .collect();
-        let far = w.dims[0].kinetics.saved_state(gearshift, 1);
         let handle = w.saved_handle(0, crank).unwrap();
         let states: Vec<_> = [shaft, gearshift, crank]
             .into_iter()
@@ -11472,9 +11459,6 @@ mod tests {
                 assert!(w.dims[0].kinetics.restore_state(p, 0, state));
             }
         }
-        if let Some(far) = far {
-            assert!(w.dims[0].kinetics.restore_state(gearshift, 1, far));
-        }
         w.restore_handle(0, crank, handle);
         w.set_sequencer_instructions(0, gearshift, instructions, false);
         w.restore_sequencer(0, gearshift, run);
@@ -11488,7 +11472,7 @@ mod tests {
         w.block_changed(0, gearshift, 11, 12);
         w.tick(0, &mut Vec::new());
         // Java: the program restarts at 32 RPM (12 ticks for 90°) and the gearshift is
-        // attached again in this tick, turning its far half 9.6° a tick.
+        // attached again in this tick, turning its output face 9.6° a tick.
         assert_eq!(w.state_at(0, gearshift), Some(12));
         let run = w.sequencer_run(0, gearshift).unwrap();
         assert_eq!((run.current, run.duration, run.timer), (0, 12, 1));

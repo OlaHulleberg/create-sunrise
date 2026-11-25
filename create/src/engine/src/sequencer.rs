@@ -1,7 +1,7 @@
 //! The sequenced gearshift, after Create's `SequencedGearshiftBlockEntity`, `Instruction`,
 //! `SequencerInstructions` and `InstructionSpeedModifiers`: a list of instructions (turn so many
 //! degrees or metres, wait, wait for a pulse, end) run one after the other while it is powered,
-//! each turning the far half at its speed modifier for as many ticks as it needs.
+//! each turning the output face at its speed modifier for as many ticks as it needs.
 //!
 //! The block's `state` (0 idle, else the running instruction's index + 1) is what the game shows
 //! and what a comparator reads; the rest lives here, ticking only while an instruction runs.
@@ -219,7 +219,7 @@ impl Instruction {
         }
     }
 
-    /// `getSpeedModifier`: what the far half turns at while it runs (0 while waiting).
+    /// `getSpeedModifier`: what the output face turns at while it runs (0 while waiting).
     pub fn speed_modifier(&self) -> i32 {
         if self.kind.turns() {
             self.speed.value()
@@ -337,7 +337,7 @@ impl Sequencer {
             .copied()
     }
 
-    /// `getModifier`: the far half's speed relative to the near one's (0 idle).
+    /// `getModifier`: the output face's speed relative to the source's (0 idle).
     pub fn modifier(&self) -> i32 {
         if self.is_idle() {
             return 0;
@@ -609,7 +609,7 @@ mod tests {
             ..Sequencer::default()
         };
         assert_eq!(s.modifier(), 0);
-        // Powered: the 90° turn starts (state 1), the far half turns.
+        // Powered: the 90° turn starts (state 1), the output face turns.
         assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
         assert_eq!(s.modifier(), 1);
         assert_eq!(s.duration, 21);
@@ -641,7 +641,7 @@ mod tests {
             ..Sequencer::default()
         };
         assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
-        assert_eq!(s.modifier(), 0, "a delay holds the far half");
+        assert_eq!(s.modifier(), 0, "a delay holds the output face");
         s.tick();
         s.tick();
         assert_eq!(s.tick(), Some(Step::Run(2)), "the await");

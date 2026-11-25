@@ -187,8 +187,7 @@ pub struct Part {
     pub diagonal: bool,
     /// An encased chain drive's chain to its neighbours (`ChainDriveBlock`).
     pub chain: Option<Chain>,
-    /// A speed set across to another part instead of a ratio: a rotation speed controller's, or a
-    /// sequenced gearshift's second half.
+    /// A speed set across to another part instead of a ratio: a rotation speed controller's.
     pub couple: Option<Couple>,
     /// Whether copySequenceContextFrom inherits or is overridden with a no-op.
     /// The context value itself lives only in KineticState.seq (and its saved record).
@@ -265,16 +264,13 @@ pub struct Chain {
 }
 
 /// A part that sets another's speed, whichever turns first driving the other
-/// (`RotationPropagator.getConveyedSpeed`, `SplitShaftBlockEntity.getRotationSpeedModifier`).
+/// (`RotationPropagator.getConveyedSpeed`).
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Couple {
     /// A rotation speed controller's target (RPM): the large cog on a horizontal axis across it,
     /// above it, turns at it while the controller turns, and the controller at it while only
     /// the cog does (`SpeedControllerBlockEntity.getDesiredOutputSpeed`).
     Controller(f32),
-    /// On a split shaft's second half: the half away from the one turned turns at this times
-    /// its speed (a sequenced gearshift's instruction modifier; 0 cuts).
-    Relay(f32),
 }
 
 impl Part {
@@ -322,7 +318,7 @@ impl Part {
             ..Part::shaft(axis)
         }
     }
-    /// A shaft end on one face only (a motor's output, one half of a split shaft).
+    /// A shaft end on one face only (a motor's output).
     pub fn half(face: Dir) -> Part {
         Part {
             shafts: face.bit(),
@@ -669,20 +665,6 @@ impl Kinetics {
         }
     }
 
-    /// SequencedGearshiftBlockEntity.run detaches its output even when the next
-    /// instruction has the same modifier. The input half retains its source/network.
-    pub(crate) fn restart_sequence_output(&mut self, pos: [i32; 3]) {
-        let Some(id) = self.at.get(&pos).map(|ids| ids[1]).filter(|&id| id != NONE) else {
-            return;
-        };
-        let mut events = Vec::new();
-        self.handle_removed(id, &mut events);
-        self.remove_source(id);
-        self.nodes[id as usize].state.update_speed = true;
-        self.dirty.push(id);
-        self.pending_events.extend(events);
-    }
-
     /// Effects of synchronous RotationPropagator calls (including destroyBlock).
     /// Hosts apply these before publishing an accepted interaction, without ticking.
     pub fn take_pending_events(&mut self) -> Vec<Event> {
@@ -927,6 +909,23 @@ impl Kinetics {
             self.nodes[id as usize].state.update_speed = true;
             self.dirty.push(id);
         }
+        self.pending_events.extend(events);
+    }
+
+    /// `SequencedGearshiftBlockEntity.run`: `detachKinetics()` detaches downstream dependents
+    /// without clearing the gearshift's own speed, source or network, and installs its updated
+    /// per-face speed modifier in place.
+    pub fn detach_sequencer(&mut self, pos: [i32; 3], part: Part) {
+        let Some(id) = self.at.get(&pos).map(|ids| ids[0]).filter(|&id| id != NONE) else {
+            return;
+        };
+        let mut events = Vec::new();
+        self.handle_removed(id, &mut events);
+        let n = &mut self.nodes[id as usize];
+        n.part = part;
+        n.state.update_speed = true;
+        n.fresh = true;
+        self.dirty.push(id);
         self.pending_events.extend(events);
     }
 
@@ -1233,50 +1232,25 @@ impl Kinetics {
     /// part that holds the setting; `pull` gets the parts on the other side, to solve with it.
     fn couplings(&self, id: u32, out: &mut Vec<Coupling>, pull: &mut Vec<u32>) {
         let n = &self.nodes[id as usize];
-        let at =
-            |p: [i32; 3], sub: usize| self.at.get(&p).map(|pair| pair[sub]).filter(|&m| m != NONE);
-        match n.part.couple {
-            Some(Couple::Controller(target)) => {
-                if let Some(cog) = at(add(n.pos, [0, 1, 0]), 0)
-                    && controls(&n.part, &self.nodes[cog as usize].part)
-                {
-                    out.push(Coupling {
-                        from: id,
-                        to: cog,
-                        kind: Couple::Controller(target),
-                    });
-                    pull.push(cog);
-                }
-            }
-            Some(Couple::Relay(m)) if n.sub == 1 => {
-                if let Some(first) = at(n.pos, 0) {
-                    out.push(Coupling {
-                        from: first,
-                        to: id,
-                        kind: Couple::Relay(m),
-                    });
-                    pull.push(first);
-                }
-            }
-            _ => {}
+        let at = |p: [i32; 3]| self.at.get(&p).map(|pair| pair[0]).filter(|&m| m != NONE);
+        if let Some(Couple::Controller(target)) = n.part.couple
+            && let Some(cog) = at(add(n.pos, [0, 1, 0]))
+            && controls(&n.part, &self.nodes[cog as usize].part)
+        {
+            out.push(Coupling {
+                from: id,
+                to: cog,
+                kind: Couple::Controller(target),
+            });
+            pull.push(cog);
         }
-        // The other side: the controller below a large cog, a split shaft's second half.
+        // The other side: the controller below a large cog.
         if n.part.cog == Cog::Large
             && n.part.axis != Axis::Y
-            && let Some(c) = at(add(n.pos, [0, -1, 0]), 0)
+            && let Some(c) = at(add(n.pos, [0, -1, 0]))
             && controls(&self.nodes[c as usize].part, &n.part)
         {
             pull.push(c);
-        }
-        if n.sub == 0
-            && n.part.shafts.count_ones() == 1
-            && let Some(second) = at(n.pos, 1)
-            && matches!(
-                self.nodes[second as usize].part.couple,
-                Some(Couple::Relay(_))
-            )
-        {
-            pull.push(second);
         }
     }
 
@@ -1639,8 +1613,8 @@ fn flicker_gain(before: f32, after: f32) -> i32 {
     if from_or_to_zero || swap { 5 } else { 0 }
 }
 
-/// A coupling found while solving: `from` holds the setting (the controller, a split shaft's
-/// first half), `dir` says which side drives (1 `from`'s, -1 `to`'s, 0 not known yet).
+/// A coupling found while solving: `from` holds the setting (the controller), `to` the part it
+/// sets.
 #[derive(Clone, Copy, Debug)]
 struct Coupling {
     from: u32,
@@ -3256,67 +3230,197 @@ mod tests {
         );
     }
 
-    fn sequencer(k: &mut Kinetics, modifier: f32) {
-        k.set([0, 0, 0], 0, Part::half(Dir::West));
+    /// A sequenced gearshift on x: one split shaft whose output face turns at `modifier` times
+    /// its source's (`getRotationSpeedModifier`; 0 while idle), owning its sequence context.
+    fn sequencer(k: &mut Kinetics, pos: [i32; 3], modifier: f32) {
         k.set(
-            [0, 0, 0],
-            1,
+            pos,
+            0,
             Part {
-                couple: Some(Couple::Relay(modifier)),
-                ..Part::half(Dir::East)
+                context: SequenceContextSource::Owned,
+                ..Part::split_shaft(Axis::X, modifier)
             },
         );
     }
 
     #[test]
-    fn a_relay_turns_the_far_half_from_whichever_side_turns() {
+    fn a_sequenced_gearshift_turns_its_output_face_from_whichever_side_turns() {
         for (m, expect) in [(2.0, 24.0), (-1.0, -12.0), (-2.0, -24.0), (0.0, 0.0)] {
             // Turned from the west.
             let mut k = Kinetics::new();
             k.set([-1, 0, 0], 0, motor(Dir::East, 12.0));
-            sequencer(&mut k, m);
+            sequencer(&mut k, [0, 0, 0], m);
             k.set([1, 0, 0], 0, Part::shaft(Axis::X));
             solve(&mut k);
             assert_eq!(k.speed([1, 0, 0], 0), Some(expect), "west, {m}");
             assert_eq!(k.speed([0, 0, 0], 0), Some(12.0));
-            // Turned from the east: the west half turns at the modifier times it too.
+            // Turned from the east: the west face turns at the modifier times it too.
             let mut k = Kinetics::new();
             k.set([1, 0, 0], 0, motor(Dir::West, -12.0));
-            sequencer(&mut k, m);
+            sequencer(&mut k, [0, 0, 0], m);
             k.set([-1, 0, 0], 0, Part::shaft(Axis::X));
             solve(&mut k);
             assert_eq!(k.speed([-1, 0, 0], 0), Some(expect), "east, {m}");
+            assert_eq!(k.speed([0, 0, 0], 0), Some(12.0));
+            assert_eq!(k.face_speed([0, 0, 0], Dir::East), Some(12.0));
+            assert_eq!(k.face_speed([0, 0, 0], Dir::West), Some(expect));
         }
         // Past 256 RPM breaks it.
         let mut k = Kinetics::new();
         k.set([-1, 0, 0], 0, motor(Dir::East, 200.0));
-        sequencer(&mut k, 2.0);
+        sequencer(&mut k, [0, 0, 0], 2.0);
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
         let e = solve(&mut k);
         assert!(e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
     }
 
+    /// An idle sequenced gearshift between two motors turning toward each other, the motor on
+    /// `first`'s side placed before it and the other after.
+    fn between_two_motors(first: Dir) -> Kinetics {
+        let (near, far) = match first {
+            Dir::West => ([-1, 0, 0], [1, 0, 0]),
+            _ => ([1, 0, 0], [-1, 0, 0]),
+        };
+        let mut k = Kinetics::new();
+        k.set(near, 0, motor(first.opposite(), 16.0));
+        sequencer(&mut k, [0, 0, 0], 0.0);
+        k.set(far, 0, motor(first, 16.0));
+        k
+    }
+
     #[test]
-    fn a_sequence_context_reaches_what_the_relay_or_valve_turns_scaled_by_its_speed() {
+    fn a1_an_idle_sequenced_gearshift_between_two_motors_is_in_one_network() {
+        // `SequencedGearshiftBlockEntity` is one `KineticBlockEntity`: one source, one network.
+        // The east motor turns first and takes it; idle, its west face has modifier 0
+        // (`getRotationSpeedModifier`), so the west motor, turning against it, cannot become
+        // its source (`RotationPropagator` skips a neighbour whose modifier is 0).
+        let mut k = between_two_motors(Dir::East);
+        let e = solve(&mut k);
+        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+        let (gearshift, east, west) = ([0, 0, 0], [1, 0, 0], [-1, 0, 0]);
+        assert_eq!(
+            k.network_membership(gearshift, 0),
+            Some((network_id(east), 2)),
+            "the east network holds the motor and the gearshift"
+        );
+        assert_eq!(k.network_membership(east, 0), Some((network_id(east), 2)));
+        assert_eq!(
+            k.network_membership(west, 0),
+            Some((network_id(west), 1)),
+            "the gearshift is in no second network"
+        );
+        assert_eq!(k.speed(gearshift, 0), Some(-16.0));
+        assert_eq!(k.speed(west, 0), Some(16.0), "the west motor turns alone");
+        assert_eq!(k.face_speed(gearshift, Dir::East), Some(-16.0));
+        assert_eq!(k.face_speed(gearshift, Dir::West), Some(0.0), "dead face");
+        assert_eq!(k.source_facing(gearshift), Some(Dir::East));
+    }
+
+    #[test]
+    fn a2_the_gearshift_stays_in_the_network_that_took_it() {
+        // The same, with the west motor first: the sides swap, and nothing flickers or breaks
+        // as the ticks go on.
+        let mut k = between_two_motors(Dir::West);
+        let (gearshift, east, west) = ([0, 0, 0], [1, 0, 0], [-1, 0, 0]);
+        for _ in 0..10 {
+            k.advance();
+            let e = solve(&mut k);
+            assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+            assert_eq!(
+                k.network_membership(gearshift, 0),
+                Some((network_id(west), 2))
+            );
+            assert_eq!(k.network_membership(east, 0), Some((network_id(east), 1)));
+            assert_eq!(k.face_speed(gearshift, Dir::West), Some(16.0));
+            assert_eq!(k.face_speed(gearshift, Dir::East), Some(0.0), "dead face");
+        }
+        assert_eq!(k.speed(east, 0), Some(-16.0), "the east motor turns alone");
+        assert!(k.flicker_score(gearshift) <= 5, "turned on once");
+    }
+
+    #[test]
+    fn a3_a_gearshift_that_lost_its_source_picks_up_the_other_motor() {
+        let mut k = between_two_motors(Dir::West);
+        let (gearshift, east, west) = ([0, 0, 0], [1, 0, 0], [-1, 0, 0]);
+        solve(&mut k);
+        assert_eq!(
+            k.network_membership(gearshift, 0),
+            Some((network_id(west), 2))
+        );
+        // The west motor goes: the gearshift has no source, so both its faces are open again.
+        k.remove(west);
+        solve(&mut k);
+        assert_eq!(k.speed(gearshift, 0), Some(0.0));
+        assert_eq!(k.network_membership(gearshift, 0), None);
+        assert_eq!(k.source_facing(gearshift), None);
+        assert_eq!(k.speed(east, 0), Some(-16.0));
+        // The east motor turns faster (`updateGeneratedRotation`) and reaches it.
+        k.set(east, 0, motor(Dir::West, 32.0));
+        let e = solve(&mut k);
+        assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+        assert_eq!(k.speed(gearshift, 0), Some(-32.0));
+        assert_eq!(
+            k.network_membership(gearshift, 0),
+            Some((network_id(east), 2))
+        );
+        assert_eq!(k.source_facing(gearshift), Some(Dir::East));
+        assert_eq!(k.face_speed(gearshift, Dir::West), Some(0.0), "dead face");
+    }
+
+    #[test]
+    fn c1_a_gearshift_driven_from_either_side_breaks_on_one_flicker_tally() {
+        // A new instruction every tick: the entity detaches and attaches again at the new
+        // modifier (`run`), 5 more on the one `flickerTally` for each change of its speed and
+        // one less a tick, until it is past 128 and breaks, whichever side turns it.
+        for (drive, at) in [(Dir::East, [-1, 0, 0]), (Dir::West, [1, 0, 0])] {
+            let mut k = Kinetics::new();
+            k.set(at, 0, motor(drive, 16.0));
+            sequencer(&mut k, [0, 0, 0], 0.0);
+            k.advance();
+            solve(&mut k);
+            let mut broke = None;
+            for t in 1..200 {
+                k.advance();
+                sequencer(&mut k, [0, 0, 0], if t % 2 == 1 { 2.0 } else { 0.0 });
+                let e = solve(&mut k);
+                if e.contains(&Event::Break { pos: [0, 0, 0] }) {
+                    broke = Some(t);
+                    break;
+                }
+            }
+            let t = broke.unwrap_or_else(|| panic!("{drive:?}: the gearshift breaks"));
+            assert!((10..=25).contains(&t), "{drive:?}: broke at {t}");
+            assert!(!k.has_part([0, 0, 0], 0));
+            assert_eq!(k.speed(at, 0), Some(convert_to_direction(16.0, drive)));
+            // A new instruction every 20 ticks never does: the tally falls back between.
+            let mut k = Kinetics::new();
+            k.set(at, 0, motor(drive, 16.0));
+            sequencer(&mut k, [0, 0, 0], 0.0);
+            for t in 0..400 {
+                k.advance();
+                if t % 20 == 0 {
+                    sequencer(&mut k, [0, 0, 0], if t % 40 == 0 { 2.0 } else { 0.0 });
+                }
+                let e = solve(&mut k);
+                assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
+            }
+            assert!(k.flicker_score([0, 0, 0]) <= 10);
+        }
+    }
+
+    #[test]
+    fn a_sequence_context_reaches_what_the_gearshift_or_valve_turns_scaled_by_its_speed() {
         let ctx = |distance, value| Context {
             distance,
             value,
             run: 1,
         };
-        // A gearshift turned from the west running "turn 90 degrees" at double speed: the far
-        // half's side takes it; a large cog geared down from it turns half as far.
+        // A gearshift turned from the west running "turn 90 degrees" at double speed: its east
+        // side takes it; a large cog geared down from it turns half as far.
         let mut k = Kinetics::new();
         k.set([-1, 0, 0], 0, motor(Dir::East, 12.0));
-        k.set([0, 0, 0], 0, Part::half(Dir::West));
-        k.set(
-            [0, 0, 0],
-            1,
-            Part {
-                couple: Some(Couple::Relay(2.0)),
-                context: SequenceContextSource::Owned,
-                ..Part::half(Dir::East)
-            },
-        );
-        k.set_sequence_context([0, 0, 0], 1, Some((ctx(false, 90.0), 90.0 / 24.0)));
+        sequencer(&mut k, [0, 0, 0], 2.0);
+        k.set_sequence_context([0, 0, 0], 0, Some((ctx(false, 90.0), 90.0 / 24.0)));
         k.set([1, 0, 0], 0, Part::cog(Axis::X, false));
         k.set([1, 1, 1], 0, Part::cog(Axis::X, true));
         solve(&mut k);
@@ -3330,19 +3434,10 @@ mod tests {
             "the side turning it"
         );
         // A new run of the same turn tells the parts again, unchanged speeds and all.
-        k.set(
-            [0, 0, 0],
-            1,
-            Part {
-                couple: Some(Couple::Relay(2.0)),
-                context: SequenceContextSource::Owned,
-                ..Part::half(Dir::East)
-            },
-        );
-        k.restart_sequence_output([0, 0, 0]);
+        k.detach_transmission([0, 0, 0]);
         k.set_sequence_context(
             [0, 0, 0],
-            1,
+            0,
             Some((
                 Context {
                     run: 2,
@@ -3447,15 +3542,15 @@ mod tests {
     }
 
     #[test]
-    fn a_relay_whose_halves_a_loop_joins_breaks_unless_it_agrees() {
-        // The far half reached around the sequencer by cogs, at the near half's speed.
+    fn a_gearshift_whose_faces_a_loop_joins_breaks_unless_it_agrees() {
+        // Its east face reached around the gearshift by cogs, at the west face's speed.
         for (m, breaks) in [(1.0, false), (2.0, true), (-1.0, true), (0.0, false)] {
             let mut k = Kinetics::new();
             k.set([-2, 0, 0], 0, motor(Dir::East, 12.0));
             for p in [[-1, 0, 0], [-1, 1, 0], [0, 1, 0], [1, 1, 0], [1, 0, 0]] {
                 k.set(p, 0, Part::cog(Axis::X, false));
             }
-            sequencer(&mut k, m);
+            sequencer(&mut k, [0, 0, 0], m);
             let e = solve(&mut k);
             assert_eq!(
                 e.iter().any(|x| matches!(x, Event::Break { .. })),
@@ -3485,7 +3580,6 @@ mod tests {
             k.network_membership([0, 0, 10], 0),
             Some((network_id([0, 0, 10]), 1))
         );
-        assert_eq!(k.network_membership([0, 0, 0], 1), None);
         k.remove([0, 0, 0]);
         k.solve(&mut Vec::new());
         assert_eq!(k.network_membership([1, 0, 0], 0), None);

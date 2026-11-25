@@ -82,7 +82,7 @@ impl KineticState {
     }
 }
 
-/// A source block position, with the engine port for split shaft halves.
+/// A source block position, with the engine port of the part there.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct PartLocation {
     pub pos: [i32; 3],
