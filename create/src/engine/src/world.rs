@@ -190,8 +190,8 @@ pub struct Dimension {
     /// Blocks whose settings changed (a generator's speed may have): the sources tell their
     /// clients what they generate.
     pub generator_changes: Vec<[i32; 3]>,
-    /// Water wheels, to look at their flow every 60 ticks (`lazyTick`), staggered by position.
-    wheels: Vec<[i32; 3]>,
+    /// Water wheels, to look at their flow every 60 ticks (`setLazyTickRate(60)`, `lazyTick`).
+    wheels: HashMap<[i32; 3], crate::block_entity::SmartBlockEntity>,
     /// Water wheels to look at now: placed, or a neighbour changed.
     wheel_checks: Vec<[i32; 3]>,
     /// Large water wheels whose scheduled tick came: a placed one or one whose frame changed
@@ -1433,8 +1433,12 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         // A wheel loaded with its column looks at its flow (`lazyTick`); placed ones are listed
         // by `block_changed`.
-        if matches!(block, Block::WaterWheel | Block::LargeWaterWheel) && !d.wheels.contains(&pos) {
-            d.wheels.push(pos);
+        if matches!(block, Block::WaterWheel | Block::LargeWaterWheel)
+            && !d.wheels.contains_key(&pos)
+        {
+            d.wheels
+                .entry(pos)
+                .or_insert_with(|| crate::block_entity::SmartBlockEntity::new(60));
             d.wheel_checks.push(pos);
         }
         if block == Block::Depot && !d.depots.contains_key(&pos) {
@@ -1916,14 +1920,19 @@ impl CreateWorld {
             if self.table.get(new).map(|(b, _)| b) == Some(Block::WaterWheel)
                 && self.table.get(old).map(|(b, _)| b) != Some(Block::WaterWheel)
             {
-                self.dims[dim].wheels.push(pos);
+                self.dims[dim]
+                    .wheels
+                    .entry(pos)
+                    .or_insert_with(|| crate::block_entity::SmartBlockEntity::new(60));
                 self.dims[dim].wheel_checks.push(pos);
             }
             if self.table.get(new).map(|(b, _)| b) == Some(Block::LargeWaterWheel)
                 && self.table.get(old).map(|(b, _)| b) != Some(Block::LargeWaterWheel)
             {
                 let d = &mut self.dims[dim];
-                d.wheels.push(pos);
+                d.wheels
+                    .entry(pos)
+                    .or_insert_with(|| crate::block_entity::SmartBlockEntity::new(60));
                 d.wheel_checks.push(pos);
                 schedule_large_wheel(d, pos);
             }
@@ -1953,7 +1962,7 @@ impl CreateWorld {
             d.kinetics.remove(pos);
             d.states.remove(&pos);
             d.handles.remove(&pos);
-            d.wheels.retain(|p| *p != pos);
+            d.wheels.remove(&pos);
             d.millstones.remove(&pos);
             d.basins.remove(&pos);
             d.presses.remove(&pos);
@@ -2265,7 +2274,7 @@ impl CreateWorld {
                 d.states.remove(&pos);
                 d.handles.remove(&pos);
             }
-            d.wheels.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.wheels.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.millstones
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.basins.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -3115,19 +3124,19 @@ impl CreateWorld {
         }
     }
 
-    /// The water wheels to look at in this tick (`tick` counts ticks): those whose neighbour
-    /// changed, and one in 60 of the others (Create's `lazyTick` every 60 ticks), with their axis.
+    /// The water wheels to look at in this tick: those whose neighbour changed, and those whose
+    /// lazy tick came (`setLazyTickRate(60)`), with their axis.
     pub fn take_wheel_checks(
         &mut self,
         dim: usize,
-        tick: u64,
     ) -> Vec<([i32; 3], crate::kinetics::Axis, bool)> {
         let d = &mut self.dims[dim];
         let mut list = std::mem::take(&mut d.wheel_checks);
-        list.extend(d.wheels.iter().filter(|p| {
-            (p[0].wrapping_mul(31) ^ p[2].wrapping_mul(17) ^ p[1]).rem_euclid(60) as u64
-                == tick % 60
-        }));
+        for (pos, be) in d.wheels.iter_mut() {
+            if be.tick() {
+                list.push(*pos);
+            }
+        }
         list.sort();
         list.dedup();
         list.into_iter()
@@ -10063,6 +10072,27 @@ mod tests {
         w.evaluate_boilers(0);
         assert!(w.dims[0].boilers.is_empty());
         assert_eq!(w.take_unsaved(0), [(0, 0)]);
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_water_wheel_looks_at_its_flow_on_the_first_tick_and_the_sixty_first() {
+        // `WaterWheelBlockEntity`: `setLazyTickRate(60)`; `lazyTick` runs on the first tick
+        // (`initialize`), then after the counter of 60 ran down.
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        states::set_range(10, 1);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            [(
+                "create:large_water_wheel",
+                [("axis", "y"), ("extension", "false")],
+            )],
+        ));
+        w.block_changed(0, [0, 0, 0], 0, 10);
+        let fired: Vec<u32> = (1..=61)
+            .filter(|_| !w.take_wheel_checks(0).is_empty())
+            .collect();
+        assert_eq!(fired, [1, 61]);
         states::clear_range();
     }
 

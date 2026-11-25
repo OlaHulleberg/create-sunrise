@@ -511,9 +511,8 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     with_world(|w| w.reattach_scheduled_transmissions(dim, &mut scheduled));
     apply_events(lv, scheduled);
     with_world(|w| w.tick_cranks(dim));
-    // Water wheels whose surroundings changed, and one in 60 of the others each tick.
-    let now = lv.game_time() as u64;
-    for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim, now)).unwrap_or_default() {
+    // Water wheels whose surroundings changed, and those whose lazy tick came.
+    for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim)).unwrap_or_default() {
         super::sources::waterwheels::determine_flow(lv, pos, axis, large);
     }
     // Encased chain drives placed or beside a change take their place in their chain
