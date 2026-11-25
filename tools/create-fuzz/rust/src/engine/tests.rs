@@ -697,6 +697,54 @@ fn a_tunnel_joining_its_group_as_the_world_saves_keeps_the_group_mode() {
 }
 
 #[test]
+fn a_tunnel_set_over_an_uncased_belt_stays_until_the_block_below_changes() {
+    // `BeltTunnelBlock.neighborChanged` asks `canSurvive` only from the block below; a tunnel
+    // set by `/setblock` over a belt with no casing survives `onPlace` and the shape updates,
+    // and breaks when the belt under it is replaced. The scenario contract has no tunnel
+    // state (tunnels are placed by `use`, which cases the belt), so the `/setblock` is driven
+    // here.
+    let sc: crate::scenario::Scenario = serde_json::from_value(serde_json::json!({
+        "version":3,"ticks":40,"blocks":[
+            {"pos":[0,8,0],"state":"create:shaft[axis=x,waterlogged=false]"},
+            {"pos":[0,8,5],"state":"create:shaft[axis=x,waterlogged=false]"}
+        ],"events":[
+            {"tick":8,"pos":[0,8,0],"action":{"kind":"use","item":"create:belt_connector","face":"up","hit":[0.5,1.0,0.5],"yaw":0.0,"pitch":0.0,"sneaking":false}},
+            {"tick":14,"pos":[0,8,5],"action":{"kind":"use","item":"create:belt_connector","face":"up","hit":[0.5,1.0,0.5],"yaw":0.0,"pitch":0.0,"sneaking":false}}
+        ]
+    }))
+    .unwrap();
+    let placed = |pos, state: &str| crate::scenario::Placed {
+        pos,
+        state: state.into(),
+        motor: None,
+    };
+    let mut r = super::Run::new(&sc);
+    for t in 0..sc.ticks {
+        if let Some(b) = sc.blocks.get(t as usize) {
+            r.place(b);
+        }
+        for e in sc.events.iter().filter(|e| e.tick == t) {
+            r.action(e.pos, e.action.as_ref().unwrap());
+        }
+        match t {
+            20 => r.place(&placed(
+                [0, 9, 2],
+                "create:brass_tunnel[axis=z,shape=straight]",
+            )),
+            25 => assert!(
+                r.snapshot(&sc).blocks["0,9,2"]
+                    .state
+                    .starts_with("create:brass_tunnel[")
+            ),
+            30 => r.place(&placed([0, 8, 2], "minecraft:air")),
+            _ => {}
+        }
+        r.tick();
+    }
+    assert_eq!(r.snapshot(&sc).blocks["0,9,2"].state, "minecraft:air");
+}
+
+#[test]
 fn a_mixer_reports_the_port_s_idle_cycle() {
     let sc: crate::scenario::Scenario =
         serde_json::from_value(serde_json::json!({"version":3,"ticks":20,"blocks":[
