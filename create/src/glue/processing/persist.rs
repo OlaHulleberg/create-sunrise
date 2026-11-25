@@ -5,7 +5,7 @@
 
 use crate::glue::entity_data::Entities;
 use crate::glue::world::with_world;
-use create_engine::{Block, basin, burner, crafter_input, crusher, deployer, tank};
+use create_engine::{Block, basin, burner, crafter_input, crusher, deployer, press, tank};
 use mod_api::{Compound, Tag};
 
 /// What an older version saved with the column, handed to the engine before the column's blocks
@@ -35,6 +35,10 @@ const BASIN: &str = "BasinTanks";
 const INPUT: &str = "ConnectedInput";
 const COVER: &str = "Cover";
 const TIMER: &str = "Timer";
+const PRESS_RUNNING: &str = "Running";
+const PRESS_MODE: &str = "Mode";
+const PRESS_FINISHED: &str = "Finished";
+const PRESS_TICKS: &str = "Ticks";
 
 pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
     match block {
@@ -45,6 +49,7 @@ pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
         Block::MechanicalCrafter => &[INPUT, COVER],
         Block::MechanicalSaw => &[super::saw::INVENTORY, super::saw::RECIPE_INDEX],
         Block::Millstone => &[TIMER],
+        Block::MechanicalPress => &[PRESS_RUNNING, PRESS_MODE, PRESS_FINISHED, PRESS_TICKS],
         _ => &[],
     }
 }
@@ -76,7 +81,8 @@ fn fluid_of(t: &Tag) -> Option<(tank::Fluid, u32)> {
 
 /// What counts down in [`save_entities`]' records, from the live deployer's `Timer`, crusher's
 /// `Remaining` (`ProcessingInventory.remainingTime`), burner's `Remaining`
-/// (`remainingBurnTime`), saw's `ProcessingTime` or millstone's `Timer` at `pos`.
+/// (`remainingBurnTime`), saw's `ProcessingTime`, millstone's `Timer` or press's `Running`,
+/// `Mode`, `Finished` and `Ticks` at `pos`.
 pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compound) {
     use super::super::entity_data::patch;
     if block == Block::MechanicalSaw {
@@ -117,6 +123,14 @@ pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compoun
                     fields.insert(TIMER.into(), Tag::Int(m.timer));
                 }
             }
+            Block::MechanicalPress => {
+                if let Some(pr) = d.presses.get(&pos) {
+                    fields.insert(PRESS_RUNNING.into(), Tag::Byte(i8::from(pr.running)));
+                    fields.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
+                    fields.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
+                    fields.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
+                }
+            }
             _ => {}
         }
     });
@@ -125,7 +139,8 @@ pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compoun
 /// `DeployerBlockEntity.write`, `CrushingWheelControllerBlockEntity.write`,
 /// `BlazeBurnerBlockEntity.write`, `BasinBlockEntity.write`'s tanks,
 /// `MechanicalCrafterBlockEntity.write`'s `ConnectedInput` and `Cover`, `SawBlockEntity.write`
-/// and `MillstoneBlockEntity.write`'s `Timer` of column `chunk`.
+/// `MillstoneBlockEntity.write`'s `Timer` and `PressingBehaviour.write`'s `Running`, `Mode`,
+/// `Finished` and `Ticks` of column `chunk`.
 pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
     super::saw::save_saws(dim, chunk, out);
     with_world(|w| {
@@ -200,6 +215,13 @@ pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
             out.entry(*p)
                 .or_default()
                 .insert(TIMER.into(), Tag::Int(m.timer));
+        }
+        for (p, pr) in d.presses.iter().filter(|(p, _)| mine(p)) {
+            let e = out.entry(*p).or_default();
+            e.insert(PRESS_RUNNING.into(), Tag::Byte(i8::from(pr.running)));
+            e.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
+            e.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
+            e.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
         }
     });
 }
@@ -310,6 +332,18 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
         }
         Block::Millstone => {
             w.dims[dim].millstones.entry(pos).or_default().timer = int(tag, TIMER);
+        }
+        Block::MechanicalPress => {
+            let flag = |k: &str| matches!(tag.get(&k.into()), Some(Tag::Byte(b)) if *b != 0);
+            let d = &mut w.dims[dim];
+            let pr = d.presses.entry(pos).or_default();
+            pr.running = flag(PRESS_RUNNING);
+            pr.mode = press::Mode::from_index(int(tag, PRESS_MODE).clamp(0, 2) as u8);
+            pr.finished = flag(PRESS_FINISHED);
+            pr.ticks = int(tag, PRESS_TICKS);
+            if pr.running {
+                d.press_changes.push(pos);
+            }
         }
         _ => {}
     });
