@@ -155,7 +155,10 @@ fn pipeline_id(i: usize) -> String {
 
 /// `register_render_pipelines`: a translucent pipeline sampling each ghost sprite.
 pub(crate) fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
-    let Ok(shader) = Identifier::parse("create:textured") else {
+    let (Ok(shader), Ok(vertex)) = (
+        Identifier::parse("create:core/textured"),
+        Identifier::parse("minecraft:core/position_tex_color"),
+    ) else {
         return;
     };
     for (i, s) in sprites().into_iter().enumerate() {
@@ -170,6 +173,7 @@ pub(crate) fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
                 PipelineBlend::Translucent,
                 WorldDepth::Tested,
             )
+            .vertex_shader(vertex.clone())
             .textured(PipelineTexture::Sprite(sprite))
             .optional(),
         );

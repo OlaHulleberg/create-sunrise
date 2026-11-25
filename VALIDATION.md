@@ -1,12 +1,13 @@
 # Validation
 
-Checked on 2026-11-25 on branch `create-sunrise-pin-bdad86d` (Linux x86_64, Rust 1.99.1), pinned to the Sunrise
-Dev build at main `bdad86d2d398ff9293002d2dc08702822aea7265` in `create/sunrise-mod.toml`. A Dev build is a test
-build with no stable mod API. `cargo sunrise-mod` uses the signature-verified release tool and SDK from
-`sdk-bdad86d2d398ff9293002d2dc08702822aea7265`, with the published release key.
+Checked on 2026-11-25 on branch `create-sunrise-glsl-6a02076` (Linux x86_64, Rust 1.99.1), pinned to the Sunrise
+Dev build at main `6a02076f89cd189d74d63492dda5b023fa85a38f` in `create/sunrise-mod.toml`. A Dev build is a test
+build with no stable mod API. `cargo sunrise-mod` used the release tool and SDK of
+`sdk-6a02076f89cd189d74d63492dda5b023fa85a38f` taken from the draft release (a local copy of the draft folder named by
+`SUNRISE_SDK_BASE`), not from the published one; the game of the in-game runs is the draft Dev release `dev-2026-11-25-6a02076`.
 
-In game on `bdad86d` (main `0b0014e6` and `main` with #277): see "Dev build `bdad86d` in game" below. `tools/create-fuzz/` has not
-been run on `bdad86d` (neither its Rust checks nor against a server). Earlier in-game results below are historical, from the builds named in their headings.
+In game on `6a02076`: see "Dev build `6a02076` in game" below. `tools/create-fuzz/` has not been run on `6a02076`.
+Earlier in-game results below are historical, from the builds named in their headings.
 
 ## Checks
 
@@ -19,18 +20,39 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `create/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `create/` | `cargo +1.99.1 test` | Pass (124 glue tests) |
 | `create/` | `cargo +1.99.1 test -p create-engine` | Pass (923 engine tests) |
-| `create/` | `cargo sunrise-mod check` | Pass (official `bdad86d2d3` SDK) |
+| `create/` | `cargo sunrise-mod check` | Pass (draft `6a02076f89` SDK) |
 | `create/` | `cargo sunrise-mod build` | Pass (native library and `.smod` package) |
-| `create/` | `cargo sunrise-mod check target/sunrise-mod/create.smod --build bdad86d2d398ff9293002d2dc08702822aea7265` | Pass (`made for`) |
+| `create/` | `cargo sunrise-mod check target/sunrise-mod/create.smod --build 6a02076f89cd189d74d63492dda5b023fa85a38f` | Pass (`made for`) |
 | `create/src/engine/` | `cargo +1.99.1 fmt --check` | Pass |
 | `create/src/engine/` | `cargo +1.99.1 check` and `cargo +1.99.1 clippy --all-targets -- -D warnings` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 fmt --check` | Pass |
 | `tools/create-data/` | `cargo +1.99.1 check --locked` and `cargo +1.99.1 clippy --locked --all-targets -- -D warnings` | Pass |
-| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (55 tests) |
+| `tools/create-data/` | `cargo +1.99.1 test --locked` | Pass (56 tests) |
 | `tools/create-data/` | `cargo run --locked -- registry --out ../../create --check` | Pass |
-| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Not run on `bdad86d` |
-| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `bdad86d` |
-| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `bdad86d` |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 fmt --check`, `cargo +1.99.1 clippy --release --all-targets -- -D warnings` | Not run on `6a02076` |
+| `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `6a02076` |
+| `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `6a02076` |
+
+## Dev build `6a02076` in game
+
+One run of the Linux build of draft Dev `6a02076` (headless, software Vulkan, driven by the control socket), from the mod
+folder `create-data prepare` writes, with Create 6.0.10's jar by its pinned sha512. Details and screenshots are not kept in
+the repository.
+
+| Area | Result |
+|---|---|
+| Startup | No error or panic; no `render pipeline ... refused` line, so the seven named pipelines and the 23 `create:steam_jet/N` pipelines built on the GLSL shader. The tag and entity-renderer warnings are those of the `bdad86d` run. |
+| Worldshaper outline (`create:checkered`) | Checkered faces and edges drawn. |
+| Super glue area (`create:glue`) | The selection preview draws with the glue texture; gluing works. |
+| Value box (`create:icons`) | The creative motor's hover frame and its speed icon draw. |
+| Display link and nixie tubes | The link targets the nixie tube and the tubes light; no side-by-side comparison. Signal glow not looked at. |
+| Operators on top of a depot or basin | Sneak-clicking the top face puts the press, spout and deployer (on a depot) and the mixer (on a basin) two above. With the wand of symmetry active the press is mirrored once. Not observed: belts as the base, the advancement and the kinetic indicator. |
+| Block drops (survival) | A door drops one door, a double slab 2, a horizontal gearbox `vertical_gearbox`; shaft and zinc ore (`raw_zinc`) drop correctly. |
+| Kinetics | A large cog drives a small cog at 32 rpm and the mixer meshing it makes `andesite_alloy` from an iron nugget and andesite; two stacked mechanical crafters make 4 sticks from two planks. |
+| Redstone link | Transmitter and receiver switch a lamp on and off. |
+| Deployer | **Fails.** It runs at 16 rpm with a block in hand but places nothing: `perform_action_scoped` returns `Busy` on every stroke (checked with a temporary `eprintln!` in `act_with`, not committed). |
+
+Not run: funnels, cart assembler, trains, schematic save and reload, the glow of signals, multiplayer, sound.
 
 ## #275 (press and brass tunnel) in game on Dev `3d34bbe` (main `3e0a710`)
 
@@ -55,7 +77,7 @@ with Create 6.0.11 (`b62e837`) Java. Screenshots are in `/mnt/lanes/game-main/ga
 Neither difference was fixed here. The press one needs saving and loading the cycle on main's `bdad86d` API, which this
 instance cannot run.
 
-## Dev build `bdad86d` in game
+## Dev build `bdad86d` in game (historical)
 
 Two runs on the Linux build of Dev `bdad86d` (headless, software Vulkan, driven by the control socket). Only the second had
 Create's local `create-data prepare` output; the first had none, so its missing wand icon and sprite warnings and its slow

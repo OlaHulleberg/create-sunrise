@@ -1,4 +1,5 @@
-//! The glue's world pipelines: textured quads through `create:textured`. Each pipeline samples
+//! The glue's world pipelines: textured quads through the GLSL fragment shader
+//! `create:core/textured` on vanilla's `position_tex_color` vertex stage. Each pipeline samples
 //! one block-atlas sprite, tinted by the quad's colour and repeating past a UV of 1, as catnip's
 //! `outlineTranslucent(texture)` draws an outline's faces. The glows add to the frame
 //! (`RenderTypes.additive()`). The pipelines are optional because some sprites need local
@@ -98,7 +99,10 @@ pub fn steam_jets() -> [Option<RenderPipelineRef>; STEAM_JET_FRAMES] {
 
 /// `register_render_pipelines`: the glue's pipelines, translucent and hidden by nearer blocks.
 pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
-    let Ok(shader) = Identifier::parse("create:textured") else {
+    let (Ok(shader), Ok(vertex)) = (
+        Identifier::parse("create:core/textured"),
+        Identifier::parse("minecraft:core/position_tex_color"),
+    ) else {
         return;
     };
     for t in Textured::ALL {
@@ -108,6 +112,7 @@ pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
         };
         event.register(
             RenderPipeline::new(id, shader.clone(), t.blend(), WorldDepth::Tested)
+                .vertex_shader(vertex.clone())
                 .textured(PipelineTexture::Sprite(sprite))
                 .optional(),
         );
@@ -122,6 +127,7 @@ pub fn register(event: &mut RegisterRenderPipelinesEvent<'_>) {
                 PipelineBlend::Translucent,
                 WorldDepth::Tested,
             )
+            .vertex_shader(vertex.clone())
             .textured(PipelineTexture::Sprite(sprite))
             .optional(),
         );
