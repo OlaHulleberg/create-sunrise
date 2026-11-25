@@ -3299,9 +3299,12 @@ impl BlockPart for MountedPart {
     /// with the rollers in line; its mode is set on its value box (`interaction::values`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = super::clicker(&*host, event.click);
         // The main hand's empty click was the block's (`useWithoutItem` succeeds on the client
         // too): the off hand is not tried after it.

@@ -34,7 +34,7 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::lifts::Held;
 use mod_api::{
     BlockPart, BlockSignalEvent, BlockState, Compound, InteractionResult, IsSignalSourceEvent,
-    LevelHost, Registrar, ServerHost, StateForPlacementEvent, Tag, UseItemOnEvent,
+    LevelHost, Registrar, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -1539,9 +1539,12 @@ impl BlockPart for LiftPart {
     /// the next tick; a rope pulley looks at its speed again (`assembleNextTick`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = clicker(&*host, event.click);
         if c.sneaking || c.held.is_some() || c.after_empty_main {
             return None;
@@ -1662,9 +1665,12 @@ impl BlockPart for ContactPart {
     /// it on the client; here the server sends what the contact holds).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let (Block::ElevatorContact, _) = states::id(event.state).and_then(create_info)? else {
             return None;
         };
