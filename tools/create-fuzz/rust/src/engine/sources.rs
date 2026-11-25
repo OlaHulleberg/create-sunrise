@@ -36,7 +36,7 @@ impl Run {
     /// `WaterWheelBlockEntity.determineAndApplyFlowScore` when a wheel's surroundings changed or
     /// its lazy tick came.
     pub(super) fn apply_wheel_flow(&mut self) {
-        for (p, _, _) in self.w.take_wheel_checks(0, self.persisted.clock as u64) {
+        for (p, _, _) in self.w.take_wheel_checks(0) {
             self.apply_flow(p);
         }
     }
