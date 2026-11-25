@@ -35,8 +35,6 @@ const DISABLED_KEY: &str = "DisabledSpoutput";
 pub const VISUALIZED_KEY: &str = "VisualizedItems";
 /// `OUTPUT_ANIMATION_TIME`: ticks an item is seen leaving the spout.
 pub const OUTPUT_ANIMATION_TIME: i64 = 10;
-/// `SmartBlockEntity`'s lazy tick: every 10 ticks.
-const LAZY_RATE: i64 = 10;
 
 thread_local! {
     /// Basins with results waiting to go out, or items just seen leaving, by dimension.
@@ -457,18 +455,15 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 pub fn tick(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let now = lv.game_time();
-    if now % LAZY_RATE == 0 {
-        let basins: Vec<[i32; 3]> =
-            with_world(|w| w.dims[dim].basins.iter().copied().collect()).unwrap_or_default();
-        for pos in basins {
-            if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
-                continue;
-            }
-            update(lv, pos);
-            // A buffer read back from a save.
-            if !can_continue(lv, pos) {
-                BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
-            }
+    let due = with_world(|w| w.tick_basins(dim)).unwrap_or_default();
+    for pos in due {
+        if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
+            continue;
+        }
+        update(lv, pos);
+        // A buffer read back from a save.
+        if !can_continue(lv, pos) {
+            BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
         }
     }
     let busy: Vec<[i32; 3]> = BUSY.with_borrow(|b| {
