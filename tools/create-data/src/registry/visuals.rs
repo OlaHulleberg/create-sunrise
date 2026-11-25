@@ -6,7 +6,9 @@ use std::collections::BTreeMap;
 const COUPLING: &str = "assets/create/models/block/minecart_coupling/";
 const CHAIN: &str = "assets/create/models/block/chain_conveyor/chain_";
 const BLOCK_ATLAS: &str = "assets/minecraft/atlases/blocks.json";
-const SHADER: &str = "assets/create/shaders/pipeline/textured.wgsl";
+const SHADER: &str = "assets/create/shaders/core/textured.fsh";
+/// The WGSL shader earlier builds wrote; owned so the generator deletes it.
+const OBSOLETE_SHADER: &str = "assets/create/shaders/pipeline/textured.wgsl";
 const CONNECTED: &str = "assets/create/sunrise/connected/";
 const CONNECTED_TABLES: &str = "assets/create/sunrise/connected_tables/";
 
@@ -30,7 +32,7 @@ pub(crate) fn spinner_definition(item: &str) -> Value {
 
 /// The asset paths this generator owns, including obsolete generated frames.
 pub(super) fn owns(path: &str) -> bool {
-    matches!(path, BLOCK_ATLAS | SHADER)
+    matches!(path, BLOCK_ATLAS | SHADER | OBSOLETE_SHADER)
         || (path.ends_with(".json")
             && [COUPLING, CHAIN, CONNECTED, CONNECTED_TABLES]
                 .iter()
@@ -109,9 +111,20 @@ pub(super) fn assets(contains: impl Fn(&str) -> bool) -> Result<BTreeMap<String,
     Ok(out)
 }
 
-/// The fragment stage of the glue's textured world pipelines.
-const TEXTURED_SHADER: &str = "fn pipeline_fragment(input: PipelineInput) -> vec4<f32> {
-    return pipeline_texture(input.uv) * input.color;
+/// The fragment stage of the glue's textured world pipelines; the vertex stage is vanilla's
+/// `position_tex_color`.
+const TEXTURED_SHADER: &str = "#version 330
+
+#include <minecraft:dynamictransforms.glsl>
+#include <sunrise:pipeline_sprite.glsl>
+
+in vec2 texCoord0;
+in vec4 vertexColor;
+
+out vec4 fragColor;
+
+void main() {
+    fragColor = sampleSprite(texCoord0) * vertexColor * ColorModulator;
 }
 ";
 

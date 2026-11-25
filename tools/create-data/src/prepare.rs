@@ -541,7 +541,7 @@ mod committed_assets {
                     || f.starts_with("create/models/block/") && f.ends_with(".json")
                     || generated_connections.get(&format!("assets/{f}")).is_some_and(|expected| std::fs::read(root.join(f)).is_ok_and(|bytes| bytes == *expected))
                     || matches!(f.as_str(), "create/textures/gui/placement_indicator.png"
-                        | "create/shaders/pipeline/textured.wgsl" | "minecraft/atlases/blocks.json"))
+                        | "create/shaders/core/textured.fsh" | "minecraft/atlases/blocks.json"))
             })
             .collect();
         assert!(
