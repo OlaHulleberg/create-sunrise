@@ -13,11 +13,11 @@
           "type": "minecraft:item",
           "conditions": [
             {
-              "block": "create:train_door",
-              "properties": {
+              "type": "minecraft:match_block",
+              "blocks": "create:train_door",
+              "state": {
                 "half": "lower"
-              },
-              "type": "minecraft:block_state_property"
+              }
             }
           ],
           "name": "create:train_door"

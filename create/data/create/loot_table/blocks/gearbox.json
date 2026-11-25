@@ -8,9 +8,9 @@
           "type": "minecraft:survives_explosion"
         },
         {
-          "type": "minecraft:block_state_property",
-          "block": "create:gearbox",
-          "properties": {
+          "type": "minecraft:match_block",
+          "blocks": "create:gearbox",
+          "state": {
             "axis": "y"
           }
         }
@@ -29,9 +29,9 @@
         {
           "type": "minecraft:inverted",
           "term": {
-            "type": "minecraft:block_state_property",
-            "block": "create:gearbox",
-            "properties": {
+            "type": "minecraft:match_block",
+            "blocks": "create:gearbox",
+            "state": {
               "axis": "y"
             }
           }
