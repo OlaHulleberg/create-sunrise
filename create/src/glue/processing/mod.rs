@@ -90,10 +90,17 @@ use mod_api::{
     RightClickBlockEvent, ServerHost,
 };
 
-/// `Container.canPlaceItem` of a kinetic block entity's slots: the millstone's handler.
+/// `Container.canPlaceItem` of a kinetic block entity's slots: the millstone's handler and the
+/// basin's inventory (`BasinInventory.insertItem`).
 pub(crate) fn can_place_item(event: &mod_api::CanPlaceItemEvent<'_>) -> Option<bool> {
-    (event.state.block() == super::states::key(Block::Millstone))
-        .then(|| millstone::admits(event.slot, event.stack))
+    let block = event.state.block();
+    if block == super::states::key(Block::Millstone) {
+        Some(millstone::admits(event.slot, event.stack))
+    } else if block == super::states::key(Block::Basin) {
+        Some(basin::admits(&event.entity.items, event.slot, event.stack))
+    } else {
+        None
+    }
 }
 
 /// `CrushingWheelControllerBlock.onRemove`, `SawBlockEntity.destroy`
