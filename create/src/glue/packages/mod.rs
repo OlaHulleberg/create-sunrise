@@ -22,7 +22,7 @@
 //! Left out, for want of API:
 //! - A frogport is not told when the inventory below it changes (`contents_changed` is a Part
 //!   of the changed block only, with no hook for every container's `setChanged`): a frogport
-//!   with an inventory below looks at it on Create's own lazy tick, every 10 ticks, instead of
+//!   with an inventory below looks at it on Create's own lazy tick, every 11 ticks, instead of
 //!   at once.
 //! - A dropped package is an item, not Create's package entity (`PackageEntity`, API_GAPS.md).
 
@@ -158,10 +158,6 @@ fn center(p: [i32; 3]) -> [f64; 3] {
 
 pub fn direction(d: Dir) -> Direction {
     Direction::ALL[d as usize]
-}
-
-fn now(lv: &ServerLevel<'_>) -> u64 {
-    lv.game_time().max(0) as u64
 }
 
 /// A package as the rules carry it: its stack and its address.
@@ -781,7 +777,6 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     // What comparators read of packagers and ports that changed (since the last tick too: a
     // menu took or gave a package) is looked at after this tick.
     let mut touched = with(dim, |pk| std::mem::take(&mut pk.changed));
-    let now = now(lv);
     if with(dim, |pk| pk.is_idle()) && GONE.with_borrow(Vec::is_empty) {
         frog_draw::sync(lv);
         box_draw::sync(lv);
@@ -832,8 +827,8 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
             Out::Caught(pos) => crate::glue::advancements::award_placer(lv, pos, "frogport"),
         }
     }
-    for pos in with(dim, |pk| pk.due(now)) {
-        frogport(lv, dim, pos, now);
+    for pos in with(dim, |pk| pk.due()) {
+        frogport(lv, dim, pos);
     }
     // Clients redraw the conveyors whose packages changed.
     let mut changed = with(dim, |pk| pk.chains.take_changed());
@@ -1560,9 +1555,9 @@ fn redstone_mode(lv: &ServerLevel<'_>, dim: usize, pos: [i32; 3]) -> bool {
 /// A frogport looks at its inventories (`lazyTick`): what it caught for its address goes down
 /// into the inventory below (`tryPushingToAdjacentInventories`), then a package not for it,
 /// its own or from below, is sent onto its chain (`tryPullingFromOwnAndAdjacentInventories`).
-/// It looks again in 10 ticks while something waits, and while an inventory is below it (that
-/// inventory's changes are not told: Create's lazy tick).
-fn frogport(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3], now: u64) {
+/// It looks again at its next lazy tick (every 11 ticks) while something waits, and while an
+/// inventory is below it (that inventory's changes are not told: Create's lazy tick).
+fn frogport(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
     let Some(animating) = with(dim, |pk| pk.ports.get(&pos).map(|p| p.is_animating())) else {
         return;
     };
@@ -1636,7 +1631,7 @@ fn frogport(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3], now: u64) {
         waiting |= own;
     }
     if waiting {
-        with(dim, |pk| pk.retry(pos, now));
+        with(dim, |pk| pk.retry(pos));
     }
 }
 

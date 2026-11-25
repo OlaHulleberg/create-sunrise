@@ -9,8 +9,6 @@
 pub const CYCLE: u32 = 20;
 /// `activate`: no second package while a button's signal lasts.
 pub const BUTTON_COOLDOWN: u32 = 40;
-/// SmartBlockEntity's default `lazyTickRate`.
-pub const LAZY_RATE: u32 = 10;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Packager<P> {
@@ -31,7 +29,8 @@ pub struct Packager<P> {
     pub queue: std::collections::VecDeque<(P, u32)>,
     /// A re-packager (`RepackagerBlockEntity`).
     pub repackager: bool,
-    lazy: u32,
+    /// `SmartBlockEntity`'s lazy tick (the default rate, 10).
+    lazy: crate::block_entity::SmartBlockEntity,
 }
 
 impl<P> Default for Packager<P> {
@@ -46,7 +45,7 @@ impl<P> Default for Packager<P> {
             address: String::new(),
             queue: std::collections::VecDeque::new(),
             repackager: false,
-            lazy: LAZY_RATE,
+            lazy: crate::block_entity::SmartBlockEntity::default(),
         }
     }
 }
@@ -152,14 +151,9 @@ impl<P: Clone> Packager<P> {
     /// One tick (`SmartBlockEntity.tick`: the lazy tick first, then `PackagerBlockEntity.tick`).
     pub fn tick(&mut self) -> Step {
         let mut step = Step::default();
-        if self.powered {
-            self.lazy = self.lazy.saturating_sub(1);
-            if self.lazy == 0 {
-                self.lazy = LAZY_RATE;
-                step.recheck = true;
-            }
-        } else {
-            self.lazy = LAZY_RATE;
+        // `lazyTick` does nothing while `redstonePowered` is unset.
+        if self.lazy.tick() && self.powered {
+            step.recheck = true;
         }
         if self.button_cooldown > 0 {
             self.button_cooldown -= 1;
@@ -236,10 +230,25 @@ mod tests {
                 rechecks += 1;
             }
         }
-        assert_eq!(rechecks, 2, "lazy ticks at 30 and 40");
+        assert_eq!(rechecks, 2, "lazy ticks at 22 and 33");
         assert!(p.can_send());
         p.powered = false;
         assert!(!p.active(), "idle once unpowered");
+    }
+
+    #[test]
+    fn a_powered_packager_rechecks_on_the_first_tick_then_every_eleven() {
+        let mut p = Packager::<&str>::default();
+        p.powered = true;
+        let at: Vec<u32> = (1..=44).filter(|_| p.tick().recheck).collect();
+        // `SmartBlockEntity` rate 10: `initialize` on the first tick, then every 11.
+        assert_eq!(at, [1, 11, 22, 33, 44]);
+    }
+
+    #[test]
+    fn an_unpowered_packager_never_rechecks() {
+        let mut p = Packager::<&str>::default();
+        assert!((1..=44).all(|_| !p.tick().recheck));
     }
 
     #[test]

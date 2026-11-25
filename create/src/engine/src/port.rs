@@ -9,7 +9,7 @@
 //! `station_ports`). Nothing here
 //! ticks for an idle port: a frogport looks at its inventories when something changes (a
 //! package caught or put in, the inventory below or the packager below, its chain's speed) and
-//! again every 10 ticks only while something it could send is held back.
+//! again on its lazy tick (`SmartBlockEntity`, every 11 ticks) only while something it could send is held back.
 
 use crate::chain_conveyor::{Chains, Event as ChainEvent, Parcel};
 use crate::package::match_address;
@@ -18,8 +18,6 @@ use std::collections::HashMap;
 
 /// `PackagePortBlockEntity.inventory`: 18 slots.
 pub const SLOTS: usize = 18;
-/// The frogport's `lazyTick` period while it waits on its target.
-pub const RETRY: u64 = 10;
 
 /// A frogport's chain conveyor (`ChainConveyorFrogportTarget`): the conveyor, where on it
 /// (degrees round the wheel, or blocks along the chain toward `connection`), and whether it was
@@ -58,6 +56,8 @@ pub struct Port<P> {
     pub anticipations: u32,
     /// A postbox's train station (`TrainStationFrogportTarget`): where the station is.
     pub station: Option<[i32; 3]>,
+    /// `SmartBlockEntity`'s lazy tick (the default rate, 10), ticked while it waits.
+    pub lazy: crate::block_entity::SmartBlockEntity,
 }
 
 impl<P> Port<P> {
@@ -77,6 +77,7 @@ impl<P> Port<P> {
             goggles: false,
             anticipations: 0,
             station: None,
+            lazy: crate::block_entity::SmartBlockEntity::default(),
         }
     }
 
@@ -212,8 +213,9 @@ pub struct Packaging<P> {
     animating: Vec<[i32; 3]>,
     /// Frogports to look at their inventories now.
     pub wake: Vec<[i32; 3]>,
-    /// Frogports to look again at a later tick (held back by their target).
-    retry: Vec<([i32; 3], u64)>,
+    /// Frogports that wait (held back by their target, or an inventory below): their
+    /// `SmartBlockEntity` ticks each tick and they look again at each lazy tick.
+    retry: Vec<[i32; 3]>,
     /// Packagers a neighbour changed beside (their power).
     pub redstone: Vec<[i32; 3]>,
     /// Columns whose saved state changed.
@@ -294,10 +296,10 @@ impl<P: Clone> Packaging<P> {
         }
     }
 
-    /// The frogport at `pos` looks again `RETRY` ticks after `now`.
-    pub fn retry(&mut self, pos: [i32; 3], now: u64) {
-        if !self.retry.iter().any(|(p, _)| *p == pos) {
-            self.retry.push((pos, now + RETRY));
+    /// The frogport at `pos` waits: it looks again at its next lazy tick.
+    pub fn retry(&mut self, pos: [i32; 3]) {
+        if !self.retry.contains(&pos) {
+            self.retry.push(pos);
         }
     }
 
@@ -382,7 +384,7 @@ impl<P: Clone> Packaging<P> {
         }
         self.animating.retain(|x| *x != pos);
         self.wake.retain(|x| *x != pos);
-        self.retry.retain(|(x, _)| *x != pos);
+        self.retry.retain(|x| *x != pos);
         p.items.into_iter().flatten().chain(p.animated).collect()
     }
 
@@ -412,18 +414,23 @@ impl<P: Clone> Packaging<P> {
         }
     }
 
-    /// The frogports due to look again at tick `now`.
-    pub fn due(&mut self, now: u64) -> Vec<[i32; 3]> {
+    /// The frogports due to look at their inventories this tick: the woken, and the waiting
+    /// ones whose lazy tick (`SmartBlockEntity.tick`, rate 10: the first tick, then every 11)
+    /// runs. One that looks and still waits calls `retry` again.
+    pub fn due(&mut self) -> Vec<[i32; 3]> {
         let mut out = std::mem::take(&mut self.wake);
-        self.retry.retain(|(p, at)| {
-            if *at <= now {
-                if !out.contains(p) {
-                    out.push(*p);
-                }
-                false
-            } else {
-                true
+        let ports = &mut self.ports;
+        self.retry.retain(|pos| {
+            let Some(port) = ports.get_mut(pos) else {
+                return false;
+            };
+            if !port.lazy.tick() {
+                return true;
             }
+            if !out.contains(pos) {
+                out.push(*pos);
+            }
+            false
         });
         out
     }
@@ -635,7 +642,37 @@ mod tests {
         pk.ports.get_mut(&[0, 0, 2]).unwrap().insert(parcel("Base"));
         assert!(!pk.send_own([0, 0, 2]));
         // Nothing left to do: idle.
-        pk.due(1000);
+        pk.due();
+        assert!(pk.is_idle());
+    }
+
+    #[test]
+    fn a_waiting_frogport_looks_on_the_first_tick_then_every_eleven() {
+        let mut pk = Packaging::<u32>::default();
+        let pos = [0, 0, 0];
+        pk.port(pos, true);
+        let mut looked = Vec::new();
+        for t in 1..=44 {
+            // The glue's `frogport` still waits, so it asks again after each look.
+            pk.retry(pos);
+            if !pk.due().is_empty() {
+                looked.push(t);
+            }
+        }
+        assert_eq!(looked, [1, 11, 22, 33, 44]);
+    }
+
+    #[test]
+    fn a_wake_looks_at_once_and_a_removed_port_stops_waiting() {
+        let mut pk = Packaging::<u32>::default();
+        let pos = [0, 0, 0];
+        pk.port(pos, true);
+        pk.wake(pos);
+        assert_eq!(pk.due(), [pos]);
+        assert!(pk.due().is_empty());
+        pk.retry(pos);
+        pk.remove_port(pos);
+        assert!(pk.due().is_empty());
         assert!(pk.is_idle());
     }
 
