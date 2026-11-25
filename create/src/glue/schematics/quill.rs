@@ -15,10 +15,10 @@ use crate::glue::owned::OwnedEquipment as _;
 use create_engine::kinetics::Dir;
 use mod_api::{
     ClientHost, DrawContext, Flow, Hand, Identifier, InteractionKey,
-    InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, PlayerRef, ScreenCharTypedPreEvent,
-    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
-    ScreenRenderPostEvent, ServerHost, SoundPlay, SubmitCustomGeometryEvent, Text, WorldDepth,
-    WorldLine, WorldQuad,
+    InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, PlayerRef, PrepareRenderBuffersEvent,
+    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
+    ScreenMouseButtonPressedPreEvent, ScreenRenderPostEvent, ServerHost, SoundPlay, Text,
+    WorldDepth, WorldLine, WorldQuad,
 };
 use std::cell::RefCell;
 
@@ -333,10 +333,10 @@ pub(super) fn mouse_scrolling(host: &mut dyn ClientHost, event: &mut MouseScroll
 }
 
 /// The outline: Create's `0x6886c5` box round the selection (or the corner and the block
-/// looked at), its face looked at shaded.
-pub(super) fn submit_custom_geometry(
+/// looked at), and the face looked at shaded, prepared for `render_level_stage`.
+pub(super) fn prepare_render_buffers(
     host: &dyn ClientHost,
-    event: &mut SubmitCustomGeometryEvent<'_>,
+    event: &mut PrepareRenderBuffersEvent<'_>,
 ) {
     if !holding(host) {
         return;
@@ -387,7 +387,7 @@ pub(super) fn submit_custom_geometry(
             ));
         }
     }
-    let _ = event.draw.lines(&lines);
+    super::prepare_lines(event, &lines);
     if let Some(face) = face {
         let o = face.offset();
         let axis = (0..3).find(|&i| o[i] != 0).unwrap_or(1);
@@ -416,7 +416,7 @@ pub(super) fn submit_custom_geometry(
             0x4068_86C5,
             WorldDepth::Tested,
         );
-        let _ = event.draw.quads(&[quad]);
+        super::prepare_quads(event, &[quad]);
     }
 }
 
