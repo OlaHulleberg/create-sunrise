@@ -58,6 +58,31 @@ pub const INPUTS: std::ops::Range<usize> = 0..9;
 pub const OUTPUTS: std::ops::Range<usize> = 9..18;
 pub const SLOTS: usize = 18;
 
+/// `BasinInventory.insertItem`: whether `item` may go into `slot`. Only an input slot takes
+/// it, none of the other inputs may already hold the same stack (`same`), and an empty slot
+/// takes it only when it is the first empty input.
+pub fn admits_slot<T>(
+    slots: &[Option<T>],
+    slot: usize,
+    item: &T,
+    same: impl Fn(&T, &T) -> bool,
+) -> bool {
+    if !INPUTS.contains(&slot) {
+        return false;
+    }
+    let mut first_free = None;
+    for i in INPUTS {
+        let cur = slots.get(i).and_then(Option::as_ref);
+        if i != slot && cur.is_some_and(|s| same(item, s)) {
+            return false;
+        }
+        if cur.is_none() && first_free.is_none() {
+            first_free = Some(i);
+        }
+    }
+    slots.get(slot).and_then(Option::as_ref).is_some() || first_free == Some(slot)
+}
+
 /// `HeatCondition`: a recipe's `heat_requirement`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum HeatReq {
@@ -712,5 +737,39 @@ mod flow_source_tests {
             outputs,
             [Some((Fluid::Water, 500)), Some((Fluid::Lava, 234))]
         );
+    }
+}
+
+#[cfg(test)]
+mod admits_tests {
+    use super::*;
+
+    fn same(a: &&str, b: &&str) -> bool {
+        a == b
+    }
+
+    #[test]
+    fn only_the_first_empty_input_takes_an_item() {
+        let slots = [Some("a"), None, None];
+        assert!(admits_slot(&slots, 1, &"b", same));
+        assert!(!admits_slot(&slots, 2, &"b", same));
+    }
+
+    #[test]
+    fn another_slot_holding_the_item_refuses() {
+        let slots = [Some("a"), None];
+        assert!(!admits_slot(&slots, 1, &"a", same));
+    }
+
+    #[test]
+    fn the_slot_holding_the_item_takes_more() {
+        let slots = [Some("a"), Some("b")];
+        assert!(admits_slot(&slots, 0, &"a", same));
+    }
+
+    #[test]
+    fn output_slots_refuse() {
+        let slots = vec![None; SLOTS];
+        assert!(!admits_slot(&slots, OUTPUTS.start, &"a", same));
     }
 }

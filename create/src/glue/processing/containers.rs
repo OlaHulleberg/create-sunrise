@@ -156,7 +156,8 @@ fn containers() -> Vec<(Block, ModContainer)> {
             menu: None,
         },
     ));
-    // The basin's inventories: hoppers put into the nine inputs and take from the nine outputs.
+    // The basin's inventories: hoppers put into the nine inputs only, and take from the inputs and
+    // the outputs alike (`CombinedInvWrapper(inputInventory, outputInventory)`).
     let all: Vec<usize> = (0..basin::SLOTS).collect();
     out.push((
         Block::Basin,
@@ -165,7 +166,7 @@ fn containers() -> Vec<(Block, ModContainer)> {
             slots: basin::SLOTS,
             faces: every(&all),
             inputs: basin::INPUTS.collect(),
-            outputs: basin::OUTPUTS.collect(),
+            outputs: all.clone(),
             menu: None,
         },
     ));
