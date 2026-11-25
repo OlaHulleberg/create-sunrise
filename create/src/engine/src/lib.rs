@@ -8,6 +8,7 @@ pub mod belt;
 pub mod belt_connector;
 pub mod bezier;
 mod block_entity_order;
+pub mod block_entity;
 pub mod board;
 pub mod burner;
 pub mod cart;
