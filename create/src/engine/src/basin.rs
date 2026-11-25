@@ -281,14 +281,15 @@ fn log2(v: i32) -> i32 {
 }
 
 impl Mixer {
-    /// `startProcessingBasin`.
+    /// `startProcessingBasin`: leaves `processing_ticks` as it was, so the first cycle of a fresh
+    /// mixer (0) spends a tick going to -1 before it works the time out, and a cycle stopped
+    /// mid-mix resumes its countdown.
     pub fn start(&mut self, recipe: usize) {
         if self.running && self.running_ticks <= 20 {
             return;
         }
         self.running = true;
         self.running_ticks = 0;
-        self.processing_ticks = -1;
         self.recipe = Some(recipe);
     }
 
@@ -638,8 +639,9 @@ mod tests {
             match m.tick(64.0, 0) {
                 MixStep::Apply => applied_at = Some(t),
                 MixStep::Done => {
-                    // 64 rpm: log2(8) × 15 + 1 = 46 ticks at the bottom.
-                    assert_eq!(applied_at, Some(20 + 46));
+                    // 64 rpm: log2(8) × 15 + 1 = 46 ticks at the bottom, after the tick a fresh
+                    // mixer (`processing_ticks` 0) spends going to -1.
+                    assert_eq!(applied_at, Some(20 + 1 + 46));
                     // The applying tick moves on twice (21, then 22): 19 more ticks up.
                     assert_eq!(t, applied_at.unwrap() + 19);
                     return;
@@ -648,6 +650,51 @@ mod tests {
             }
         }
         panic!("the cycle never ended");
+    }
+
+    /// Ticks `m` at 64 rpm until the cycle ends; the tick the recipe applies on.
+    fn run_cycle(m: &mut Mixer) -> i32 {
+        let mut applied_at = None;
+        for t in 0..200 {
+            match m.tick(64.0, 0) {
+                MixStep::Apply => applied_at = Some(t),
+                MixStep::Done => return applied_at.expect("done before applying"),
+                MixStep::None => {}
+            }
+        }
+        panic!("the cycle never ended");
+    }
+
+    #[test]
+    fn the_first_cycle_of_a_mixer_is_a_tick_longer_than_the_second() {
+        let mut m = Mixer::default();
+        m.start(0);
+        let first = run_cycle(&mut m);
+        m.start(0);
+        let second = run_cycle(&mut m);
+        assert_eq!(first, 20 + 1 + 46);
+        assert_eq!(second, 20 + 46);
+    }
+
+    #[test]
+    fn a_mixer_stopped_mid_mix_resumes_its_countdown() {
+        let mut m = Mixer::default();
+        m.start(0);
+        while m.processing_ticks != 30 {
+            assert_eq!(m.tick(64.0, 0), MixStep::None);
+        }
+        // Stopped: the head goes back up without applying.
+        loop {
+            match m.tick(0.0, 0) {
+                MixStep::Done => break,
+                step => assert_eq!(step, MixStep::None),
+            }
+        }
+        assert_eq!(m.processing_ticks, 30);
+        m.start(0);
+        assert_eq!(m.processing_ticks, 30);
+        // Down 20 ticks, then 30 ticks counted down from the kept value.
+        assert_eq!(run_cycle(&mut m), 20 + 30 - 1);
     }
 }
 
