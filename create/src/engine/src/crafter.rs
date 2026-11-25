@@ -80,12 +80,26 @@ pub enum Phase {
     Inserting,
 }
 
-/// A crafter's typed state: its phase, `countDown`, and the grid it holds (`groupedItems`).
-#[derive(Clone, Debug, Default, PartialEq)]
+/// A crafter's typed state: its phase, `countDown`, the grid it holds (`groupedItems`), and its
+/// lazy tick (`setLazyTickRate(20)`).
+#[derive(Clone, Debug, PartialEq)]
 pub struct Crafter {
     pub phase: Phase,
     pub count_down: i32,
     pub grid: Vec<((i32, i32), String)>,
+    pub lazy: crate::block_entity::SmartBlockEntity,
+}
+
+impl Default for Crafter {
+    /// Idle and empty, with the lazy tick rate 20 (not `SmartBlockEntity`'s default, 10).
+    fn default() -> Self {
+        Self {
+            phase: Phase::Idle,
+            count_down: 0,
+            grid: Vec::new(),
+            lazy: crate::block_entity::SmartBlockEntity::new(20),
+        }
+    }
 }
 
 /// `getCountDownSpeed`: the speed held between 4 and 250 (0 when still).
@@ -158,6 +172,13 @@ pub fn axis(facing: Dir) -> Axis {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn crafters_lazy_tick_fires_every_twenty_one_ticks() {
+        let mut lazy = Crafter::default().lazy;
+        let fired: Vec<i32> = (1..=42).filter(|_| lazy.tick()).collect();
+        assert_eq!(fired, [1, 21, 42]);
+    }
 
     #[test]
     fn crafters_point_by_their_facing_and_grids_read_from_the_top() {

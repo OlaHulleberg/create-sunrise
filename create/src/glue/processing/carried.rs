@@ -88,7 +88,7 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
                 // Taken before its block goes, so its grid rides rather than drops.
                 if let Some(c) = d.crafters.remove(&pos) {
                     d.crafting.retain(|p| *p != pos);
-                    if c != crafter::Crafter::default() {
+                    if c.phase != crafter::Phase::Idle || c.count_down != 0 || !c.grid.is_empty() {
                         out.insert(
                             CRAFTING.into(),
                             Tag::IntArray(vec![c.phase as i32, c.count_down]),
@@ -231,6 +231,7 @@ pub(super) fn carry_in(
                     phase,
                     count_down: v.get(1).copied().unwrap_or(0),
                     grid,
+                    ..crafter::Crafter::default()
                 })
             });
             with_world(|w| {
