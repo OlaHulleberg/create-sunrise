@@ -77,11 +77,13 @@ pub fn remainder(item: &str) -> Option<String> {
 
 /// The recipes both sides run: Create's mixing ones, then the shapeless crafting ones the
 /// mixer runs; Create's compacting ones; and the square crafting ones a press asks the game
-/// for, 9 before 4 (`compressible`).
+/// for, 9 before 4 (`compressible`). The mixing and the compacting ones each in a `RecipeTrie`.
 pub struct Books {
     pub mixing: Vec<basin::Recipe>,
     pub compacting: Vec<basin::Recipe>,
     squares: Vec<(String, basin::Recipe)>,
+    pub mixing_trie: create_engine::recipe_trie::RecipeTrie<usize>,
+    pub compacting_trie: create_engine::recipe_trie::RecipeTrie<usize>,
 }
 
 impl Books {
@@ -111,14 +113,18 @@ impl Books {
                 .map(|(f, n)| (Fluid::of_id(f).expect("recipe fluid"), *n))
                 .collect(),
         };
+        let mixing: Vec<basin::Recipe> = contract()
+            .mixing
+            .iter()
+            .chain(&contract().shapeless)
+            .map(recipe)
+            .collect();
+        let compacting: Vec<basin::Recipe> = contract().compacting.iter().map(recipe).collect();
         Books {
-            mixing: contract()
-                .mixing
-                .iter()
-                .chain(&contract().shapeless)
-                .map(recipe)
-                .collect(),
-            compacting: contract().compacting.iter().map(recipe).collect(),
+            mixing_trie: basin::recipe_trie(&mixing),
+            compacting_trie: basin::recipe_trie(&compacting),
+            mixing,
+            compacting,
             squares: contract()
                 .squares
                 .iter()

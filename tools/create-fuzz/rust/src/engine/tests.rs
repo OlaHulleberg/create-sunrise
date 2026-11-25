@@ -855,3 +855,41 @@ fn a_broken_basin_drops_what_waited_at_its_spout() {
             .all(|d| d.placed.is_some())
     );
 }
+
+/// `processing-basin-recipe-order`: with dirt, water, mud and wheat in a basin the mixer packs
+/// mud first (`getMatchingRecipes` sorts by item ingredients alone: `minecraft:packed_mud` has
+/// two, `create:mixing/mud_by_mixing` one and water), then mixes mud.
+#[test]
+fn a_mixer_packs_mud_before_mixing_it() {
+    let sc: crate::scenario::Scenario = serde_json::from_str(include_str!(
+        "../../../cases/processing-basin-recipe-order.json"
+    ))
+    .unwrap();
+    let snap = super::run(&sc);
+    let basin = snap.blocks["0,6,0"].processing.as_ref().unwrap();
+    let by_slot = |s: Option<&Vec<crate::processing::Slot>>| {
+        s.unwrap()
+            .iter()
+            .map(|s| (s.slot, s.item.clone(), s.count))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        by_slot(basin.input.as_ref()),
+        [
+            (0, "minecraft:dirt".into(), 1),
+            (1, "minecraft:wheat".into(), 1)
+        ]
+    );
+    assert_eq!(
+        by_slot(basin.outputs.as_ref()),
+        [
+            (0, "minecraft:mud".into(), 1),
+            (1, "minecraft:packed_mud".into(), 1)
+        ]
+    );
+    let mixer = snap.blocks["0,8,0"].processing.as_ref().unwrap();
+    assert_eq!(
+        (mixer.running, mixer.running_ticks, mixer.processing_ticks),
+        (Some(false), Some(0), Some(14))
+    );
+}

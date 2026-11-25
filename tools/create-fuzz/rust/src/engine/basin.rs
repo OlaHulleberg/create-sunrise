@@ -355,17 +355,23 @@ impl Run {
         tanks: &basin::Tanks,
         cx: &basin::Context<'_>,
     ) -> bool {
-        (recipe.results.is_empty() || accepts)
-            && !basin::matching(std::slice::from_ref(recipe), slots, tanks, cx).is_empty()
+        (recipe.results.is_empty() || accepts) && basin::applies(recipe, slots, tanks, cx)
     }
 
-    /// `matching_recipe`: `getMatchingRecipes` of the operator at `operator`: the fitting
-    /// recipe with the most ingredients. A mixer's are its book's; a press's are the compacting
-    /// ones, or a square crafting recipe of one item (`canCompress`) that has more ingredients.
+    /// `matching_recipe`: `getMatchingRecipes` of the operator at `operator`, its first: the
+    /// recipes that apply, those with the most item ingredients first. A mixer's are its trie's
+    /// (its book's); a press's are its trie's of the compacting ones, then the square crafting
+    /// recipes of one item (`canCompress`).
     pub(super) fn matching_recipe(&mut self, operator: Pos, at: Pos) -> Option<basin::Recipe> {
         let accepts = self.spout_accepts(at);
         let slots = self.basin_slots(at)?;
         let tanks = self.basin_tanks(at);
+        if slots.iter().all(Option::is_none)
+            && tanks.input.iter().chain(&tanks.output).all(Option::is_none)
+        {
+            return None;
+        }
+        let pool = basin::variants(&slots, &tanks);
         let cx = context(self.basin_heat(at), self.basin_facing(at) != Dir::Down);
         let press = self.w.block_at(0, operator) == Some(Block::MechanicalPress);
         let squares = if press {
@@ -373,23 +379,32 @@ impl Run {
         } else {
             Vec::new()
         };
-        let fits = |r: &basin::Recipe| self.recipe_fits(accepts, r, &slots, &tanks, &cx);
-        if press {
-            let compacting = basin::matching(&self.basin_books.compacting, &slots, &tanks, &cx)
-                .into_iter()
-                .map(|i| self.basin_books.compacting[i].clone())
-                .find(|r| fits(r));
-            let most = compacting.as_ref().map_or(0, |c| c.ingredients.len());
-            squares
-                .into_iter()
-                .find(|c| c.ingredients.len() > most && fits(c))
-                .or(compacting)
+        let (book, trie, appended): (
+            &Vec<basin::Recipe>,
+            &create_engine::recipe_trie::RecipeTrie<usize>,
+            Vec<basin::Recipe>,
+        ) = if press {
+            (
+                &self.basin_books.compacting,
+                &self.basin_books.compacting_trie,
+                squares,
+            )
         } else {
-            basin::matching(&self.basin_books.mixing, &slots, &tanks, &cx)
-                .into_iter()
-                .map(|i| self.basin_books.mixing[i].clone())
-                .find(|r| fits(r))
-        }
+            (
+                &self.basin_books.mixing,
+                &self.basin_books.mixing_trie,
+                Vec::new(),
+            )
+        };
+        let fits = |r: &basin::Recipe| self.recipe_fits(accepts, r, &slots, &tanks, &cx);
+        let handed_out = trie
+            .lookup(&pool)
+            .into_iter()
+            .map(|&i| book[i].clone())
+            .chain(appended);
+        create_engine::recipe_trie::get_matching_recipes(handed_out, fits, |r| r.ingredients.len())
+            .into_iter()
+            .next()
     }
 
     /// `applyBasinRecipe`: the operator at `machine`'s recipe on the basin two below it,

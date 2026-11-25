@@ -167,9 +167,14 @@ cannot differ from Create's.
 compacting recipes, the shapeless crafting ones a mixer runs (`allowShapelessInMixer`) and the
 square crafting ones a press compacts (`allowShapedSquareInPress`), each ingredient as the items
 of its family it takes. An operator takes the matching recipes from a recipe trie in its
-traversal's order, those with the most ingredients first (`BasinOperatingBlockEntity`, :150-165);
-the driver keeps Create's recipes before the crafting ones, which is another order when a mixing
-and a shapeless recipe both fit (dirt, water, mud and wheat in a basin). `BasinRecipeAudit` checks every entry against the loaded recipe and that
+traversal's order, those with the most item ingredients first (`BasinOperatingBlockEntity`,
+:150-165; fluids do not count). The port and the driver have the trie too
+(`create_engine::recipe_trie`), in the iteration order of the fastutil tables its Java sits on.
+Where Java's order follows identity hashes, they take a fixed one: the basin's slots and tanks
+in order for what it holds (Java walks a `HashSet`), and the books' order for the recipe list
+(Java takes the recipe manager's, Create's mixing before the shapeless ones here). Only recipes
+with as many item ingredients as each other and both fitting one basin can come out in another
+order, and none such is in these families. `BasinRecipeAudit` checks every entry against the loaded recipe and that
 no recipe of these kinds is missing whose ingredients a family's basin can come to hold: its
 inputs, its recipes' results and the containers these and what they use up leave.
 
@@ -211,18 +216,12 @@ Fixed, each with an engine test carrying Create's numbers and a case in `cases/`
 | `processing-basin-handler` | The handler takes a stack only into the first empty slot and not beside a stack of the same item; it gives from the input slots | Takes into any empty input slot; gives nothing from the inputs | `BasinInventory.java:20`, `:45`, `BasinBlockEntity.java:116` |
 | `processing-basin-bucket` | A bucket emptied into the tanks leaves its empty bucket in the hand; one filled from them lands back in it | The bucket goes to the inventory | `FluidHelper.java:141`, `:185` |
 | `processing-basin-spout-pop` | A broken basin drops the items waiting at its spout | They are lost | `BasinBlockEntity.java:228` |
+| `processing-basin-recipe-order` | With dirt, water, mud and wheat in the basin the mixer packs mud first: `getMatchingRecipes` sorts by item ingredients alone, and `minecraft:packed_mud` has two to `create:mixing/mud_by_mixing`'s one | Sorted by item and fluid ingredients together: a tie, so Create's recipe came first of the book | `BasinOperatingBlockEntity.java:160`, `:165`, `IntArrayTrie.java:64` |
 
 The driver spilled a broken millstone's slots as `Block.popResource` does; the game spills a
 mod container as `Containers.dropContents` does, as Create's `destroy` (:144,
 `ItemHelper.dropContents`) does, so seeds 973 and 1485 differed whenever Java's items landed
 outside the narrower range.
-
-Open, each reported with a case in `cases/` that differs until the port matches (the driver mirrors
-the port, so `./run.sh fuzz check cases/processing-basin-*.json` shows them):
-
-| Case | Java | Port | Deciding Java |
-| --- | --- | --- | --- |
-| `processing-basin-recipe-order` (with the bucket row: its water comes from a bucket) | With dirt, water, mud and wheat in the basin the mixer packs mud first: its recipe trie hands `minecraft:packed_mud` out before `create:mixing/mud_by_mixing` | Lists Create's mixing recipes before the shapeless ones and mixes mud first | `BasinOperatingBlockEntity.java:160`, `IntArrayTrie.java:64` |
 
 A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by
 `enableMerging`), so a basin spouting into one holds its second result at the spout until the

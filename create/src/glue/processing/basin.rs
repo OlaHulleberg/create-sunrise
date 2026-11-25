@@ -425,51 +425,51 @@ fn recipe_fits(
     let filter = super::filtering::filter_at(lv.dim, at);
     super::filtering::basin_recipe_passes(&*lv.host, filter.as_ref(), recipe)
         && (recipe.results.is_empty() || accepts)
-        && !basin::matching(std::slice::from_ref(recipe), slots, tanks, cx).is_empty()
+        && basin::applies(recipe, slots, tanks, cx)
 }
 
-/// `getMatchingRecipes` of the operator at `operator`: the fitting recipe with the most
-/// ingredients. A mixer's are its book's (Create's mixing, then the shapeless crafting ones); a
-/// press's are the compacting ones, or a square crafting recipe of one item (`canCompress`)
-/// that has more ingredients (`MechanicalPressBlockEntity`).
+/// `getMatchingRecipes` of the operator at `operator`, its first: the recipes that apply now,
+/// those with the most item ingredients first (`BasinOperatingBlockEntity`). A mixer's are its
+/// trie's of Create's mixing and the shapeless crafting recipes, then the potion ones
+/// (`MechanicalMixerBlockEntity`); a press's its trie's of the compacting ones, then the square
+/// crafting recipes of one item the game gives (`canCompress`).
 fn matching_recipe(
     lv: &mut ServerLevel<'_>,
     operator: [i32; 3],
     at: [i32; 3],
 ) -> Option<basin::Recipe> {
-    let accepts = super::spoutput::accepts(lv, at);
     let dim = lv.dim;
     let slots = basin_slots(lv, at)?;
     let tanks = basin_tanks(dim, at);
+    if basin_empty(lv, at) {
+        return None;
+    }
+    let pool = basin::variants(&slots, &tanks);
+    let accepts = super::spoutput::accepts(lv, at);
+    let press = lv
+        .info(operator)
+        .is_some_and(|(b, _)| b == Block::MechanicalPress);
     with_context(lv, at, |cx| {
         let fits = |r: &basin::Recipe| recipe_fits(lv, at, accepts, r, &slots, &tanks, cx);
-        if lv
-            .info(operator)
-            .is_some_and(|(b, _)| b == Block::MechanicalPress)
-        {
-            let compacting = recipes::with(|r| {
-                basin::matching(&r.compacting, &slots, &tanks, cx)
-                    .into_iter()
-                    .map(|i| &r.compacting[i])
-                    .find(|r| fits(r))
-                    .cloned()
-            })
-            .flatten();
-            let most = compacting.as_ref().map_or(0, |c| c.ingredients.len());
-            compressible(lv, &slots)
+        let most = |r: &basin::Recipe| r.ingredients.len();
+        recipes::with(|r| {
+            // `RecipeTrie.lookup`'s order, then what the machine appends to it.
+            let (book, trie, appended): (&[basin::Recipe], _, Vec<basin::Recipe>) = if press {
+                (&r.compacting, &r.compacting_trie, compressible(lv, &slots))
+            } else {
+                let own = r.mixing.len() - r.potions;
+                (&r.mixing[..own], &r.mixing_trie, r.mixing[own..].to_vec())
+            };
+            let handed_out = trie
+                .lookup(&pool)
                 .into_iter()
-                .find(|c| c.ingredients.len() > most && fits(c))
-                .or(compacting)
-        } else {
-            recipes::with(|r| {
-                basin::matching(&r.mixing, &slots, &tanks, cx)
-                    .into_iter()
-                    .map(|i| &r.mixing[i])
-                    .find(|r| fits(r))
-                    .cloned()
-            })
-            .flatten()
-        }
+                .map(|&i| book[i].clone())
+                .chain(appended);
+            create_engine::recipe_trie::get_matching_recipes(handed_out, fits, most)
+                .into_iter()
+                .next()
+        })
+        .flatten()
     })
 }
 

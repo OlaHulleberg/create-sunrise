@@ -7,6 +7,7 @@ use crate::Block;
 use crate::block_entity::SmartBlockEntity;
 use crate::fan::Heat;
 use crate::processing::{Output, Rng, Slot, insert_stacked};
+use crate::recipe_trie::{AbstractIngredient, Variant};
 use crate::tank::Fluid;
 use crate::world::Dimension;
 use std::collections::{HashMap, HashSet};
@@ -268,23 +269,86 @@ pub fn insert_one_stack(slots: &mut [Slot], item: &str, mut count: u8, max: u8) 
     count
 }
 
-/// `getMatchingRecipes`: the recipes that would apply now, those with the most ingredients first.
-pub fn matching(recipes: &[Recipe], slots: &[Slot], tanks: &Tanks, cx: &Context) -> Vec<usize> {
-    let mut out: Vec<usize> = (0..recipes.len())
-        .filter(|&i| {
-            apply(
-                &mut slots.to_vec(),
-                &mut tanks.clone(),
-                &recipes[i],
-                cx,
-                &mut Rng::new(1),
-                true,
-            )
-            .is_some()
-        })
-        .collect();
-    out.sort_by_key(|&i| std::cmp::Reverse(recipes[i].ingredients.len() + recipes[i].fluids.len()));
-    out
+/// `BasinRecipe.apply(basin, recipe, true)`: whether the recipe applies to the basin as it
+/// stands, heat, ingredients and room for its results.
+pub fn applies(recipe: &Recipe, slots: &[Slot], tanks: &Tanks, cx: &Context) -> bool {
+    apply(
+        &mut slots.to_vec(),
+        &mut tanks.clone(),
+        recipe,
+        cx,
+        &mut Rng::new(1),
+        true,
+    )
+    .is_some()
+}
+
+impl Recipe {
+    /// `RecipeTrie.Builder.createRecipe`: the recipe's ingredients as the trie takes them, each
+    /// once. An item ingredient is the items it takes, an empty one universal; a fluid
+    /// ingredient is its fluid, universal when it takes nothing.
+    pub fn abstract_ingredients(&self) -> Vec<AbstractIngredient> {
+        let mut out: Vec<AbstractIngredient> = Vec::new();
+        for items in self
+            .ingredients
+            .iter()
+            .map(|items| {
+                if items.is_empty() {
+                    AbstractIngredient::Universal
+                } else {
+                    AbstractIngredient::Variants(items.iter().cloned().map(Variant::Item).collect())
+                }
+            })
+            .chain(self.fluids.iter().map(|&(fluid, amount)| {
+                if amount == 0 {
+                    AbstractIngredient::Universal
+                } else {
+                    AbstractIngredient::Variants(vec![Variant::Fluid(fluid)])
+                }
+            }))
+        {
+            if !out.contains(&items) {
+                out.push(items);
+            }
+        }
+        out
+    }
+}
+
+/// A `RecipeTrie` over `recipes`, each by its index, in their order: what the glue builds
+/// from its books when the recipes are read.
+pub fn recipe_trie(recipes: &[Recipe]) -> crate::recipe_trie::RecipeTrie<usize> {
+    let mut builder = crate::recipe_trie::RecipeTrieBuilder::new();
+    for (i, recipe) in recipes.iter().enumerate() {
+        builder.insert(i, &recipe.abstract_ingredients());
+    }
+    builder.build()
+}
+
+/// `RecipeTrie.getVariants` of a basin: the item of each slot that holds one, in slot order,
+/// then the fluid of each tank, the outputs' first (its fluid handler's order); each once. Java
+/// collects them in a `HashSet` it then walks in that set's order; this is the order the glue
+/// hands the lookup.
+pub fn variants(slots: &[Slot], tanks: &Tanks) -> Vec<Variant> {
+    let mut pool = Vec::new();
+    for variant in slots
+        .iter()
+        .flatten()
+        .map(|(item, _)| Variant::Item(item.clone()))
+        .chain(
+            tanks
+                .output
+                .iter()
+                .chain(&tanks.input)
+                .flatten()
+                .map(|&(fluid, _)| Variant::Fluid(fluid)),
+        )
+    {
+        if !pool.contains(&variant) {
+            pool.push(variant);
+        }
+    }
+    pool
 }
 
 /// `DeferralBehaviour`: its owner sees to what it was told of on its own turn.
@@ -827,15 +891,7 @@ mod tests {
         slots[0] = Some(("minecraft:andesite".into(), 2));
         slots[1] = Some(("minecraft:iron_nugget".into(), 1));
         let r = alloy();
-        assert_eq!(
-            matching(
-                std::slice::from_ref(&r),
-                &slots,
-                &Tanks::default(),
-                &cx(Heat::None)
-            ),
-            vec![0]
-        );
+        assert!(applies(&r, &slots, &Tanks::default(), &cx(Heat::None)));
         assert!(run(
             &mut slots,
             &mut Tanks::default(),
@@ -869,6 +925,86 @@ mod tests {
             Heat::Kindled,
             true
         ));
+    }
+
+    /// `processing-basin-recipe-order`: with dirt, water, mud and wheat in a basin,
+    /// `create:mixing/mud_by_mixing` (one item ingredient and water) and `minecraft:packed_mud`
+    /// (mud and wheat) both apply, and `getMatchingRecipes` sorts by the number of item
+    /// ingredients alone: mud is packed first, whichever the trie hands out first.
+    #[test]
+    fn the_most_item_ingredients_is_mixed_first() {
+        let mud_by_mixing = Recipe {
+            id: "create:mixing/mud_by_mixing".into(),
+            ingredients: vec![vec!["minecraft:dirt".into()]],
+            results: vec![Output {
+                item: "minecraft:mud".into(),
+                count: 1,
+                chance: 1.0,
+            }],
+            time: 0,
+            heat: HeatReq::None,
+            fluids: vec![(Fluid::Water, 250)],
+            fluid_results: vec![],
+        };
+        let packed_mud = Recipe {
+            id: "minecraft:packed_mud".into(),
+            ingredients: vec![vec!["minecraft:mud".into()], vec!["minecraft:wheat".into()]],
+            results: vec![Output {
+                item: "minecraft:packed_mud".into(),
+                count: 1,
+                chance: 1.0,
+            }],
+            time: 0,
+            heat: HeatReq::None,
+            fluids: vec![],
+            fluid_results: vec![],
+        };
+        let mut slots: Vec<Slot> = vec![None; SLOTS];
+        slots[0] = Some(("minecraft:dirt".into(), 1));
+        slots[1] = Some(("minecraft:wheat".into(), 1));
+        slots[2] = Some(("minecraft:mud".into(), 1));
+        let tanks = Tanks {
+            input: [Some((Fluid::Water, 500)), None],
+            output: [None; 2],
+        };
+        let cx = cx(Heat::None);
+        assert!(applies(&mud_by_mixing, &slots, &tanks, &cx));
+        assert!(applies(&packed_mud, &slots, &tanks, &cx));
+        let pool = variants(&slots, &tanks);
+        assert_eq!(
+            pool,
+            [
+                Variant::Item("minecraft:dirt".into()),
+                Variant::Item("minecraft:wheat".into()),
+                Variant::Item("minecraft:mud".into()),
+                Variant::Fluid(Fluid::Water),
+            ]
+        );
+        assert_eq!(
+            mud_by_mixing.abstract_ingredients(),
+            [
+                AbstractIngredient::Variants(vec![Variant::Item("minecraft:dirt".into())]),
+                AbstractIngredient::Variants(vec![Variant::Fluid(Fluid::Water)]),
+            ]
+        );
+        for book in [
+            [mud_by_mixing.clone(), packed_mud.clone()],
+            [packed_mud.clone(), mud_by_mixing.clone()],
+        ] {
+            let trie = crate::basin::recipe_trie(&book);
+            let found = crate::recipe_trie::get_matching_recipes(
+                trie.lookup(&pool).into_iter().copied(),
+                |&i| applies(&book[i], &slots, &tanks, &cx),
+                |&i| book[i].ingredients.len(),
+            );
+            assert_eq!(
+                found
+                    .iter()
+                    .map(|&i| book[i].id.as_str())
+                    .collect::<Vec<_>>(),
+                ["minecraft:packed_mud", "create:mixing/mud_by_mixing"]
+            );
+        }
     }
 
     #[test]
@@ -1042,10 +1178,7 @@ mod tests {
             "no milk"
         );
         assert_eq!(fill(&mut tanks.input, Fluid::Milk, 400), 400);
-        assert_eq!(
-            matching(std::slice::from_ref(&r), &slots, &tanks, &cx(Heat::Kindled)),
-            vec![0]
-        );
+        assert!(applies(&r, &slots, &tanks, &cx(Heat::Kindled)));
         assert!(run(&mut slots, &mut tanks, &r, Heat::Kindled, false));
         assert_eq!(tanks.input[0], Some((Fluid::Milk, 150)));
         assert_eq!(tanks.output[0], Some((Fluid::Chocolate, 250)));

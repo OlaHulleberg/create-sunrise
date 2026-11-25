@@ -20,10 +20,19 @@ pub struct Recipes {
     /// (`allowStonecuttingOnSaw`, on by default).
     pub cutting: Book,
     /// Create's mixing recipes, then shapeless crafting recipes of more than one ingredient
-    /// the press doesn't compress (`allowShapelessInMixer`).
+    /// the press doesn't compress (`allowShapelessInMixer`), then the potion ones; the first two
+    /// kinds in `mixing_trie`.
     pub mixing: Vec<basin::Recipe>,
-    /// Create's compacting recipes (a press over a basin).
+    /// `RecipeTrie` of the first `mixing` recipes short of `potions` (`RecipeTrieFinder`, a
+    /// mixer's).
+    pub mixing_trie: create_engine::recipe_trie::RecipeTrie<usize>,
+    /// How many of `mixing` are the potion ones, which `MechanicalMixerBlockEntity` adds after
+    /// the trie's recipes.
+    pub potions: usize,
+    /// Create's compacting recipes (a press over a basin), in `compacting_trie`.
     pub compacting: Vec<basin::Recipe>,
+    /// `RecipeTrie` of `compacting` (`RecipeTrieFinder`, a press's).
+    pub compacting_trie: create_engine::recipe_trie::RecipeTrie<usize>,
     /// The fan's: Create's washing and haunting, vanilla's cooking.
     pub splashing: Book,
     pub haunting: Book,
@@ -151,15 +160,22 @@ pub fn publish(host: &dyn ReloadContext) {
     splashing.extend(runtime_data::splashing(&items));
     let mut mixing = read_basin(host, "create:mixing");
     mixing.extend(read_shapeless_mixing(host));
-    let potions = read_potion_mixing(host);
-    mixing.extend(potions);
+    let mixing_trie = basin::recipe_trie(&mixing);
+    let mixed = mixing.len();
+    mixing.extend(read_potion_mixing(host));
+    let potions = mixing.len() - mixed;
+    let compacting = read_basin(host, "create:compacting");
+    let compacting_trie = basin::recipe_trie(&compacting);
     let next = Recipes {
         milling,
         pressing,
         crushing: read_book(host, "create:crushing"),
         cutting: Book::new(cutting),
         mixing,
-        compacting: read_basin(host, "create:compacting"),
+        mixing_trie,
+        potions,
+        compacting,
+        compacting_trie,
         splashing: Book::new(splashing),
         haunting: read_book(host, "create:haunting"),
         smoking: read_cooking(host, "minecraft:smoking"),
