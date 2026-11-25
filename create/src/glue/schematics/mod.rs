@@ -154,6 +154,9 @@ struct Interned {
 }
 
 thread_local! {
+    /// The frame's overlay batches (the quill's outline, the tools' guides), prepared in
+    /// `prepare_render_buffers` for `render_level_stage`.
+    static PREPARED: RefCell<Vec<mod_api::PreparedWorldDraw>> = const { RefCell::new(Vec::new()) };
     static CANNONS: RefCell<Option<Vec<Dim>>> = const { RefCell::new(None) };
     static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
     static INTERNED: RefCell<Interned> = RefCell::new(Interned::default());
@@ -288,8 +291,34 @@ impl Subsystem for Schematics {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        quill::submit_custom_geometry(host, event);
         tools::submit_custom_geometry(host, event);
+    }
+
+    fn prepare_render_buffers(
+        &self,
+        host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+        PREPARED.with_borrow_mut(Vec::clear);
+        quill::prepare_render_buffers(host, event);
+        tools::prepare_render_buffers(event);
+    }
+
+    /// Draws the overlays `prepare_render_buffers` prepared, after the translucent blocks.
+    fn render_level_stage(
+        &self,
+        _host: &dyn mod_api::ClientHost,
+        event: &mut mod_api::RenderLevelStageEvent<'_>,
+    ) {
+        if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
+            return;
+        }
+        let batches = PREPARED.take();
+        if let Some(pass) = event.context.world_pass() {
+            for batch in batches {
+                let _ = pass.draw(batch);
+            }
+        }
     }
 
     fn screen_render_post(
