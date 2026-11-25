@@ -20,10 +20,6 @@
 //! packages through block entity slots mirroring them (`automation`).
 //!
 //! Left out, for want of API:
-//! - A frogport is not told when the inventory below it changes (`contents_changed` is a Part
-//!   of the changed block only, with no hook for every container's `setChanged`): a frogport
-//!   with an inventory below looks at it on Create's own lazy tick, every 11 ticks, instead of
-//!   at once.
 //! - A dropped package is an item, not Create's package entity (`PackageEntity`, API_GAPS.md).
 
 mod automation;
