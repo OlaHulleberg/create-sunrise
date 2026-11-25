@@ -12,11 +12,11 @@
               "add": false,
               "conditions": [
                 {
-                  "block": "create:polished_cut_asurine_slab",
-                  "properties": {
+                  "type": "minecraft:match_block",
+                  "blocks": "create:polished_cut_asurine_slab",
+                  "state": {
                     "type": "double"
-                  },
-                  "type": "minecraft:block_state_property"
+                  }
                 }
               ],
               "count": 2.0,

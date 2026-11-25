@@ -13,11 +13,11 @@
           "type": "minecraft:item",
           "conditions": [
             {
-              "block": "create:brass_door",
-              "properties": {
+              "type": "minecraft:match_block",
+              "blocks": "create:brass_door",
+              "state": {
                 "half": "lower"
-              },
-              "type": "minecraft:block_state_property"
+              }
             }
           ],
           "name": "create:brass_door"

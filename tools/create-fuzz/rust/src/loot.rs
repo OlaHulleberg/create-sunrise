@@ -1,7 +1,7 @@
 //! What a broken block drops: its loot table (`create/data/create/loot_table/blocks/<name>.json`,
 //! Create's generated data), as the host rolls it for `destroyBlock(pos, true)`. Only the
 //! tables of Create's blocks, and only what they use: one roll of plain item entries under
-//! `survives_explosion`, `block_state_property` and `inverted` conditions.
+//! `survives_explosion`, `match_block` and `inverted` conditions.
 use serde_json::Value;
 
 /// Whether a player's empty hand breaks the block in `state` without its drops
@@ -83,11 +83,11 @@ fn condition(c: &Value, block: &str, props: &[(String, String)]) -> Option<bool>
     match c["type"].as_str()? {
         "minecraft:survives_explosion" => Some(true),
         "minecraft:inverted" => condition(&c["term"], block, props).map(|b| !b),
-        "minecraft:block_state_property" => {
-            if c["block"].as_str()? != block {
+        "minecraft:match_block" => {
+            if c["blocks"].as_str()? != block {
                 return Some(false);
             }
-            Some(c["properties"].as_object()?.iter().all(|(k, v)| {
+            Some(c["state"].as_object()?.iter().all(|(k, v)| {
                 props
                     .iter()
                     .any(|(pk, pv)| pk == k && Some(pv.as_str()) == v.as_str())
