@@ -100,6 +100,18 @@ pub fn can_take(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     .unwrap_or(false)
 }
 
+/// `getStackToDistribute().isEmpty()` of the brass tunnel at `pos`.
+pub fn holds_nothing(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    let dim = lv.dim;
+    with_world(|w| {
+        w.dims[dim]
+            .brass
+            .get(&pos)
+            .is_some_and(create_engine::tunnel::Brass::holds_nothing)
+    })
+    .unwrap_or(false)
+}
+
 /// `BrassTunnelItemHandler.insertItem`: whether the brass tunnel at `pos` passes inserts to its
 /// belt below, accepts them to distribute, or holds them back.
 pub fn handler_target(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<tunnel::HandlerTarget> {

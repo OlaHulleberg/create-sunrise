@@ -496,7 +496,7 @@ pub fn handle_insertion(
     let above = [next[0], next[1] + 1, next[2]];
     if super::tunnel::has_distribution(lv, above) {
         let from = side.opposite();
-        if !super::tunnel::can_take(lv, above)
+        if !super::tunnel::holds_nothing(lv, above)
             || !super::tunnel::flap_filter_passes(lv, above, from, &item.item)
         {
             return Some(item.count);

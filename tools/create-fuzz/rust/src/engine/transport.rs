@@ -696,7 +696,9 @@ impl Run {
         let above = [p[0], p[1] + 1, p[2]];
         if self.has_distribution(above) {
             let from = side.opposite();
-            if !self.brass_can_take(above) || !self.brass_filter_passes(above, from, &item.item) {
+            if !self.brass_holds_nothing(above)
+                || !self.brass_filter_passes(above, from, &item.item)
+            {
                 return Some(item.count);
             }
             if !simulate {
