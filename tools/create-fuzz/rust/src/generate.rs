@@ -175,11 +175,17 @@ pub const FAMILIES: &[Family] = &[
         transmission::sequence,
     ),
     family("transmission/chain", &low_half(12), transmission::chain),
-    // The crank trace reads no seed bit but the reload one: one residue of each half.
+    // The crank trace reads no seed bit but the reload one: 13 never reloads, 45 does.
     family(
         "transmission/crank",
-        &[(256, 13), (128, 45)],
+        &[(256, 13), (256, 45)],
         transmission::crank,
+    ),
+    // 45's copy: crank reads no seed bit but the reload one, and 173 reloads too.
+    family(
+        "transmission/sequenced_gearshift",
+        &[(256, 173)],
+        sequenced_gearshift,
     ),
     // 13's copy: the crank trace reads no seed bit but the reload one, and 141 never reloads.
     family("network/cog_casing", &[(256, 141)], cog_casing),
@@ -236,6 +242,9 @@ fn waterwheel(seed: u64) -> Scenario {
 }
 fn steam_engine(seed: u64) -> Scenario {
     crate::steam_engine::generate(seed, index(seed))
+}
+fn sequenced_gearshift(seed: u64) -> Scenario {
+    crate::sequenced_gearshift::generate(seed, index(seed))
 }
 fn source_faces(seed: u64) -> Scenario {
     geometry::source_faces(seed, index(seed))
@@ -535,7 +544,7 @@ mod tests {
             (0..128).filter(|r| old(*r) != family_name(*r)).collect()
         };
         for r in 0..128 {
-            if ![0, 2, 13, 77, 92, 93, 124].contains(&r) {
+            if ![0, 2, 13, 45, 77, 92, 93, 124].contains(&r) {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
@@ -544,6 +553,7 @@ mod tests {
         assert_eq!(family_name(124), "network/driven_placement");
         assert_eq!(family_name(130), "network/integrated_cogs");
         assert_eq!(family_name(141), "network/cog_casing");
+        assert_eq!(family_name(173), "transmission/sequenced_gearshift");
         assert_eq!(family_name(128), "processing/saw");
         assert_eq!(family_name(205), "processing/millstone");
         assert_eq!(family_name(221), "processing/crushing");
