@@ -20,9 +20,6 @@ use std::sync::{Mutex, OnceLock};
 /// The server's message: a level's turning fans and their currents.
 pub(super) const CHANNEL: &str = "create:air";
 
-/// The server's message: whether this client's player flies in creative (one byte).
-pub(super) const FLYING_CHANNEL: &str = "create:air_flying";
-
 /// Create's air flow particle type.
 pub(super) const AIR_FLOW: &str = "create:air_flow";
 
@@ -104,9 +101,6 @@ thread_local! {
     /// `entitySearchCooldown` of each fan for the local player, and whether its last search
     /// caught the player (`caughtEntities`).
     static CAUGHT: RefCell<Vec<([i32; 3], u8, bool)>> = const { RefCell::new(Vec::new()) };
-    /// `isPlayerCreativeFlying` for the local player, as the server told it: the client's own
-    /// abilities read back the server's last abilities packet, not its own flight (`API_GAPS.md`).
-    static FLYING: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
     /// `AirCurrent.Client`: whether a fan pushed the player since the last sound tick
     /// (`isClientPlayerInAirCurrent`), and the wind (`flyingSound`) with its volume.
     static IN_CURRENT: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -174,12 +168,6 @@ pub(super) fn reset() {
     IN_CURRENT.set(false);
     WIND.set(None);
     CAUGHT.with_borrow_mut(Vec::clear);
-    FLYING.set(false);
-}
-
-/// The server's `create:air_flying`.
-pub(super) fn flying_from_server(data: &[u8]) {
-    FLYING.set(data.first() == Some(&1));
 }
 
 /// The server's `create:air`: the fans of the level this client shows, all of them.
@@ -210,7 +198,9 @@ pub(super) fn push_player(host: &mut dyn ClientHost, player: mod_api::PlayerRef)
         return;
     };
     let sneaking = e.is_shift_key_down(h).unwrap_or(false);
-    let creative_flying = FLYING.get();
+    let creative_flying = player
+        .abilities(h)
+        .is_some_and(|a| a.flying && a.instabuild);
     let start = motion;
     let mut winds = Vec::new();
     CAUGHT.with_borrow_mut(|caught| {
