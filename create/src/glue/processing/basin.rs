@@ -312,7 +312,11 @@ pub fn use_basin(
             .collect();
         if !taken.is_empty() && lv.set_slots(pos, &taken) {
             basin_changed(dim, pos);
-            contents_changed(dim, pos);
+            // The input inventory alone sets `contentsChanged` as a slot is cleared: the
+            // output inventory has no such callback.
+            if taken.iter().any(|(i, _)| basin::INPUTS.contains(i)) {
+                contents_changed(dim, pos);
+            }
             for s in slots.into_iter().flatten() {
                 lv.give(player, s);
             }

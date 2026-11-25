@@ -127,7 +127,8 @@ is `create:blaze_burner[blaze]`, a magma block or a lit campfire (`BasinBlockEnt
   (`BasinInventory.insertItem`, :20: one stack of an item in a basin, and only into the first empty
   slot; `extractItem`, :45: any slot), and `useItemOn` (:88): a container's fluid goes into the
   input tanks when all of it fits, a container is filled from the outputs first, an empty hand
-  takes everything and stops the operator (`onEmptied`, :237).
+  takes everything and stops the operator (`onEmptied`, :237); only results taken does not have
+  it look again, as the input inventory alone sets `contentsChanged` (:112).
 - `onWrenched` (:280): the spout's side is chosen, or shut when it is the one faced. Facing a
   side, results go to what takes items below it; facing down, into the output slots.
 - The mixer (`tick`, :126): 20 ticks down, `processingTicks` (:157: from the speed and the
@@ -216,6 +217,7 @@ Fixed, each with an engine test carrying Create's numbers and a case in `cases/`
 | `processing-basin-handler` | The handler takes a stack only into the first empty slot and not beside a stack of the same item; it gives from the input slots | Takes into any empty input slot; gives nothing from the inputs | `BasinInventory.java:20`, `:45`, `BasinBlockEntity.java:116` |
 | `processing-basin-bucket` | A bucket emptied into the tanks leaves its empty bucket in the hand; one filled from them lands back in it | The bucket goes to the inventory | `FluidHelper.java:141`, `:185` |
 | `processing-basin-spout-pop` | A broken basin drops the items waiting at its spout | They are lost | `BasinBlockEntity.java:228` |
+| `processing-basin-emptied-outputs` | An empty hand taking only results does not have the operator look at once: the basin's input inventory alone sets `contentsChanged`, so the press over a basin left with 750 mB of chocolate stops in the tick after the take and starts again 150 ticks later, at the backup check | The operator was told at once: the press started again in the tick after it stopped | `BasinBlock.java:121`, `BasinBlockEntity.java:112`, `:357` |
 | `processing-basin-recipe-order` | With dirt, water, mud and wheat in the basin the mixer packs mud first: `getMatchingRecipes` sorts by item ingredients alone, and `minecraft:packed_mud` has two to `create:mixing/mud_by_mixing`'s one | Sorted by item and fluid ingredients together: a tie, so Create's recipe came first of the book | `BasinOperatingBlockEntity.java:160`, `:165`, `IntArrayTrie.java:64` |
 
 The driver spilled a broken millstone's slots as `Block.popResource` does; the game spills a

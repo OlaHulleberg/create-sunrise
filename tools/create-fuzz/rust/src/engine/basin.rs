@@ -205,14 +205,19 @@ impl Run {
                 return (None, given);
             };
             let mut slots = before.clone();
-            for slot in slots.iter_mut() {
+            let mut from_inputs = false;
+            for (i, slot) in slots.iter_mut().enumerate() {
                 if let Some((item, count)) = slot.take() {
                     given.push(Stack { item, count });
+                    from_inputs |= basin::INPUTS.contains(&i);
                 }
             }
             let empty = vec![None; basin::SLOTS];
             self.write_basin(pos, &before, &empty);
-            self.w.basin_contents_changed(0, pos);
+            // The input inventory alone sets `contentsChanged` as a slot is cleared.
+            if from_inputs {
+                self.w.basin_contents_changed(0, pos);
+            }
             self.w.basin_emptied(0, pos);
             return (None, given);
         };

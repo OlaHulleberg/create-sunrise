@@ -856,6 +856,46 @@ fn a_broken_basin_drops_what_waited_at_its_spout() {
     );
 }
 
+/// `processing-basin-emptied-outputs`: an empty hand taking only results does not have the
+/// operator look at once (the basin's input inventory alone sets `contentsChanged`): the press
+/// over a basin left with 750 mB of chocolate stops in the tick after the take and starts
+/// again 150 ticks later, at the basin's backup check (`recipeBackupCheck`).
+#[test]
+fn an_empty_hand_taking_only_results_leaves_the_press_to_the_backup_check() {
+    let sc: crate::scenario::Scenario = serde_json::from_str(include_str!(
+        "../../../cases/processing-basin-emptied-outputs.json"
+    ))
+    .unwrap();
+    let snap = super::run(&sc);
+    let outputs = |tick: u32| {
+        snap.checkpoints[&tick].blocks["0,6,0"]
+            .processing
+            .as_ref()
+            .unwrap()
+            .outputs
+            .clone()
+    };
+    let press = |tick: u32| {
+        let o = snap.checkpoints[&tick].blocks["0,8,0"]
+            .processing
+            .as_ref()
+            .unwrap();
+        (o.running, o.running_ticks)
+    };
+    let bar = crate::processing::Slot {
+        item: "create:bar_of_chocolate".into(),
+        count: 1,
+        slot: 0,
+    };
+    assert_eq!(outputs(67), Some(vec![bar.clone()]));
+    assert_eq!(outputs(69), Some(vec![]));
+    assert_eq!(press(68), (Some(true), Some(112)));
+    assert_eq!(press(69), (Some(false), Some(0)));
+    assert_eq!(press(218), (Some(false), Some(0)));
+    assert_eq!(press(220), (Some(true), Some(8)));
+    assert_eq!(outputs(240), Some(vec![bar]));
+}
+
 /// `processing-basin-recipe-order`: with dirt, water, mud and wheat in a basin the mixer packs
 /// mud first (`getMatchingRecipes` sorts by item ingredients alone: `minecraft:packed_mud` has
 /// two, `create:mixing/mud_by_mixing` one and water), then mixes mud.
