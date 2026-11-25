@@ -23,7 +23,7 @@ use create_engine::Block;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::place;
 use mod_api::{
-    BlockClick, BlockState, Hand, HostBlockStates, InteractionResult, ItemStack,
+    BlockClick, BlockState, Hand, HostBlockStates, HostSide, InteractionResult, ItemStack,
     OnItemUseFirstEvent, PlayerRef, Registrar, ServerHost, SoundSource, UseItemOnEvent,
 };
 
@@ -140,9 +140,12 @@ struct CogItem(bool);
 impl mod_api::ItemPart for CogItem {
     fn on_item_use_first(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut OnItemUseFirstEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.players().acting_player()?;
         // `if (player.isShiftKeyDown() || !player.mayBuild()) return PASS`.
@@ -161,9 +164,12 @@ struct Clicked;
 impl mod_api::BlockPart for Clicked {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         let item = stack.item().name(&*host);

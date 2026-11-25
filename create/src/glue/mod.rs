@@ -156,7 +156,7 @@ pub struct Submit<'a> {
     pub pos: [i32; 3],
     pub block: &'a str,
     pub state: mod_api::BlockState,
-    pub entity: &'a mod_api::ModBlockEntity,
+    pub entity: mod_api::BlockEntityDataView<'a>,
     pub draw: &'a mut dyn mod_api::BlockEntityDrawContext,
 }
 
