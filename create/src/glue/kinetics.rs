@@ -155,10 +155,13 @@ impl Subsystem for Kinetics {
     }
 
     /// The `motors` an older version kept in the column.
-    fn chunk_load(&self, lv: &mut ServerLevel<'_>, _chunk: [i32; 2], data: &Compound) {
+    fn chunk_load(&self, lv: &mut ServerLevel<'_>, chunk: [i32; 2], data: &Compound) {
         let saved = settings_from_nbt(data);
         let dim = lv.dim;
-        with_world(|w| w.load_settings(dim, saved.into_iter()));
+        with_world(|w| {
+            w.column_loaded(dim, chunk[0], chunk[1]);
+            w.load_settings(dim, saved.into_iter());
+        });
     }
 
     /// `ScrollValueBehaviour.write` of a creative motor's or speed controller's speed.

@@ -2302,9 +2302,15 @@ impl CreateWorld {
         }
     }
 
+    /// A column loaded: kinetic positions in it answer `Level.isLoaded` (`validateKinetics`).
+    pub fn column_loaded(&mut self, dim: usize, cx: i32, cz: i32) {
+        self.dims[dim].kinetics.column_loaded(cx, cz);
+    }
+
     /// A column left the level: invalidate entities without detaching their networks.
     pub fn column_unloaded(&mut self, dim: usize, cx: i32, cz: i32) {
         let d = &mut self.dims[dim];
+        d.kinetics.column_unloaded(cx, cz);
         // Its track leaves the graph; trains standing in it leave with it (saved with it).
         d.railway.column_unloaded(cx, cz);
         d.lifts.column_unloaded(cx, cz);

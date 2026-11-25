@@ -104,29 +104,45 @@ impl Kinetics {
         a.state.theoretical * modifier
     }
 
-    /// KineticBlockEntity.onSpeedChanged and setSpeed.
+    /// `setSpeed` followed by `onSpeedChanged`, as the propagator calls them in a row.
     pub(super) fn change_speed(&mut self, id: u32, speed: f32) {
+        let before = self.nodes[id as usize].state.speed;
+        let changed = self.set_speed(id, speed);
+        self.speed_changed(id, before, changed);
+    }
+
+    /// KineticBlockEntity.setSpeed: the field alone, with no flicker and no callbacks.
+    /// Returns whether the speed it holds or shows changed.
+    pub(super) fn set_speed(&mut self, id: u32, speed: f32) -> bool {
         let n = &mut self.nodes[id as usize];
         let shown = if n.state.overstressed { 0.0 } else { speed };
-        n.state.flicker = n.state.flicker(self.now)
-            + if n.sub == 0 {
-                flicker_gain(n.state.speed, shown)
-            } else {
-                0
-            };
-        n.state.flicker_at = self.now;
         let changed = n.state.theoretical != speed || n.state.speed != shown;
         n.fresh |= changed;
         n.state.theoretical = speed;
         n.state.speed = shown;
-        if changed && n.sub == 0 {
-            self.speed_notifications.push((n.pos, shown));
-        }
         // KineticBlockEntity.setSpeed/onSpeedChanged do not enroll members.
         // switchToBlockState detaches while the old network id is still present.
         // Membership belongs to setNetwork/add and generator stress updates.
         if changed {
             self.mark_changed(id);
+        }
+        changed
+    }
+
+    /// KineticBlockEntity.onSpeedChanged: the flicker tally gains 5 when the speed started,
+    /// stopped or turned round since `before`, and the subclass callbacks run.
+    pub(super) fn speed_changed(&mut self, id: u32, before: f32, changed: bool) {
+        let n = &mut self.nodes[id as usize];
+        let shown = n.state.speed;
+        n.state.flicker = n.state.flicker(self.now)
+            + if n.sub == 0 {
+                flicker_gain(before, shown)
+            } else {
+                0
+            };
+        n.state.flicker_at = self.now;
+        if changed && n.sub == 0 {
+            self.speed_notifications.push((n.pos, shown));
         }
         self.on_speed_changed(id);
     }
@@ -363,9 +379,14 @@ impl Kinetics {
             // updateGeneratedRotation updates the figures synchronously. It does
             // not set networkDirty: later addSilently calls must not trigger a sync.
         }
+        // `onSpeedChanged(prevSpeed)` runs once, after the propagation and the stress
+        // update: the flicker tally the propagation read did not yet hold its +5.
+        let changed = prev != self.nodes[id as usize].state.theoretical;
+        self.speed_changed(id, prev, changed);
     }
 
-    /// GeneratingKineticBlockEntity.applyNewSpeed: stop, start, overpower, or reapply.
+    /// GeneratingKineticBlockEntity.applyNewSpeed: stop, start, overpower, or reapply, with
+    /// `setSpeed` alone (`updateGeneratedRotation` calls `onSpeedChanged` afterwards).
     fn apply_new_speed(
         &mut self,
         id: u32,
@@ -379,10 +400,10 @@ impl Kinetics {
                 return;
             }
             self.handle_removed(id, events);
-            self.change_speed(id, 0.0);
+            self.set_speed(id, 0.0);
             self.set_network(id, None);
         } else if prev == 0.0 {
-            self.change_speed(id, generated);
+            self.set_speed(id, generated);
             self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             self.propagate_new_source(id, events);
         } else if source.is_some() && prev.abs() >= generated.abs() {
@@ -393,7 +414,7 @@ impl Kinetics {
             }
         } else {
             self.handle_removed(id, events);
-            self.change_speed(id, generated);
+            self.set_speed(id, generated);
             // applyNewSpeed only creates an identity when overpowering a source.
             // Reapplying an independent generator retains its current network.
             if source.is_some() {
