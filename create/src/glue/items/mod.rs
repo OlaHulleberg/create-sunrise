@@ -340,10 +340,6 @@ impl Subsystem for Items {
         }
     }
 
-    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClosedEvent) {
-        filters::menu_closed(host, event);
-    }
-
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         filters::level_tick(lv);
         symmetry::level_tick(lv);
