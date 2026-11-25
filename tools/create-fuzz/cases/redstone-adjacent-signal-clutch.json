@@ -1,0 +1,71 @@
+{
+  "version": 3,
+  "seed": 0,
+  "checkpoints": [
+    10,
+    30,
+    60
+  ],
+  "ticks": 60,
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:clutch[axis=x,powered=false]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        3,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 5,
+      "pos": [
+        1,
+        10,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    },
+    {
+      "tick": 6,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      }
+    }
+  ]
+}

@@ -74,7 +74,9 @@ Differences are filed as issues with the shrunk case, not kept here.
 Initial state specifications are injected one per tick, in order. `motor` sets a creative motor's speed the tick after it is placed.
 `day_time` (default 0) is the level's day time when the case starts; Java sets it for each batch, whose cases share
 it. Each event happens before its tick runs: `state` places a block (`minecraft:air` removes it), `turn` turns a hand
-crank (true: backwards). A `minecraft:redstone_block` powers the blocks beside it.
+crank (true: backwards). A `minecraft:redstone_block` powers the blocks beside it. The `signal` action places `createfuzz:signal`, a controlled
+power source that is not a redstone conductor: adjacent signal blocks do not relay power, so each one's output is
+strictly its own `strength`.
 
 ## How the two sides are kept comparable
 
