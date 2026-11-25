@@ -1,7 +1,6 @@
 /target/
 /create/target/
 /create/.horizon/
-/create/Cargo.lock
 /tools/create-data/target/
 /create/src/engine/target/
 
