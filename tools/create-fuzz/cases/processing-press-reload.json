@@ -1,0 +1,68 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:mechanical_press[facing=north]"
+    },
+    {
+      "motor": 32,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    }
+  ],
+  "checkpoints": [
+    60,
+    70,
+    100
+  ],
+  "events": [
+    {
+      "action": {
+        "input": {
+          "kind": "drop_on",
+          "stack": {
+            "count": 1,
+            "item": "minecraft:iron_ingot"
+          }
+        },
+        "kind": "item"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 30
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 50
+    }
+  ],
+  "seed": 29903,
+  "ticks": 110,
+  "version": 3
+}

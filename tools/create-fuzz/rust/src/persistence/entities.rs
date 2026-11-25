@@ -39,6 +39,15 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
                 fields.insert("Timer".into(), Tag::Int(m.timer));
             }
         }
+        // glue/processing/persist.rs `live_fields`: the press's cycle.
+        Some(Block::MechanicalPress) => {
+            if let Some(pr) = w.dims[0].presses.get(&p) {
+                fields.insert("Running".into(), Tag::Byte(i8::from(pr.running)));
+                fields.insert("Mode".into(), Tag::Int(i32::from(pr.mode.index())));
+                fields.insert("Finished".into(), Tag::Byte(i8::from(pr.finished)));
+                fields.insert("Ticks".into(), Tag::Int(pr.ticks));
+            }
+        }
         _ => {}
     }
 }
@@ -178,6 +187,17 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
                 .insert("Timer".into(), Tag::Int(m.timer));
         }
     }
+    // glue/processing/persist.rs `save_entities`: the press's `Running`, `Mode`, `Finished`
+    // and `Ticks`.
+    for (p, pr) in w.dims[0].presses.iter() {
+        if (p[0] >> 4, p[2] >> 4) == column {
+            let e = out.entry(*p).or_default();
+            e.insert("Running".into(), Tag::Byte(i8::from(pr.running)));
+            e.insert("Mode".into(), Tag::Int(i32::from(pr.mode.index())));
+            e.insert("Finished".into(), Tag::Byte(i8::from(pr.finished)));
+            e.insert("Ticks".into(), Tag::Int(pr.ticks));
+        }
+    }
     super::fluids::save_entities(w, column, &mut out);
     out
 }
@@ -225,6 +245,23 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
                 _ => 0,
             };
             w.dims[0].millstones.entry(p).or_default().timer = timer;
+        }
+        // glue/processing/persist.rs `load_entity`: the press's cycle.
+        Block::MechanicalPress => {
+            let flag = |k: &str| matches!(tag.get(k), Some(Tag::Byte(b)) if *b != 0);
+            let int = |k: &str| match tag.get(k) {
+                Some(Tag::Int(v)) => *v,
+                _ => 0,
+            };
+            let d = &mut w.dims[0];
+            let pr = d.presses.entry(p).or_default();
+            pr.running = flag("Running");
+            pr.mode = create_engine::press::Mode::from_index(int("Mode").clamp(0, 2) as u8);
+            pr.finished = flag("Finished");
+            pr.ticks = int("Ticks");
+            if pr.running {
+                d.press_changes.push(p);
+            }
         }
         _ => {}
     }
