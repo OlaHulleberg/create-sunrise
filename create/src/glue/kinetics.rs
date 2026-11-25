@@ -616,6 +616,13 @@ fn apply_events(lv: &mut ServerLevel<'_>, mut events: Vec<Event>) {
                 } => {
                     let mut speeds = current_speeds(lv, pos);
                     speeds[usize::from(sub & 1)] = speed;
+                    // `SequencedGearshiftBlockEntity.getRotationSpeedModifier`: its output face
+                    // turns at the running instruction's modifier times its speed.
+                    if let Some(modifier) =
+                        with_world(|w| w.sequencer_modifier(lv.dim, pos)).flatten()
+                    {
+                        speeds[1] = speed * modifier;
+                    }
                     let first = (sub == 0).then_some((theoretical, overstressed));
                     set_speeds(lv, pos, Some(speeds), first);
                     for s in super::SUBSYSTEMS {

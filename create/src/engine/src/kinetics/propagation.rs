@@ -78,19 +78,6 @@ impl Kinetics {
                 desired
             };
         }
-        if a.pos == b.pos
-            && let Some(Couple::Relay(m)) = a.part.couple.or(b.part.couple)
-        {
-            return if a.state.source == Some(self_location(b)) {
-                if m == 0.0 {
-                    0.0
-                } else {
-                    a.state.theoretical / m
-                }
-            } else {
-                a.state.theoretical * m
-            };
-        }
         // RotationPropagator.getRotationSpeedModifier's axis connection.
         if let Some(d) = Dir::from_offset(sub(b.pos, a.pos))
             && a.part.shafts & d.bit() != 0

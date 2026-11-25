@@ -166,7 +166,7 @@ fn engine_lines(host: &dyn ClientHost, pos: [i32; 3]) -> Option<Vec<Vec<(String,
             .unwrap_or_default(),
         ..Default::default()
     };
-    let [part, _] = create_engine::parts::parts(Block::PoweredShaft, &shaft_info, &settings);
+    let part = create_engine::parts::parts(Block::PoweredShaft, &shaft_info, &settings);
     let capacity = part.map_or(0.0, |p| p.capacity);
     let (speed, _) = super::super::kinetics::shown_theory(host, level, shaft);
     let generated = data
