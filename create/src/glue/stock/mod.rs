@@ -46,13 +46,14 @@ use create_engine::stock::{
     RequestType, Requester, SavedNetwork, Source, Summary, Trigger,
 };
 use mod_api::{
-    AnalogOutputEvent, AttachmentCodec, AttachmentType, BlockPart, Command, CommandArgumentValue,
-    Compound, Flow, HasAnalogOutputEvent, Holder, HostBlockStates, InteractionResult, ItemPart,
-    ItemStack, LevelHost, OnBlockPlacedByEvent, PlayerRef, Registrar, RegistrationContext,
-    ServerHost, SetPlacedByEvent, Tag, UseItemOnEvent,
+    AnalogOutputEvent, AttachmentCodec, AttachmentDescriptor, AttachmentKey, BlockPart, Command,
+    CommandArgumentValue, Compound, Flow, HasAnalogOutputEvent, Holder, HostBlockStates,
+    InteractionResult, ItemPart, ItemStack, LevelHost, OnBlockPlacedByEvent, PlayerRef, Registrar,
+    RegistrationContext, ServerHost, SetPlacedByEvent, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// `FactoryPanelSupportBehaviour.notifyPanels` of the redstone link at `link` (its signal
 /// changed, or it is gone).
@@ -222,17 +223,12 @@ type Change = (usize, [i32; 3], Option<Block>, Option<Block>);
 
 /// The overworld's saved networks (`data/create/logistics_networks.dat` in Create; here the
 /// level's attachments' saved data).
-static NETWORKS: AttachmentType<Compound> = AttachmentType {
-    namespace: "create",
-    name: "logistics_networks",
-    default: Compound::new,
-    codec: Some(AttachmentCodec {
-        encode: |data| Ok(data.clone()),
-        decode: |data| Ok(data.clone()),
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+static NETWORKS: RwLock<Option<AttachmentKey<Compound>>> = RwLock::new(None);
+
+/// The issued networks key, once the mod has registered.
+fn networks_key() -> Option<AttachmentKey<Compound>> {
+    NETWORKS.read().ok().and_then(|slot| slot.clone())
+}
 
 thread_local! {
     static STOCK: RefCell<Option<Vec<Net>>> = const { RefCell::new(None) };
@@ -535,6 +531,21 @@ impl Subsystem for Stock {
         let key = r.item_key("create:package_filter");
         r.item_part(key, package_filter::PackageFilterPart);
         shop::register(r);
+        let networks = AttachmentDescriptor::new("create:logistics_networks", Compound::new)
+            .serialize(AttachmentCodec {
+                encode: |data| Ok(data.clone()),
+                decode: |data| Ok(data.clone()),
+            });
+        match r.register_attachment_type(networks) {
+            Ok(key) => {
+                if let Ok(mut slot) = NETWORKS.write() {
+                    *slot = Some(key);
+                }
+            }
+            Err(e) => {
+                crate::create_log!("[create] the logistics networks attachment was refused: {e:?}")
+            }
+        }
         if let Some(kind) = super::kinetics::kind()
             && let Err(e) = r.block_entity_part(&kind, gauge_client::GaugeDraw)
         {
@@ -1464,9 +1475,12 @@ impl BlockPart for StockBlock {
     /// item goes on to its own use (tuning it to the block's network).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         if states::id(event.state).and_then(block_of) == Some(Block::FactoryGauge) {
             return gauge::use_item_on(host, event.click);
         }
@@ -1494,9 +1508,12 @@ impl BlockPart for StockBlock {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut mod_api::UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         own_use(host, event.state, event.click)
     }
 
@@ -1900,13 +1917,13 @@ impl ItemPart for StockItem {
     }
 
     /// `appendHoverText` of a tuned item.
-    fn tooltip(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::TooltipEvent<'_>) {
+    fn tooltip(&self, _host: &dyn mod_api::ClientHost, event: &mut mod_api::TooltipEvent<'_, '_>) {
         if tuned(event.stack).is_some() {
             let line = |key: &str| mod_api::Text::translate(key, Vec::new());
-            event
+            let _ = event
                 .lines
                 .push((line("create.logistically_linked.tooltip"), 0xFFAA00));
-            event
+            let _ = event
                 .lines
                 .push((line("create.logistically_linked.tooltip_clear"), 0xAAAAAA));
         }
@@ -2452,7 +2469,10 @@ fn uuid_tag(id: u128) -> Tag {
 /// Their links count as unloaded until their columns load (a link already loaded is not).
 fn level_load(lv: &mut ServerLevel<'_>) {
     let now = now(lv);
-    let data = match NETWORKS.get_existing(&mut *lv.host, Holder::Level) {
+    let Some(key) = networks_key() else {
+        return;
+    };
+    let data = match key.get_existing(&mut *lv.host, Holder::Level, |data| data.cloned()) {
         Ok(Some(data)) => data,
         Ok(None) => return,
         Err(e) => {
@@ -2600,7 +2620,10 @@ fn level_save(lv: &mut ServerLevel<'_>) {
     let now = now(lv);
     let networks = networks_tag(&*lv.host, now);
     let data = Compound::from([("LogisticsNetworks".into(), networks)]);
-    match NETWORKS.set(&mut *lv.host, Holder::Level, data) {
+    let Some(key) = networks_key() else {
+        return;
+    };
+    match key.set(&mut *lv.host, Holder::Level, data) {
         Ok(()) => DIRTY.set(false),
         Err(e) => crate::create_log!("[create] saving the logistics networks: {e:?}"),
     }
