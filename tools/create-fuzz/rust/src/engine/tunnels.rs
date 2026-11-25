@@ -73,14 +73,13 @@ impl Run {
         let Some(now) = self.tunnel_state(pos) else {
             return;
         };
-        let seg = self
-            .belt_below(pos)
-            .filter(|s| s.slope == belt::Slope::Horizontal);
-        if check_survive && (seg.is_none() || !self.cased_below(pos)) {
+        let belt = self.belt_below(pos);
+        let horizontal = belt.is_some_and(|s| s.slope == belt::Slope::Horizontal);
+        if check_survive && (!horizontal || !self.cased_below(pos)) {
             self.break_block(pos, false);
             return;
         }
-        let axis = seg.map_or(now.0, |s| s.facing.axis());
+        let axis = belt.map_or(Axis::X, |s| s.facing.axis());
         let output = |side: Dir| {
             let q = add([pos[0], pos[1] - 1, pos[2]], side.offset());
             if let Some((Block::Belt, i)) = self.w.table.get(self.at(q)) {

@@ -282,8 +282,8 @@ fn keep_side_filters(lv: &mut ServerLevel<'_>, pos: [i32; 3], open: (Axis, tunne
 /// outputs give (`at_once`: as placed or `updateTunnel`; otherwise `updateShape`, keeping a state
 /// whose window still fits). With `check_survive` (`neighborChanged` from the block below, the
 /// one place `canSurvive` is asked) it breaks without a cased, flat belt below; `onPlace`,
-/// `getStateForPlacement` and `updateShape` never break it, and without a belt below it keeps
-/// its axis (`getTunnelState` sets the axis only for a belt).
+/// `getStateForPlacement` and `updateShape` never break it, and without a belt below it defaults
+/// to `Axis::X` (`getTunnelState` starts from `defaultBlockState()`).
 fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool, check_survive: bool) {
     let belt_below = |lv: &ServerLevel<'_>, p: [i32; 3]| {
         info_at(lv, [p[0], p[1] - 1, p[2]]).and_then(|(_, i)| i.belt)
@@ -298,12 +298,13 @@ fn shape_tunnel(lv: &mut ServerLevel<'_>, pos: [i32; 3], at_once: bool, check_su
     let Some(now) = tunnel_state(lv, pos) else {
         return;
     };
-    let seg = belt_below(lv, pos).filter(|s| s.slope == Slope::Horizontal);
-    if check_survive && (seg.is_none() || !cased(lv, pos)) {
+    let belt = belt_below(lv, pos);
+    let horizontal = belt.is_some_and(|s| s.slope == Slope::Horizontal);
+    if check_survive && (!horizontal || !cased(lv, pos)) {
         lv.destroy_block(pos, true);
         return;
     }
-    let axis = seg.map_or(now.0, |s| s.facing.axis());
+    let axis = belt.map_or(Axis::X, |s| s.facing.axis());
     // `hasValidOutput` beside the belt segment: a belt across it, or anything taking items
     // from that side (`DirectBeltInputBehaviour.canInsertFromSide`: a depot, an ejector, a
     // floor funnel, a chute, an item drain, a processing machine).
