@@ -806,7 +806,7 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
         Block::LitBlazeBurner => {
             basin::use_lit_burner(&mut lv, pos, player, click.hand, click.stack)
         }
-        Block::Basin if main => basin::use_basin(&mut lv, pos, player, click.stack),
+        Block::Basin if main => basin::use_basin(&mut lv, pos, player, click.hand, click.stack),
         _ => false,
     };
     if used {

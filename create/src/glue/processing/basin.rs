@@ -3,6 +3,7 @@
 //! heating it (`BlazeBurnerBlockEntity`).
 
 use super::{recipes, stacks};
+use crate::glue::items;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::basin::{self, MixStep};
@@ -291,6 +292,7 @@ pub fn use_basin(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     player: PlayerRef,
+    hand: mod_api::Hand,
     stack: Option<&ItemStack>,
 ) -> bool {
     let dim = lv.dim;
@@ -333,13 +335,17 @@ pub fn use_basin(
             tanks.input = inputs;
             with_world(|w| w.set_basin_fluids(dim, pos, tanks));
             if !creative {
-                lv.take_held(player, 1);
-                if let Some(left) = e
+                let left = e
                     .leftover
                     .as_deref()
-                    .and_then(|l| crate::glue::logistics::items::stack_of(&*lv.host, l, 1))
-                {
-                    lv.give(player, left);
+                    .and_then(|l| crate::glue::logistics::items::stack_of(&*lv.host, l, 1));
+                if stack.count() <= 1 {
+                    items::set_held(lv.host, player, hand, left);
+                } else {
+                    items::shrink_held(lv.host, player, hand, 1);
+                    if let Some(left) = left {
+                        items::give_back(lv.host, player, left);
+                    }
                 }
             }
             return true;
@@ -365,9 +371,9 @@ pub fn use_basin(
         *slot = (have > need).then_some((fluid, have - need));
         with_world(|w| w.set_basin_fluids(dim, pos, tanks));
         if !creative {
-            lv.take_held(player, 1);
+            items::shrink_held(lv.host, player, hand, 1);
             if let Some(out) = crate::glue::logistics::items::stack_of(&*lv.host, &out, 1) {
-                lv.give(player, out);
+                items::give_back(lv.host, player, out);
             }
         }
         return true;
