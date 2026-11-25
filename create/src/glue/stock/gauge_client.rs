@@ -622,7 +622,7 @@ fn draw_model_with(
         };
         match draw.terrain_model(m, options) {
             Ok(()) => return,
-            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) if !fresh => continue,
             Err(_) => return,
         }
     }
@@ -896,7 +896,7 @@ impl BlockEntityPart for GaugeDraw {
         let Some((face, facing)) = orientation(host, pos) else {
             return;
         };
-        let shown = shown_of(host, &event.entity.nbt);
+        let shown = shown_of(host, event.entity.nbt());
         let draw = &mut *event.draw;
         let t = draw.partial();
         let light = draw.light();
@@ -937,7 +937,7 @@ impl BlockEntityPart for GaugeDraw {
                 draw_item(draw, host, face, facing, p.slot, f);
             }
         }
-        if !animated(pos, &event.entity.nbt, host) {
+        if !animated(pos, event.entity.nbt(), host) {
             draw.keep();
         }
     }

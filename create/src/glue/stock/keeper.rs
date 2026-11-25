@@ -1229,153 +1229,153 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
     // its background, the search bar, the lock and the stacks scroll with the list.
     let top = y + 17.0;
     let bottom = y + l.h - 80.0;
-    let _ = draw.push_clip([x + 16.0, top, 199.0, bottom - top]);
-    let reach = max_scroll(&groups, &cats, l.h) as f32 * CELL + l.h - 72.0;
-    let mut slice = -2.0;
-    while slice < reach {
-        let at = slice - shift;
-        if (-20.0..=l.h - 72.0).contains(&at) {
-            draw.sprite(
-                TEX,
-                [37.0, 48.0, 182.0, 20.0],
-                [x + 22.0, y + at + 18.0, 182.0, 20.0],
-                None,
-            );
-        }
-        slice += 20.0;
-    }
-    draw.sprite(
-        TEX,
-        [57.0, 17.0, 142.0, 18.0],
-        [x + 42.0, y + 17.0 - shift, 142.0, 18.0],
-        None,
-    );
-    {
-        // The search text and hint.
-        let search = if o.search.is_empty() && o.focus != Focus::Search {
-            tr(host, "create.gui.stock_keeper.search_items", "Search Items")
-        } else {
-            let mut s = o.search.clone();
-            if o.focus == Focus::Search && blink() {
-                s.push('_');
+    let _ = draw.with_scissor([x + 16.0, top, 199.0, bottom - top], &mut |draw| {
+        let reach = max_scroll(&groups, &cats, l.h) as f32 * CELL + l.h - 72.0;
+        let mut slice = -2.0;
+        while slice < reach {
+            let at = slice - shift;
+            if (-20.0..=l.h - 72.0).contains(&at) {
+                draw.sprite(
+                    TEX,
+                    [37.0, 48.0, 182.0, 20.0],
+                    [x + 22.0, y + at + 18.0, 182.0, 20.0],
+                    None,
+                );
             }
-            s
-        };
-        let w = draw.text_width(&search);
-        let sx = if o.search.is_empty() && o.focus != Focus::Search {
-            (x + WIDTH / 2.0 - w / 2.0).floor()
-        } else {
-            x + 71.0
-        };
-        draw.text(&search, [sx, y + 22.0 - shift], 0xFF4A_2D31, false);
-    }
-    for (ci, g) in groups.iter().enumerate() {
-        if g.is_empty() {
-            continue;
+            slice += 20.0;
         }
-        let cy = cats.get(ci).map_or(0.0, |c| c.y);
-        if let Some(c) = cats.get(ci) {
-            let hy = l.items_y + cy - shift;
-            let u = if c.hidden { 143.0 } else { 151.0 };
-            draw.sprite(
-                TEX,
-                [u, 176.0, 8.0, 8.0],
-                [l.items_x, hy + 6.0, 8.0, 8.0],
-                None,
-            );
-            draw.text(&c.name, [l.items_x + 10.0, hy + 8.0], 0xFF4A_2D31, false);
-            draw.text(&c.name, [l.items_x + 9.0, hy + 7.0], 0xFFF8_F8EC, false);
-            if c.hidden {
-                continue;
-            }
-        }
-        let first = if cats.is_empty() { 4.0 } else { CELL };
-        for (i, &si) in g.iter().enumerate() {
-            let py = l.items_y + cy + first + (i / COLS) as f32 * CELL - shift;
-            if py < y {
-                continue;
-            }
-            if py > y + l.h - 72.0 {
-                break;
-            }
-            let e = &stock[si];
-            let at = [l.items_x + (i % COLS) as f32 * CELL, py];
-            item_entry(
-                draw,
-                at,
-                &e.stack,
-                listed_count(o, e),
-                hover == Some(Hover::Item(ci, i)),
-                true,
-            );
-        }
-    }
-    // The lock, for the network's owner.
-    if o.admin {
-        let u = if o.locked { 16.0 } else { 32.0 };
         draw.sprite(
             TEX,
-            [u, 176.0, 15.0, 16.0],
-            [l.lock_x, l.beside_search_y - shift, 15.0, 16.0],
+            [57.0, 17.0, 142.0, 18.0],
+            [x + 42.0, y + 17.0 - shift, 142.0, 18.0],
             None,
         );
-    }
-    // `getTroubleshootingMessage`, faded in once the list stayed empty.
-    if groups.iter().all(Vec::is_empty) {
-        let msg = if o.stock.is_none() {
-            tr(
-                host,
-                "create.gui.stock_keeper.checking_stocks",
-                "Checking stocks...",
-            )
-        } else if o.links == 0 {
-            tr(
-                host,
-                "create.gui.stock_keeper.no_packagers_linked",
-                "No Packagers Linked",
-            )
-        } else if o.stock.as_ref().is_some_and(Vec::is_empty) {
-            tr(
-                host,
-                "create.gui.stock_keeper.inventories_empty",
-                "Linked Inventories are Empty",
-            )
-        } else if o.list.is_some() {
-            if o.order.is_empty() {
+        {
+            // The search text and hint.
+            let search = if o.search.is_empty() && o.focus != Focus::Search {
+                tr(host, "create.gui.stock_keeper.search_items", "Search Items")
+            } else {
+                let mut s = o.search.clone();
+                if o.focus == Focus::Search && blink() {
+                    s.push('_');
+                }
+                s
+            };
+            let w = draw.text_width(&search);
+            let sx = if o.search.is_empty() && o.focus != Focus::Search {
+                (x + WIDTH / 2.0 - w / 2.0).floor()
+            } else {
+                x + 71.0
+            };
+            draw.text(&search, [sx, y + 22.0 - shift], 0xFF4A_2D31, false);
+        }
+        for (ci, g) in groups.iter().enumerate() {
+            if g.is_empty() {
+                continue;
+            }
+            let cy = cats.get(ci).map_or(0.0, |c| c.y);
+            if let Some(c) = cats.get(ci) {
+                let hy = l.items_y + cy - shift;
+                let u = if c.hidden { 143.0 } else { 151.0 };
+                draw.sprite(
+                    TEX,
+                    [u, 176.0, 8.0, 8.0],
+                    [l.items_x, hy + 6.0, 8.0, 8.0],
+                    None,
+                );
+                draw.text(&c.name, [l.items_x + 10.0, hy + 8.0], 0xFF4A_2D31, false);
+                draw.text(&c.name, [l.items_x + 9.0, hy + 7.0], 0xFFF8_F8EC, false);
+                if c.hidden {
+                    continue;
+                }
+            }
+            let first = if cats.is_empty() { 4.0 } else { CELL };
+            for (i, &si) in g.iter().enumerate() {
+                let py = l.items_y + cy + first + (i / COLS) as f32 * CELL - shift;
+                if py < y {
+                    continue;
+                }
+                if py > y + l.h - 72.0 {
+                    break;
+                }
+                let e = &stock[si];
+                let at = [l.items_x + (i % COLS) as f32 * CELL, py];
+                item_entry(
+                    draw,
+                    at,
+                    &e.stack,
+                    listed_count(o, e),
+                    hover == Some(Hover::Item(ci, i)),
+                    true,
+                );
+            }
+        }
+        // The lock, for the network's owner.
+        if o.admin {
+            let u = if o.locked { 16.0 } else { 32.0 };
+            draw.sprite(
+                TEX,
+                [u, 176.0, 15.0, 16.0],
+                [l.lock_x, l.beside_search_y - shift, 15.0, 16.0],
+                None,
+            );
+        }
+        // `getTroubleshootingMessage`, faded in once the list stayed empty.
+        if groups.iter().all(Vec::is_empty) {
+            let msg = if o.stock.is_none() {
                 tr(
                     host,
-                    "create.gui.stock_keeper.schematic_list.no_results",
-                    "No items from your checklist are in stock",
+                    "create.gui.stock_keeper.checking_stocks",
+                    "Checking stocks...",
                 )
+            } else if o.links == 0 {
+                tr(
+                    host,
+                    "create.gui.stock_keeper.no_packagers_linked",
+                    "No Packagers Linked",
+                )
+            } else if o.stock.as_ref().is_some_and(Vec::is_empty) {
+                tr(
+                    host,
+                    "create.gui.stock_keeper.inventories_empty",
+                    "Linked Inventories are Empty",
+                )
+            } else if o.list.is_some() {
+                if o.order.is_empty() {
+                    tr(
+                        host,
+                        "create.gui.stock_keeper.schematic_list.no_results",
+                        "No items from your checklist are in stock",
+                    )
+                } else {
+                    tr(
+                        host,
+                        "create.gui.stock_keeper.schematic_list.requesting",
+                        "Click 'Send' to request all available items from your checklist",
+                    )
+                }
             } else {
                 tr(
                     host,
-                    "create.gui.stock_keeper.schematic_list.requesting",
-                    "Click 'Send' to request all available items from your checklist",
+                    "create.gui.stock_keeper.no_search_results",
+                    "No matching items found",
                 )
-            }
-        } else {
-            tr(
-                host,
-                "create.gui.stock_keeper.no_search_results",
-                "No matching items found",
-            )
-        };
-        let alpha = ((o.empty_ticks as f32 + partial - 10.0) / 5.0).clamp(0.0, 1.0);
-        if alpha > 0.0 {
-            let a = ((alpha * 255.0) as u32).max(5) << 24;
-            for (i, line) in wrap(draw, &msg, 160.0).iter().enumerate() {
-                let w = draw.text_width(line);
-                let at = [
-                    (x + WIDTH / 2.0 - w / 2.0).floor(),
-                    l.items_y + 20.0 + i as f32 * 10.0,
-                ];
-                draw.text(line, [at[0] + 1.0, at[1] + 1.0], a | 0x4A_2D31, false);
-                draw.text(line, at, a | 0xF8_F8EC, false);
+            };
+            let alpha = ((o.empty_ticks as f32 + partial - 10.0) / 5.0).clamp(0.0, 1.0);
+            if alpha > 0.0 {
+                let a = ((alpha * 255.0) as u32).max(5) << 24;
+                for (i, line) in wrap(draw, &msg, 160.0).iter().enumerate() {
+                    let w = draw.text_width(line);
+                    let at = [
+                        (x + WIDTH / 2.0 - w / 2.0).floor(),
+                        l.items_y + 20.0 + i as f32 * 10.0,
+                    ];
+                    draw.text(line, [at[0] + 1.0, at[1] + 1.0], a | 0x4A_2D31, false);
+                    draw.text(line, at, a | 0xF8_F8EC, false);
+                }
             }
         }
-    }
-    let _ = draw.pop_clip();
+    });
     // The scroll bar.
     let max = max_scroll(&groups, &cats, l.h) as f32;
     let window_h = l.h - 92.0;
