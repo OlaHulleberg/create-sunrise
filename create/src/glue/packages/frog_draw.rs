@@ -95,8 +95,7 @@ pub(super) fn client_tick(host: &dyn ClientHost) {
 
 /// Whether the frogport moves and is drawn again each frame (`Subsystem::animated`; a still
 /// one's drawing is kept): while it catches or sends, anticipates, and opens or shuts with its
-/// screen. One with an address always is: a kept drawing is not asked again when the crosshair
-/// comes onto it, for its nameplate.
+/// screen. One idle with an address is kept: its nameplate is drawn in `submit_custom_geometry`.
 pub(super) fn animated(nbt: &Compound) -> bool {
     let Some(Tag::Compound(frog)) = nbt.get(&FROG.into()) else {
         return false;
@@ -107,13 +106,10 @@ pub(super) fn animated(nbt: &Compound) -> bool {
         _ => None,
     };
     let within = |t: Option<i64>, ticks: i64| t.is_some_and(|t| (0..=ticks).contains(&(now - t)));
-    let addressed = matches!(frog.get(&"Address".into()),
-        Some(Tag::String(a)) if !a.to_string_lossy().trim().is_empty());
     flag(frog, "Animating") && within(long("Start"), 11)
         || within(long("Anticipated"), 11)
         || within(long("Opened"), 4)
         || within(long("Closed"), 4)
-        || addressed
 }
 
 /// `openTracker`: `player` opened the screen of the port at `pos` (`open`) or closed it.
@@ -571,64 +567,66 @@ impl BlockEntityPart for FrogDraw {
             draw.item(&stack, ItemDisplayContext::None, None, 0);
             draw.pop();
         }
-        let plated = nameplate(draw, host, pos, &frog);
-        if !moving && !plated {
+        if !moving {
             draw.keep();
         }
     }
 }
 
 /// `renderNameplateOnHover` with the address (`FrogportRenderer`): while the crosshair is on
-/// the frogport, within 64 blocks, its address a block and a quarter up, turned to the camera,
-/// a fortieth of a block a font pixel. Whether the frogport has an address (it is drawn again
-/// next frame, for the crosshair coming onto it or the camera turning). The name tag's see-through pass over its translucent
-/// background is left out: a block entity's text is drawn only as a sign's (`API_GAPS.md`).
-fn nameplate(
-    draw: &mut dyn BlockEntityDrawContext,
+/// the frogport, within 64 blocks, its address a block and a quarter up as a name tag, opaque
+/// in the world and faded through walls over a translucent background, lit as the block is.
+pub(super) fn submit_custom_geometry(
     host: &dyn ClientHost,
-    pos: [i32; 3],
-    frog: &Compound,
-) -> bool {
-    let Some(Tag::String(address)) = frog.get(&"Address".into()) else {
-        return false;
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+) {
+    // The crosshair's block as the last client tick saw it.
+    let Some(pos) = HOVERED.get() else {
+        return;
     };
-    let address = address.to_string_lossy();
-    if address.trim().is_empty() {
-        return false;
-    }
-    nameplate_hovered(draw, host, pos, &address);
-    true
-}
-
-fn nameplate_hovered(
-    draw: &mut dyn BlockEntityDrawContext,
-    host: &dyn ClientHost,
-    pos: [i32; 3],
-    address: &str,
-) -> bool {
-    // The crosshair's block as the last client tick saw it (a block entity's drawing is not
-    // told of the crosshair).
-    if HOVERED.get() != Some(pos) {
-        return false;
-    }
     let Some(cam) = host.camera() else {
-        return false;
+        return;
     };
     let d2: f64 = (0..3)
         .map(|i| (cam.position[i] - f64::from(pos[i]) - 0.5).powi(2))
         .sum();
     if d2 > 4096.0 {
-        return false;
+        return;
     }
-    let text = mod_api::Text::literal(address);
-    draw.push();
-    draw.translate([0.5, 1.25, 0.5]);
-    // `cameraOrientation()`: `rotationYXZ(PI - yaw, -pitch, 0)`.
-    draw.rotate_about([0.0, 1.0, 0.0], 180.0 - cam.yaw, [0.0; 3]);
-    draw.rotate_about([1.0, 0.0, 0.0], -cam.pitch, [0.0; 3]);
-    draw.scale([0.025, -0.025, 0.025]);
-    let width = draw.text_width(&text);
-    let _ = draw.text(&text, [-(width / 2.0).floor(), 0.0], 0xFF_FFFF, false, None);
-    draw.pop();
-    true
+    let Some(level) = host.level(host.dimension()) else {
+        return;
+    };
+    let Some(nbt) = host.block_entity(level, pos).and_then(|be| be.data(host)) else {
+        return;
+    };
+    let Some(Tag::Compound(frog)) = nbt.get(&FROG.into()) else {
+        return;
+    };
+    let Some(Tag::String(address)) = frog.get(&"Address".into()) else {
+        return;
+    };
+    let address = address.to_string_lossy();
+    if address.trim().is_empty() {
+        return;
+    }
+    let light = level
+        .brightness(host, mod_api::LightLayer::Sky, pos)
+        .zip(level.brightness(host, mod_api::LightLayer::Block, pos))
+        .map_or(0xF0, |(sky, block)| {
+            ((sky & 0xF) << 4 | (block & 0xF)) as u8
+        });
+    // `WorldDrawContext::name_tag` draws 0.5 blocks above `at`; passing `y + 0.75` places the
+    // label at `y + 1.25`, matching `FrogportRenderer.renderNameplateOnHover` (`yOffset = 1`,
+    // `+ 0.25`) with Create's 0x20 see-through alpha and exact block light.
+    let _ = event.draw.name_tag(
+        [
+            f64::from(pos[0]) + 0.5,
+            f64::from(pos[1]) + 0.75,
+            f64::from(pos[2]) + 0.5,
+        ],
+        &mod_api::Text::literal(&address),
+        mod_api::NameTagOptions::new(true, true, light)
+            .with_faded_alpha(0x20)
+            .with_exact_light(),
+    );
 }

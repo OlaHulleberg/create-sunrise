@@ -606,6 +606,7 @@ impl Subsystem for Packages {
         event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         frog_target::submit_custom_geometry(host, event);
+        frog_draw::submit_custom_geometry(host, event);
     }
 
     /// `PackagePortPlacementPacket`: a frogport placed by a player takes the point chosen.
