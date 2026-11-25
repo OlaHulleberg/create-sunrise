@@ -188,8 +188,13 @@ struct Net {
     last: HashMap<[i32; 3], Summary<Key>>,
     /// Links in columns not loaded, by network (`getUnloadedLinkCount`).
     unloaded: HashMap<Network, Vec<[i32; 3]>>,
-    /// Links, requesters and gauges whose neighbours changed.
+    /// Links and requesters whose neighbours changed.
     neighbours: Vec<[i32; 3]>,
+    /// Each factory gauge's `SmartBlockEntity` lazy tick (the default rate, 10), for
+    /// `FactoryPanelBlockEntity.lazyTick`.
+    gauge_lazy: HashMap<[i32; 3], create_engine::block_entity::SmartBlockEntity>,
+    /// Each panel's `FactoryPanelBehaviour` lazy tick (rate 40), for `checkForRedstoneInput`.
+    panel_lazy: HashMap<PanelPos, create_engine::block_entity::SmartBlockEntity>,
     /// Panels whose redstone input to look at again: a link joined to them went.
     redstone_checks: Vec<PanelPos>,
     /// Tickers whose network their clients are told again (`TICKER_NETWORK`).
@@ -410,6 +415,7 @@ fn block_moved(
         // `FactoryPanelBlockEntity.destroy` (its other panels' gauges dropped) and each
         // panel's `disconnectAll`.
         Some(Block::FactoryGauge) => {
+            with(dim, |n| n.gauge_lazy.remove(&pos));
             let extra = gauge::extra_drops(dim, pos);
             if extra > 0
                 && let Some(stack) =
@@ -443,7 +449,7 @@ fn block_moved(
         }),
         // Its panels are added by the item that placed it (`setPlacedBy`).
         Some(Block::FactoryGauge) => with(dim, |n| {
-            n.neighbours.push(pos);
+            n.gauge_lazy.insert(pos, Default::default());
         }),
         _ => {}
     }
@@ -902,7 +908,7 @@ impl Subsystem for Stock {
 
     /// A neighbour of a link, requester or gauge changed: looked at in the level's tick.
     fn neighbor_changed(&self, dim: usize, pos: [i32; 3], state: u32) {
-        if !block_of(state).is_some_and(ours) {
+        if !block_of(state).is_some_and(|b| ours(b) && b != Block::FactoryGauge) {
             return;
         }
         with(dim, |n| {
@@ -1163,30 +1169,73 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
                     }
                 }
             }
-            // `FactoryPanelBlockEntity.lazyTick`: a restocker while a packager is behind it.
-            Some(Block::FactoryGauge) => {
-                if with(dim, |n| gauge::panels_at(n, pos).is_empty()) {
-                    lv.destroy_block(pos, false);
-                    continue;
-                }
-                let restocker = restocked(lv, pos).is_some();
-                with(dim, |n| {
-                    let mut changed = false;
-                    for slot in create_engine::factory::SLOTS {
-                        if let Some(g) = n.gauges.get_mut(&(pos, slot))
-                            && g.restocker != restocker
-                        {
-                            g.restocker = restocker;
-                            changed = true;
-                        }
-                    }
-                    if changed {
-                        n.redraw.push(pos);
-                    }
-                });
-            }
             _ => {}
         }
+    }
+    // `SmartBlockEntity.tick`: each loaded gauge's lazy tick (`FactoryPanelBlockEntity.lazyTick`),
+    // then its panels' (`FactoryPanelBehaviour.lazyTick`).
+    let blocks: Vec<[i32; 3]> = with(dim, |n| {
+        let mut v: Vec<[i32; 3]> = n
+            .gauges
+            .keys()
+            .map(|p| p.0)
+            .chain(n.gauge_lazy.keys().copied())
+            .collect();
+        v.sort_unstable();
+        v.dedup();
+        v
+    });
+    for pos in blocks {
+        if !lv.is_loaded(pos) {
+            continue;
+        }
+        if block_at(lv, pos) != Some(Block::FactoryGauge) {
+            with(dim, |n| n.gauge_lazy.remove(&pos));
+            continue;
+        }
+        if !with(dim, |n| n.gauge_lazy.entry(pos).or_default().tick()) {
+            continue;
+        }
+        // A restocker while a packager is behind it.
+        if with(dim, |n| gauge::panels_at(n, pos).is_empty()) {
+            lv.destroy_block(pos, false);
+            continue;
+        }
+        let restocker = restocked(lv, pos).is_some();
+        with(dim, |n| {
+            let mut changed = false;
+            for slot in create_engine::factory::SLOTS {
+                if let Some(g) = n.gauges.get_mut(&(pos, slot))
+                    && g.restocker != restocker
+                {
+                    g.restocker = restocker;
+                    changed = true;
+                }
+            }
+            if changed {
+                n.redraw.push(pos);
+            }
+        });
+    }
+    let panels: Vec<PanelPos> = with(dim, |n| {
+        n.panel_lazy.retain(|p, _| n.gauges.contains_key(p));
+        let mut v: Vec<PanelPos> = n.gauges.keys().copied().collect();
+        v.sort_unstable();
+        v.into_iter()
+            .filter(|pp| {
+                n.panel_lazy
+                    .entry(*pp)
+                    .or_insert_with(|| {
+                        create_engine::block_entity::SmartBlockEntity::new(
+                            create_engine::factory::PANEL_LAZY_RATE,
+                        )
+                    })
+                    .tick()
+            })
+            .collect()
+    });
+    for pp in panels {
+        gauge::check_redstone_input(lv, pp);
     }
     let now = now(lv);
     if with(dim, |n| !n.due.is_empty() && now >= n.next) {
@@ -2457,6 +2506,8 @@ fn chunk_unload(dim: usize, chunk: [i32; 2]) {
         n.requesters.retain(|p, _| !inside(p));
         n.gauges.retain(|p, _| !inside(&p.0));
         n.due.retain(|p, _| !inside(&p.0));
+        n.gauge_lazy.retain(|p, _| !inside(p));
+        n.panel_lazy.retain(|p, _| !inside(&p.0));
         n.last.retain(|p, _| !inside(p));
     });
 }
