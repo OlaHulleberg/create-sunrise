@@ -136,7 +136,7 @@ pub(super) fn carry_in(
                 burner::Burner {
                     fuel: burner::Fuel::from_index(kind),
                     remaining: value,
-                    creative: None,
+                    ..burner::Burner::default()
                 }
             };
             with_world(|w| w.load_burners(dim, std::iter::once((pos, b))));

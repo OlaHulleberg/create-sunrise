@@ -2,6 +2,7 @@
 //! burns down tick by tick and sets its heat (smouldering without fuel, kindled, fading near the
 //! end, seething on special fuel). A burner with nothing burning does nothing.
 
+use crate::block_entity::SmartBlockEntity;
 use crate::fan::Heat;
 
 pub const MAX_HEAT_CAPACITY: i32 = 10_000;
@@ -35,6 +36,10 @@ pub struct Burner {
     pub remaining: i32,
     /// `isCreative`: fed a creative blaze cake, it holds this heat and takes no fuel.
     pub creative: Option<Heat>,
+    /// `SmartBlockEntity`'s lazy tick (the default rate, 10), for `lazyTick`.
+    pub lazy: SmartBlockEntity,
+    /// `stockKeeper`: a stock ticker was beside it at its last lazy tick.
+    pub stock_keeper: bool,
 }
 
 impl Burner {
@@ -76,6 +81,24 @@ impl Burner {
             }
             Fuel::Normal => Heat::Kindled,
             Fuel::None => Heat::Smouldering,
+        }
+    }
+
+    /// `BlazeBurnerBlockEntity.getHeatLevelForRender` for a block showing `shown`: a stock
+    /// keeper shows at least fading.
+    pub fn render_heat(&self, shown: Heat) -> Heat {
+        if shown < Heat::Fading && self.stock_keeper {
+            Heat::Fading
+        } else {
+            shown
+        }
+    }
+
+    /// `SmartBlockEntity.tick`'s lazy tick, on the client too: `lazyTick` sets `stockKeeper` to
+    /// whether `ticker_beside` (`getStockTicker` found a ticker on a side) says so.
+    pub fn lazy_tick(&mut self, ticker_beside: impl FnOnce() -> bool) {
+        if self.lazy.tick() {
+            self.stock_keeper = ticker_beside();
         }
     }
 
@@ -175,7 +198,7 @@ mod tests {
         let mut b = Burner {
             fuel: Fuel::Normal,
             remaining: 1,
-            creative: None,
+            ..Burner::default()
         };
         assert!(b.try_fuel(Fuel::Normal, i32::MAX, false));
         assert_eq!(b.remaining, -2147483648);
@@ -186,10 +209,54 @@ mod tests {
         let mut b = Burner {
             fuel: Fuel::Normal,
             remaining: 600,
-            creative: None,
+            ..Burner::default()
         };
         assert!(b.try_fuel(Fuel::Normal, i32::MAX, true));
         assert_eq!(b.remaining, -2147483049);
+    }
+
+    #[test]
+    fn the_lazy_tick_looks_for_a_ticker_at_initialize_then_every_eleven_ticks() {
+        let mut b = Burner::default();
+        let mut looked = Vec::new();
+        for tick in 1..=33 {
+            b.lazy_tick(|| {
+                looked.push(tick);
+                tick > 5
+            });
+        }
+        assert_eq!(looked, [1, 11, 22, 33]);
+        // The last look found a ticker; one found nothing before it.
+        assert!(b.stock_keeper);
+        let mut b = Burner::default();
+        b.lazy_tick(|| true);
+        assert!(b.stock_keeper);
+        for _ in 0..9 {
+            b.lazy_tick(|| false);
+            assert!(b.stock_keeper, "it only looks again at the next lazy tick");
+        }
+        b.lazy_tick(|| false);
+        assert!(!b.stock_keeper);
+    }
+
+    #[test]
+    fn a_stock_keeper_renders_at_least_fading() {
+        let mut b = Burner::default();
+        for h in [
+            Heat::None,
+            Heat::Smouldering,
+            Heat::Fading,
+            Heat::Kindled,
+            Heat::Seething,
+        ] {
+            assert_eq!(b.render_heat(h), h, "not a keeper");
+        }
+        b.stock_keeper = true;
+        assert_eq!(b.render_heat(Heat::Smouldering), Heat::Fading);
+        assert_eq!(b.render_heat(Heat::None), Heat::Fading);
+        assert_eq!(b.render_heat(Heat::Fading), Heat::Fading);
+        assert_eq!(b.render_heat(Heat::Kindled), Heat::Kindled);
+        assert_eq!(b.render_heat(Heat::Seething), Heat::Seething);
     }
 
     #[test]
