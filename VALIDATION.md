@@ -48,7 +48,7 @@ condition (it has `match_block`), and 79 generated block loot tables used it. #2
 | Funnels | A belt funnel on the belt and an upward-facing brass funnel at the belt's end fill a chest. A horizontal funnel at a belt's end takes nothing, as `supportsDirectBeltInput` says. |
 | Cart assembler | The planks ride in the cart and it rolls along powered rails. |
 | Schematic save, deploy, relaunch; wand of symmetry; filter, toolbox and postbox menus; potato cannon; save and relaunch | Pass. |
-| Deployer | **Fails.** Its strokes cycle, but every `perform_action_scoped` call is refused with `Busy`, so it places and uses nothing. Earlier Devs (`3d34bbe`) did this work. The cause is being traced. |
+| Deployer | **Fails.** Its strokes cycle, but every `perform_action_scoped` call is refused with `Busy`, so it places and uses nothing. Earlier Devs (`3d34bbe`) did this work. The game wraps the `level_tick_post` listener in a host transaction, and a fake player's action is refused while one is open: sunrise-org/sunrise#5750. |
 | Trains | Not exercised: the track pieces could not be connected through the driver. |
 
 Warnings that remain at startup: the jar's tags `c:tea`, `c:teleporting_not_supported` and `create:ignore_seat` name
