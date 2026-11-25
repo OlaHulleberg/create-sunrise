@@ -238,7 +238,8 @@ impl BlockPart for RedstoneBlock {
     }
 
     /// `ControllerRailBlock.getStateForPlacement`: straight across the player's facing,
-    /// backwards when facing a positive way. A smart observer or threshold switch looks for
+    /// backwards when facing a positive way. A rose quartz lamp is `powered` as placed
+    /// (`RoseQuartzLampBlock.getStateForPlacement`: `hasNeighborSignal`). A smart observer or threshold switch looks for
     /// what it will watch once placed (`place_detectors`).
     fn state_for_placement(
         &self,
@@ -269,6 +270,16 @@ impl BlockPart for RedstoneBlock {
                             },
                         ),
                     ],
+                )?;
+                Some(Some(state))
+            }
+            Block::RoseQuartzLamp => {
+                let pos = [c.pos.x, c.pos.y, c.pos.z];
+                let powered = level.has_neighbor_signal(pos)?;
+                let state = level.state_with_property(
+                    event.state,
+                    "powered",
+                    if powered { "true" } else { "false" },
                 )?;
                 Some(Some(state))
             }
