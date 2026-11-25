@@ -206,15 +206,15 @@ impl mod_api::BlockEntityDrawContext for Recorder<'_> {
     ) -> bool {
         false
     }
-    fn block(&mut self, block: mod_api::BlockKey, properties: &[(&str, &str)]) -> bool {
-        let mut state = Compound::from([(
-            "Name".into(),
-            Tag::String(block.name(self.host).as_str().into()),
-        )]);
+    fn block(&mut self, state: mod_api::BlockState) -> bool {
+        let Some((name, properties)) = super::state_parts(self.host, state) else {
+            return false;
+        };
+        let mut state = Compound::from([("Name".into(), Tag::String(name.as_str().into()))]);
         if !properties.is_empty() {
             let props = properties
                 .iter()
-                .map(|(k, v)| ((*k).into(), Tag::String((*v).into())))
+                .map(|(k, v)| (k.as_str().into(), Tag::String(v.as_str().into())))
                 .collect();
             state.insert("Properties".into(), Tag::Compound(props));
         }
@@ -268,7 +268,7 @@ impl mod_api::BlockEntityDrawContext for Recorder<'_> {
         &mut self,
         _: mod_api::ModelRef,
         _: mod_api::TerrainModelOptions<'_>,
-    ) -> Result<(), mod_api::TerrainModelError> {
+    ) -> Result<(), mod_api::ModelError> {
         Ok(())
     }
     fn text(
@@ -287,14 +287,7 @@ impl mod_api::BlockEntityDrawContext for Recorder<'_> {
     fn model_part(&mut self, _: &mod_api::ModelPart, _: &str, _: u32) -> bool {
         false
     }
-    fn fluid_box(
-        &mut self,
-        _: &mod_api::FluidStack,
-        _: [f32; 6],
-        _: mod_api::FluidBoxOptions,
-    ) -> Result<(), mod_api::FluidBoxError> {
-        Ok(())
-    }
+    fn fluid_box(&mut self, _: &mod_api::FluidStack, _: [f32; 6], _: mod_api::FluidBoxOptions) {}
 }
 
 /// `FlapDisplayRenderer` for a controlling board: each line's flaps as they stood when the

@@ -189,7 +189,7 @@ impl ItemPart for ScheduleItem {
 
     /// `ScheduleItem.appendHoverText`: each destination's filter, the one at the saved
     /// progress marked when there are several entries.
-    fn tooltip(&self, _host: &dyn ClientHost, event: &mut mod_api::TooltipEvent<'_>) {
+    fn tooltip(&self, _host: &dyn ClientHost, event: &mut mod_api::TooltipEvent<'_, '_>) {
         let Some(s) = schedule_of(event.stack) else {
             return;
         };
@@ -209,7 +209,9 @@ impl ItemPart for ScheduleItem {
                 ("> ", "gold")
             };
             let line = styled(prefix, "gray").append(styled(filter, colour));
-            event.lines.push((line, u32::MAX));
+            if event.lines.push((line, u32::MAX)).is_err() {
+                break;
+            }
         }
     }
 }
@@ -719,96 +721,96 @@ fn draw_schedule(
     let partial = crate::glue::stock::keeper::partial_tick();
     // The cards are cut to the list (`enableScissor(leftPos + 16, topPos + 16, leftPos + 236,
     // topPos + 189)`).
-    let _ = draw.push_clip([left + 16.0, top + 16.0, 220.0, 173.0]);
-    for i in 0..=s.entries.len() {
-        if s.saved_progress == i && !s.entries.is_empty() {
-            let expected = scroll + y_offset + 4.0;
-            let actual = expected.clamp(18.0, 170.0);
-            let pointer = if expected == actual {
-                POINTER
-            } else {
-                POINTER_OFFSCREEN
-            };
-            sprite(draw, SHEET, pointer, [left, top + actual]);
-        }
-        if i == 0 || s.entries.is_empty() {
-            stretched(
-                draw,
-                STRIP_LIGHT,
-                [left + 33.0, top + 16.0 + scroll, 3.0, 10.0],
-            );
-        }
-        if i == s.entries.len() {
-            if i > 0 {
-                y_offset += 9.0;
+    let _ = draw.with_scissor([left + 16.0, top + 16.0, 220.0, 173.0], &mut |draw| {
+        for i in 0..=s.entries.len() {
+            if s.saved_progress == i && !s.entries.is_empty() {
+                let expected = scroll + y_offset + 4.0;
+                let actual = expected.clamp(18.0, 170.0);
+                let pointer = if expected == actual {
+                    POINTER
+                } else {
+                    POINTER_OFFSCREEN
+                };
+                sprite(draw, SHEET, pointer, [left, top + actual]);
             }
-            sprite(
-                draw,
-                SHEET,
-                STRIP_END,
-                [left + 29.0, top + y_offset + scroll],
-            );
-            sprite(
-                draw,
-                SHEET,
-                CARD_NEW,
-                [left + 43.0, top + y_offset + scroll],
-            );
-            break;
-        }
-        let e = &s.entries[i];
-        let h = card_height(e);
-        let card_y = y_offset;
-        draw_entry(host, draw, s, i, [left + 25.0, top + card_y + scroll]);
-        y_offset += h;
-        if i + 1 < s.entries.len() {
-            sprite(
-                draw,
-                SHEET,
-                STRIP_DOTTED,
-                [left + 29.0, top + y_offset - 3.0 + scroll],
-            );
-            y_offset += 10.0;
-        }
-        if !e.instruction.supports_conditions() {
-            continue;
-        }
-        // The conditions, scrolled across and cut to the card (`enableScissor(leftPos + 43,
-        // 0, leftPos + 204, 400)` inside the list's).
-        let widths = column_widths(host, e);
-        let c = o.column(i);
-        let index = c[0] + (c[1] - c[0]) * partial;
-        let _ = draw.push_clip([left + 43.0, 0.0, 161.0, 400.0]);
-        draw_conditions(
-            host,
-            draw,
-            e,
-            [left + 25.0, top + card_y + scroll],
-            column_scroll(&widths, index),
-            h,
-        );
-        let _ = draw.pop_clip();
-        if scrollable(&widths) {
-            let center = ((h - 8.0 + CARD_HEADER) / 2.0).floor();
-            if c[2] != 0.0 {
+            if i == 0 || s.entries.is_empty() {
+                stretched(
+                    draw,
+                    STRIP_LIGHT,
+                    [left + 33.0, top + 16.0 + scroll, 3.0, 10.0],
+                );
+            }
+            if i == s.entries.len() {
+                if i > 0 {
+                    y_offset += 9.0;
+                }
                 sprite(
                     draw,
                     SHEET,
-                    SCROLL_LEFT,
-                    [left + 40.0, top + card_y + scroll + center],
+                    STRIP_END,
+                    [left + 29.0, top + y_offset + scroll],
                 );
-            }
-            if c[2] != (e.conditions.len() as f32 - 1.0) {
                 sprite(
                     draw,
                     SHEET,
-                    SCROLL_RIGHT,
-                    [left + 203.0, top + card_y + scroll + center],
+                    CARD_NEW,
+                    [left + 43.0, top + y_offset + scroll],
                 );
+                break;
+            }
+            let e = &s.entries[i];
+            let h = card_height(e);
+            let card_y = y_offset;
+            draw_entry(host, draw, s, i, [left + 25.0, top + card_y + scroll]);
+            y_offset += h;
+            if i + 1 < s.entries.len() {
+                sprite(
+                    draw,
+                    SHEET,
+                    STRIP_DOTTED,
+                    [left + 29.0, top + y_offset - 3.0 + scroll],
+                );
+                y_offset += 10.0;
+            }
+            if !e.instruction.supports_conditions() {
+                continue;
+            }
+            // The conditions, scrolled across and cut to the card (`enableScissor(leftPos + 43,
+            // 0, leftPos + 204, 400)` inside the list's).
+            let widths = column_widths(host, e);
+            let c = o.column(i);
+            let index = c[0] + (c[1] - c[0]) * partial;
+            let _ = draw.with_scissor([left + 43.0, 0.0, 161.0, 400.0], &mut |draw| {
+                draw_conditions(
+                    host,
+                    draw,
+                    e,
+                    [left + 25.0, top + card_y + scroll],
+                    column_scroll(&widths, index),
+                    h,
+                );
+            });
+            if scrollable(&widths) {
+                let center = ((h - 8.0 + CARD_HEADER) / 2.0).floor();
+                if c[2] != 0.0 {
+                    sprite(
+                        draw,
+                        SHEET,
+                        SCROLL_LEFT,
+                        [left + 40.0, top + card_y + scroll + center],
+                    );
+                }
+                if c[2] != (e.conditions.len() as f32 - 1.0) {
+                    sprite(
+                        draw,
+                        SHEET,
+                        SCROLL_RIGHT,
+                        [left + 203.0, top + card_y + scroll + center],
+                    );
+                }
             }
         }
-    }
-    let _ = draw.pop_clip();
+    });
     draw.fill_gradient([left + 16.0, top + 16.0, 220.0, 10.0], 0x7700_0000, 0);
     draw.fill_gradient([left + 16.0, top + 179.0, 220.0, 10.0], 0, 0x7700_0000);
     // The buttons (hidden while editing).

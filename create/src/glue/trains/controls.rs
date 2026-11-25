@@ -24,7 +24,7 @@ use create_engine::train_controls::{
 use create_engine::train_hud::{self as th, Hud};
 use mod_api::text::TextStyle;
 use mod_api::{
-    BlockState, ClientHost, CrosshairTarget, Flow, GuiDraw, Hand, Host, InteractionKey,
+    BlockState, ClientHost, CrosshairTarget, Flow, Hand, Host, InteractionKey,
     InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, PlayerRef, RenderGuiPostEvent,
     ServerHost, Text,
 };
@@ -380,13 +380,15 @@ fn hud(host: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
         draw.sprite(th::ARROW_TEXTURE, src, dst, None);
     }
     if let (Some([x, y]), Some((text, shadow))) = (drawn.text, prompt) {
-        let _ = draw.gui_paint(&[GuiDraw::Text {
-            text,
-            x: x as i32,
-            y: y as i32,
-            color: 0xFF00_0000 | th::PROMPT_TEXT,
-            shadow,
-        }]);
+        let _ = draw.draw_gui(&mut |canvas| {
+            canvas.text(
+                &text,
+                [x as i32 as f32, y as i32 as f32],
+                0xFF00_0000 | th::PROMPT_TEXT,
+                shadow,
+            )?;
+            Ok(())
+        });
     }
 }
 

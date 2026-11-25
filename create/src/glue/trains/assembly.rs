@@ -78,17 +78,23 @@ fn click_station(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<In
 impl BlockPart for Station {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         click_station(host, event.click)
     }
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         click_station(host, event.click)
     }
 
@@ -632,17 +638,23 @@ fn click_track(host: &mut dyn ServerHost, click: &BlockClick<'_>) -> Option<Inte
 impl BlockPart for TrackClick {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         click_track(host, event.click)
     }
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         click_track(host, event.click)
     }
 }
