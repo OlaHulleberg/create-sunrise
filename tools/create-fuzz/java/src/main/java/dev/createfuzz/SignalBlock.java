@@ -10,7 +10,11 @@ import net.minecraft.world.level.block.state.properties.IntegerProperty;
 import net.neoforged.neoforge.registries.DeferredBlock;
 import net.neoforged.neoforge.registries.DeferredRegister;
 
-/** Controlled external input. No wire propagation, support ticks or analog approximation. */
+/**
+ * Controlled external input. No wire propagation, support ticks or analog approximation. It is not a
+ * redstone conductor, so an adjacent signal block never relays strong power and the power it gives is always
+ * its own {@code strength}.
+ */
 final class SignalBlock extends Block {
     static final IntegerProperty STRENGTH = IntegerProperty.create("strength", 0, 15);
     static final DeferredRegister.Blocks REGISTRY = DeferredRegister.createBlocks("createfuzz");
@@ -18,7 +22,7 @@ final class SignalBlock extends Block {
             REGISTRY.register("signal", () -> new SignalBlock());
 
     SignalBlock() {
-        super(Properties.of());
+        super(Properties.of().isRedstoneConductor((s, l, p) -> false));
         registerDefaultState(defaultBlockState().setValue(STRENGTH, 0));
     }
 
