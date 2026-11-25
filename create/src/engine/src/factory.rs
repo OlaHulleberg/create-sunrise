@@ -9,6 +9,10 @@ use crate::steam::Face;
 /// `PanelSlot`: `TOP_LEFT`, `TOP_RIGHT`, `BOTTOM_LEFT`, `BOTTOM_RIGHT` by ordinal.
 pub const SLOTS: [u8; 4] = [0, 1, 2, 3];
 
+/// `FactoryPanelBehaviour`'s lazy tick rate (`setLazyTickRate(40)`); `FactoryPanelBlockEntity`
+/// keeps `SmartBlockEntity`'s default, 10.
+pub const PANEL_LAZY_RATE: i32 = 40;
+
 /// `PanelSlot.xOffset`, `yOffset`.
 pub fn slot_offset(slot: u8) -> (i32, i32) {
     match slot {
@@ -507,6 +511,29 @@ mod tests {
         assert_eq!(
             issue([16, 0, 0], true, true),
             Some("factory_panel.too_far_apart")
+        );
+    }
+}
+
+#[cfg(test)]
+mod lazy_tests {
+    use super::*;
+    use crate::block_entity::SmartBlockEntity;
+
+    fn firing(mut be: SmartBlockEntity, ticks: i32) -> Vec<i32> {
+        (1..=ticks).filter(|_| be.tick()).collect()
+    }
+
+    #[test]
+    fn gauge_block_lazy_ticks_at_initialize_then_every_eleven_ticks() {
+        assert_eq!(firing(SmartBlockEntity::default(), 33), [1, 11, 22, 33]);
+    }
+
+    #[test]
+    fn panel_lazy_ticks_at_initialize_then_every_forty_one_ticks() {
+        assert_eq!(
+            firing(SmartBlockEntity::new(PANEL_LAZY_RATE), 123),
+            [1, 41, 82, 123]
         );
     }
 }
