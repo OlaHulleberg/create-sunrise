@@ -162,6 +162,7 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
             && l.pulleys.is_empty()
             && l.elevator_clicks.is_empty()
             && l.travelling.is_empty()
+            && l.elevators.is_empty()
             && l.contact_checks.is_empty()
             && l.contact_ticks.is_empty()
             && l.changes.is_empty()
@@ -931,9 +932,28 @@ fn tick_elevators(lv: &mut ServerLevel<'_>) {
             assemble_elevator(lv, pos);
         }
     }
+    let now = lv.game_time();
+    // `SmartBlockEntity.tick`'s lazy tick, before the rest of each tick: every 4 ticks
+    // (`LinearActuatorBlockEntity` rate 3) an elevator standing at its floor lights that floor's
+    // contact again (`lazyTick`).
+    let mut running: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].lifts.elevators.keys().copied().collect()).unwrap_or_default();
+    running.sort();
+    for pos in running {
+        let standing = with_world(|w| {
+            let l = &mut w.dims[dim].lifts;
+            let e = l.elevators.get_mut(&pos)?;
+            let target = l.columns.get(&e.column).and_then(|c| c.target);
+            let column = e.column;
+            e.lazy_tick(pos[1], target).map(|y| [column.x, y, column.z])
+        })
+        .flatten();
+        if let Some(c) = standing {
+            trigger_contact(lv, c, now);
+        }
+    }
     let travelling: Vec<[i32; 3]> =
         with_world(|w| w.dims[dim].lifts.travelling.iter().copied().collect()).unwrap_or_default();
-    let now = lv.game_time();
     for pos in travelling {
         // Its actors first (`tickActors`); while one stalls, the elevator holds.
         if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
@@ -993,20 +1013,28 @@ fn tick_elevators(lv: &mut ServerLevel<'_>) {
         }
         elevator_doors(lv, pos);
         // `triggerContact`: an elevator contact there that isn't lit lights on its next tick.
-        if let Some(c) = reached
-            && let Some((Block::ElevatorContact, info)) = create_info(lv.block(c))
-            && !info.powering
-        {
-            with_world(|w| {
-                let l = &mut w.dims[dim].lifts;
-                l.contact_lit.insert(c);
-                l.schedule(c, now);
-            });
+        if let Some(c) = reached {
+            trigger_contact(lv, c, now);
         }
         if settled {
             show_elevator(lv, pos);
             mark_unsaved(lv, pos);
         }
+    }
+}
+
+/// `ElevatorPulleyBlockEntity.triggerContact`: an elevator contact at `c` that isn't lit lights
+/// on its next tick (`activateBlock`, `scheduleActivation`).
+fn trigger_contact(lv: &mut ServerLevel<'_>, c: [i32; 3], now: i64) {
+    let dim = lv.dim;
+    if let Some((Block::ElevatorContact, info)) = create_info(lv.block(c))
+        && !info.powering
+    {
+        with_world(|w| {
+            let l = &mut w.dims[dim].lifts;
+            l.contact_lit.insert(c);
+            l.schedule(c, now);
+        });
     }
 }
 
@@ -1327,23 +1355,13 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             lv.set_num(p, s, update_all());
         }
     }
-    let now = lv.game_time();
     let here = [column.x, target, column.z];
-    let light = matches!(
-        create_info(lv.block(here)),
-        Some((Block::ElevatorContact, i)) if !i.powering
-    );
     with_world(|w| {
         let l = &mut w.dims[dim].lifts;
         l.columns.entry(column).or_default().target = Some(target);
         l.set_active(column, true);
         l.elevators.insert(pos, e);
         l.travelling.insert(pos);
-        // `lazyTick`: standing at its floor, it lights that floor's contact.
-        if light {
-            l.contact_lit.insert(here);
-            l.schedule(here, now);
-        }
     });
     let visiting = with_world(|w| {
         w.dims[dim]
@@ -1966,6 +1984,9 @@ pub(super) fn chunk_load(lv: &mut ServerLevel<'_>, data: &Compound) {
                         min_contact: at(14)?,
                         max_contact: at(15)?,
                         blocks: blocks(c, "")?,
+                        lazy: create_engine::block_entity::SmartBlockEntity::new(
+                            create_engine::elevator::LAZY_TICK_RATE,
+                        ),
                     })
                 }
                 _ => return None,

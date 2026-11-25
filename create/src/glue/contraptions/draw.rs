@@ -576,6 +576,9 @@ fn parse(host: &dyn Host, c: &Compound) -> Option<Shape> {
                 min_contact: at(14)?,
                 max_contact: at(15)?,
                 blocks: Vec::new(),
+                lazy: create_engine::block_entity::SmartBlockEntity::new(
+                    create_engine::elevator::LAZY_TICK_RATE,
+                ),
             };
             Shape::Elevator {
                 blocks: drawn_blocks(host, c, ""),
