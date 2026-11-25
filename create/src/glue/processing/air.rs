@@ -11,8 +11,8 @@
 use create_engine::fan::{self, Kind, Seen};
 use create_engine::processing::Rng;
 use mod_api::{
-    ClientHost, ModParticle, ParticleKey, ParticleOptions, ParticleProvider, Registrar, SoundPlay,
-    SoundRef, SoundSource, SoundState,
+    ClientHost, CustomParticle, ParticleKey, ParticleOptions, ParticleProvider, ParticleSpawn,
+    ParticleTickView, Registrar, SoundPlay, SoundRef, SoundSource, SoundState,
 };
 use std::cell::RefCell;
 use std::sync::{Mutex, OnceLock};
@@ -295,9 +295,9 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
 }
 
 /// A number from 0 to 1 for a particle's tick: its position and age hashed with `salt`.
-fn roll(p: &ModParticle, salt: u64) -> f32 {
-    let mut h = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ p.age as u64;
-    for v in p.position {
+fn roll(position: [f64; 3], age: u64, salt: u64) -> f32 {
+    let mut h = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15) ^ age;
+    for v in position {
         h = (h ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
     }
     h ^= h >> 29;
@@ -307,17 +307,17 @@ fn roll(p: &ModParticle, salt: u64) -> f32 {
 }
 
 /// `Color.mixColors(a, b, t)` as the particle's colour.
-fn mix(p: &mut ModParticle, a: u32, b: u32, t: f32) {
+fn mix(rgba: &mut [f32; 4], a: u32, b: u32, t: f32) {
     for (i, s) in [16, 8, 0].into_iter().enumerate() {
         let (x, y) = (((a >> s) & 255) as f32, ((b >> s) & 255) as f32);
-        p.rgba[i] = (x + (y - x) * t) as u32 as f32 / 255.0;
+        rgba[i] = (x + (y - x) * t) as u32 as f32 / 255.0;
     }
 }
 
 /// `setColor(0xEEEEEE)`.
-fn plain(p: &mut ModParticle) {
+fn plain(rgba: &mut [f32; 4]) {
     let c = f32::from(0xEEu8) / 255.0;
-    p.rgba = [c, c, c, 0.25];
+    *rgba = [c, c, c, 0.25];
 }
 
 /// `AirFlowParticle`: 40 ticks, a quarter smaller, its fan the one that spawned it; it goes
@@ -328,116 +328,132 @@ fn plain(p: &mut ModParticle) {
 pub(super) struct AirFlow;
 
 impl ParticleProvider for AirFlow {
-    fn tick(
+    fn create_particle(
         &self,
-        particles: &mut mod_api::ParticleBatch,
+        spawn: &mut ParticleSpawn<'_, ()>,
+        particle: &mut dyn ParticleTickView,
+    ) -> Option<Box<dyn CustomParticle>> {
+        // The spawn: its fan, from where `tick` put it.
+        let at = spawn.position;
+        let fan = shared(|s| {
+            let i = s.spawned.iter().position(|(p, _)| *p == at)?;
+            Some(s.spawned.swap_remove(i).1)
+        })?;
+        // `quadSize *= 0.75` of `Particle`'s `0.1 * (random * .5 + .5) * 2`.
+        particle.set_size(0.1 * (roll(at, particle.age() as u64, 1) * 0.5 + 0.5) * 2.0 * 0.75);
+        particle.set_lifetime(40);
+        particle.set_velocity([0.0; 3]);
+        particle.set_has_physics(false);
+        let mut rgba = [0.0; 4];
+        plain(&mut rgba);
+        particle.set_rgba(rgba);
+        // `selectSprite(7)`: `sprites.get(7, 8)` of the 8.
+        particle.set_sprite_index(7 * 7 / 8);
+        Some(Box::new(AirFlowParticle { fan }))
+    }
+}
+
+/// One air flow particle: the fan that spawned it.
+struct AirFlowParticle {
+    fan: [i32; 3],
+}
+
+impl CustomParticle for AirFlowParticle {
+    fn tick(
+        &mut self,
+        particle: &mut dyn ParticleTickView,
         _level: &dyn mod_api::ParticleLevelView,
     ) {
-        let one = |p: &mut mod_api::ModParticle| {
-            if p.state[3] == 0.0 {
-                // The spawn: its fan, from where `tick` put it.
-                let Some(fan) = shared(|s| {
-                    let i = s.spawned.iter().position(|(at, _)| *at == p.position)?;
-                    Some(s.spawned.swap_remove(i).1)
-                }) else {
-                    p.removed = true;
-                    return;
-                };
-                p.state = [f64::from(fan[0]), f64::from(fan[1]), f64::from(fan[2]), 1.0];
-                // `quadSize *= 0.75` of `Particle`'s `0.1 * (random * .5 + .5) * 2`.
-                p.size = 0.1 * (roll(p, 1) * 0.5 + 0.5) * 2.0 * 0.75;
-                p.lifetime = 40;
-                p.velocity = [0.0; 3];
-                plain(p);
-                // `selectSprite(7)`: `sprites.get(7, 8)` of the 8.
-                p.frame = 7 * 7 / 8;
-            }
-            let fan = [p.state[0] as i32, p.state[1] as i32, p.state[2] as i32];
-            let Some(seen) = shared(|s| s.fans.iter().find(|f| f.pos == fan).cloned()) else {
-                p.removed = true;
-                return;
-            };
-            let Some((motion, kind)) = seen.particle_step(p.position) else {
-                p.removed = true;
-                return;
-            };
-            let pick = |p: &ModParticle, salt| roll(p, salt);
-            match kind {
-                None => {
-                    plain(p);
-                    let max = f64::from(seen.current.max).max(1e-3);
-                    let o = seen.facing.offset();
-                    let distance = (0..3)
-                        .map(|a| {
-                            ((p.position[a] - (f64::from(fan[a]) + 0.5)) * f64::from(o[a])).powi(2)
-                        })
-                        .sum::<f64>()
-                        .sqrt()
-                        - 0.5;
-                    let i = ((distance / max) * 8.0 + f64::from((pick(p, 2) * 4.0) as i32))
-                        .clamp(0.0, 7.0) as u32;
-                    p.frame = i * 7 / 8;
-                }
-                Some(kind) => {
-                    let t = pick(p, 3);
-                    let mut extra = Vec::new();
-                    let speed = |m: f64| motion.map(|v| v * m);
-                    match kind {
-                        Kind::Blasting => {
-                            mix(p, 0xFF4400, 0xFF8855, t);
-                            p.rgba[3] = 0.5;
-                            if pick(p, 4) < 1.0 / 32.0 {
-                                extra.push((Extra::Flame, speed(0.25)));
-                            }
-                            if pick(p, 5) < 1.0 / 16.0 {
-                                extra.push((Extra::Lava, speed(0.25)));
-                            }
-                        }
-                        Kind::Haunting => {
-                            mix(p, 0x0, 0x126568, t);
-                            p.rgba[3] = 1.0;
-                            if pick(p, 4) < 1.0 / 128.0 {
-                                extra.push((Extra::SoulFireFlame, speed(0.125)));
-                            }
-                            if pick(p, 5) < 1.0 / 32.0 {
-                                extra.push((Extra::Smoke, speed(0.125)));
-                            }
-                        }
-                        Kind::Smoking => {
-                            mix(p, 0x0, 0x555555, t);
-                            p.rgba[3] = 1.0;
-                            if pick(p, 4) < 1.0 / 32.0 {
-                                extra.push((Extra::Smoke, speed(0.125)));
-                            }
-                            if pick(p, 5) < 1.0 / 32.0 {
-                                extra.push((Extra::LargeSmoke, speed(0.125)));
-                            }
-                        }
-                        Kind::Splashing => {
-                            mix(p, 0x4499FF, 0x2277FF, t);
-                            p.rgba[3] = 1.0;
-                            if pick(p, 4) < 1.0 / 32.0 {
-                                extra.push((Extra::Bubble, speed(0.125)));
-                            }
-                            if pick(p, 5) < 1.0 / 32.0 {
-                                extra.push((Extra::BubblePop, speed(0.125)));
-                            }
-                        }
-                    }
-                    // `selectSprite(random.nextInt(3))`.
-                    p.frame = ((pick(p, 6) * 3.0) as u32).min(2) * 7 / 8;
-                    if !extra.is_empty() {
-                        let at = p.position;
-                        shared(|s| s.extra.extend(extra.into_iter().map(|(e, v)| (e, at, v))));
-                    }
-                }
-            }
-            // `move(xd, yd, zd)` without physics.
-            p.velocity = motion;
-            for (v, m) in p.position.iter_mut().zip(motion) {
-                *v += m;
-            }
+        if !particle.advance_age() {
+            return;
+        }
+        let fan = self.fan;
+        let position = particle.position();
+        let age = particle.age() as u64;
+        let Some(seen) = shared(|s| s.fans.iter().find(|f| f.pos == fan).cloned()) else {
+            particle.remove();
+            return;
         };
-        particles.iter_mut().for_each(one);
+        let Some((motion, kind)) = seen.particle_step(position) else {
+            particle.remove();
+            return;
+        };
+        let pick = |salt| roll(position, age, salt);
+        let mut rgba = particle.rgba();
+        match kind {
+            None => {
+                plain(&mut rgba);
+                let max = f64::from(seen.current.max).max(1e-3);
+                let o = seen.facing.offset();
+                let distance = (0..3)
+                    .map(|a| ((position[a] - (f64::from(fan[a]) + 0.5)) * f64::from(o[a])).powi(2))
+                    .sum::<f64>()
+                    .sqrt()
+                    - 0.5;
+                let i = ((distance / max) * 8.0 + f64::from((pick(2) * 4.0) as i32)).clamp(0.0, 7.0)
+                    as usize;
+                particle.set_sprite_index(i * 7 / 8);
+            }
+            Some(kind) => {
+                let t = pick(3);
+                let mut extra = Vec::new();
+                let speed = |m: f64| motion.map(|v| v * m);
+                match kind {
+                    Kind::Blasting => {
+                        mix(&mut rgba, 0xFF4400, 0xFF8855, t);
+                        rgba[3] = 0.5;
+                        if pick(4) < 1.0 / 32.0 {
+                            extra.push((Extra::Flame, speed(0.25)));
+                        }
+                        if pick(5) < 1.0 / 16.0 {
+                            extra.push((Extra::Lava, speed(0.25)));
+                        }
+                    }
+                    Kind::Haunting => {
+                        mix(&mut rgba, 0x0, 0x126568, t);
+                        rgba[3] = 1.0;
+                        if pick(4) < 1.0 / 128.0 {
+                            extra.push((Extra::SoulFireFlame, speed(0.125)));
+                        }
+                        if pick(5) < 1.0 / 32.0 {
+                            extra.push((Extra::Smoke, speed(0.125)));
+                        }
+                    }
+                    Kind::Smoking => {
+                        mix(&mut rgba, 0x0, 0x555555, t);
+                        rgba[3] = 1.0;
+                        if pick(4) < 1.0 / 32.0 {
+                            extra.push((Extra::Smoke, speed(0.125)));
+                        }
+                        if pick(5) < 1.0 / 32.0 {
+                            extra.push((Extra::LargeSmoke, speed(0.125)));
+                        }
+                    }
+                    Kind::Splashing => {
+                        mix(&mut rgba, 0x4499FF, 0x2277FF, t);
+                        rgba[3] = 1.0;
+                        if pick(4) < 1.0 / 32.0 {
+                            extra.push((Extra::Bubble, speed(0.125)));
+                        }
+                        if pick(5) < 1.0 / 32.0 {
+                            extra.push((Extra::BubblePop, speed(0.125)));
+                        }
+                    }
+                }
+                // `selectSprite(random.nextInt(3))`.
+                particle.set_sprite_index(((pick(6) * 3.0) as usize).min(2) * 7 / 8);
+                if !extra.is_empty() {
+                    shared(|s| {
+                        s.extra
+                            .extend(extra.into_iter().map(|(e, v)| (e, position, v)));
+                    });
+                }
+            }
+        }
+        particle.set_rgba(rgba);
+        // `move(xd, yd, zd)` without physics.
+        particle.set_previous_position(position);
+        particle.set_velocity(motion);
+        particle.move_by(motion);
     }
 }

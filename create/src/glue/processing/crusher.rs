@@ -12,13 +12,14 @@ use crate::glue::world::{level_index, try_with_world, with_world};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, crusher, processing};
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, BlockPart, BlockState, CollisionShapeEvent,
-    Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityRef, EntityWrite, Holder,
-    HostBlockStates as _, InsideEffect, LevelRandomHost, LoopContext, Registrar, ServerHost, Tag,
+    AttachmentCodec, AttachmentDescriptor, AttachmentError, AttachmentKey, BlockPart, BlockState,
+    CollisionShapeEvent, Compound, EntityInsideEvent, EntityJoinLevelEvent, EntityRef, EntityWrite,
+    Holder, HostBlockStates as _, InsideEffect, LevelRandomHost, LoopContext, Registrar,
+    ServerHost, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::OnceLock;
+use std::sync::{OnceLock, RwLock};
 
 /// Crushing wheels: the controllers between wheels turning against each other
 /// (`CrushingWheelBlock.updateControllers`, after a wheel is placed, broken or changes speed),
@@ -43,25 +44,7 @@ pub fn tick_crushers(lv: &mut ServerLevel<'_>) {
 
 /// `BypassCrushingWheel` in an item's persistent data: the controller that let it out, which
 /// neither catches it again nor stops it.
-static BYPASS: AttachmentType<Option<[i32; 3]>> = AttachmentType {
-    namespace: "create",
-    name: "bypass_crushing_wheel",
-    default: || None,
-    codec: Some(AttachmentCodec {
-        encode: |pos| {
-            Ok(Compound::from([(
-                "Pos".into(),
-                Tag::IntArray(pos.map_or_else(Vec::new, |p| p.to_vec())),
-            )]))
-        },
-        decode: |saved| match saved.get(&"Pos".into()) {
-            Some(Tag::IntArray(p)) => Ok(p.as_slice().try_into().ok()),
-            _ => Err(AttachmentError::Decode),
-        },
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+static BYPASS: RwLock<Option<AttachmentKey<Option<[i32; 3]>>>> = RwLock::new(None);
 
 thread_local! {
     /// [`BYPASS`] of the loaded items that have one, by entity id, for the collision rule.
@@ -71,8 +54,27 @@ thread_local! {
 static VALID_FACINGS: OnceLock<HashMap<BlockState, Dir>> = OnceLock::new();
 
 pub(super) fn register(r: &mut dyn Registrar) {
-    if let Err(e) = r.register_attachment_type("create:bypass_crushing_wheel", false) {
-        crate::create_log!("[create] declaring bypass_crushing_wheel: {e:?}");
+    let descriptor =
+        AttachmentDescriptor::<Option<[i32; 3]>>::new("create:bypass_crushing_wheel", || None)
+            .serialize(AttachmentCodec {
+                encode: |pos| {
+                    Ok(Compound::from([(
+                        "Pos".into(),
+                        Tag::IntArray(pos.map_or_else(Vec::new, |p| p.to_vec())),
+                    )]))
+                },
+                decode: |saved| match saved.get(&"Pos".into()) {
+                    Some(Tag::IntArray(p)) => Ok(p.as_slice().try_into().ok()),
+                    _ => Err(AttachmentError::Decode),
+                },
+            });
+    match r.register_attachment_type(descriptor) {
+        Ok(key) => {
+            *BYPASS
+                .write()
+                .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key)
+        }
+        Err(e) => crate::create_log!("[create] declaring bypass_crushing_wheel: {e:?}"),
     }
     r.block_part(states::key(Block::CrushingWheelController), Passage);
 }
@@ -111,7 +113,13 @@ fn bypassing(entity: u32) -> Option<[i32; 3]> {
 }
 
 fn bypass(host: &mut dyn ServerHost, entity: u32, controller: [i32; 3]) {
-    if let Err(e) = BYPASS.set(host, Holder::Entity(entity), Some(controller)) {
+    let key = BYPASS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
+    if let Some(key) = key
+        && let Err(e) = key.set(host, Holder::Entity(entity), Some(controller))
+    {
         crate::create_log!("[create] tagging a crushed item: {e:?}");
     }
     BYPASSING.with_borrow_mut(|m| m.insert(entity, controller));
@@ -119,9 +127,15 @@ fn bypass(host: &mut dyn ServerHost, entity: u32, controller: [i32; 3]) {
 
 /// An item back with its chunk keeps its tag.
 pub(super) fn item_joined(host: &mut dyn ServerHost, event: &EntityJoinLevelEvent<'_>) {
+    let key = BYPASS
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone();
     if event.loaded_from_disk
         && event.kind == "minecraft:item"
-        && let Ok(Some(Some(controller))) = BYPASS.get_existing(host, Holder::Entity(event.entity))
+        && let Some(key) = key
+        && let Ok(Some(Some(controller))) =
+            key.get_existing(host, Holder::Entity(event.entity), |value| value.copied())
     {
         BYPASSING.with_borrow_mut(|m| m.insert(event.entity, controller));
     }

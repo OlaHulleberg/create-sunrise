@@ -202,11 +202,7 @@ impl Subsystem for Processing {
         r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, provide_items);
         client::register(r);
         air::register(r);
-        // Entity Part state is offered to native mods only.
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Err(e) = r.entity_part_with_state("minecraft:horse", fan::Haunted) {
-            crate::create_log!("[create] the haunted horse's progress is refused: {e:?}");
-        }
+        fan::register(r);
         for block in [Block::Basin, Block::MechanicalSaw, Block::Millstone] {
             r.block_part(super::states::key(block), Landing);
         }
@@ -423,7 +419,7 @@ impl Subsystem for Processing {
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
         if let Some(&ty) = air::AIR_FLOW_TYPE.get() {
-            providers.register_sprite_set(ty, std::sync::Arc::new(air::AirFlow));
+            providers.register_sprite_set(ty, |_sprites| air::AirFlow);
         }
     }
 
@@ -722,9 +718,12 @@ struct CrafterUse;
 impl BlockPart for CrafterUse {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut mod_api::UseItemOnEvent<'_>,
     ) -> Option<mod_api::InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let dimension = click.dimension.key().id().to_owned();
         let mut lv = ServerLevel::new(host, &dimension)?;

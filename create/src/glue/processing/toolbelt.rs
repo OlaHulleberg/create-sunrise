@@ -1681,13 +1681,15 @@ fn draw_menu(
         let a = (fade * 255.0) as u32;
         if a > 8 {
             let w = host.text_width(&tip) as f32;
-            let _ = draw.gui_paint(&[mod_api::GuiDraw::Text {
-                text: tip,
-                x: (c[0] - (w / 2.0).round()) as i32,
-                y: (size[1] - 68.0 - 4.0) as i32,
-                color: (a.min(255) << 24) | 0xFF_FFFF,
-                shadow: false,
-            }]);
+            let at = [
+                (c[0] - (w / 2.0).round()) as i32 as f32,
+                (size[1] - 68.0 - 4.0) as i32 as f32,
+            ];
+            let color = (a.min(255) << 24) | 0xFF_FFFF;
+            let _ = draw.draw_gui(&mut |canvas| {
+                canvas.text(&tip, at, color, false)?;
+                Ok(())
+            });
         }
     }
 }
