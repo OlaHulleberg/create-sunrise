@@ -1,6 +1,6 @@
 # API gaps
 
-What the port is missing as of 2026-11-25, at the interim Sunrise Dev build `6a02076` (a test build with no stable mod API, not yet run in game) in `create/sunrise-mod.toml`.
+What the port is missing as of 2026-11-25, at the interim Sunrise Dev build `6a02076` (a test build with no stable mod API) in `create/sunrise-mod.toml`.
 Each row is an operation the pinned SDK does not offer and the port cannot write itself, with its upstream issue or PR where one exists. APIs the pin already has but the port has not adopted are port work and not listed. The port uses no `[[native.mixin]]` (`docs/architecture.md`), so vanilla behaviour only a mixin could change is listed as a gap. Better APIs wait until after parity. Since `94256510f7`, `Compound` keys iterate in Java's HashMap order (`compound-traversal`): output that relies on sorted keys sorts them itself.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 

@@ -98,7 +98,7 @@ The folder in `target/create-mod` holds files made from Create's assets. It is f
 > (6.0.11 isn't released yet); the two differ in only two textures.
 
 > The pin is the interim Sunrise Dev build `6a02076` (a test build with no stable mod API). Its official signed SDK
-> (`sdk-6a02076f89cd189d74d63492dda5b023fa85a38f`) is fetched automatically by `cargo sunrise-mod`. The port has not been run in game on this build yet.
+> (`sdk-6a02076f89cd189d74d63492dda5b023fa85a38f`) is fetched automatically by `cargo sunrise-mod`. In-game results on this build are in [VALIDATION.md](VALIDATION.md).
 
 ## See it running
 
