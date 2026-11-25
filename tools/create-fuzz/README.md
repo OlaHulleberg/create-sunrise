@@ -344,7 +344,8 @@ table's comments say.
 | belt slicer, tunnels, funnels | 99, 103, 61 mod 128 | 3/128 | Reload; the slicer picks its cut, join or refusal variant by `index` |
 | belt surface, depots, chutes | 94, 29, 66 mod 128 | 3/128 | Never reload |
 | transmission valve, sequence, chain, generate | 10-12, 14 mod 16, below 64 mod 128 | 4 × 1/32 = 12.5% | Short traces with few variants (bits 16 and 32, seed / 64 mod 3); they gave up the half above 64 |
-| transmission crank | 13 mod 256, 45 mod 128 | 3/256 | Its trace reads no seed bit but the reload one: one residue of each half (141, a copy of 13, went to cog_casing) |
+| transmission crank | 13, 45 mod 256 | 2/256 | Its trace reads no seed bit but the reload one: one residue of each half (141, a copy of 13, went to cog_casing; 173, a copy of 45, to sequenced_gearshift) |
+| transmission/sequenced_gearshift | 173 mod 256 | 1/256 | Sequenced gearshifts (`SequencedGearshiftBlockEntity`) between sources, idle or running each instruction kind, on all four orientations: two opposing generators with and without shafts in every placement order, the far side turned while the program runs and either source removed, a gearbox loop back into the block's network, and clutches on either face toggled every tick so the speed crosses zero. Four histories picked by `index`; always reloads |
 | network/cog_casing | 141 mod 256 | 1/256 | Cogs cased beside shafts, cogs and gearboxes on their axis faces, then wrenched and uncased; never reloads |
 | transmission flicker | 2 mod 256 | 1/256 | Reads no seed bit and 2 mod 64 never reloads: 66 generated the same trace, and so did 130 |
 | network/integrated_cogs | 130 mod 256 | 1/256 | Cog items on encased cogs and pumps (`CogwheelBlockItem`'s helpers on non-dedicated cogs); flicker's copy, never reloads |
@@ -363,6 +364,8 @@ Residues that changed owner (mod 128): transmission valve's 74, 90, 106, 122 to 
 sequence's 75, 91, 107, 123 to steam_engine; chain's 76, 108 to source_faces and 92, 124 to
 geometry/network; crank's 77, 93, 109, 125, generate's 78, 94, 110, 126 and actions' 87, 99,
 103, 119 to geometry/states.
+
+The sequenced gearshift family then took transmission/crank's 173 (mod 256).
 
 The processing families then took geometry/states' 205 and 221 and geometry/stress_boundary's
 128 (mod 256).

@@ -44,6 +44,7 @@ mod program;
 mod records;
 mod repeat_java;
 mod scenario;
+mod sequenced_gearshift;
 mod shrink;
 mod slicer;
 mod steam_engine;
