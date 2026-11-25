@@ -340,11 +340,7 @@ fn tick_hoses(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let level = HoseLevel(lv);
-        if speed.is_nan() {
-            hose.wake(&level, pos, now);
-        } else {
-            hose.speed_changed(&level, pos, speed, now);
-        }
+        hose.speed_changed(&level, pos, speed, now);
         settle_hose(dim, pos, hose, true);
     }
     for pos in busy {
@@ -367,16 +363,10 @@ fn tick_hoses(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// A hose back in place: clients see it again when it `changed`, it ticks while busy, and a
-/// still one turning forwards waits for the block below its end (`lazyTick`).
+/// A hose back in place: clients see it again when it `changed`, and it ticks while busy.
 fn settle_hose(dim: usize, pos: [i32; 3], hose: create_engine::hose::Hose, changed: bool) {
     with_world(|w| {
         let p = &mut w.dims[dim].plumbing;
-        p.hose_waits.retain(|_, h| *h != pos);
-        if !hose.moving && hose.movement() > 0.0 {
-            let depth = (hose.offset + hose.movement()).ceil() as i32;
-            p.hose_waits.insert([pos[0], pos[1] - depth, pos[2]], pos);
-        }
         if changed {
             p.hose_changes.push(pos);
         }
