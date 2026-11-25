@@ -22,17 +22,14 @@
 //! turn (`colliders`, `ContraptionCollider.collideEntities`).
 //!
 //! What the API cannot do, left out (for API_GAPS.md's gaps):
-//! - A structure moving into an entity doesn't push it, and its blocks' contact effects are
-//!   missing (`colliders`).
+//! - A turning structure moving into an entity doesn't push it, and its blocks' contact effects
+//!   are missing (`colliders`).
 //! - A moving block cannot be clicked, and riders cannot sit on a moving structure's seats
 //!   (`Contraption.seats`): there is no moving entity to pick or ride. Contraption controls on a
 //!   structure an anchor draws (piston, gantry, pulley, bearing, windmill, elevator) are clicked
 //!   and scrolled through the client's own raycast of what it draws, turned back into the
 //!   structure's frame (`draw::use_key`, `draw::scroll`); on a minecart's contraption (drawn by
 //!   display entities) with `/create_debug controls`.
-//! - Each moving block is lit with the world's light where the structure was last sent from
-//!   (the server reads it: `LevelRef::brightness` is the server's only), not where it is each
-//!   frame.
 //! - A clockwork bearing's top turns at its kinetic speed, not with the hour hand
 //!   (`BearingRenderer`): the top is the kinetic block entity's part.
 //!
