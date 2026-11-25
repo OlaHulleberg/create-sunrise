@@ -54,7 +54,7 @@ The jar's tags are loaded as they are, so three of them log a missing member at 
 | Tag | Missing member |
 |---|---|
 | `c:tea` | `create:tea`: the port declares no tea fluid. |
-| `c:teleporting_not_supported` | `create:contraption` and `create:carriage_contraption`: the port's contraptions are not entity types of those names. |
+| `c:teleporting_not_supported` | `create:contraption` and `create:carriage_contraption`: the port declares general entities of those names, but the entity-type tag does not find them. Why is not confirmed. |
 | `create:ignore_seat` | `#c:capturing_not_supported`: no such tag exists. |
 
 ## Not used by Create (out of scope until after parity)
