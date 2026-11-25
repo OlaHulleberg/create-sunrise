@@ -16,7 +16,7 @@ use create_engine::decor::{self, BracketKind};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockEntityPart, BlockPart, ClientHost, HostSide, InteractionResult, ItemPart, PlayerRef,
-    Registrar, ServerHost, Tag, UseItemOnEvent, UseOnEvent,
+    Registrar, Tag, UseItemOnEvent, UseOnEvent,
 };
 
 pub(super) fn register(r: &mut dyn Registrar) {
@@ -171,9 +171,12 @@ impl BlockPart for Bracketed {
     /// stays as it is. Without a bracket the wrench does what it does to the block.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         if stack.item().name(&*host) != "create:wrench" {

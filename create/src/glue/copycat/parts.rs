@@ -163,9 +163,12 @@ impl BlockPart for CopycatBlock {
     /// item's own use (the wrench's is `Copycats::wrench_used`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         let player = host.player(click.player)?;
@@ -282,7 +285,7 @@ impl BlockPart for CopycatBlock {
 
     /// `CopycatBlock.getFriction`: the material's, at the copycat's position (`getMaterial`:
     /// air without a block entity, the copycat base without a material).
-    fn friction(&self, level: mod_api::LevelSide<'_>, event: &mut FrictionEvent<'_>) {
+    fn friction(&self, level: mod_api::LevelSide<'_>, event: &mut FrictionEvent) {
         let (level, server) = states::level_view(level);
         let pos = [event.pos.x, event.pos.y, event.pos.z];
         let material = match level.block_entity(pos) {

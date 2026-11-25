@@ -12,9 +12,8 @@ use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use create_engine::tank::Fluid;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntityRenderBoundingBoxEvent, BlockPart, ClientHost, FluidBoxOptions, FluidStack,
-    ModBlockEntity, Registrar, Tag,
+    BlockEntityClientTickEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart,
+    ClientHost, FluidBoxOptions, FluidStack, ModBlockEntity, Registrar, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -114,27 +113,6 @@ impl BlockPart for FluidEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for FluidEntity {
-    fn block_entity_client_ticks(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut BlockEntityClientTicksEvent<'_>,
-    ) {
-        // Pipes, valves and pumps spawn their flows' particles (`flows`).
-        if matches!(
-            event.block,
-            "create:fluid_valve"
-                | "create:steam_engine"
-                | "create:steam_whistle"
-                | "create:fluid_pipe"
-                | "create:encased_fluid_pipe"
-                | "create:glass_fluid_pipe"
-                | "create:smart_fluid_pipe"
-                | "create:mechanical_pump"
-        ) {
-            event.ticks = true;
-        }
-    }
-
     /// Each client tick: a valve's pointer sets off at a new speed and takes a step
     /// (`tickChaser`).
     fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
@@ -322,8 +300,8 @@ pub(crate) fn fluid_box(
         } else {
             options
         };
-        draw.fluid_box(&FluidStack::new(key, amount.max(1)), bounds, options)
-            .is_ok()
+        draw.fluid_box(&FluidStack::new(key, amount.max(1)), bounds, options);
+        true
     });
     if drawn {
         return;

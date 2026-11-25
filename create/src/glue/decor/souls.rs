@@ -18,8 +18,8 @@ use crate::glue::names::Named as _;
 use crate::glue::owned::OwnedEquipment as _;
 use create_engine::soul::{self, Pulse, SoulAnimation};
 use mod_api::{
-    BlockFace, Hand, LightLayer, ModParticle, ParticleKey, ParticleOptions, ParticleProvider,
-    PlayerRef, Registrar, ServerHost, SoundSource, SupportType,
+    BlockFace, Hand, LightLayer, ParticleKey, ParticleOptions, ParticleProvider, PlayerRef,
+    Registrar, ServerHost, SoundSource, SupportType,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
@@ -265,9 +265,9 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
 }
 
 /// A number from 0 to 1 that stays with a particle, from where it spawned.
-fn random(p: &ModParticle, salt: u64) -> f32 {
+fn random(position: [f64; 3], salt: u64) -> f32 {
     let mut h = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-    for v in p.position {
+    for v in position {
         h = (h ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
     }
     h ^= h >> 29;
@@ -275,8 +275,8 @@ fn random(p: &ModParticle, salt: u64) -> f32 {
 }
 
 /// `SoulPulseEffect.isDark`: no block light where the particle is.
-fn dark_at(level: &dyn mod_api::ParticleLevelView, p: &mod_api::ModParticle) -> bool {
-    let at = p.position.map(|v| v.floor() as i32);
+fn dark_at(level: &dyn mod_api::ParticleLevelView, position: [f64; 3]) -> bool {
+    let at = position.map(|v| v.floor() as i32);
     level.brightness(mod_api::LightLayer::Block, at) < 1
 }
 
@@ -286,51 +286,50 @@ fn dark_at(level: &dyn mod_api::ParticleLevelView, p: &mod_api::ModParticle) -> 
 pub(super) struct Soul;
 
 impl ParticleProvider for Soul {
-    fn tick(&self, particles: &mut mod_api::ParticleBatch, level: &dyn mod_api::ParticleLevelView) {
-        let one = |p: &mut mod_api::ModParticle| {
-            let mut a = if p.state[0] == 0.0 {
-                p.size = 0.5;
-                p.lifetime = i32::MAX;
-                p.velocity = [0.0; 3];
-                p.facing = mod_api::ParticleFacing::AroundY;
-                SoulAnimation {
-                    stage: 1,
-                    ticks: 0,
-                    loops: 0,
-                    // `startFrames + (int) (random.nextFloat() * 5f - 4f)` and the like.
-                    start_ticks: (17 + (random(p, 1) * 5.0 - 4.0) as i32) as u32,
-                    end_ticks: (20 + (random(p, 2) * 5.0 - 4.0) as i32) as u32,
-                    num_loops: (1.0 + random(p, 3) * 2.0) as u32,
-                }
-            } else {
-                let s = p.state;
-                SoulAnimation {
-                    stage: s[0] as u8,
-                    ticks: s[1] as u32,
-                    loops: s[2] as u32,
-                    start_ticks: (s[3] as u32) & 0xFF,
-                    end_ticks: ((s[3] as u32) >> 8) & 0xFF,
-                    num_loops: (s[3] as u32) >> 16,
-                }
-            };
-            let frame = a.tick();
-            if a.stage == 0 {
-                p.removed = true;
-                return;
-            }
-            // `animatedSprite.get(frame, 53)`.
-            p.frame = frame * 52 / 53;
-            p.state = [
-                f64::from(a.stage),
-                f64::from(a.ticks),
-                f64::from(a.loops),
-                f64::from(a.start_ticks | a.end_ticks << 8 | a.num_loops << 16),
-            ];
-            if !dark_at(level, p) {
-                p.removed = true;
-            }
-        };
-        particles.iter_mut().for_each(one);
+    fn create_particle(
+        &self,
+        _spawn: &mut mod_api::ParticleSpawn<'_, ()>,
+        particle: &mut dyn mod_api::ParticleTickView,
+    ) -> Option<Box<dyn mod_api::CustomParticle>> {
+        let at = particle.position();
+        particle.set_size(0.5);
+        particle.set_lifetime(i32::MAX);
+        particle.set_velocity([0.0; 3]);
+        particle.set_facing(mod_api::ParticleFacing::AroundY);
+        Some(Box::new(SoulInstance {
+            animation: SoulAnimation {
+                stage: 1,
+                ticks: 0,
+                loops: 0,
+                // `startFrames + (int) (random.nextFloat() * 5f - 4f)` and the like.
+                start_ticks: (17 + (random(at, 1) * 5.0 - 4.0) as i32) as u32,
+                end_ticks: (20 + (random(at, 2) * 5.0 - 4.0) as i32) as u32,
+                num_loops: (1.0 + random(at, 3) * 2.0) as u32,
+            },
+        }))
+    }
+}
+
+struct SoulInstance {
+    animation: SoulAnimation,
+}
+
+impl mod_api::CustomParticle for SoulInstance {
+    fn tick(
+        &mut self,
+        particle: &mut dyn mod_api::ParticleTickView,
+        level: &dyn mod_api::ParticleLevelView,
+    ) {
+        let frame = self.animation.tick();
+        if self.animation.stage == 0 {
+            particle.remove();
+            return;
+        }
+        // `animatedSprite.get(frame, 53)`.
+        particle.set_sprite_index((frame * 52 / 53) as usize);
+        if !dark_at(level, particle.position()) {
+            particle.remove();
+        }
     }
 }
 
@@ -339,24 +338,47 @@ impl ParticleProvider for Soul {
 pub(super) struct SoulBase;
 
 impl ParticleProvider for SoulBase {
-    fn tick(&self, particles: &mut mod_api::ParticleBatch, level: &dyn mod_api::ParticleLevelView) {
-        let one = |p: &mut mod_api::ModParticle| {
-            if p.state[0] == 0.0 {
-                let half = std::f32::consts::FRAC_PI_4;
-                p.facing = mod_api::ParticleFacing::Fixed([half.sin(), 0.0, 0.0, half.cos()]);
-                p.size = 0.5;
-                p.velocity = [0.0; 3];
-                p.lifetime = (90.0 / (random(p, 4) * 0.36 + 0.64)) as i32;
-                let loop_length = 16 + (random(p, 5) * 2.0 - 1.0) as i32;
-                p.state[0] = f64::from(loop_length);
-            }
-            let loop_length = (p.state[0] as i32).max(1);
-            // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
-            p.frame = ((p.age % loop_length) * 7 / loop_length) as u32;
-            if !dark_at(level, p) {
-                p.removed = true;
-            }
-        };
-        particles.iter_mut().for_each(one);
+    fn create_particle(
+        &self,
+        _spawn: &mut mod_api::ParticleSpawn<'_, ()>,
+        particle: &mut dyn mod_api::ParticleTickView,
+    ) -> Option<Box<dyn mod_api::CustomParticle>> {
+        let at = particle.position();
+        let half = std::f32::consts::FRAC_PI_4;
+        particle.set_facing(mod_api::ParticleFacing::Fixed([
+            half.sin(),
+            0.0,
+            0.0,
+            half.cos(),
+        ]));
+        particle.set_size(0.5);
+        particle.set_velocity([0.0; 3]);
+        particle.set_lifetime((90.0 / (random(at, 4) * 0.36 + 0.64)) as i32);
+        let loop_length = 16 + (random(at, 5) * 2.0 - 1.0) as i32;
+        Some(Box::new(SoulBaseInstance {
+            loop_length: loop_length.max(1),
+        }))
+    }
+}
+
+struct SoulBaseInstance {
+    loop_length: i32,
+}
+
+impl mod_api::CustomParticle for SoulBaseInstance {
+    fn tick(
+        &mut self,
+        particle: &mut dyn mod_api::ParticleTickView,
+        level: &dyn mod_api::ParticleLevelView,
+    ) {
+        if !particle.advance_age() {
+            return;
+        }
+        // `selectSpriteLoopingWithAge`: `sprites.get(age % loopLength, loopLength)` of 8.
+        let age = particle.age() as i32;
+        particle.set_sprite_index(((age % self.loop_length) * 7 / self.loop_length) as usize);
+        if !dark_at(level, particle.position()) {
+            particle.remove();
+        }
     }
 }
