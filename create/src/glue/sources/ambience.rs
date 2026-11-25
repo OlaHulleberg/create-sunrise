@@ -7,9 +7,9 @@
 //! (`SoundScape.getVolume`).
 //!
 //! Create's sound plays at its blocks' mean, which it follows every tick (`ContinuousSound.getX`),
-//! fading with distance as any sound does. A playing sound cannot be moved through the API, so
-//! it plays at the listener at the volume that fade gives it (`Attenuation.LINEAR` over 16
-//! blocks), heard from no side (see `API_GAPS.md`).
+//! fading with distance as any sound does. The playing sound is positioned at the blocks' mean
+//! (linear attenuation over 16 blocks, as the sound engine gives it) and moved there with
+//! `SoundRef::move_to` when the mean changes, without restarting it.
 
 use super::super::kinetics;
 use create_engine::Block;
@@ -97,12 +97,13 @@ fn clicks(block: Block) -> bool {
 /// The blocks heard in a group this tick, and the pitch of the first.
 type Heard = (f32, Vec<[i32; 3]>);
 
-/// One playing `SoundScape`: its sound, the pitch it started with and the volume it was last
-/// given.
+/// One playing `SoundScape`: its sound, the pitch it started with, the volume it was last given
+/// and the mean position it was last placed at.
 struct Scape {
     sound: Option<SoundRef>,
     pitch: f32,
     volume: f32,
+    mean: [f64; 3],
 }
 
 #[derive(Default)]
@@ -206,15 +207,15 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
                 .sum::<f64>()
                 .sqrt();
             let (event, relative) = key.0.sound();
-            // `ContinuousSound.getVolume`, then the linear fade over 16 blocks the sound engine
-            // gives a sound at the mean.
-            let fade = (1.0 - distance / f64::from(RANGE)).max(0.0) as f32;
-            let vol = volume(blocks.len(), distance) * relative * fade;
+            // `ContinuousSound.getVolume`; the linear fade over 16 blocks comes from the sound
+            // engine, the sound being at the mean.
+            let vol = volume(blocks.len(), distance) * relative;
             let fresh = !c.scapes.contains_key(&key);
             let scape = c.scapes.entry(key).or_insert(Scape {
                 sound: None,
                 pitch,
                 volume: vol,
+                mean,
             });
             // A new group starts at once; one whose sound ended starts again on an update.
             let stopped = scape.sound.is_none_or(|s| {
@@ -225,17 +226,21 @@ pub(super) fn client_tick(host: &mut dyn ClientHost) {
                     s.stop(&*host);
                 }
                 scape.volume = vol;
-                let mut play = SoundPlay::ui(event)
+                scape.mean = mean;
+                let play = SoundPlay::at(event, SoundSource::Ambient, mean)
                     .with_volume(vol.max(0.0001))
                     .with_pitch(scape.pitch)
                     .looping(0);
-                play.source = SoundSource::Ambient;
                 scape.sound = host.play_local_sound(&play, 0);
-            } else if (scape.volume - vol).abs() > 1e-4
-                && let Some(s) = scape.sound
-            {
-                scape.volume = vol;
-                s.fade(&*host, vol.max(0.0001), 1);
+            } else if let Some(s) = scape.sound {
+                if (0..3).any(|i| (scape.mean[i] - mean[i]).abs() > 1e-4) {
+                    scape.mean = mean;
+                    s.move_to(&*host, mean);
+                }
+                if (scape.volume - vol).abs() > 1e-4 {
+                    scape.volume = vol;
+                    s.fade(&*host, vol.max(0.0001), 1);
+                }
             }
         }
     });
