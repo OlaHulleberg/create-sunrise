@@ -238,27 +238,6 @@ fn kept_asset(path: &str) -> bool {
 /// `assets/`.
 const CRATE_FILES: &[&str] = &["sunrise-mod.toml", "Cargo.toml", "LICENSE", "NOTICE.md"];
 
-/// How Horizon moves Create's particles that the glue spawns by name. Create's particle files
-/// (`assets/create/particles/*.json`, its sprite lists) are All Rights Reserved: they come from
-/// the player's jar, and only this behaviour, which is the port's own, is added to them here.
-fn particle_behaviour(path: &str) -> Option<Value> {
-    match path {
-        "assets/create/particles/rotation_indicator.json"
-        | "assets/create/particles/soul.json"
-        | "assets/create/particles/soul_base.json"
-        | "assets/create/particles/air.json" => Some(json!({ "velocity": [0.0, 0.0, 0.0] })),
-        "assets/create/particles/steam_jet.json" => Some(json!({
-            "velocity": [0.0, 0.0, 0.0],
-            "animation": "age",
-            "gravity": 0.0,
-            "friction": 1.0,
-            "lifetime": 21,
-            "size": [0.375, 0.375]
-        })),
-        _ => None,
-    }
-}
-
 /// Whether the sources are exactly the jar `create/sunrise-mod.toml` names, which the launcher
 /// layers under the mod: then what would be copied from it unchanged is left to that layer.
 fn layered(sources: &[PathBuf]) -> Result<bool, String> {
@@ -339,14 +318,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
     for (path, bytes) in &files {
         // Our own files (a blockstate we draw differently) stand over Create's.
         if !kept_asset(path) || ours.contains_key(path) {
-            continue;
-        }
-        if let Some(behaviour) = particle_behaviour(path) {
-            let mut doc: Value =
-                serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
-            doc["sunrise:behaviour"] = behaviour;
-            put(path, &serde_json::to_vec_pretty(&doc).unwrap())?;
-            copied += 1;
             continue;
         }
         if let Some(door) = sliding_door_states(path, bytes) {
