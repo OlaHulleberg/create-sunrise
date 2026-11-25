@@ -712,9 +712,14 @@ fn pay_tracks(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, need: i32) -
 /// (`HAS_BE`), and each track's block entity carries what it draws now; then the track and
 /// signal block entities that came in get their data.
 pub fn sync(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let tracks: Vec<[i32; 3]> =
+        with_world(|w| w.dims[dim].track_curves.at.keys().copied().collect()).unwrap_or_default();
+    let loaded: std::collections::HashSet<[i32; 3]> =
+        tracks.into_iter().filter(|p| lv.is_loaded(*p)).collect();
+    with_world(|w| w.dims[dim].track_curves.lazy_tick(|p| loaded.contains(&p)));
     lay_fake_track(lv);
     drop_curves(lv);
-    let dim = lv.dim;
     let changed = with_world(|w| {
         let c = &mut w.dims[dim].track_curves.changed;
         if c.is_empty() {
@@ -1070,8 +1075,8 @@ pub fn lights_changed(lv: &mut ServerLevel<'_>, lights: &[([i32; 3], Option<Sign
 /// `TrackBlockEntity.manageFakeTracksAlong` for curves added or gone: fake track (`Track
 /// Marker for Maps`) laid in the replaceable blocks above a curve (waterlogged in a water
 /// source, never in another fluid), taken up with it. Create also lays it again every lazy tick
-/// and lets it decay by random ticks (`FakeTrackBlockEntity.keepAlive`); here it is laid once and
-/// taken up when its curve goes, with nothing per tick.
+/// (`TrackBlockEntity.lazyTick`, rate 100: `Curves::lazy_tick` queues it here) and lets it decay
+/// by random ticks (`FakeTrackBlockEntity.keepAlive`); the decay is not ported.
 fn lay_fake_track(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let fake = with_world(|w| {

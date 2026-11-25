@@ -3,6 +3,7 @@
 //! first one's copy primary (it draws the curve), the other's the same curve reversed.
 
 use crate::bezier::{Curve, Vec3};
+use crate::block_entity::SmartBlockEntity;
 use std::collections::HashMap;
 
 /// One end's view of a curve: the track block at its other end and the curve from here.
@@ -74,6 +75,9 @@ pub struct Curves {
     /// Curves taken up with a track (`removeInboundConnections(dropAndDiscard)`), for the glue
     /// to drop their items (`spawnItems`).
     pub dropped: Vec<Saved>,
+    /// Each loaded track block holding a primary curve's `SmartBlockEntity` lazy tick (rate 100,
+    /// `TrackBlockEntity`'s `setLazyTickRate`), for `lazyTick`'s fake track.
+    pub lazy: HashMap<[i32; 3], SmartBlockEntity>,
 }
 
 /// `manageFakeTracksAlong`: the blocks a curve's fake track takes, a block above each column it
@@ -155,7 +159,36 @@ impl Curves {
         self.changed.push(pos);
         self.revision += 1;
         self.changed.extend(&others);
+        self.lazy
+            .retain(|p, _| self.at.get(p).is_some_and(|l| l.iter().any(|c| c.primary)));
         others
+    }
+
+    /// `TrackBlockEntity.lazyTick` at rate 100: each loaded track holding a primary curve ticks
+    /// (first at its `initialize`, then every 101 ticks), and one that is due lays its primary
+    /// curves' fake track again (`manageFakeTracksAlong(connection, false)`) for the glue. A
+    /// track that is unloaded or has no primary curve left loses its state, as its block entity
+    /// does.
+    pub fn lazy_tick(&mut self, loaded: impl Fn([i32; 3]) -> bool) {
+        self.lazy.retain(|p, _| {
+            loaded(*p) && self.at.get(p).is_some_and(|l| l.iter().any(|c| c.primary))
+        });
+        for (pos, list) in &self.at {
+            if !loaded(*pos) || !list.iter().any(|c| c.primary) {
+                continue;
+            }
+            let due = self
+                .lazy
+                .entry(*pos)
+                .or_insert_with(|| SmartBlockEntity::new(100))
+                .tick();
+            if due {
+                for c in list.iter().filter(|c| c.primary) {
+                    self.fake
+                        .extend(fake_track_along(&c.curve).into_iter().map(|p| (p, true)));
+                }
+            }
+        }
     }
 
     /// The curves whose primary end is in column (cx, cz), to save with it.
@@ -292,5 +325,30 @@ mod tests {
         let gone: Vec<[i32; 3]> = c.fake.iter().filter(|f| !f.1).map(|f| f.0).collect();
         assert!(!laid.is_empty());
         assert_eq!(laid, gone);
+    }
+
+    #[test]
+    fn lazy_tick_lays_primary_fake_track_at_rate_100_cadence() {
+        let mut c = Curves::default();
+        c.add(turn());
+        c.fake.clear();
+        let mut fired = Vec::new();
+        for tick in 1..=202 {
+            c.lazy_tick(|_| true);
+            if !c.fake.is_empty() {
+                fired.push(tick);
+                // Only the primary end lays it: one curve's worth, all to lay.
+                assert!(c.fake.iter().all(|f| f.1));
+                c.fake.clear();
+            }
+        }
+        assert_eq!(fired, [1, 101, 202]);
+        // Unloaded, or with its curve gone, a track's state goes.
+        c.lazy_tick(|_| false);
+        assert!(c.lazy.is_empty());
+        c.lazy_tick(|_| true);
+        assert_eq!(c.lazy.len(), 1);
+        c.remove_at([8, 0, 8]);
+        assert!(c.lazy.is_empty());
     }
 }
