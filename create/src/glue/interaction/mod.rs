@@ -18,7 +18,6 @@ mod board;
 mod commands;
 mod crank;
 mod ghost;
-mod ghost_models;
 mod hud;
 mod item_use_overrides;
 mod placement;
@@ -39,11 +38,6 @@ pub struct Interaction;
 /// A placement helper's target and the properties its transform sets on the held block's
 /// default state (`PlacementOffset.withTransform`), for the ghost.
 pub(crate) type HelperTarget = ([i32; 3], Vec<(&'static str, String)>);
-
-/// The placement ghosts' world pipelines, one a sprite (`ghost.rs`).
-pub(crate) fn register_pipelines(event: &mut mod_api::RegisterRenderPipelinesEvent<'_>) {
-    ghost::register(event);
-}
 
 impl Subsystem for Interaction {
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
