@@ -1333,7 +1333,7 @@ impl BlockEntityPart for ClothEntity {
             if let Some(tag) = states::partial(name) {
                 draw.push();
                 draw.rotate_about([0.0, 1.0, 0.0], rot, centre);
-                draw.block(tag, &[("facing", "up")]);
+                crate::glue::states::draw_block(&mut *draw, tag, &[("facing", "up")]);
                 draw.pop();
             }
             if let Some(price) = &cloth.price {

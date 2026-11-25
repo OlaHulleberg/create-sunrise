@@ -583,8 +583,7 @@ fn boxes(
                 .map(|v| v.floor() as i32);
             let shape = state(*s)
                 .and_then(|state| {
-                    lv.level
-                        .block_shape(&*lv.host, state, cell, BlockShapeKind::Collision)
+                    crate::glue::block_shape(lv.level, &*lv.host, state, cell, BlockShapeKind::Collision)
                 })
                 .unwrap_or_default();
             (*o, shape)

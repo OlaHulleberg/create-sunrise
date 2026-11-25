@@ -562,7 +562,7 @@ impl Subsystem for Entities {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        entity: &mod_api::BlockEntityDataView<'_>,
+        entity: crate::glue::EntityData<'_>,
     ) -> bool {
         client::animated(block, pos, entity)
     }
@@ -650,8 +650,7 @@ pub fn has_collision(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
         f64::from(pos[1]) + 1.0 - 1e-4,
         f64::from(pos[2]) + 1.0 - 1e-4,
     ];
-    lv.level
-        .collision_boxes(&*lv.host, cell)
+    crate::glue::collision_boxes(lv.level, &*lv.host, cell)
         .is_some_and(|b| !b.is_empty())
 }
 

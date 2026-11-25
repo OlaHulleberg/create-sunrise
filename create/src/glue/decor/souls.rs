@@ -134,9 +134,8 @@ fn soul_fits(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
     }
     let empty = |p: [i32; 3]| {
         let lo = p.map(f64::from);
-        let full = lv
-            .level
-            .collision_boxes(
+        let full = crate::glue::collision_boxes(lv
+            .level, 
                 host,
                 [lo[0], lo[1], lo[2], lo[0] + 1.0, lo[1] + 1.0, lo[2] + 1.0],
             )
@@ -161,8 +160,7 @@ fn soul_fits(lv: &ServerLevel<'_>, at: [i32; 3]) -> bool {
         f64::from(at[1]),
         f64::from(at[2]) + 0.5,
     );
-    lv.level
-        .collision_boxes(host, [x - 0.1, y, z - 0.1, x + 0.1, y + 0.75, z + 0.1])
+    crate::glue::collision_boxes(lv.level, host, [x - 0.1, y, z - 0.1, x + 0.1, y + 0.75, z + 0.1])
         .is_some_and(|b| b.is_empty())
 }
 

@@ -1176,7 +1176,7 @@ fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipH
     let replaceable = is_air(host, place)
         || level
             .block(host, place)
-            .is_some_and(|b| host.block_in_tag(b, "minecraft:replaceable") == Some(true));
+            .is_some_and(|b| crate::glue::block_in_tag(host.tags(), b, "minecraft:replaceable") == Some(true));
     match kind {
         // `PlantCrop`: on top of farmland.
         "plant_crop" => {
@@ -1216,9 +1216,7 @@ fn block_hit(host: &mut dyn ServerHost, level: LevelRef, ammo: &Ammo, hit: ClipH
                     ("Time".into(), Tag::Int(1)),
                 ]);
                 let at = [f64::from(place[0]) + 0.5, y, f64::from(place[2]) + 0.5];
-                if let Some(dimension) = level.dimension().id(host).map(str::to_owned) {
-                    host.summon(&dimension, "minecraft:falling_block", at, nbt);
-                }
+                let _ = level.summon(host, "minecraft:falling_block", at, nbt);
             }
             true
         }

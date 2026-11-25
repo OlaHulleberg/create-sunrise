@@ -368,7 +368,7 @@ impl ws::FlattenWorld for Flattening<'_, '_> {
     /// waterlogged block gives a source, anything dry air.
     fn fluid_block(&mut self, state: &BlockState) -> BlockState {
         let host = &*self.lv.host;
-        let Some(f) = host.state_fluid_state(*state).filter(|f| !f.is_empty()) else {
+        let Some(f) = state.fluid_state(&host.block_states()).filter(|f| !f.is_empty()) else {
             return self.air;
         };
         let id = f.fluid.name(host);

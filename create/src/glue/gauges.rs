@@ -19,7 +19,7 @@ use create_engine::client::{Draw, Model, WheelSpin};
 use create_engine::gauge::{Needle, Shown, dial_faces, dial_pose};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityDataView, BlockEntityPart, BlockPart, ClientHost,
+    BlockEntityClientTickEvent, BlockEntityPart, BlockPart, ClientHost,
     Compound, ParticleOptions, Registrar, RegistrationContext, Tag,
 };
 use std::cell::RefCell;
@@ -51,7 +51,7 @@ impl Subsystem for Gauges {
         draws_itself(block, part)
     }
 
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &BlockEntityDataView<'_>) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         animated(block, pos, entity)
     }
 
@@ -188,7 +188,7 @@ pub fn draws_itself(block: Block, d: &Draw) -> bool {
 
 /// Whether the block entity of `block` at `pos` is animated this frame, so its drawing is not
 /// kept: a moving needle, wheel, valve pointer or hose.
-pub fn animated(block: Block, pos: [i32; 3], entity: &BlockEntityDataView<'_>) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         // A needle still moving, or one whose target the server just changed (its client tick
         // sets it off after this drawing, which must not be kept).
@@ -383,7 +383,7 @@ fn draw_dials_at(
         draw.push();
         draw.translate(pose.offset);
         draw.rotate_about(axis_vector(pose.axis), pose.angle, [0.5; 3]);
-        draw.block(dial, &[("facing", kinetics::dir_name(face))]);
+        crate::glue::states::draw_block(&mut *draw, dial, &[("facing", kinetics::dir_name(face))]);
         draw.pop();
     }
 }
@@ -417,13 +417,13 @@ fn draw_wheel(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: 
     if w.moving {
         draw.push();
         draw.rotate_about(v, w.angle as f32, [0.5; 3]);
-        draw.block(states::key(Block::Flywheel), &own);
+        crate::glue::states::draw_block(&mut *draw, states::key(Block::Flywheel), &own);
         draw.pop();
     } else {
         let rate = w.spin.visual * 0.3;
         let phase = (w.angle - now * f64::from(rate)).rem_euclid(360.0) as f32;
         draw.spin(v, [0.5; 3], rate, phase);
-        draw.block(states::key(Block::Flywheel), &own);
+        crate::glue::states::draw_block(&mut *draw, states::key(Block::Flywheel), &own);
         draw.still();
         draw.keep();
     }

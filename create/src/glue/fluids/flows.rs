@@ -186,9 +186,9 @@ pub(super) fn client_tick(host: &dyn ClientHost) {
 }
 
 /// Whether a pipe's flows move this frame: one growing or yet to start or go.
-pub(super) fn animated(entity: &ModBlockEntity) -> bool {
+pub(super) fn animated(entity: crate::glue::EntityData<'_>) -> bool {
     let now = CLIENT_NOW.get() as f64;
-    shown(&entity.nbt).iter().any(|s| {
+    shown(&entity.nbt()).iter().any(|s| {
         let grown = s.from + 1.0 / f64::from(s.speed);
         now <= grown + 1.0 || s.to.is_some()
     })
@@ -198,7 +198,7 @@ pub(super) fn animated(entity: &ModBlockEntity) -> bool {
 /// comes in by to the middle, or from the middle out, as far as it got (`renderFluidStream`, 3/16
 /// of a block from the pipe's middle). Two whole halves along the axis are drawn as one.
 pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
-    let flows = shown(&event.entity.nbt);
+    let flows = shown(&event.entity.nbt());
     if flows.is_empty() {
         return;
     }

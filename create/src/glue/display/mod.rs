@@ -105,7 +105,7 @@ impl Subsystem for Display {
     /// it flashes (`bulb`), and nixie tubes as Create's renderer does: one on a train signal shows
     /// its lights (and an invalid one's blink) as the signal changes (`NixieTubeBlockEntity.tick`
     /// looks at it each tick).
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         display::is_nixie(block)
             || (block == Block::DisplayBoard && client::animated(pos, entity))
             || (block == Block::DisplayLink && bulb::animated(pos, entity))
@@ -796,7 +796,7 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
             }
             let tagged = |p: [i32; 3], tag: &str| {
                 lv.block_state(p)
-                    .is_some_and(|s| lv.host.block_in_tag(s.block(), tag) == Some(true))
+                    .is_some_and(|s| crate::glue::block_in_tag(lv.host.tags(), s.block(), tag) == Some(true))
             };
             let power = display::bookshelf_offsets()
                 .into_iter()

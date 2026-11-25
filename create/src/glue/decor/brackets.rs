@@ -212,7 +212,7 @@ impl BlockEntityPart for BracketEntity {
 
 impl BracketEntity {
     fn submit(&self, _host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
-        let Some(Tag::String(text)) = event.entity.nbt.get(&BRACKET.into()) else {
+        let Some(Tag::String(text)) = event.entity.nbt().get(&BRACKET.into()) else {
             return;
         };
         let text = text.to_string_lossy();
@@ -222,7 +222,7 @@ impl BracketEntity {
             "create:wooden_bracket" => Block::WoodenBracket,
             _ => return,
         };
-        event.draw.block(states::key(block), &props);
+        crate::glue::states::draw_block(&mut *event.draw, states::key(block), &props);
         event.draw.keep();
     }
 }

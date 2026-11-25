@@ -66,9 +66,9 @@ impl Subsystem for Drawing {
         matches!(part.model, Model::BearingTop(_) | Model::BearingTopMetal(_))
     }
 
-    fn animated(&self, block: Block, _pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-        redraws_each_frame(&entity.nbt)
-            || (holds_structure(&entity.nbt) && actor_draw::view(&entity.nbt).is_some())
+    fn animated(&self, block: Block, _pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
+        redraws_each_frame(&entity.nbt())
+            || (holds_structure(&entity.nbt()) && actor_draw::view(&entity.nbt()).is_some())
             || actor_draw::animated(block, entity)
     }
 
@@ -931,7 +931,7 @@ fn draw_carried(
     anchor: [i32; 3],
     b: &Drawn,
     block: create_engine::Block,
-    entity: &mod_api::ModBlockEntity,
+    entity: crate::glue::EntityData<'_>,
 ) {
     if drawn_by_movement(block) {
         return;
@@ -1183,7 +1183,7 @@ fn submit(
     top: Option<(Block, Model)>,
 ) {
     let pos = event.pos;
-    let data = &event.entity.nbt;
+    let data = &event.entity.nbt();
     let draw = &mut *event.draw;
     let rev = int(c, "Rev").unwrap_or(0);
     let fresh = SHOWN.with_borrow(|s| s.get(&pos).is_none_or(|x| x.rev != rev));
@@ -1746,7 +1746,7 @@ fn draw_resting(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
         "create:elevator_pulley" => true,
         _ => return,
     };
-    let offset = match super::super::kinetics::synced(&event.entity.nbt, PULLEY_REST) {
+    let offset = match super::super::kinetics::synced(&event.entity.nbt(), PULLEY_REST) {
         Some(Tag::Int(v)) => *v as f32,
         _ => 0.0,
     };
@@ -1830,7 +1830,7 @@ impl BlockEntityPart for StructurePart {
             }),
             _ => None,
         };
-        let Some(Tag::Compound(structure)) = super::super::kinetics::synced(&event.entity.nbt, KEY)
+        let Some(Tag::Compound(structure)) = super::super::kinetics::synced(&event.entity.nbt(), KEY)
         else {
             draw_bearing_top(host, event.draw, top);
             if SHOWN.with_borrow_mut(|s| s.remove(&event.pos).is_some()) {

@@ -189,7 +189,7 @@ pub trait Subsystem: Sync {
         &self,
         _block: create_engine::Block,
         _pos: [i32; 3],
-        _entity: &mod_api::BlockEntityDataView<'_>,
+        _entity: crate::glue::EntityData<'_>,
     ) -> bool {
         false
     }

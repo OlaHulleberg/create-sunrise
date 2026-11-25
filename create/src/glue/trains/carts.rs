@@ -700,8 +700,7 @@ fn wrench_controller_rail(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let solid = |p: [i32; 3]| {
         let cell = [0, 1, 2, 3, 4, 5].map(|k| f64::from(p[k % 3] + i32::from(k >= 3)));
-        lv.level
-            .collision_boxes(host, cell)
+        crate::glue::collision_boxes(lv.level, host, cell)
             .is_some_and(|b| !b.is_empty())
     };
     let stable = |s: Shape| {
@@ -2095,8 +2094,7 @@ impl ItemPart for ContraptionItem {
                 Tag::Float(0f32.to_bits()),
             ]),
         );
-        let id = lv.host.summon(&dimension, kind, at, nbt)?;
-        let entity = lv.host.entity(id)?;
+        let entity = lv.level.summon(&mut *lv.host, kind, at, nbt).ok()??;
         let nc = Cart::read(lv.host, entity)?;
         let dim = lv.dim;
         let on = item_contraption(event.stack).and_then(|c| {

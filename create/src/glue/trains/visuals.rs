@@ -627,11 +627,11 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
         };
         let nbt = display_nbt(&name, &props, part.translation, part.left, n.yaw, n.pitch);
         let pos = place(n, part);
-        if let Some(id) = lv
-            .host
-            .summon(lv.dimension, "minecraft:block_display", pos, nbt)
+        if let Ok(Some(entity)) =
+            lv.level
+                .summon(&mut *lv.host, "minecraft:block_display", pos, nbt)
         {
-            displays.push((id, part));
+            displays.push((entity.id(), part));
         }
     }
     for (centre, e) in extras {
@@ -662,8 +662,11 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
             let floats = Tag::List(scale.iter().map(|f| Tag::Float(f.to_bits())).collect());
             tr.insert("scale".into(), floats);
         }
-        if let Some(id) = lv.host.summon(lv.dimension, e.kind, place(n, part), nbt) {
-            displays.push((id, part));
+        if let Ok(Some(entity)) = lv
+            .level
+            .summon(&mut *lv.host, e.kind, place(n, part), nbt)
+        {
+            displays.push((entity.id(), part));
         }
     }
     for (block, info, centre, i) in actors {
@@ -686,11 +689,13 @@ fn spawn(lv: &mut ServerLevel<'_>, n: &Now) -> Shown {
         let props = vec![("facing".to_owned(), facing.to_owned())];
         let name = format!("create:{name}");
         let nbt = display_nbt(&name, &props, part.translation, part.left, n.yaw, n.pitch);
-        if let Some(id) =
-            lv.host
-                .summon(lv.dimension, "minecraft:block_display", place(n, part), nbt)
-        {
-            displays.push((id, part));
+        if let Ok(Some(entity)) = lv.level.summon(
+            &mut *lv.host,
+            "minecraft:block_display",
+            place(n, part),
+            nbt,
+        ) {
+            displays.push((entity.id(), part));
         }
     }
     Shown {

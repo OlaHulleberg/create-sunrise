@@ -407,9 +407,8 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     {
         return None;
     }
-    let collides = lv
-        .level
-        .block_shape(host, state, at, mod_api::BlockShapeKind::Collision)
+    let collides = crate::glue::block_shape(lv
+        .level, host, state, at, mod_api::BlockShapeKind::Collision)
         .is_some_and(|s| !s.is_empty());
     if !collides {
         return None;
@@ -422,7 +421,7 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     Some(Paver {
         state,
         slab: slab.is_some(),
-        wall: girder || host.block_in_tag(block, "minecraft:walls") == Some(true),
+        wall: girder || crate::glue::block_in_tag(host.tags(), block, "minecraft:walls") == Some(true),
         girder,
     })
 }
@@ -437,9 +436,8 @@ fn free_for(lv: &ServerLevel<'_>, p: [i32; 3], state: BlockState) -> Option<Bloc
     }
     let water = host
         .block_state_id("minecraft:water")
-        .and_then(|w| host.state_fluid_state(w));
-    let source = host
-        .state_fluid_state(at)
+        .and_then(|w| w.fluid_state(&host.block_states()));
+    let source = at.fluid_state(&host.block_states())
         .is_some_and(|f| f.source && water.is_some_and(|w| w.fluid == f.fluid));
     let has = state
         .property(&host.block_states(), "waterlogged")
@@ -1110,7 +1108,7 @@ fn lay_fake_track(lv: &mut ServerLevel<'_>) {
         if present {
             continue;
         }
-        let fluid = lv.host.state_fluid_state(here);
+        let fluid = here.fluid_state(&lv.host.block_states());
         let water = lv
             .host
             .block_state_string(here)

@@ -72,8 +72,8 @@ pub(super) fn send(lv: &mut ServerLevel<'_>) {
 }
 
 /// The stack a drain's data shows: item, count, position, previous position, way.
-fn shown(entity: &ModBlockEntity) -> Option<(String, u32, f32, f32, Dir)> {
-    let Some(Tag::List(l)) = entity.nbt.get(&DRAIN_ITEM.into()) else {
+fn shown(entity: crate::glue::EntityData<'_>) -> Option<(String, u32, f32, f32, Dir)> {
+    let Some(Tag::List(l)) = entity.nbt().get(&DRAIN_ITEM.into()) else {
         return None;
     };
     let [
@@ -96,15 +96,15 @@ fn shown(entity: &ModBlockEntity) -> Option<(String, u32, f32, f32, Dir)> {
 }
 
 /// Whether a drain's stack moves this frame.
-pub(super) fn animated(entity: &ModBlockEntity) -> bool {
+pub(super) fn animated(entity: crate::glue::EntityData<'_>) -> bool {
     shown(entity).is_some_and(|(_, _, p, q, _)| p != q)
 }
 
 /// `ItemDrainRenderer.renderFluid` (the basin's fluid) and `renderItem`.
 pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
-    if let Some(Tag::IntArray(v)) = event.entity.nbt.get(&TANK.into()).cloned()
+    if let Some(Tag::IntArray(v)) = event.entity.nbt().get(&TANK.into()).cloned()
         && let &[fluid, amount, capacity] = v.as_slice()
-        && let Some(fluid) = Codes::fluid(&super::fluid_keys(&event.entity.nbt, TANK), fluid)
+        && let Some(fluid) = Codes::fluid(&super::fluid_keys(&event.entity.nbt(), TANK), fluid)
         && amount > 0
         && capacity > 0
     {

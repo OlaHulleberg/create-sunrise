@@ -1540,7 +1540,7 @@ struct Reader<'a, 'b> {
 impl ServerLevel<'_> {
     fn in_tag(&self, pos: [i32; 3], tag: &str) -> bool {
         self.block_state(pos)
-            .and_then(|s| self.host.block_in_tag(s.block(), tag))
+            .and_then(|s| crate::glue::block_in_tag(self.host.tags(), s.block(), tag))
             .unwrap_or(false)
     }
 
@@ -1548,8 +1548,7 @@ impl ServerLevel<'_> {
     fn collision(&self, pos: [i32; 3]) -> Vec<[f64; 6]> {
         self.block_state(pos)
             .and_then(|s| {
-                self.level
-                    .block_shape(&*self.host, s, pos, BlockShapeKind::Collision)
+                crate::glue::block_shape(self.level, &*self.host, s, pos, BlockShapeKind::Collision)
             })
             .unwrap_or_default()
     }
@@ -1623,9 +1622,8 @@ fn valid_pave_material(lv: &ServerLevel<'_>, item: &str) -> bool {
         .block_states()
         .has_block_entity(state)
         .unwrap_or(true);
-    let shape = lv
-        .level
-        .block_shape(&*lv.host, state, [0, 0, 0], BlockShapeKind::Collision)
+    let shape = crate::glue::block_shape(lv
+        .level, &*lv.host, state, [0, 0, 0], BlockShapeKind::Collision)
         .unwrap_or_default();
     let full = shape == [[0.0, 0.0, 0.0, 1.0, 1.0, 1.0]];
     !block_entity && full && !name.ends_with("_stairs")
@@ -1721,9 +1719,8 @@ impl actors::Probe for Reader<'_, '_> {
         let name = lv.block_name(pos).unwrap_or_default();
         let air = AIRS.contains(&name.as_str());
         let replaceable = lv.host.block_states().replaceable(state).unwrap_or(false);
-        let liquid = lv
-            .host
-            .state_fluid_state(state)
+        let liquid = state
+            .fluid_state(&lv.host.block_states())
             .is_some_and(|f| f.amount > 0)
             && replaceable;
         let no_collision = lv.collision(pos).is_empty();
@@ -1854,7 +1851,7 @@ fn break_block(lv: &mut ServerLevel<'_>, at: [i32; 3], tool: Option<&ItemStack>)
         let under = [at[0], at[1] - 1, at[2]];
         let liquid = lv
             .block_state(under)
-            .and_then(|s| lv.host.state_fluid_state(s))
+            .and_then(|s| s.fluid_state(&lv.host.block_states()))
             .is_some_and(|f| f.amount > 0);
         if (!lv.collision(under).is_empty() || liquid)
             && let Some(water) = lv.host.block_state_id("minecraft:water")
@@ -2530,8 +2527,8 @@ fn placed_track(lv: &ServerLevel<'_>, item: &str) -> bool {
     let Some(block) = item_key_of(lv, item).and_then(|k| lv.host.item_block(k)) else {
         return false;
     };
-    lv.host.block_in_tag(block, "minecraft:rails") == Some(true)
-        || lv.host.block_in_tag(block, "create:tracks") == Some(true)
+    crate::glue::block_in_tag(lv.host.tags(), block, "minecraft:rails") == Some(true)
+        || crate::glue::block_in_tag(lv.host.tags(), block, "create:tracks") == Some(true)
 }
 
 /// The plough's hoe on the block a ray down from the block's centre hits (it, if it has a
@@ -2542,8 +2539,7 @@ fn till(lv: &mut ServerLevel<'_>, p: [i32; 3]) {
     let outline = lv
         .block_state(above)
         .and_then(|s| {
-            lv.level
-                .block_shape(&*lv.host, s, above, BlockShapeKind::Outline)
+            crate::glue::block_shape(lv.level, &*lv.host, s, above, BlockShapeKind::Outline)
         })
         .unwrap_or_default();
     let target = if outline.is_empty() { p } else { above };

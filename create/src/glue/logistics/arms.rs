@@ -1416,8 +1416,7 @@ impl ejector::World for EjectorWorld<'_, '_> {
         let lv = &*self.lv;
         ejector::clip(from, to, |p| {
             let [x, y, z] = p.map(f64::from);
-            lv.level
-                .collision_boxes(&*lv.host, [x, y, z, x + 1.0, y + 1.0, z + 1.0])
+            crate::glue::collision_boxes(lv.level, &*lv.host, [x, y, z, x + 1.0, y + 1.0, z + 1.0])
                 .unwrap_or_default()
         })
     }

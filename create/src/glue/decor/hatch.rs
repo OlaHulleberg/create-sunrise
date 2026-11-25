@@ -37,7 +37,7 @@ impl BlockEntityPart for HatchEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let item = event.entity.nbt.get(&FILTER.into())?.clone();
+        let item = event.entity.nbt().get(&FILTER.into())?.clone();
         Some(Compound::from([(FILTER.into(), item)]))
     }
 
@@ -51,7 +51,7 @@ impl BlockEntityPart for HatchEntity {
         event: &mut mod_api::BlockEntitySubmitEvent<'_>,
     ) {
         let event = &mut crate::glue::Submit::of(event);
-        let Some(Tag::Compound(item)) = event.entity.nbt.get(&FILTER.into()) else {
+        let Some(Tag::Compound(item)) = event.entity.nbt().get(&FILTER.into()) else {
             return;
         };
         if item.is_empty() {

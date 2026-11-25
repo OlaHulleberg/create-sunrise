@@ -318,7 +318,7 @@ impl Subsystem for Decor {
         &[BRACKET, bell::DING, bells::RINGING]
     }
 
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         (block == Block::DeskBell && bell::animated(pos, entity))
             || (bells::is_bell(block) && bells::animated(pos, entity))
     }

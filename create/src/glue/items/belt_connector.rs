@@ -171,8 +171,7 @@ pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32;
     };
     // `getFluidState().getType() == Fluids.WATER`: a water source.
     let water = |lv: &ServerLevel<'_>, s: BlockState| {
-        lv.host
-            .state_fluid_state(s)
+        s.fluid_state(&lv.host.block_states())
             .is_some_and(|f| f.is_source() && f.fluid.name(&*lv.host) == "minecraft:water")
     };
     let mut failed = false;

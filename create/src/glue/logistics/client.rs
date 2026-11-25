@@ -274,7 +274,7 @@ fn draw_ejector_target(host: &dyn ClientHost, lines: &mut Vec<mod_api::WorldLine
     let boxes = host
         .level(host.dimension())
         .and_then(|l| l.block_state(host, sel))
-        .and_then(|s| host.state_outline(s))
+        .and_then(|s| s.outline(&host.block_states()).map(<[_]>::to_vec))
         .unwrap_or_default();
     let (mut lo, mut hi) = ([1.0f64; 3], [0.0f64; 3]);
     for b in &boxes {
@@ -337,7 +337,7 @@ pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::RenderLevelSt
     for (p, input) in points {
         let boxes = level
             .and_then(|l| l.block_state(host, p))
-            .and_then(|s| host.state_outline(s))
+            .and_then(|s| s.outline(&host.block_states()).map(<[_]>::to_vec))
             .unwrap_or_default();
         let (mut lo, mut hi) = ([1.0f64; 3], [0.0f64; 3]);
         for b in &boxes {
@@ -435,7 +435,7 @@ fn table_info(
 /// ejector or arm (they move their own parts), a depot whose held stack slides, a belt's
 /// controller carrying items. The server touches the block entity (`SHOWN`) when what a kept
 /// drawing shows changes, so it is drawn once more from the contents it sent first.
-pub fn animated(block: Block, pos: [i32; 3], entity: &mod_api::BlockEntityDataView<'_>) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         Block::MechanicalArm | Block::WeightedEjector => true,
         // A windowed chute's stack moves (`chute::CHUTE_MOTION`).
@@ -1119,7 +1119,7 @@ fn axis_vector(axis: Axis) -> [f32; 3] {
 /// A partial model's block (`create:part_*`), at its `up` state.
 fn partial(draw: &mut dyn BlockEntityDrawContext, name: &str) {
     if let Some(b) = states::partial(name) {
-        draw.block(b, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, b, &[("facing", "up")]);
     }
 }
 

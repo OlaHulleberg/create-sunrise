@@ -282,9 +282,8 @@ pub(super) fn placed(host: &mut dyn ServerHost, event: &Placed) -> Option<()> {
 /// collision shape `state` would have at `pos`.
 pub(crate) fn obstructed(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
     let host = &*lv.host;
-    let Some(shape) = lv
-        .level
-        .block_shape(host, state, pos, mod_api::BlockShapeKind::Collision)
+    let Some(shape) = crate::glue::block_shape(lv
+        .level, host, state, pos, mod_api::BlockShapeKind::Collision)
     else {
         return false;
     };

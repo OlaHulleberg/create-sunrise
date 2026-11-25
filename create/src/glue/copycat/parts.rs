@@ -464,7 +464,7 @@ impl BlockEntityPart for CopycatEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let nbt = &event.entity.nbt;
+        let nbt = &event.entity.nbt();
         let material = nbt.get(&MATERIAL.into())?.clone();
         let special = nbt.get(&SPECIAL.into()).cloned().unwrap_or(Tag::Byte(0));
         Some(Compound::from([
@@ -489,7 +489,7 @@ impl CopycatEntity {
         let Some(shape) = shape_of(host, event.state) else {
             return;
         };
-        let nbt = &event.entity.nbt;
+        let nbt = &event.entity.nbt();
         let text = match nbt.get(&MATERIAL.into()) {
             Some(Tag::String(s)) => s.to_string_lossy(),
             _ => String::new(),
@@ -517,10 +517,10 @@ impl CopycatEntity {
             Drawn::Whole => {
                 let full = host.block_state_string(material).unwrap_or_default();
                 let (_, props) = states::split(&full);
-                draw.block(material.block(), &props);
+                crate::glue::states::draw_block(&mut *draw, material.block(), &props);
             }
             Drawn::Bars(f) => {
-                draw.block(
+                crate::glue::states::draw_block(&mut *draw, 
                     states::key(Block::CopycatBars),
                     &[("facing", cc::dir_name(f))],
                 );

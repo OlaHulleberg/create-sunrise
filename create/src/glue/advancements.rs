@@ -191,7 +191,7 @@ pub(crate) fn pressed(lv: &mut ServerLevel<'_>, pos: [i32; 3], result: Option<(&
         .ok()
         .and_then(|id| host.item_key(&id))
         .and_then(|k| host.item_block(k))
-        .and_then(|b| host.block_in_tag(b, "create:tracks"))
+        .and_then(|b| crate::glue::block_in_tag(host.tags(), b, "create:tracks"))
         .unwrap_or(false);
     if !track {
         return;

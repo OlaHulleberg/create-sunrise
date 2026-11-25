@@ -117,7 +117,7 @@ impl Subsystem for Interaction {
         &self,
         _block: create_engine::Block,
         pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        _entity: crate::glue::EntityData<'_>,
     ) -> bool {
         value_text::animated(pos)
     }

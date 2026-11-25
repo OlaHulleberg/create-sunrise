@@ -153,9 +153,16 @@ fn diving_boots(host: &mut dyn mod_api::ClientHost, player: PlayerRef) {
         return;
     }
     let e = player.entity();
-    let in_water = e
-        .fluid_heights(h)
-        .is_some_and(|f| f.iter().any(|(id, _)| id == "minecraft:water"));
+    let mut in_water = false;
+    let read = e.visit_fluid_heights(h, &mut |id, _| {
+        in_water = id == "minecraft:water";
+        if in_water {
+            std::ops::ControlFlow::Break(())
+        } else {
+            std::ops::ControlFlow::Continue(())
+        }
+    });
+    let in_water = read.is_ok() && in_water;
     if !in_water || e.pose(h) == Some("swimming") || player.abilities(h).is_some_and(|a| a.flying) {
         return;
     }
@@ -1086,7 +1093,7 @@ pub(crate) fn grip_pick(host: &dyn mod_api::ClientHost, event: &mut mod_api::Cli
     }
     let (Some(base), Some(modifiers)) = (
         living.attribute_base(host, ENTITY_RANGE),
-        living.attribute_modifiers(host, ENTITY_RANGE),
+        crate::glue::attribute_modifiers(living, host, ENTITY_RANGE),
     ) else {
         return;
     };
@@ -1140,8 +1147,7 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
         let Ok(id) = Identifier::parse(modifier.0) else {
             continue;
         };
-        let has = living
-            .attribute_modifiers(&*host, BLOCK_RANGE)
+        let has = crate::glue::attribute_modifiers(living, &*host, BLOCK_RANGE)
             .is_some_and(|m| m.iter().any(|m| m.id == id));
         if has == on {
             continue;
@@ -1176,8 +1182,7 @@ fn extendo_reach(host: &mut dyn ServerHost, player: PlayerRef) {
         entity
     };
     let id = &*ENTITY_REACH;
-    let now = living
-        .attribute_modifiers(&*host, ENTITY_RANGE)
+    let now = crate::glue::attribute_modifiers(living, &*host, ENTITY_RANGE)
         .and_then(|m| m.iter().find(|m| &m.id == id).map(|m| m.amount));
     if entity == 0.0 && now.is_some() {
         living.remove_attribute_modifier(host, ENTITY_RANGE, id);
@@ -1277,7 +1282,7 @@ impl mod_api::BlockEntityPart for BacktankCogs {
             speed / 4.0,
             0.0,
         );
-        draw.block(part, &[("facing", super::kinetics::dir_name(facing))]);
+        crate::glue::states::draw_block(&mut *draw, part, &[("facing", super::kinetics::dir_name(facing))]);
         draw.still();
     }
 }

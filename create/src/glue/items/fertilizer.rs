@@ -30,7 +30,7 @@ impl ItemPart for Fertilizer {
 fn sapling(host: &dyn Host, level: LevelRef, pos: [i32; 3]) -> Option<BlockState> {
     let state = level.block_state(host, pos)?;
     let hanging = level.block_property(host, pos, "hanging").as_deref() == Some("true");
-    (host.block_in_tag(state.block(), "minecraft:saplings") == Some(true) && !hanging)
+    (crate::glue::block_in_tag(host.tags(), state.block(), "minecraft:saplings") == Some(true) && !hanging)
         .then_some(state)
 }
 

@@ -26,10 +26,10 @@ pub(super) fn candidate(
     let host = &*lv.host;
     let block = state.block();
     let id = block.name(host);
-    let tagged = |t: &str| host.block_in_tag(block, t) == Some(true);
+    let tagged = |t: &str| crate::glue::block_in_tag(host.tags(), block, t) == Some(true);
     let create = id.strip_prefix("create:").and_then(Block::from_name);
     // `getShape(level, pos).bounds()` is the whole block.
-    let outline = host.state_outline(state).unwrap_or_default();
+    let outline = state.outline(&host.block_states()).map(<[_]>::to_vec).unwrap_or_default();
     let mut lo = [f64::MAX; 3];
     let mut hi = [f64::MIN; 3];
     for o in &outline {
@@ -39,9 +39,8 @@ pub(super) fn candidate(
         }
     }
     let full = !outline.is_empty() && lo == [0.0; 3] && hi == [1.0; 3];
-    let collides = lv
-        .level
-        .block_shape(host, state, pos, BlockShapeKind::Collision)
+    let collides = crate::glue::block_shape(lv
+        .level, host, state, pos, BlockShapeKind::Collision)
         .is_some_and(|s| !s.is_empty());
     let facts = host.block_states();
     let has = |k: &str| state.property(&facts, k).ok().flatten().is_some();

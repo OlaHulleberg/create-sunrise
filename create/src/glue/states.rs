@@ -348,6 +348,9 @@ pub struct States {
     base: SlotMap<(u32, u32)>,
     /// The API state of each id, `FIRST..`.
     by_id: Vec<BlockState>,
+    /// Each block's and partial's states with their properties, for the draws that name a state
+    /// by its properties.
+    variants: SlotMap<Vec<(BlockState, Vec<(String, String)>)>>,
 }
 
 static STATES: RwLock<Option<States>> = RwLock::new(None);
@@ -358,6 +361,20 @@ impl States {
     fn read(host: &dyn Host) -> Option<(States, StateTable)> {
         let keys = KEYS.get()?;
         let facts = host.block_states();
+        let mut variants = SlotMap::default();
+        for &key in PARTIAL_KEYS.get().into_iter().flatten() {
+            let Some(range) = facts.states_of(key) else {
+                continue;
+            };
+            let states = range
+                .iter()
+                .map(|state| {
+                    let text = host.block_state_string(state).unwrap_or_default();
+                    (state, owned_props(&text))
+                })
+                .collect();
+            variants.insert(key, states);
+        }
         let mut base = SlotMap::default();
         let mut by_id = Vec::new();
         let mut names = Vec::new();
@@ -367,13 +384,16 @@ impl States {
             };
             let first = FIRST + by_id.len() as u32;
             base.insert(key, (first, range.len()));
+            let mut states = Vec::new();
             for state in range.iter() {
                 by_id.push(state);
                 let text = host
                     .block_state_string(state)
                     .unwrap_or_else(|| format!("create:{}", Block::NAMES[i]));
+                states.push((state, owned_props(&text)));
                 names.push(text);
             }
+            variants.insert(key, states);
         }
         if by_id.is_empty() {
             return None;
@@ -385,7 +405,14 @@ impl States {
                 .iter()
                 .map(|(name, props)| (*name, props.iter().copied())),
         );
-        Some((States { base, by_id }, table))
+        Some((
+            States {
+                base,
+                by_id,
+                variants,
+            },
+            table,
+        ))
     }
 
     fn id(&self, state: BlockState) -> Option<u32> {
@@ -393,6 +420,14 @@ impl States {
         let ordinal = u32::from(state.ordinal());
         (ordinal < len).then_some(first + ordinal)
     }
+}
+
+fn owned_props(text: &str) -> Vec<(String, String)> {
+    split(text)
+        .1
+        .into_iter()
+        .map(|(k, v)| (k.to_owned(), v.to_owned()))
+        .collect()
 }
 
 /// `create:shaft[axis=y,waterlogged=false]` as its name and properties.
@@ -445,6 +480,33 @@ pub fn open(host: &dyn Host) -> Option<StateTable> {
     create_engine::states::set_range(FIRST, states.by_id.len() as u32);
     *STATES.write().unwrap_or_else(|e| e.into_inner()) = Some(states);
     Some(table)
+}
+
+/// The state of one of Create's blocks or partial models whose properties include all of
+/// `props`, from the numbering read at world open; `None` before it or for no such state.
+pub fn resolve(key: BlockKey, props: &[(&str, &str)]) -> Option<BlockState> {
+    let states = STATES.read().ok()?;
+    let variants = states.as_ref()?.variants.get(&key)?;
+    variants
+        .iter()
+        .find(|(_, have)| {
+            props
+                .iter()
+                .all(|(k, v)| have.iter().any(|(hk, hv)| hk == k && hv == v))
+        })
+        .map(|(state, _)| *state)
+}
+
+/// Draws the model of `key` with `props` (`BlockEntityDrawContext::block`), nothing when it
+/// names no state of Create's.
+pub fn draw_block(
+    draw: &mut dyn mod_api::BlockEntityDrawContext,
+    key: BlockKey,
+    props: &[(&str, &str)],
+) {
+    if let Some(state) = resolve(key, props) {
+        draw.block(state);
+    }
 }
 
 /// The engine id of `state`, or `None` for a block that is not Create's. Hot: one map lookup.

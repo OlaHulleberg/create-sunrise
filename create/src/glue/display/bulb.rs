@@ -99,8 +99,8 @@ fn pulse_of(nbt: &Compound) -> Option<i64> {
 }
 
 /// Whether the link at `pos` still flashes.
-pub(super) fn animated(pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-    pulse_of(&entity.nbt).is_some_and(|t| DONE.with_borrow(|d| d.get(&pos) != Some(&t)))
+pub(super) fn animated(pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
+    pulse_of(&entity.nbt()).is_some_and(|t| DONE.with_borrow(|d| d.get(&pos) != Some(&t)))
 }
 
 pub(super) struct BulbDraw;
@@ -119,7 +119,7 @@ impl BlockEntityPart for BulbDraw {
         if event.state.block() != states::key(Block::DisplayLink) {
             return;
         }
-        let Some(t0) = pulse_of(&event.entity.nbt) else {
+        let Some(t0) = pulse_of(&event.entity.nbt()) else {
             return;
         };
         let draw = &mut *event.draw;
@@ -170,7 +170,7 @@ impl BlockEntityPart for BulbDraw {
         GLOWING.with_borrow_mut(|g| g.insert(pos, (t0, pose)));
         let light = draw.light();
         draw.set_light(FULL_BRIGHT);
-        draw.block(tube, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, tube, &[("facing", "up")]);
         draw.set_light(light);
         draw.pop();
     }

@@ -204,8 +204,8 @@ impl BlockPart for BellBlock {
 }
 
 /// Whether the bell at `pos` swings now.
-pub(super) fn animated(pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-    ring_of(&entity.nbt).is_some_and(|(t, _)| DONE.with_borrow(|d| d.get(&pos) != Some(&t)))
+pub(super) fn animated(pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
+    ring_of(&entity.nbt()).is_some_and(|(t, _)| DONE.with_borrow(|d| d.get(&pos) != Some(&t)))
 }
 
 /// `BellRenderer.getSwingAngle`, radians.
@@ -241,7 +241,7 @@ impl BlockEntityPart for BellDraw {
         let draw = &mut *event.draw;
         let pos = event.pos;
         draw.push();
-        if let Some((t, side)) = ring_of(&event.entity.nbt) {
+        if let Some((t, side)) = ring_of(&event.entity.nbt()) {
             let ticks = (draw.game_time() - t) as f32 + draw.partial();
             if ticks >= 0.0 && ticks < RING_DURATION as f32 {
                 // `rotateCentered(angle, ringDirection.getCounterClockWise())`.
@@ -258,7 +258,7 @@ impl BlockEntityPart for BellDraw {
             y += 90.0;
         }
         draw.rotate_about([0.0, 1.0, 0.0], y, [0.5; 3]);
-        draw.block(part, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
         draw.pop();
     }
 }

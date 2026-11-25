@@ -95,7 +95,7 @@ impl BlockEntityPart for ClothDraw {
         let Some(part) = states::partial(&format!("part_table_cloth_{kind}")) else {
             return;
         };
-        let mask = match event.entity.nbt.get(&CULL.into()) {
+        let mask = match event.entity.nbt().get(&CULL.into()) {
             Some(Tag::Byte(b)) => *b,
             _ => 0,
         };
@@ -103,7 +103,7 @@ impl BlockEntityPart for ClothDraw {
         for (i, (_, facing)) in SIDES.iter().enumerate() {
             // The side's own face and the next one clockwise (`getClockWise`).
             if !culled(i) && !culled(i + 1) {
-                event.draw.block(part, &[("facing", facing)]);
+                crate::glue::states::draw_block(&mut *event.draw, part, &[("facing", facing)]);
             }
         }
         event.draw.keep();

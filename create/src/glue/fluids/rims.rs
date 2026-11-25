@@ -112,7 +112,7 @@ pub(super) fn tick(lv: &mut ServerLevel<'_>) {
 /// Draws the pieces a pipe's block entity data shows (`PipeAttachmentModel.addQuads`), kept
 /// with the rest of the block entity's drawing as the kinetic renderer decides.
 pub(super) fn draw(event: &mut crate::glue::Submit<'_>) {
-    let Some(Tag::IntArray(v)) = event.entity.nbt.get(&RIMS.into()) else {
+    let Some(Tag::IntArray(v)) = event.entity.nbt().get(&RIMS.into()) else {
         return;
     };
     let v = v.clone();
@@ -139,13 +139,13 @@ pub(super) fn draw(event: &mut crate::glue::Submit<'_>) {
                 RimPiece::Drain => "drain",
             };
             if let Some(part) = states::partial(&format!("part_pipe_{kind}_{}", side(d))) {
-                event.draw.block(part, &[("facing", "up")]);
+                crate::glue::states::draw_block(&mut *event.draw, part, &[("facing", "up")]);
             }
         }
     }
     if v[6] != 0
         && let Some(part) = states::partial("part_pipe_casing")
     {
-        event.draw.block(part, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *event.draw, part, &[("facing", "up")]);
     }
 }

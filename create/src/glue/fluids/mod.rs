@@ -755,8 +755,8 @@ fn set_shown_tank(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: Option<&Multi>) {
 }
 
 /// The tank a block entity shows its clients.
-fn shown_tank(entity: &ModBlockEntity) -> Option<Multi> {
-    tank_in(&entity.nbt)
+fn shown_tank(entity: crate::glue::EntityData<'_>) -> Option<Multi> {
+    tank_in(&entity.nbt())
 }
 
 /// The tank block entity data `data` shows.

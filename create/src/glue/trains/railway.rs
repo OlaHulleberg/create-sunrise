@@ -307,7 +307,7 @@ impl Subsystem for Trains {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        entity: &mod_api::BlockEntityDataView<'_>,
+        entity: crate::glue::EntityData<'_>,
     ) -> bool {
         (block == create_engine::Block::TrackStation
             && super::station_draw::animating(pos, entity.nbt()))

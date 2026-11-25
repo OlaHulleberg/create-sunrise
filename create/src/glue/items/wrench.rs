@@ -151,7 +151,7 @@ pub(crate) fn rotate_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 
 /// Whether `state` is in `create:wrench_pickup` (`WrenchItem.canWrenchPickup`).
 fn pickup(host: &dyn mod_api::Host, state: mod_api::BlockState) -> bool {
-    host.block_in_tag(state.block(), "create:wrench_pickup") == Some(true)
+    crate::glue::block_in_tag(host.tags(), state.block(), "create:wrench_pickup") == Some(true)
 }
 
 /// `onSneakWrenched` and `onItemUseOnOther`: `Block.getDrops` with the wrench, back into the

@@ -228,7 +228,7 @@ impl Subsystem for Packages {
         &self,
         block: Block,
         pos: [i32; 3],
-        entity: &mod_api::BlockEntityDataView<'_>,
+        entity: crate::glue::EntityData<'_>,
     ) -> bool {
         if block == Block::PackageFrogport {
             return frog_draw::animated(entity.nbt());
@@ -1287,7 +1287,7 @@ fn update_sign_address(lv: &mut ServerLevel<'_>, dim: usize, pos: [i32; 3]) {
 fn sign_text(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> {
     let host: &dyn mod_api::Host = &*lv.host;
     let state = lv.block_state(pos)?;
-    if host.block_in_tag(state.block(), "minecraft:all_signs") != Some(true) {
+    if crate::glue::block_in_tag(host.tags(), state.block(), "minecraft:all_signs") != Some(true) {
         return None;
     }
     let data = lv.host.block_entity(lv.level, pos)?.data(host)?;

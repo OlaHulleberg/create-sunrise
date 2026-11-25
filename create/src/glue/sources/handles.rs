@@ -141,7 +141,7 @@ pub(super) fn draws_itself(block: Block, part: &Draw) -> bool {
 pub(super) fn animated(
     block: Block,
     pos: [i32; 3],
-    entity: &mod_api::BlockEntityDataView<'_>,
+    entity: crate::glue::EntityData<'_>,
 ) -> bool {
     match block {
         Block::HandCrank => {
@@ -201,8 +201,7 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
         let empty = lv
             .block_state(behind)
             .and_then(|state| {
-                lv.level
-                    .block_shape(&*lv.host, state, behind, mod_api::BlockShapeKind::Collision)
+                crate::glue::block_shape(lv.level, &*lv.host, state, behind, mod_api::BlockShapeKind::Collision)
             })
             .is_some_and(|boxes| boxes.is_empty());
         if empty {
@@ -354,7 +353,7 @@ fn draw_crank(event: &mut crate::glue::Submit<'_>, facing: Dir) {
     draw.rotate_about(axis_vector(facing.axis()), angle, [0.5; 3]);
     // `rotateTo(0, 0, -1 -> facing)`: the model's north (its grip's end) points the crank's
     // way, which is the partial's `facing` variant.
-    draw.block(part, &[("facing", kinetics::dir_name(facing))]);
+    crate::glue::states::draw_block(&mut *draw, part, &[("facing", kinetics::dir_name(facing))]);
     draw.pop();
     if !c.moving && target == 0.0 {
         draw.keep();
@@ -383,12 +382,12 @@ fn draw_valve(
             let angle = valve::drawn_angle(target, ticks, elapsed, back, positive);
             draw.push();
             draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
-            draw.block(model, own);
+            crate::glue::states::draw_block(&mut *draw, model, own);
             draw.pop();
         }
         _ if d.rpm != 0.0 => {
             draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
-            draw.block(model, own);
+            crate::glue::states::draw_block(&mut *draw, model, own);
             draw.still();
             if keep {
                 draw.keep();
@@ -400,7 +399,7 @@ fn draw_valve(
             });
             draw.push();
             draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
-            draw.block(model, own);
+            crate::glue::states::draw_block(&mut *draw, model, own);
             draw.pop();
             if keep {
                 draw.keep();

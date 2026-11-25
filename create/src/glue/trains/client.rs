@@ -117,7 +117,7 @@ pub fn carriage_hit(
     let now = now(host);
     let shape = |s: u32| -> Vec<[f64; 6]> {
         state_of(s)
-            .and_then(|st| host.state_outline(st))
+            .and_then(|st| st.outline(&host.block_states()).map(<[_]>::to_vec))
             .unwrap_or_default()
     };
     TRAINS.with_borrow(|trains| {

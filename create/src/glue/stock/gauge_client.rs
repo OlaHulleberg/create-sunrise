@@ -681,7 +681,7 @@ fn blocked(host: &dyn ClientHost, at: [f64; 3]) -> bool {
         return false;
     };
     let local = [0, 1, 2].map(|i| at[i] - f64::from(b[i]));
-    host.state_outline(state)
+    state.outline(&host.block_states()).map(<[_]>::to_vec)
         .unwrap_or_default()
         .iter()
         .any(|x| (0..3).all(|i| local[i] > x[i] && local[i] < x[i + 3]))

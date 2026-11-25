@@ -171,7 +171,7 @@ impl Subsystem for Processing {
         &self,
         block: create_engine::Block,
         _pos: [i32; 3],
-        entity: &mod_api::ModBlockEntity,
+        entity: crate::glue::EntityData<'_>,
     ) -> bool {
         client::animated(block, entity)
     }
@@ -843,7 +843,7 @@ impl ServerLevel<'_> {
     pub fn block_tagged(&self, p: [i32; 3], tag: &str) -> bool {
         self.level
             .block(&*self.host, p)
-            .and_then(|k| self.host.block_in_tag(k, tag))
+            .and_then(|k| crate::glue::block_in_tag(self.host.tags(), k, tag))
             .unwrap_or(false)
     }
 
@@ -855,7 +855,7 @@ impl ServerLevel<'_> {
     /// The boxes of the block's shape at `p` (`kind`), in blocks from its corner.
     pub fn shape(&self, p: [i32; 3], kind: mod_api::BlockShapeKind) -> Vec<[f64; 6]> {
         self.block_state(p)
-            .and_then(|s| self.level.block_shape(&*self.host, s, p, kind))
+            .and_then(|s| crate::glue::block_shape(self.level, &*self.host, s, p, kind))
             .unwrap_or_default()
     }
 

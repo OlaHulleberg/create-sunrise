@@ -806,14 +806,15 @@ fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
     }
     // `EntityType.SKELETON_HORSE.create`, then `deserializeNBT` of the horse's data.
     let spawned = lv
-        .host
+        .level
         .summon(
-            lv.dimension,
+            &mut *lv.host,
             "minecraft:skeleton_horse",
             at,
             Compound::new(),
         )
-        .and_then(|id| lv.host.entity(id));
+        .ok()
+        .flatten();
     if let Some(s) = spawned {
         s.merge_nbt(&mut *lv.host, saved);
     }

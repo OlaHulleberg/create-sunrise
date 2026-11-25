@@ -98,7 +98,7 @@ impl mod_api::BlockEntityPart for ToolboxDraw {
                 draw.push();
                 draw.rotate_about([0.0, 1.0, 0.0], turn, [0.5; 3]);
                 draw.translate([0.0, up, 0.0]);
-                draw.block(key, &[("facing", "up")]);
+                crate::glue::states::draw_block(&mut *draw, key, &[("facing", "up")]);
                 draw.pop();
             }
         };

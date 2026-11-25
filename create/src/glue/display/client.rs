@@ -177,8 +177,8 @@ pub(super) fn server_message(host: &mut dyn ClientHost, channel: &str, data: &[u
 
 /// Whether the board at `pos` has flaps turning on a running board: drawn again every frame
 /// (`FlapDisplayRenderer` turns them by the render time), its last frame kept once they settle.
-pub(super) fn animated(pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-    speed_of(&entity.nbt).abs() >= create_engine::gauge::MEDIUM_SPEED
+pub(super) fn animated(pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
+    speed_of(&entity.nbt()).abs() >= create_engine::gauge::MEDIUM_SPEED
         && DISPLAYS.with_borrow(|d| d.active.contains(&pos))
 }
 
@@ -312,7 +312,7 @@ impl BlockEntityPart for DisplayEntity {
             };
             draw_nixie(host, event.draw, event.state, block, facing, pos);
         } else if block == Block::DisplayBoard {
-            let speed = speed_of(&event.entity.nbt);
+            let speed = speed_of(&event.entity.nbt());
             let known = DISPLAYS.with_borrow_mut(|d| {
                 d.boards.get_mut(&pos).map(|b| {
                     b.speed = speed;
@@ -437,7 +437,7 @@ fn draw_nixie_signal(
     }
     let invert = getfacing == Dir::Down || face == Face::WallReversed;
     if let Some(panel) = states::partial("part_signal_panel") {
-        draw.block(panel, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, panel, &[("facing", "up")]);
     }
     let mut pose = Pose::at(pos.map(f64::from))
         .rotate([0.0, 1.0, 0.0], f64::from(y_rot), [0.5; 3])
@@ -701,7 +701,7 @@ pub(super) fn draw_carried(
     event: &mut crate::glue::Submit<'_>,
 ) {
     let carried = crate::glue::contraptions::actors::SHOWN_CARRIED;
-    let Some(Tag::Compound(c)) = event.entity.nbt.get(&carried.into()) else {
+    let Some(Tag::Compound(c)) = event.entity.nbt().get(&carried.into()) else {
         return;
     };
     if block == Block::DisplayBoard {

@@ -177,7 +177,7 @@ impl BlockEntityPart for DoorEntity {
                         }
                     }
                     let leaf = if model_left { leaves[0] } else { leaves[1] };
-                    draw.block(leaf, &[("facing", "north")]);
+                    crate::glue::states::draw_block(&mut *draw, leaf, &[("facing", "north")]);
                     draw.pop();
                 }
             }
@@ -206,7 +206,7 @@ fn draw_closed(
     half: &str,
     hinge: &str,
 ) {
-    draw.block(
+    crate::glue::states::draw_block(&mut *draw, 
         key,
         &[
             ("facing", facing),

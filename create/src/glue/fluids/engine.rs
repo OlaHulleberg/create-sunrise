@@ -178,8 +178,8 @@ fn shaft(host: &dyn ClientHost, pos: [i32; 3], info: &StateInfo) -> Option<(Dir,
 }
 
 /// Whether an engine moves this frame (its shaft turns).
-pub(super) fn animated(entity: &ModBlockEntity) -> bool {
-    shown_speed(&entity.nbt) != 0.0
+pub(super) fn animated(entity: crate::glue::EntityData<'_>) -> bool {
+    shown_speed(&entity.nbt()) != 0.0
 }
 
 /// `AngleHelper.horizontalAngle`.
@@ -206,7 +206,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, i
     let Some((facing, at, axis)) = shaft(host, event.pos, info) else {
         return;
     };
-    let speed = shown_speed(&event.entity.nbt);
+    let speed = shown_speed(&event.entity.nbt());
     // `getTargetAngle`: the shaft's turn (`getAngleForBe`).
     if axis == facing.axis() {
         return;
@@ -241,7 +241,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, i
         draw.push();
         transformed(draw);
         draw.translate([0.0, piston + 20.0 / 16.0, 0.0]);
-        draw.block(p, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, p, &[("facing", "up")]);
         draw.pop();
     }
     if let Some(p) = part("part_engine_linkage") {
@@ -253,7 +253,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, i
             angle2.to_degrees(),
             [0.0, 4.0 / 16.0, 8.0 / 16.0],
         );
-        draw.block(p, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, p, &[("facing", "up")]);
         draw.pop();
     }
     if let Some(p) = part("part_engine_connector") {
@@ -265,7 +265,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, i
             -(angle + std::f32::consts::FRAC_PI_2).to_degrees(),
             c,
         );
-        draw.block(p, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, p, &[("facing", "up")]);
         draw.pop();
     }
 }

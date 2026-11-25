@@ -295,7 +295,7 @@ impl BlockEntityPart for Drawn {
             };
             let draw = &mut *event.draw;
             draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
-            draw.block(part, &[("facing", kinetics::dir_name(facing))]);
+            crate::glue::states::draw_block(&mut *draw, part, &[("facing", kinetics::dir_name(facing))]);
             draw.still();
         }
         event.draw.keep();

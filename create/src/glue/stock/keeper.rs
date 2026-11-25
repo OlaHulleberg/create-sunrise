@@ -149,7 +149,7 @@ fn keeper_entity(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<mod_api::EntityR
             let hi = p.map(|v| f64::from(v) + 1.0);
             for e in lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default() {
                 let rider = if seat_vehicle(&*lv.host, e) {
-                    e.passengers(&*lv.host).and_then(|p| p.first().copied())
+                    crate::glue::passengers(e, &*lv.host).and_then(|p| p.first().copied())
                 } else {
                     e.vehicle(&*lv.host)
                         .is_some_and(|v| seat_vehicle(&*lv.host, v))
