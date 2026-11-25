@@ -388,7 +388,7 @@ fn model(draw: &mut dyn BlockEntityDrawContext, host: &dyn ClientHost, file: &'s
         let Some(m) = m else { return };
         match draw.terrain_model(m, TerrainModelOptions::default()) {
             Ok(()) => return,
-            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) if !fresh => continue,
             Err(_) => return,
         }
     }
@@ -423,7 +423,7 @@ impl BlockEntityPart for FrogDraw {
             return;
         }
         let pos = event.pos;
-        let frog = match event.entity.nbt.get(&FROG.into()) {
+        let frog = match event.entity.nbt().get(&FROG.into()) {
             Some(Tag::Compound(c)) => c.clone(),
             _ => Compound::new(),
         };

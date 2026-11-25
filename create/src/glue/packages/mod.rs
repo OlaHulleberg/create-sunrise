@@ -224,20 +224,25 @@ pub struct Packages;
 impl Subsystem for Packages {
     /// A chain conveyor carrying packages is drawn every frame, as they move along it (its
     /// drawing is otherwise kept, and drawn anew only when its data changes).
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+    fn animated(
+        &self,
+        block: Block,
+        pos: [i32; 3],
+        entity: &mod_api::BlockEntityDataView<'_>,
+    ) -> bool {
         if block == Block::PackageFrogport {
-            return frog_draw::animated(&entity.nbt);
+            return frog_draw::animated(entity.nbt());
         }
         if block != Block::ChainConveyor {
             return box_draw::animated(block, pos, entity);
         }
         let carrying = matches!(
-            super::kinetics::synced(&entity.nbt, CARRYING),
+            super::kinetics::synced(entity.nbt(), CARRYING),
             Some(Tag::Byte(b)) if *b != 0
         );
         // A turning conveyor's chains scroll (`renderChain`'s `animation`).
-        let turning = super::kinetics::speeds_of(&entity.nbt)[0] != 0.0
-            && matches!(entity.nbt.get(&CHAINS.into()), Some(Tag::IntArray(v)) if v.len() > 1);
+        let turning = super::kinetics::speeds_of(entity.nbt())[0] != 0.0
+            && matches!(entity.nbt().get(&CHAINS.into()), Some(Tag::IntArray(v)) if v.len() > 1);
         carrying
             || turning
             || SHOWN.with_borrow(|s| s.contains_key(&pos))
@@ -253,6 +258,7 @@ impl Subsystem for Packages {
         let _ = DUST_PARTICLE.set(r.particle_key("minecraft:dust"));
         let _ = HAPPY.set(r.particle_key("minecraft:happy_villager"));
         automation::register(r);
+        station_ports::register(r);
         for &b in Block::ALL.iter().filter(|&&b| is_packager(b) || is_port(b)) {
             r.block_part(states::key(b), PackageBlock);
         }
@@ -1874,9 +1880,12 @@ impl BlockPart for PackageBlock {
 
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let b = block_of(states::id(event.state)?)?;
         if b == Block::PackageFrogport {
             let held = event.click.stack.map(|s| s.item().name(&*host));
@@ -1897,9 +1906,12 @@ impl BlockPart for PackageBlock {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut mod_api::UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         if block_of(states::id(event.state)?)? != Block::PackageFrogport {
             return None;
         }
@@ -2347,7 +2359,7 @@ fn conveyor_model(
         }
         match draw.terrain_model(m, options) {
             Ok(()) => return,
-            Err(mod_api::TerrainModelError::Model(_)) if !fresh => continue,
+            Err(_) if !fresh => continue,
             Err(_) => return,
         }
     }
@@ -2541,7 +2553,7 @@ impl BlockEntityPart for ConveyorDraw {
         let pos = event.pos;
         let draw = &mut *event.draw;
         let now = draw.animation_time();
-        draw_conveyor(draw, host, pos, &event.entity.nbt);
+        draw_conveyor(draw, host, pos, event.entity.nbt());
         SHOWN.with_borrow_mut(|shown| {
             let Some(s) = shown.get_mut(&pos) else {
                 return;

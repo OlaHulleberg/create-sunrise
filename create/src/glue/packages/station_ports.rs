@@ -20,9 +20,13 @@ use super::{body, parcel, with};
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::package;
-use mod_api::{AttachmentCodec, AttachmentType, Compound, Holder, ItemStack, PlayerRef, Tag};
+use mod_api::{
+    AttachmentCodec, AttachmentDescriptor, AttachmentKey, Compound, Holder, ItemStack, PlayerRef,
+    Registrar, Tag,
+};
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 const SLOTS: usize = create_engine::port::SLOTS;
 
@@ -52,17 +56,21 @@ thread_local! {
     static DIRTY: Cell<bool> = const { Cell::new(false) };
 }
 
-static SAVED: AttachmentType<Compound> = AttachmentType {
-    namespace: "create",
-    name: "station_ports",
-    default: Compound::new,
-    codec: Some(AttachmentCodec {
-        encode: |data| Ok(data.clone()),
-        decode: |data| Ok(data.clone()),
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+/// The key of the overworld's `create:station_ports` attachment, issued at registration.
+static SAVED: RwLock<Option<AttachmentKey<Compound>>> = RwLock::new(None);
+
+/// Registers the attachment the joins are kept in.
+pub(super) fn register(r: &mut dyn Registrar) {
+    let descriptor = AttachmentDescriptor::new("create:station_ports", Compound::new).serialize(
+        AttachmentCodec {
+            encode: |data| Ok(data.clone()),
+            decode: |data| Ok(data.clone()),
+        },
+    );
+    if let Ok(key) = r.register_attachment_type(descriptor) {
+        *SAVED.write().unwrap() = Some(key);
+    }
+}
 
 pub(super) fn reset() {
     PORTS.with_borrow_mut(HashMap::clear);
@@ -543,14 +551,20 @@ fn save(lv: &mut ServerLevel<'_>) {
             .collect()
     });
     let data = Compound::from([("Ports".into(), Tag::List(list))]);
-    match SAVED.set(&mut *lv.host, Holder::Level, data) {
+    let Some(key) = SAVED.read().unwrap().clone() else {
+        return;
+    };
+    match key.set(&mut *lv.host, Holder::Level, data) {
         Ok(()) => DIRTY.set(false),
         Err(e) => crate::create_log!("[create] saving the station ports: {e:?}"),
     }
 }
 
 fn load(lv: &mut ServerLevel<'_>) {
-    let data = match SAVED.get_existing(&mut *lv.host, Holder::Level) {
+    let Some(key) = SAVED.read().unwrap().clone() else {
+        return;
+    };
+    let data = match key.get_existing(&mut *lv.host, Holder::Level, |v| v.cloned()) {
         Ok(Some(d)) => d,
         _ => return,
     };
