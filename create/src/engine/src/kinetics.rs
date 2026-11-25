@@ -523,6 +523,11 @@ pub struct Kinetics {
     networks: TorquePropagator,
     scheduler: scheduling::TickScheduler,
     reactivation_due: Vec<(u32, u64)>,
+    /// Entities whose validation countdown ran out, kept awake until their own tick validates.
+    validation_due: Vec<(u32, u64)>,
+    /// Columns known to be loaded (`Level.isLoaded`): one holding a part, or reported by
+    /// `column_loaded`, until `column_unloaded`.
+    loaded_columns: HashSet<(i32, i32)>,
     /// Positions whose parts left since the last `take_removed`.
     removed: Vec<[i32; 3]>,
     stamp: u64,
@@ -687,12 +692,24 @@ impl Kinetics {
         !self.legacy_loads.is_empty()
             || !self.dirty.is_empty()
             || !self.reactivation_due.is_empty()
+            || !self.validation_due.is_empty()
             || !self.pending_events.is_empty()
             || !self.changed.is_empty()
             || self.networks.has_dirty()
     }
 
-    /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`).
+    /// A column loaded: its positions now answer `Level.isLoaded` (`validateKinetics`).
+    pub fn column_loaded(&mut self, cx: i32, cz: i32) {
+        self.loaded_columns.insert((cx, cz));
+    }
+
+    /// A column left the level: its positions no longer answer `Level.isLoaded`.
+    pub fn column_unloaded(&mut self, cx: i32, cz: i32) {
+        self.loaded_columns.remove(&(cx, cz));
+    }
+
+    /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`),
+    /// and the parts whose validation countdown ran out validate in their own tick.
     pub fn advance(&mut self) {
         self.now += 1;
         while let Some(due) = self.scheduler.take_reactivation(self.now) {
@@ -703,10 +720,14 @@ impl Kinetics {
                 if !self.nodes[id as usize].live || self.nodes[id as usize].stamp != stamp {
                     continue;
                 }
-                let mut events = Vec::new();
-                self.validate_kinetics(id, &mut events);
-                self.pending_events.extend(events);
                 self.scheduler.validate_later(self.now, id, stamp);
+                // `validateKinetics` runs inside the entity's own tick (`tick_base`), after
+                // the entities registered before it. A part not yet migrated from a legacy
+                // save does not tick.
+                if self.nodes[id as usize].load_origin != LoadOrigin::Legacy {
+                    self.nodes[id as usize].state.validate_pending = true;
+                    self.validation_due.push((id, stamp));
+                }
             }
         }
     }
@@ -714,19 +735,35 @@ impl Kinetics {
     /// KineticBlockEntity.validateKinetics, including its sourceless-generator rule.
     fn validate_kinetics(&mut self, id: u32, events: &mut Vec<Event>) {
         let source = self.nodes[id as usize].state.source;
-        if source.is_some() {
+        if let Some(location) = source {
             if self.nodes[id as usize].state.net.is_none() {
                 self.remove_source(id);
-            } else if self.resolve_source(source).is_some_and(|i| {
-                !self.nodes[i as usize].live || self.nodes[i as usize].state.theoretical == 0.0
-            }) {
+                return;
+            }
+            let missing = match self.resolve_source(source) {
+                Some(i) => {
+                    !self.nodes[i as usize].live || self.nodes[i as usize].state.theoretical == 0.0
+                }
+                // No kinetic block entity at `source`, once its column is loaded.
+                None => {
+                    if !self
+                        .loaded_columns
+                        .contains(&(location.pos[0] >> 4, location.pos[2] >> 4))
+                    {
+                        return;
+                    }
+                    true
+                }
+            };
+            if missing {
                 self.remove_source(id);
                 self.handle_removed(id, events);
             }
         } else if self.nodes[id as usize].part.generated == 0.0
             && self.nodes[id as usize].state.theoretical != 0.0
         {
-            self.change_speed(id, 0.0);
+            // `speed = 0`: no onSpeedChanged, so no flicker and no callbacks.
+            self.set_speed(id, 0.0);
         }
     }
 
@@ -820,6 +857,7 @@ impl Kinetics {
             }
         };
         slot[sub as usize] = id;
+        self.loaded_columns.insert((pos[0] >> 4, pos[2] >> 4));
         self.order.register(pos, None);
         self.mark_changed(id);
         self.dirty.push(id);
@@ -894,11 +932,15 @@ impl Kinetics {
     }
 
     /// `GearshiftBlock.detachKinetics` (with `reAttachNextTick`): remove downstream rotation,
-    /// retaining the entity's own source and network. The re-attach is a scheduled block
-    /// tick (`worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`, run as
+    /// retaining the entity's own source and network. Only `RotationPropagator.handleRemoved`
+    /// runs: `updateSpeed` stays as it was, and the power change's state write is kinetically
+    /// equivalent (`KineticBlock.onPlace` sets `preventSpeedUpdate`), so it clears nothing
+    /// either. The re-attach is a scheduled block tick
+    /// (`worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`, run as
     /// `GearshiftBlock.tick`) — owed before the entities' own ticks next solve
-    /// (`reattach_transmission`). The serialized `NeedsSpeedUpdate` flag carries the re-attach
-    /// across a save the level's scheduled tick list would also survive.
+    /// (`reattach_transmission`). A reload needs no flag for it: `KineticBlockEntity.read`
+    /// leaves the constructor's `updateSpeed`, so every loaded entity attaches on its first
+    /// tick.
     pub fn detach_transmission(&mut self, pos: [i32; 3]) {
         let Some(ids) = self.at.get(&pos).copied() else {
             return;
@@ -906,7 +948,6 @@ impl Kinetics {
         let mut events = Vec::new();
         for id in ids.into_iter().filter(|id| *id != NONE) {
             self.handle_removed(id, &mut events);
-            self.nodes[id as usize].state.update_speed = true;
             self.dirty.push(id);
         }
         self.pending_events.extend(events);
@@ -1437,10 +1478,15 @@ impl Kinetics {
         {
             self.update_generated_rotation(id, events);
         }
-        // KineticBlockEntity.tick validates on its first callback: the Java
-        // constructor leaves validationCountdown at zero. Reuse Lifecycle so
-        // tick_base_through and solve cannot repeat initialization in this pass.
-        if self.nodes[id as usize].state.lifecycle.is_new() {
+        // KineticBlockEntity.tick validates on its first callback (the Java constructor
+        // leaves validationCountdown at zero) and whenever the countdown ran out since,
+        // here in the entity's own turn: after attach and initialize, before the network
+        // update. Reuse Lifecycle so tick_base_through and solve cannot repeat
+        // initialization in this pass.
+        if self.nodes[id as usize].state.lifecycle.is_new()
+            || self.nodes[id as usize].state.validate_pending
+        {
+            self.nodes[id as usize].state.validate_pending = false;
             self.validate_kinetics(id, events);
         }
         if self.nodes[id as usize].state.lifecycle.is_new() {
@@ -1534,6 +1580,10 @@ impl Kinetics {
         self.reactivation_due.retain(|&(id, stamp)| {
             let n = &self.nodes[id as usize];
             n.live && n.stamp == stamp && n.state.reactivate_source
+        });
+        self.validation_due.retain(|&(id, stamp)| {
+            let n = &self.nodes[id as usize];
+            n.live && n.stamp == stamp && n.state.validate_pending
         });
         self.dirty.clear();
         let mut stats = SolveStats::default();
@@ -1858,6 +1908,157 @@ mod tests {
         assert!(k.has_dirty());
         solve(&mut k);
         assert_eq!(k.speed([1, 0, 0], 0), Some(0.0));
+    }
+
+    #[test]
+    fn validation_clears_a_source_missing_from_a_loaded_column() {
+        // KineticBlockEntity.validateKinetics: no kinetic block entity at `source` clears it
+        // when the position is loaded, and waits while it is not (`Level.isLoaded`).
+        let mut k = Kinetics::new();
+        k.set([15, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([16, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([17, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        // The source's column unloads, and the entity it held is gone when it loads again.
+        k.unload([15, 0, 0]);
+        k.column_unloaded(0, 0);
+        for _ in 0..61 {
+            k.advance();
+        }
+        solve(&mut k);
+        assert_eq!(k.speed([16, 0, 0], 0), Some(16.0), "unloaded: not checked");
+        let source = k.saved_state([16, 0, 0], 0).unwrap().source;
+        assert_eq!(source.map(|s| s.pos), Some([15, 0, 0]));
+        k.column_loaded(0, 0);
+        for _ in 0..61 {
+            k.advance();
+        }
+        solve(&mut k);
+        assert_eq!(k.saved_state([16, 0, 0], 0).unwrap().source, None);
+        assert_eq!(k.speed([16, 0, 0], 0), Some(0.0));
+        // removeSource left the shaft at rest, so detachKinetics had nothing to detach; the
+        // shaft it drove clears its own source when its turn comes right after.
+        assert_eq!(k.speed([17, 0, 0], 0), Some(0.0));
+    }
+
+    #[test]
+    fn sourceless_validation_stops_the_part_without_a_flicker_bump() {
+        // validateKinetics: a part with no source whose generated speed is 0 only sets
+        // `speed = 0`: no onSpeedChanged, so no +5 on the tally and no callbacks.
+        let mut k = Kinetics::new();
+        let pos = [0, 0, 0];
+        k.set(pos, 0, motor(Dir::East, 16.0));
+        solve(&mut k);
+        // The generator's part stops generating without updateGeneratedRotation.
+        k.read_part(pos, 0, Part::half(Dir::East));
+        for _ in 0..60 {
+            k.advance();
+        }
+        assert_eq!(k.flicker_score(pos), 0);
+        k.take_speed_notifications();
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed(pos, 0), Some(0.0));
+        assert_eq!(k.flicker_score(pos), 0, "no +5 from the speed reset");
+        assert!(k.take_speed_notifications().is_empty());
+    }
+
+    #[test]
+    fn validation_runs_in_the_entitys_own_turn_after_an_earlier_attach() {
+        // Create validates inside each entity's tick: the shaft attached earlier in the same
+        // tick already turns when the one behind it checks its source. A batch before all
+        // ticks saw it at rest and cleared the source (and flickered the tally).
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        k.set([2, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        for _ in 0..60 {
+            k.advance();
+        }
+        // The middle shaft's block state is replaced: it re-attaches on its turn this tick.
+        k.change_block_state([1, 0, 0], 0, Part::shaft(Axis::X), false);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0));
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        assert_eq!(k.speed([2, 0, 0], 0), Some(16.0));
+        let source = k.saved_state([2, 0, 0], 0).unwrap().source;
+        assert_eq!(source.map(|s| s.pos), Some([1, 0, 0]), "kept by validation");
+        assert_eq!(k.flicker_score([2, 0, 0]), 0, "never stopped");
+    }
+
+    #[test]
+    fn a_generator_breaks_on_the_tally_it_read_not_the_one_after_its_own_change() {
+        // updateGeneratedRotation propagates (applyNewSpeed) before onSpeedChanged adds 5, so
+        // the part breaks when the tally it reads is above 128, not from 124.
+        let generator = |rpm: f32| Part {
+            generated: rpm,
+            ..motor(Dir::East, 16.0)
+        };
+        let pos = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(pos, 0, generator(16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        let mut broke = false;
+        for t in 0..200 {
+            k.advance();
+            let before = k.flicker_score(pos);
+            k.set(pos, 0, generator(if t % 2 == 0 { -16.0 } else { 16.0 }));
+            let e = solve(&mut k);
+            if e.contains(&Event::Break { pos }) {
+                assert!(before > 128, "broke on a tally of {before}");
+                broke = true;
+                break;
+            }
+            assert!(before <= 128, "survived a tally of {before}");
+            assert_eq!(
+                k.flicker_score(pos),
+                before + 5,
+                "onSpeedChanged adds 5 once"
+            );
+        }
+        assert!(broke, "the reversing generator breaks");
+    }
+
+    #[test]
+    fn a_gearshift_power_change_detaches_without_owing_an_entity_attach() {
+        // GearshiftBlock.neighborChanged: handleRemoved, a scheduled tick and an equivalent
+        // state write. `updateSpeed` stays false; only GearshiftBlock.tick attaches again.
+        let mut k = Kinetics::new();
+        let gearshift = [0, 0, 0];
+        k.set([-1, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set(gearshift, 0, Part::split_shaft(Axis::X, 1.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        k.detach_transmission(gearshift);
+        k.change_block_state(gearshift, 0, Part::split_shaft(Axis::X, -1.0), true);
+        let saved = k.saved_state(gearshift, 0).unwrap();
+        assert!(!saved.needs_speed_update);
+        assert_eq!(saved.speed, 16.0, "its own speed and source stay");
+        assert_eq!(saved.source.map(|s| s.pos), Some([-1, 0, 0]));
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0), "no entity tick attaches");
+        // The scheduled block tick re-attaches with the powered state.
+        let mut events = Vec::new();
+        k.reattach_transmission(gearshift, &mut events);
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(-16.0));
+        // A reload restores the entity with the constructor's updateSpeed, as `read` does.
+        let saved = k.saved_state(gearshift, 0).unwrap();
+        let mut loaded = Kinetics::new();
+        loaded.set(gearshift, 0, Part::split_shaft(Axis::X, -1.0));
+        assert!(loaded.restore_state(gearshift, 0, saved));
+        assert!(
+            loaded.nodes[loaded.at[&gearshift][0] as usize]
+                .state
+                .update_speed
+        );
     }
 
     #[test]
@@ -3137,13 +3338,13 @@ mod tests {
         // scheduled tick re-attaches before any of the fresh entities tick.
         loaded.detach_transmission([0, 0, 0]);
         loaded.change_block_state([0, 0, 0], 0, Part::split_shaft(Axis::X, -1.0), true);
-        // `KineticBlockEntity.write` saves `NeedsSpeedUpdate`, so a world saved between the
-        // detach and the block tick keeps the re-attach owed and a reload's first base tick
-        // attaches again (the level's scheduled tick list itself is not saved).
+        // `GearshiftBlock.detachKinetics` only runs `handleRemoved`: `NeedsSpeedUpdate` stays
+        // false. A reload re-attaches anyway, since `KineticBlockEntity.read` leaves the
+        // constructor's `updateSpeed` (`restore_state`).
         let detached = positions.map(|pos| loaded.saved_state(pos, 0).unwrap());
         assert!(
-            detached[2].needs_speed_update,
-            "the detach owes an attach, and the flag is saved"
+            !detached[2].needs_speed_update,
+            "the detach leaves updateSpeed alone"
         );
         let mut reloaded = Kinetics::new();
         let reloaded_parts = [
@@ -3164,7 +3365,7 @@ mod tests {
         assert_eq!(
             reloaded.speed([1, 0, 0], 0),
             Some(32.0),
-            "the saved re-attach ran on the gearshift's first tick"
+            "the reloaded gearshift attached on its first tick"
         );
         let mut events = Vec::new();
         loaded.reattach_transmission([0, 0, 0], &mut events);
@@ -3435,6 +3636,7 @@ mod tests {
         );
         // A new run of the same turn tells the parts again, unchanged speeds and all.
         k.detach_transmission([0, 0, 0]);
+        let mut reattached = Vec::new();
         k.set_sequence_context(
             [0, 0, 0],
             0,
@@ -3446,6 +3648,8 @@ mod tests {
                 90.0 / 24.0,
             )),
         );
+        // The detach only removes the downstream rotation; its scheduled tick attaches again.
+        k.reattach_transmission([0, 0, 0], &mut reattached);
         let e = solve(&mut k);
         assert!(
             e.iter()

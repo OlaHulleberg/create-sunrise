@@ -47,6 +47,8 @@ pub(super) struct KineticState {
     pub(super) lifecycle: Lifecycle,
     /// KineticBlockEntity.updateSpeed: attach on the next server tick.
     pub(super) update_speed: bool,
+    /// `KineticBlockEntity.validationCountdown` ran out: the entity's next tick validates.
+    pub(super) validate_pending: bool,
     pub(super) source: Option<PartLocation>,
     pub(super) reactivate_source: bool,
     /// ChainGearshiftBlockEntity.signalChanged: input applied after the base tick.
@@ -69,6 +71,7 @@ impl Default for KineticState {
             net: None,
             lifecycle: Lifecycle::New,
             update_speed: true,
+            validate_pending: false,
             source: None,
             reactivate_source: false,
             chain_signal: None,
