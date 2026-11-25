@@ -7,6 +7,9 @@
 //! box (`CopycatModel`), the copycat base when it holds none. Nothing runs per tick: the level's
 //! tick looks only when a copycat was placed, changed or broken, or its material changed.
 //!
+//! It breaks as its material too (`CopycatBlock.canHarvestBlock`, `getDestroyProgress`): the
+//! material's tool rule and its speed for the player.
+//!
 //! A copycat item clicked on its kind places the next one beside it (`CopycatPanelBlock` and
 //! `CopycatStepBlock`'s placement helpers). A copycat sounds as its material (`sound.rs`).
 //!
