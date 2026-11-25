@@ -1,0 +1,22 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:copper_scaffolding",
+      "state": {
+        "bottom": [
+          "true"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/scaffold/copper_scaffold_inside"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "state",
+  "sheet": "create:block/scaffold/copper_scaffold_inside_connected",
+  "table": "horizontal_uncovered"
+}

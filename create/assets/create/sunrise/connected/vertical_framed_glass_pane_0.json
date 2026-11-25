@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:vertical_framed_glass_pane"
+  ],
+  "sprites": [
+    "create:block/palettes/framed_glass"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/vertical_framed_glass_connected",
+  "table": "vertical_uncovered"
+}

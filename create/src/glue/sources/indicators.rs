@@ -4,10 +4,8 @@
 //! circle its axis, seen only through goggles.
 //!
 //! The server sends them as Create does (`sendParticles`), one at a time so each carries its data
-//! in its velocity (the particle type declares no velocity of its own,
-//! `assets/create/particles/rotation_indicator.json`): the colour, the speed, the axis and the two
-//! radii. The client's provider reads it on the particle's first tick and turns it about its
-//! origin from then on.
+//! in its velocity: the colour, the speed, the axis and the two radii. The client's provider reads
+//! it from the spawn and turns the spark about its origin from its first tick on.
 
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
@@ -183,8 +181,8 @@ fn rotate(v: [f64; 3], deg: f64, axis: Axis) -> [f64; 3] {
     }
 }
 
-/// `RotationIndicatorParticle`: on its first tick it takes its data from its velocity (and
-/// stays only for a player wearing goggles); each tick it stands on its circle, the circle
+/// `RotationIndicatorParticle`: it takes its data from its spawn's velocity, and on its first
+/// tick stays only for a player wearing goggles; each tick it stands on its circle, the circle
 /// closing from its first radius to its second, and fades in its second half
 /// (`SimpleAnimatedParticle`).
 pub struct Indicator;
@@ -192,10 +190,13 @@ pub struct Indicator;
 impl ParticleProvider for Indicator {
     fn create_particle(
         &self,
-        _spawn: &mut mod_api::ParticleSpawn<'_, ()>,
+        spawn: &mut mod_api::ParticleSpawn<'_, ()>,
         _particle: &mut dyn mod_api::ParticleTickView,
     ) -> Option<Box<dyn mod_api::CustomParticle>> {
-        Some(Box::new(Instance { placed: None }))
+        Some(Box::new(Instance {
+            spark: decode(spawn.velocity),
+            placed: None,
+        }))
     }
 }
 
@@ -206,8 +207,9 @@ struct Placed {
     spark: Spark,
 }
 
-/// One live indicator: `placed` is empty until its first tick takes its data.
+/// One live indicator: `placed` is empty until its first tick.
 struct Instance {
+    spark: Spark,
     placed: Option<Placed>,
 }
 
@@ -224,7 +226,7 @@ impl mod_api::CustomParticle for Instance {
                     p.remove();
                     return;
                 }
-                let s = decode(p.velocity());
+                let s = self.spark;
                 // `lifeSpan + random.nextInt(32)`: the spawn's random size picks the 32.
                 let random = p.size().to_bits() % 32;
                 p.set_lifetime(10 + random as i32);

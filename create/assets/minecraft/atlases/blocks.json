@@ -2,118 +2,131 @@
   "sources": [
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_0",
-      "sprite": "create:block/special/steam_jet_0"
+      "resource": "create:particle/steam_jet_0"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_1",
-      "sprite": "create:block/special/steam_jet_1"
+      "resource": "create:particle/steam_jet_1"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_2",
-      "sprite": "create:block/special/steam_jet_2"
+      "resource": "create:particle/steam_jet_2"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_3",
-      "sprite": "create:block/special/steam_jet_3"
+      "resource": "create:particle/steam_jet_3"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_4",
-      "sprite": "create:block/special/steam_jet_4"
+      "resource": "create:particle/steam_jet_4"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_5",
-      "sprite": "create:block/special/steam_jet_5"
+      "resource": "create:particle/steam_jet_5"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_6",
-      "sprite": "create:block/special/steam_jet_6"
+      "resource": "create:particle/steam_jet_6"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_7",
-      "sprite": "create:block/special/steam_jet_7"
+      "resource": "create:particle/steam_jet_7"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_8",
-      "sprite": "create:block/special/steam_jet_8"
+      "resource": "create:particle/steam_jet_8"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_9",
-      "sprite": "create:block/special/steam_jet_9"
+      "resource": "create:particle/steam_jet_9"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_10",
-      "sprite": "create:block/special/steam_jet_10"
+      "resource": "create:particle/steam_jet_10"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_11",
-      "sprite": "create:block/special/steam_jet_11"
+      "resource": "create:particle/steam_jet_11"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_12",
-      "sprite": "create:block/special/steam_jet_12"
+      "resource": "create:particle/steam_jet_12"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_13",
-      "sprite": "create:block/special/steam_jet_13"
+      "resource": "create:particle/steam_jet_13"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_14",
-      "sprite": "create:block/special/steam_jet_14"
+      "resource": "create:particle/steam_jet_14"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_15",
-      "sprite": "create:block/special/steam_jet_15"
+      "resource": "create:particle/steam_jet_15"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_16",
-      "sprite": "create:block/special/steam_jet_16"
+      "resource": "create:particle/steam_jet_16"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_17",
-      "sprite": "create:block/special/steam_jet_17"
+      "resource": "create:particle/steam_jet_17"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_18",
-      "sprite": "create:block/special/steam_jet_18"
+      "resource": "create:particle/steam_jet_18"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_19",
-      "sprite": "create:block/special/steam_jet_19"
+      "resource": "create:particle/steam_jet_19"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_20",
-      "sprite": "create:block/special/steam_jet_20"
+      "resource": "create:particle/steam_jet_20"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_21",
-      "sprite": "create:block/special/steam_jet_21"
+      "resource": "create:particle/steam_jet_21"
     },
     {
       "type": "minecraft:single",
-      "resource": "create:particle/steam_jet_22",
-      "sprite": "create:block/special/steam_jet_22"
+      "resource": "create:particle/steam_jet_22"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:special/checkerboard"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:special/glue"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:gui/icons"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:fluid/milk_still"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/andesite_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/andesite_encased_cogwheel_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/brass_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/brass_encased_cogwheel_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/copper_casing_connected"
     },
     {
       "type": "minecraft:single",
@@ -134,6 +147,22 @@
     {
       "type": "minecraft:single",
       "resource": "create:block/fluid_tank_top_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/girder_pole_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/linear_chassis_end_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/linear_chassis_end_sticky_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/linear_chassis_side_connected"
     },
     {
       "type": "minecraft:single",
@@ -305,11 +334,111 @@
     },
     {
       "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/andesite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/asurine_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/calcite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/crimsite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/deepslate_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/diorite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/dripstone_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/granite_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/limestone_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/ochrum_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/scorchia_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/scoria_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/tuff_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/palettes/stone_types/pillar/veridium_cut_pillar_connected"
+    },
+    {
+      "type": "minecraft:single",
       "resource": "create:block/palettes/vertical_framed_glass_connected"
     },
     {
       "type": "minecraft:single",
       "resource": "create:block/palettes/warped_window_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/railway_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/railway_casing_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/refined_radiance_casing_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/andesite_scaffold_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/andesite_scaffold_inside_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/brass_scaffold_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/brass_scaffold_inside_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/copper_scaffold_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/scaffold/copper_scaffold_inside_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/secondary_linear_chassis_side_connected"
+    },
+    {
+      "type": "minecraft:single",
+      "resource": "create:block/shadow_steel_casing_connected"
     },
     {
       "type": "minecraft:single",

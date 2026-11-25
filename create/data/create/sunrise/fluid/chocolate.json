@@ -1,5 +1,5 @@
 {
-  "sprite": "create:block/fluid/chocolate_still",
+  "sprite": "create:fluid/chocolate_still",
   "tint": 4294967295,
   "world": {
     "tick_delay": 25,

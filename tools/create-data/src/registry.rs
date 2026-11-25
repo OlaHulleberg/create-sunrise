@@ -1,5 +1,6 @@
 //! Deterministic Sunrise 26.3 overlays from Create's pinned, MIT-licensed data.
 
+pub(crate) mod items;
 pub(crate) mod visuals;
 
 use serde_json::{Value, json};
@@ -480,6 +481,24 @@ fn read_data(jar: &mut zip::ZipArchive<fs::File>) -> Result<BTreeMap<String, Vec
         .collect()
 }
 
+/// The files under `dir`, by their paths from `root`.
+fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<(), String> {
+    for e in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let p = e.map_err(|e| e.to_string())?.path();
+        if p.is_dir() {
+            walk(root, &p, out)?;
+        } else {
+            let rel = p
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(rel, fs::read(&p).map_err(|e| e.to_string())?);
+        }
+    }
+    Ok(())
+}
+
 fn git_blob(bytes: &[u8]) -> String {
     use sha1::{Digest, Sha1};
     let mut digest = Sha1::new();
@@ -597,40 +616,46 @@ pub fn generate(
     let visual_assets = visuals::assets(|path| jar.index_for_name(path).is_some())?;
     let visual_count = visual_assets.len();
     let mut declarations = BTreeMap::new();
-    crate::prepare::walk(
+    walk(
         mod_dir,
         &mod_dir.join("data/create/sunrise"),
         &mut declarations,
     )?;
-    let models = crate::prepare::item_models(&declarations, |p| jar.index_for_name(p).is_some());
+    let models = items::item_models(&declarations, |p| jar.index_for_name(p).is_some());
     let mut audit = String::from(
-        "# Create registry item-definition licence audit\n\nPinned jar: Create 6.0.10 for Minecraft 1.21.1, Modrinth `UjX6dr61`. Source: `mc1.21.1-6.0.10` (`ac0c444d9828da3453ae8cc65338e8de063286fb`), MIT `src/generated` tree `a537ebce356393ce32d5fbcf209c5c447a53683f`. Create's `LICENSE.md` excludes `src/main/resources/assets/`, which is not used. Simple `minecraft:model` wrappers name only a model id, not model geometry or textures. For these wrappers the pinned jar model must be byte-identical to a Git blob in the generated MIT tree. The port's three special tool models name original parts by id. Dependent art remains a runtime reference in both cases. The remaining custom definitions, tinted models and connected texture tiles remain local to `prepare`.\n\n| Definition | Decision | Evidence or reason |\n|---|---|---|\n",
+        "# Create registry item-definition licence audit\n\nPinned jar: Create 6.0.10 for Minecraft 1.21.1, Modrinth `UjX6dr61`. Source: `mc1.21.1-6.0.10` (`ac0c444d9828da3453ae8cc65338e8de063286fb`), MIT `src/generated` tree `a537ebce356393ce32d5fbcf209c5c447a53683f`. Create's `LICENSE.md` excludes `src/main/resources/assets/`, which is not used. An item definition names models by id only, never their geometry or textures, and every model it names must be in the pinned jar, where it stays: the player's game reads it from there. The audit notes where a named model is also an MIT generated blob.\n\n| Definition | Decision | Evidence or reason |\n|---|---|---|\n",
     );
     use std::fmt::Write as _;
     for (path, model) in models {
-        let target = model.jar_path();
-        let blob = tree.get(&target);
         let (decision, reason) = if visual_assets.contains_key(&path) {
             (
                 "In",
                 "Port-authored special model; only references original part IDs".to_owned(),
             )
-        } else if model.custom.is_some() {
-            (
-                "Out",
-                "Custom rendering needs local asset preparation".to_owned(),
-            )
-        } else if jar.index_for_name(&target).is_none() {
-            ("Out", format!("No `{target}` in the pinned jar"))
-        } else if let Some(blob) = blob {
-            if git_blob(&jar_bytes(&mut jar, &target)?) == *blob {
-                output.insert(path.clone(), crate::pretty(&model.definition()));
-                ("In", format!("`{target}` matches MIT blob `{blob}`"))
-            } else {
-                ("Out", format!("`{target}` differs from MIT blob `{blob}`"))
-            }
         } else {
-            ("Out", format!("`{target}` not in the MIT generated tree"))
+            let definition = model.definition();
+            let named = items::named_models(&definition);
+            match named
+                .iter()
+                .map(|id| items::model_path(id))
+                .find(|target| jar.index_for_name(target).is_none())
+            {
+                Some(target) => ("Out", format!("No `{target}` in the pinned jar")),
+                None => {
+                    let mut reasons = Vec::new();
+                    for id in &named {
+                        let target = items::model_path(id);
+                        reasons.push(match tree.get(&target) {
+                            Some(blob) if git_blob(&jar_bytes(&mut jar, &target)?) == *blob => {
+                                format!("`{target}` matches MIT blob `{blob}`")
+                            }
+                            _ => format!("names `{target}` by id"),
+                        });
+                    }
+                    output.insert(path.clone(), crate::pretty(&definition));
+                    ("In", reasons.join("; "))
+                }
+            }
         };
         writeln!(audit, "| `{path}` | {decision} | {reason} |").unwrap();
     }
@@ -645,7 +670,7 @@ pub fn generate(
     for tree in ["data", "assets"] {
         let dir = mod_dir.join(tree);
         if dir.exists() {
-            crate::prepare::walk(mod_dir, &dir, &mut current)?;
+            walk(mod_dir, &dir, &mut current)?;
         }
     }
     current.retain(|path, _| owned(path));
@@ -944,7 +969,7 @@ mod tests {
 /// mechanical crafting, crafting, cooking and stonecutting recipes alike) holds at least one
 /// item: a recipe whose ingredient names an empty or missing tag finds nothing, so a machine or
 /// crafting table never takes its items. Runs where Create's jar is at hand (`$CREATE_JAR`, else
-/// the `prepare` download cache).
+/// the registry's download cache).
 #[cfg(test)]
 mod c_tags_resolve {
     use super::*;
@@ -985,7 +1010,7 @@ mod c_tags_resolve {
             })
             .filter(|p| p.is_file());
         let Some(jar) = jar else {
-            eprintln!("no Create jar at hand ($CREATE_JAR or the prepare cache): skipped");
+            eprintln!("no Create jar at hand ($CREATE_JAR or the registry's cache): skipped");
             return;
         };
         let files = read_data(&mut open_jar(&jar).unwrap()).unwrap();

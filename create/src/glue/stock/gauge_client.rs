@@ -634,7 +634,7 @@ fn panel_frame(draw: &mut dyn BlockEntityDrawContext, face: Face, facing: Dir) {
     draw.rotate_about([0.0, 1.0, 0.0], 180.0, [0.5; 3]);
 }
 
-/// The tinted copy (`create-data prepare`'s) of a connection partial
+/// The connection partial
 /// (`AllPartialModels.FACTORY_PANEL_ARROWS`, `FACTORY_PANEL_LINES`) pointing `d`.
 fn segment_model(d: Dir, arrow: bool) -> &'static str {
     match (d, arrow) {
@@ -649,16 +649,16 @@ fn segment_model(d: Dir, arrow: bool) -> &'static str {
     }
 }
 
-/// The connection partials, tinted (`prepare` makes them from the player's jar).
+/// The connection partials, drawn in their path's colour.
 pub(super) const SEGMENTS: [&str; 8] = [
-    "create:block/factory_gauge/connections/arrow_north_tinted",
-    "create:block/factory_gauge/connections/arrow_south_tinted",
-    "create:block/factory_gauge/connections/arrow_west_tinted",
-    "create:block/factory_gauge/connections/arrow_east_tinted",
-    "create:block/factory_gauge/connections/line_north_tinted",
-    "create:block/factory_gauge/connections/line_south_tinted",
-    "create:block/factory_gauge/connections/line_west_tinted",
-    "create:block/factory_gauge/connections/line_east_tinted",
+    "create:block/factory_gauge/connections/arrow_north",
+    "create:block/factory_gauge/connections/arrow_south",
+    "create:block/factory_gauge/connections/arrow_west",
+    "create:block/factory_gauge/connections/arrow_east",
+    "create:block/factory_gauge/connections/line_north",
+    "create:block/factory_gauge/connections/line_south",
+    "create:block/factory_gauge/connections/line_west",
+    "create:block/factory_gauge/connections/line_east",
 ];
 
 /// Whether a point of the world lies in another panel or a solid block (`level.noCollision`
@@ -726,7 +726,7 @@ fn draw_path(
         panel_frame(draw, face, facing);
         draw.translate([sx as f32 * 0.5 + 0.25 + x, y, sy as f32 * 0.5 + 0.25 + z]);
         // `shiftUV(FACTORY_PANEL_CONNECTIONS)`: the animated sheet while it is asking.
-        let mut options = TerrainModelOptions::default().with_tint(color);
+        let mut options = TerrainModelOptions::default().with_color(0xFF00_0000 | color);
         if moving {
             options = options.with_uv_shift(mod_api::TerrainUvShift::new(
                 "create:block/factory_panel_connections",
@@ -808,7 +808,7 @@ fn draw_link_path(
         draw.push();
         panel_frame(draw, face, facing);
         draw.translate([sx as f32 * 0.5 + 0.25 + x, y, sy as f32 * 0.5 + 0.25 + z]);
-        let options = TerrainModelOptions::default().with_tint(color);
+        let options = TerrainModelOptions::default().with_color(0xFF00_0000 | color);
         let model = if redstone.is_none() {
             dotted_model(*d)
         } else {
@@ -828,7 +828,7 @@ fn draw_link_path(
     }
 }
 
-/// The tinted copy of `AllPartialModels.FACTORY_PANEL_DOTTED` pointing `d`.
+/// `AllPartialModels.FACTORY_PANEL_DOTTED` pointing `d`.
 fn dotted_model(d: Dir) -> &'static str {
     match d {
         Dir::North => DOTS[0],
@@ -838,12 +838,12 @@ fn dotted_model(d: Dir) -> &'static str {
     }
 }
 
-/// The dotted connection partials, tinted.
+/// The dotted connection partials, drawn in their path's colour.
 pub(super) const DOTS: [&str; 4] = [
-    "create:block/factory_gauge/connections/dotted_north_tinted",
-    "create:block/factory_gauge/connections/dotted_south_tinted",
-    "create:block/factory_gauge/connections/dotted_west_tinted",
-    "create:block/factory_gauge/connections/dotted_east_tinted",
+    "create:block/factory_gauge/connections/dotted_north",
+    "create:block/factory_gauge/connections/dotted_south",
+    "create:block/factory_gauge/connections/dotted_west",
+    "create:block/factory_gauge/connections/dotted_east",
 ];
 
 /// The filter's item on its panel (`FilteringRenderer`, `ValueBoxRenderer.renderItemIntoValueBox`).

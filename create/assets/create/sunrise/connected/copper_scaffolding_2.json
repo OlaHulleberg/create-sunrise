@@ -1,0 +1,23 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:copper_scaffolding",
+      "state": {
+        "bottom": [
+          "true"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/copper_casing"
+  ],
+  "faces": [
+    "up",
+    "down"
+  ],
+  "connect": "state",
+  "sheet": "create:block/copper_casing_connected",
+  "table": "omni"
+}

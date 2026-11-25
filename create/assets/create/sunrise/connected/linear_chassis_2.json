@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:linear_chassis"
+  ],
+  "sprites": [
+    "create:block/linear_chassis_end_sticky"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/linear_chassis_end_sticky_connected",
+  "table": "omni",
+  "orient": "texture"
+}

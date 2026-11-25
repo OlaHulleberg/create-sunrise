@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:calcite_pillar"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/cap/calcite_cut_cap"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/cap/calcite_cut_cap_connected",
+  "table": "omni",
+  "orient": "texture"
+}

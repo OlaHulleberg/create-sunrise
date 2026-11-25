@@ -1,0 +1,22 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:andesite_scaffolding",
+      "state": {
+        "bottom": [
+          "true"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/scaffold/andesite_scaffold"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "state",
+  "sheet": "create:block/scaffold/andesite_scaffold_connected",
+  "table": "horizontal_uncovered"
+}

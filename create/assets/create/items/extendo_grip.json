@@ -1,0 +1,1707 @@
+{
+  "model": {
+    "type": "create:extendo_grip_pose",
+    "models": {
+      "rest_0": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 0.0,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_0_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_1_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_1_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_2_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_2_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_3_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_3_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_4_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_4_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_5_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_5_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_6_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_6_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "hand_7_0_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 0.0,
+          "hand": "punching"
+        }
+      },
+      "hand_7_0_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 0.0,
+          "hand": "holding"
+        }
+      },
+      "rest_1": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 4.5,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_0_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_1_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_1_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_2_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_2_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_3_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_3_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_4_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_4_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_5_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_5_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_6_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_6_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "hand_7_1_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 4.5,
+          "hand": "punching"
+        }
+      },
+      "hand_7_1_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 4.5,
+          "hand": "holding"
+        }
+      },
+      "rest_2": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 9.0,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_0_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_1_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_1_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_2_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_2_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_3_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_3_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_4_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_4_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_5_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_5_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_6_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_6_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "hand_7_2_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 9.0,
+          "hand": "punching"
+        }
+      },
+      "hand_7_2_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 9.0,
+          "hand": "holding"
+        }
+      },
+      "rest_3": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 13.5,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_0_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_1_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_1_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_2_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_2_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_3_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_3_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_4_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_4_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_5_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_5_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_6_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_6_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "hand_7_3_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 13.5,
+          "hand": "punching"
+        }
+      },
+      "hand_7_3_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 13.5,
+          "hand": "holding"
+        }
+      },
+      "rest_4": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 18.0,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_0_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_1_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_1_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_2_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_2_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_3_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_3_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_4_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_4_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_5_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_5_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_6_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_6_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "hand_7_4_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 18.0,
+          "hand": "punching"
+        }
+      },
+      "hand_7_4_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 18.0,
+          "hand": "holding"
+        }
+      },
+      "rest_5": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 22.5,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_0_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_1_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_1_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_2_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_2_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_3_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_3_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_4_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_4_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_5_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_5_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_6_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_6_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "hand_7_5_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 22.5,
+          "hand": "punching"
+        }
+      },
+      "hand_7_5_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 22.5,
+          "hand": "holding"
+        }
+      },
+      "rest_6": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 27.0,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_0_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_1_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_1_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_2_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_2_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_3_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_3_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_4_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_4_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_5_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_5_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_6_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_6_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "hand_7_6_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 27.0,
+          "hand": "punching"
+        }
+      },
+      "hand_7_6_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 27.0,
+          "hand": "holding"
+        }
+      },
+      "rest_7": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 31.5,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_0_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_1_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_1_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_2_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_2_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_3_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_3_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_4_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_4_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_5_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_5_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_6_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_6_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "hand_7_7_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 31.5,
+          "hand": "punching"
+        }
+      },
+      "hand_7_7_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 31.5,
+          "hand": "holding"
+        }
+      },
+      "rest_8": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 36.0,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_0_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_1_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_1_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_2_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_2_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_3_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_3_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_4_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_4_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_5_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_5_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_6_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_6_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "hand_7_8_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 36.0,
+          "hand": "punching"
+        }
+      },
+      "hand_7_8_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 36.0,
+          "hand": "holding"
+        }
+      },
+      "rest_9": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.25,
+          "cog": 40.5,
+          "hand": "pointing"
+        }
+      },
+      "hand_0_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_0_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.0,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_1_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_1_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.14285714285714285,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_2_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_2_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.2857142857142857,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_3_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_3_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.42857142857142855,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_4_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_4_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.5714285714285714,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_5_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_5_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.7142857142857143,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_6_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_6_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 0.8571428571428571,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      },
+      "hand_7_9_punching": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 40.5,
+          "hand": "punching"
+        }
+      },
+      "hand_7_9_holding": {
+        "type": "minecraft:special",
+        "base": "create:item/extendo_grip",
+        "model": {
+          "type": "create:extendo_grip",
+          "animation": 1.0,
+          "cog": 40.5,
+          "hand": "holding"
+        }
+      }
+    }
+  }
+}

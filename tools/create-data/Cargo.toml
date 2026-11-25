@@ -4,13 +4,12 @@ version = "0.1.0"
 edition = "2024"
 license = "MIT"
 publish = false
-description = "Compiles Create's MIT data into the mod's tables, and assembles the playable mod from Create's jar"
+description = "Compiles Create's MIT data into the mod's tables, and names the assets of Create's jar the mod uses"
 
 [dependencies]
 serde_json = { version = "1", features = ["preserve_order"] }
 zip = { version = "2", default-features = false, features = ["deflate"] }
-png = "0.17"
-# Fetches the pinned Create jar from Modrinth's CDN when `prepare` is given none.
+# Fetches the pinned Create jar from Modrinth's CDN when `registry` is given none.
 ureq = { version = "2", default-features = false, features = ["tls"] }
 # Git's blob identity for proving model/data provenance; SHA-512 pins the distributed jar.
 sha1 = "0.10"

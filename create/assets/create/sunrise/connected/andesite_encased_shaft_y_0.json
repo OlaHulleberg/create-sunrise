@@ -1,0 +1,22 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:andesite_encased_shaft",
+      "state": {
+        "axis": [
+          "y"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/andesite_casing"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "state",
+  "sheet": "create:block/andesite_casing_connected",
+  "table": "omni"
+}

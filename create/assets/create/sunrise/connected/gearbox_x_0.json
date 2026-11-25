@@ -1,0 +1,23 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:gearbox",
+      "state": {
+        "axis": [
+          "x"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/andesite_casing"
+  ],
+  "faces": [
+    "east",
+    "west"
+  ],
+  "connect": "state",
+  "sheet": "create:block/andesite_casing_connected",
+  "table": "omni"
+}

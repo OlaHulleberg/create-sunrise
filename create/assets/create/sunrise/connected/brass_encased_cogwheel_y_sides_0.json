@@ -1,0 +1,23 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:brass_encased_cogwheel",
+      "state": {
+        "axis": [
+          "y"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/brass_encased_cogwheel_side"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "state",
+  "sheet": "create:block/brass_encased_cogwheel_side_connected",
+  "table": "horizontal_by_texture_uncovered",
+  "orient": "texture"
+}

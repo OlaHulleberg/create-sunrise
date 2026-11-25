@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:cherry_window_pane"
+  ],
+  "sprites": [
+    "create:block/palettes/cherry_window"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/cherry_window_connected",
+  "table": "vertical_uncovered"
+}

@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:refined_radiance_casing"
+  ],
+  "sprites": [
+    "create:block/refined_radiance_casing"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/refined_radiance_casing_connected",
+  "table": "omni"
+}

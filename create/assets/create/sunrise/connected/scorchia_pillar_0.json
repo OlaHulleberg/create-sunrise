@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:scorchia_pillar"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/pillar/scorchia_cut_pillar"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/pillar/scorchia_cut_pillar_connected",
+  "table": "rectangle_uncovered",
+  "orient": "texture"
+}

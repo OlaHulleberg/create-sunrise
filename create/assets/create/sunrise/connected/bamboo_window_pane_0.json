@@ -1,0 +1,15 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:bamboo_window_pane"
+  ],
+  "sprites": [
+    "create:block/palettes/bamboo_window"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/bamboo_window_connected",
+  "table": "vertical_uncovered"
+}

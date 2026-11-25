@@ -1641,10 +1641,10 @@ fn draw_depot_stacks(
 
 /// Draws an arm as `ArmRenderer` poses it at its progress: every part turned about the
 /// block's vertical axis by the base's yaw, its joints, and the item in its claw.
-/// A dancing arm's body, tinted (`create-data prepare` makes them from the player's jar).
-pub(super) const ARM_TINTED: [&str; 2] = [
-    "create:block/mechanical_arm/lower_body_tinted",
-    "create:block/mechanical_arm/upper_body_tinted",
+/// A dancing arm's body, drawn in its rainbow colour.
+pub(super) const ARM_BODY: [&str; 2] = [
+    "create:block/mechanical_arm/lower_body",
+    "create:block/mechanical_arm/upper_body",
 ];
 
 /// Whether this client sees goggles on the arm at `pos`.
@@ -1728,14 +1728,14 @@ fn draw_arm_shown(
         if name == claw && s.ceiling && s.goggles {
             draw.rotate_about([0.0, 0.0, 1.0], 180.0, [0.5; 3]);
         }
-        let tinted = match (rainbow, name) {
-            (Some(c), "part_arm_lower_body") => Some((ARM_TINTED[0], c)),
-            (Some(c), "part_arm_upper_body") => Some((ARM_TINTED[1], c)),
+        let coloured = match (rainbow, name) {
+            (Some(c), "part_arm_lower_body") => Some((ARM_BODY[0], c)),
+            (Some(c), "part_arm_upper_body") => Some((ARM_BODY[1], c)),
             _ => None,
         };
-        match tinted {
+        match coloured {
             Some((file, c)) => {
-                let options = mod_api::TerrainModelOptions::default().with_tint(c);
+                let options = mod_api::TerrainModelOptions::default().with_color(0xFF00_0000 | c);
                 if !terrain(draw, host, file, options) {
                     partial(draw, name);
                 }

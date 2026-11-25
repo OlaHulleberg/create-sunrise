@@ -1,0 +1,23 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:brass_scaffolding",
+      "state": {
+        "bottom": [
+          "true"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/brass_casing"
+  ],
+  "faces": [
+    "up",
+    "down"
+  ],
+  "connect": "state",
+  "sheet": "create:block/brass_casing_connected",
+  "table": "omni"
+}

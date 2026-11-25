@@ -1,7 +1,7 @@
 {
   "textures": {
-    "fluid": "create:block/fluid/honey_still",
-    "particle": "create:block/fluid/honey_still"
+    "fluid": "create:fluid/honey_still",
+    "particle": "create:fluid/honey_still"
   },
   "elements": [
     {

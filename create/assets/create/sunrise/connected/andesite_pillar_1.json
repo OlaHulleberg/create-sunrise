@@ -1,0 +1,16 @@
+{
+  "method": "table",
+  "blocks": [
+    "create:andesite_pillar"
+  ],
+  "sprites": [
+    "create:block/palettes/stone_types/cap/andesite_cut_cap"
+  ],
+  "faces": [
+    "all"
+  ],
+  "connect": "block",
+  "sheet": "create:block/palettes/stone_types/cap/andesite_cut_cap_connected",
+  "table": "omni",
+  "orient": "texture"
+}

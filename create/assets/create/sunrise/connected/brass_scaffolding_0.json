@@ -1,0 +1,22 @@
+{
+  "method": "table",
+  "blocks": [
+    {
+      "block": "create:brass_scaffolding",
+      "state": {
+        "bottom": [
+          "true"
+        ]
+      }
+    }
+  ],
+  "sprites": [
+    "create:block/scaffold/brass_scaffold"
+  ],
+  "faces": [
+    "sides"
+  ],
+  "connect": "state",
+  "sheet": "create:block/scaffold/brass_scaffold_connected",
+  "table": "horizontal_uncovered"
+}

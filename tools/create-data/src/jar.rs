@@ -170,7 +170,7 @@ mod tests {
         );
         assert!(CREATE.url.ends_with(&format!("/{}", CREATE.file)));
         assert!(CREATE.file.contains(CREATE.version));
-        // The launcher layers the file the manifest names: it must be the one prepare reads.
+        // The launcher layers the file the manifest names: it must be the one the registry reads.
         let manifest = fs::read_to_string(
             Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create/sunrise-mod.toml"),
         )

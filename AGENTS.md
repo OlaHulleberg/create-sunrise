@@ -10,7 +10,7 @@ Read [README.md](README.md) and [docs/architecture.md](docs/architecture.md) fir
   come from `tools/create-data compile` and `tools/create-data registry`.
 - Never commit Create's All Rights Reserved assets, anything derived from them, the jar itself, binaries or
   `create/.horizon/`. Draw Create's models by id and sample its textures; never transcribe their numbers. The
-  `committed_assets` test allows generated block states and models, verified item-model references, the port's
+  `committed_assets` test allows generated block states and models, item definitions naming models by id, the port's
   atlas declarations, connected-texture rules and shader, and Catnip's placement indicator in `create/assets`. It refuses copies of the jar's assets when the jar is at
   hand. Details: [CONTRIBUTING.md](CONTRIBUTING.md).
 - Keep the repository MIT: never read or copy NeoForge source or data (LGPL), horizon-rust/horizon at or after

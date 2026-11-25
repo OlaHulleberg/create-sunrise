@@ -3,21 +3,19 @@
 //! (`data/create/sunrise/`), the partial models' block states (`assets/create/`) and the engine's
 //! typed block table (`src/engine/src/generated.rs`).
 //!
-//! `create-data registry`: converts the pinned jar's MIT data to 26.3, and writes item definitions
-//! backed by verified MIT model ids. It can also check that these committed outputs are current.
-//!
-//! `create-data prepare`: assembles the playable native mod from this repository and Create's jar,
-//! transforming the remaining art on the player's machine. With no jar given it downloads the
-//! pinned one from Modrinth into the user's cache (`jar.rs`); loose asset folders may be given too.
+//! `create-data registry`: converts the pinned jar's MIT data to 26.3, and writes the item
+//! definitions, atlas references and connected-texture rules that name the jar's assets by id. It
+//! can also check that these committed outputs are current. With no jar given it downloads the
+//! pinned one from Modrinth into the user's cache (`jar.rs`).
 
 mod blocks;
 mod c_tags;
+#[cfg(test)]
+mod committed_assets;
 mod ct;
 mod equipment;
-mod ghosts;
 mod jar;
 mod java;
-mod prepare;
 mod registry;
 mod shapes;
 mod tabs;
@@ -31,8 +29,7 @@ use std::path::{Path, PathBuf};
 fn usage() -> ! {
     eprintln!(
         "usage:\n  create-data compile --create <Create checkout> --out <this repository>\n  \
-         create-data registry --out <mod folder> [--check] [--jar <pinned jar>] [--tree <tree.json>] [--audit <file>]\n  \
-         create-data prepare --out <mod folder> [[--jar] <jar or folder>...]"
+         create-data registry --out <mod folder> [--check] [--jar <pinned jar>] [--tree <tree.json>] [--audit <file>]"
     );
     std::process::exit(2)
 }
@@ -74,37 +71,6 @@ fn main() {
             if let Err(e) = result {
                 eprintln!("create-data registry: {e}");
                 std::process::exit(1);
-            }
-        }
-        Some("prepare") => {
-            let out = flag("--out").unwrap_or_else(|| usage());
-            let mut sources = Vec::new();
-            let mut skip = false;
-            for a in &args[1..] {
-                if skip {
-                    skip = false;
-                } else if a == "--out" {
-                    skip = true;
-                } else if a != "--jar" {
-                    sources.push(PathBuf::from(a));
-                }
-            }
-            if sources.is_empty() {
-                match jar::fetch(&jar::CREATE) {
-                    Ok(path) => sources.push(path),
-                    Err(e) => {
-                        eprintln!("create-data prepare: {e}");
-                        std::process::exit(1);
-                    }
-                }
-            }
-            let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
-            match prepare::prepare(&repo, &sources, &out) {
-                Ok(report) => println!("{report}"),
-                Err(e) => {
-                    eprintln!("create-data prepare: {e}");
-                    std::process::exit(1);
-                }
             }
         }
         _ => usage(),
@@ -244,6 +210,9 @@ fn compile(create: &Path, repo: &Path) {
         &states_dir.join("blaze_burner.json"),
         &pretty(&blocks::blaze_burner_states()),
     );
+    for (name, states) in blocks::sliding_door_states() {
+        write(&states_dir.join(format!("{name}.json")), &pretty(&states));
+    }
     let models_dir = out.join("assets/create/models/block");
     for (name, model) in blocks::fluid_models() {
         write(&models_dir.join(format!("{name}.json")), &pretty(&model));

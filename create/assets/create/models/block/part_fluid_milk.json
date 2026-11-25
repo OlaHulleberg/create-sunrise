@@ -1,7 +1,7 @@
 {
   "textures": {
-    "fluid": "create:block/fluid/milk_still",
-    "particle": "create:block/fluid/milk_still"
+    "fluid": "create:fluid/milk_still",
+    "particle": "create:fluid/milk_still"
   },
   "elements": [
     {
