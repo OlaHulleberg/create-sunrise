@@ -406,10 +406,6 @@ impl Subsystem for Processing {
             air::from_server(data);
             return true;
         }
-        if channel == air::FLYING_CHANNEL {
-            air::flying_from_server(data);
-            return true;
-        }
         toolbelt::server_message(host, channel, data) || client::server_message(host, channel, data)
     }
 
@@ -455,7 +451,6 @@ impl Subsystem for Processing {
     fn player_tick(&self, host: HostSide, event: &mut mod_api::PlayerTickPostEvent) {
         if let HostSide::Server(host) = host {
             toolbelt::player_tick(host, event.player);
-            fan::player_tick(host, event.player);
         }
     }
 

@@ -34,8 +34,6 @@ type Told = (Vec<u8>, Vec<u128>);
 thread_local! {
     /// Per level: the turning fans' currents last told its clients, and to whom.
     static TOLD: RefCell<HashMap<usize, Told>> = RefCell::new(HashMap::new());
-    /// The players last told they fly in creative.
-    static FLYING: RefCell<Vec<u128>> = const { RefCell::new(Vec::new()) };
     static PARTICLE_RNG: RefCell<processing::Rng> = RefCell::new(processing::Rng::new(0xFA2));
 }
 
@@ -43,33 +41,6 @@ thread_local! {
 pub(super) fn player_joined(player: PlayerRef) {
     let uuid = player.uuid();
     TOLD.with_borrow_mut(|t| t.values_mut().for_each(|(_, to)| to.retain(|u| *u != uuid)));
-    FLYING.with_borrow_mut(|f| f.retain(|u| *u != uuid));
-}
-
-/// The end of a player's server tick: their client is told when they start or stop flying in
-/// creative (`isPlayerCreativeFlying`), which lets go of them in a current.
-pub(super) fn player_tick(host: &mut dyn mod_api::ServerHost, player: PlayerRef) {
-    let flying = player
-        .abilities(&*host)
-        .is_some_and(|a| a.flying && a.instabuild);
-    let uuid = player.uuid();
-    let told = FLYING.with_borrow(|f| f.contains(&uuid));
-    if flying == told {
-        return;
-    }
-    FLYING.with_borrow_mut(|f| {
-        if flying {
-            f.push(uuid);
-        } else {
-            f.retain(|u| *u != uuid);
-        }
-    });
-    net::send_to_player(
-        host,
-        player,
-        super::air::FLYING_CHANNEL,
-        &[u8::from(flying)],
-    );
 }
 
 /// The level's turning fans and their currents (`AirCurrent`, which Create keeps on both sides
