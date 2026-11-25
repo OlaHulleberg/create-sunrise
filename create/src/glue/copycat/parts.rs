@@ -15,9 +15,9 @@ use create_engine::copycat::{self as cc, Drawn, Shape, Special, Use};
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockEntityPart, BlockEntityUpdateTagEvent, BlockPart, BlockState, CanHarvestBlockEvent,
-    ClientHost, Compound, Direction, FrictionEvent, Hand, HostBlockStates, HostSide,
-    InteractionResult, ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent, PlayerRef,
-    ServerHost, SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
+    ClientHost, Compound, DestroyProgressEvent, Direction, FrictionEvent, Hand, HostBlockStates,
+    HostSide, InteractionResult, ItemPart, ItemStack, LightEmissionEvent, OnBlockPlacedByEvent,
+    PlayerRef, ServerHost, SoundSource, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 
 fn dir(d: Direction) -> Dir {
@@ -346,6 +346,26 @@ impl BlockPart for CopycatBlock {
             .and_then(|l| l.hand_item(host, Hand::Main));
         event.can_harvest = !requires
             || held.is_some_and(|s| facts.is_correct_tool_for_drops(&s, material) == Some(true));
+    }
+
+    /// `CopycatBlock.getDestroyProgress`: the material's own (`BlockState.getDestroyProgress`),
+    /// for the player, as it is in the copycat's place. The server reads the material from its own
+    /// copycats, as `can_harvest_block` does. A client leaves it to the block's own progress:
+    /// `PlayerRef::destroy_progress` is server-only.
+    fn destroy_progress(
+        &self,
+        host: HostSide<'_>,
+        event: &mut DestroyProgressEvent,
+    ) -> Option<f32> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
+        let level = event.player.level(&*host)?;
+        let material = server_material(&mut *host, event.player.entity(), event.pos)?;
+        let material = host.block_state_id(&material)?;
+        event
+            .player
+            .destroy_progress(host, level, event.pos, material)
     }
 }
 
