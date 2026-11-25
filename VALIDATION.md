@@ -36,7 +36,7 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 
 Two runs on the Linux build of Dev `bdad86d` (headless, software Vulkan, driven by the control socket). Only the second had
 Create's local `create-data prepare` output; the first had none, so its missing wand icon and sprite warnings and its slow
-schematic preview after relaunch came from that. The first run met a startup crash: 26.3 has no `minecraft:block_state_property` loot
+schematic preview after relaunch likely came from that. The first run met a startup crash: 26.3 has no `minecraft:block_state_property` loot
 condition (it has `match_block`), and 79 generated block loot tables used it. #277 changed `tools/create-data` to emit
 `match_block` and regenerated them. The second run is on main with #277 and no loot edits.
 
