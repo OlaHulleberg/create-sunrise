@@ -1,0 +1,103 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 30,
+  "checkpoints": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    29,
+    30
+  ],
+  "blocks": [
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:sequenced_gearshift[axis=x,vertical=false,state=0]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 16
+    }
+  ],
+  "events": [
+    {
+      "tick": 8,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "south",
+        "hit": [
+          0.1,
+          0.5,
+          1.0
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      }
+    },
+    {
+      "tick": 16,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "use",
+        "item": "create:wrench",
+        "face": "south",
+        "hit": [
+          0.1,
+          0.5,
+          1.0
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      }
+    }
+  ]
+}

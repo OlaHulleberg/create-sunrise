@@ -1,0 +1,108 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 90,
+  "checkpoints": [
+    6,
+    7,
+    8,
+    9,
+    18,
+    19,
+    20,
+    21,
+    39,
+    40,
+    41,
+    42,
+    43,
+    83,
+    84,
+    85,
+    86,
+    89,
+    90
+  ],
+  "blocks": [
+    {
+      "pos": [
+        3,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=west]",
+      "motor": 16
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:sequenced_gearshift[axis=x,vertical=false,state=0]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 3,
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "program",
+        "instructions": [
+          {
+            "instruction": "TURN_ANGLE",
+            "modifier": "FORWARD_FAST",
+            "value": 90
+          },
+          {
+            "instruction": "DELAY",
+            "modifier": "FORWARD",
+            "value": 20
+          },
+          {
+            "instruction": "TURN_DISTANCE",
+            "modifier": "BACK_FAST",
+            "value": 5
+          },
+          {
+            "instruction": "END",
+            "modifier": "FORWARD",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "tick": 6,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    }
+  ]
+}

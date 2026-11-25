@@ -1,0 +1,63 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 40,
+  "checkpoints": [
+    7,
+    8,
+    9,
+    10,
+    11,
+    12,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    39,
+    40
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 16
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:sequenced_gearshift[axis=z,vertical=true,state=0]"
+    },
+    {
+      "pos": [
+        0,
+        9,
+        0
+      ],
+      "state": "create:shaft[axis=y]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 8,
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    }
+  ]
+}

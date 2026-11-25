@@ -1,0 +1,151 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 70,
+  "checkpoints": [
+    8,
+    9,
+    10,
+    11,
+    12,
+    14,
+    15,
+    16,
+    17,
+    18,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    39,
+    40,
+    41,
+    42,
+    43,
+    50,
+    51,
+    52,
+    53,
+    54,
+    55,
+    56,
+    69,
+    70
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 16
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:sequenced_gearshift[axis=x,vertical=false,state=0]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 8,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    },
+    {
+      "tick": 15,
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "program",
+        "instructions": [
+          {
+            "instruction": "DELAY",
+            "modifier": "FORWARD",
+            "value": 20
+          },
+          {
+            "instruction": "END",
+            "modifier": "FORWARD",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "tick": 30,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      }
+    },
+    {
+      "tick": 35,
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "program",
+        "instructions": [
+          {
+            "instruction": "TURN_ANGLE",
+            "modifier": "FORWARD",
+            "value": 45
+          },
+          {
+            "instruction": "END",
+            "modifier": "FORWARD",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "tick": 40,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    }
+  ]
+}
