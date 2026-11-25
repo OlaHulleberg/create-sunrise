@@ -41,8 +41,9 @@ emitted. Subsystem payloads compare sequencer instructions/run; valve selected
 angle/total use duration/target; belt controller/index/length/casing, persisted
 inventory order/stack/position/lock; and depot held slots. Floating fields use
 the existing kinetic tolerance. Random render angles and dependent offsets
-are excluded symmetrically. Belt save observations project write's committed
-queues without mutating the live inventory; the actual reload uses write.
+are excluded symmetrically. Belt save observations project `BeltInventory.write`'s
+committed queues in its list order, without mutating the live inventory; the
+actual reload uses write.
 
 Explicit boundaries:
 

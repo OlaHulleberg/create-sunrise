@@ -75,9 +75,15 @@ final class Persistence {
             var inv=b.getInventory();var owner=com.simibubi.create.content.kinetics.belt.transport.BeltInventory.class;
             boolean positive=TransportObservations.<Boolean>field(inv,owner,"beltMovementPositive");
             var items=new java.util.ArrayList<>(inv.getTransportedItems());
-            items.addAll(TransportObservations.<java.util.List<com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack>>field(inv,owner,"toInsert"));
+            for(var item:TransportObservations.<java.util.List<com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack>>field(inv,owner,"toInsert")) {
+                int index=0;
+                for(var stack:items) {
+                    if(stack.compareTo(item)>0==positive) break;
+                    index++;
+                }
+                items.add(index,item);
+            }
             items.removeAll(TransportObservations.<java.util.List<com.simibubi.create.content.kinetics.belt.transport.TransportedItemStack>>field(inv,owner,"toRemove"));
-            items.sort(positive ? java.util.Comparator.naturalOrder() : java.util.Comparator.reverseOrder());
             var saved=new net.minecraft.nbt.CompoundTag();var list=new net.minecraft.nbt.ListTag();
             for(var item:items) list.add(item.serializeNBT(b.getLevel().registryAccess()));
             saved.put("Items",list);saved.putBoolean("PositiveOrder",positive);tag.put("Inventory",saved);
