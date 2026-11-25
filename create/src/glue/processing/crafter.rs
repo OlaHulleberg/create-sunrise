@@ -426,8 +426,8 @@ fn crafter_recipe(lv: &ServerLevel<'_>, grid: &[((i32, i32), String)]) -> Option
 }
 
 /// `ejectWholeGrid`: every crafter of the chain throws out its grid in front of it and goes
-/// idle, then looks at its slot again (`lazyTick`). Its slot is left: Create's refuses items
-/// while it works, so an item a hopper put in meanwhile is the next round's.
+/// idle; it looks at its slot again at its next `lazyTick`. Its slot is left: Create's refuses
+/// items while it works, so an item a hopper put in meanwhile is the next round's.
 fn crafters_eject(lv: &mut ServerLevel<'_>, root: [i32; 3]) {
     let dim = lv.dim;
     let chain = crafter_chain(lv, root, |_, _| true, true).unwrap_or_else(|| vec![root]);
@@ -442,7 +442,6 @@ fn crafters_eject(lv: &mut ServerLevel<'_>, root: [i32; 3]) {
         })
         .flatten()
         .unwrap_or_default();
-        with_world(|w| w.dims[dim].crafter_checks.push(p));
         let f = crafter_at(lv, p).map_or([0, 0, 0], |(f, _)| f.offset());
         let at: [f64; 3] = std::array::from_fn(|i| f64::from(p[i]) + 0.5 + f64::from(f[i]) * 0.75);
         for (_, item) in grid {
@@ -649,8 +648,16 @@ fn run_crafters(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let Some((mut checks, drops, working, power)) = with_world(|w| {
         let d = &mut w.dims[dim];
+        let mut checks = std::mem::take(&mut d.crafter_checks);
+        // `lazyTick` (rate 20): an idle crafter looks at its slot again
+        // (`checkCompletedRecipe(false)`).
+        for (p, c) in d.crafters.iter_mut() {
+            if c.lazy.tick() && c.phase == Phase::Idle {
+                checks.push(*p);
+            }
+        }
         (
-            std::mem::take(&mut d.crafter_checks),
+            checks,
             std::mem::take(&mut d.crafter_drops),
             d.crafting.clone(),
             std::mem::take(&mut d.crafter_power_checks),
