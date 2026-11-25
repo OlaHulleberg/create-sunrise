@@ -12,8 +12,7 @@
 //! be read: the entity is noted there and seated or turned at the end of the level's tick.
 //! A player clicking a free seat while leading a mob seats the mob instead (`getLeashed`). A
 //! seat bounces what won't sit on it (`bounce_restitution`) and halves the fall it breaks
-//! (`SeatBlock.fallOn`). Create's `setNoActionTime(20)` and `setOnGround(false)` for mobs on a
-//! turntable have no writer (`API_GAPS.md`).
+//! (`SeatBlock.fallOn`).
 
 use super::super::server::{ServerLevel, update_all};
 use super::super::states::key;
@@ -374,7 +373,8 @@ fn seat_inside(lv: &mut ServerLevel<'_>, pos: [i32; 3], e: EntityRef) {
 }
 
 /// `TurntableBlock.entityInside` on a turntable turning at its speed: a mob standing on it
-/// turns by 3/10 of the speed a tick (its head with it); a player standing on it (their client
+/// turns by 3/10 of the speed a tick (its head with it, and it idles for 20 ticks off the
+/// ground); a player standing on it (their client
 /// turns them, `turn_local_player`) whose middle is off it is carried round it
 /// (`setDeltaMovement` on the server's copy of their motion).
 fn turntable_inside(lv: &mut ServerLevel<'_>, pos: [i32; 3], e: EntityRef) {
@@ -396,6 +396,12 @@ fn turntable_inside(lv: &mut ServerLevel<'_>, pos: [i32; 3], e: EntityRef) {
         if stands {
             e.set_rotation(&mut *lv.host, yaw - speed, pitch);
             e.set_head_yaw(&mut *lv.host, yaw - speed);
+            if let Some(mob) = lv.host.mob(e) {
+                mob.set_no_action_time(&mut *lv.host, 20);
+            }
+            if lv.host.living(e).is_some() {
+                let _ = e.set_on_ground(&mut *lv.host, false);
+            }
         }
         return;
     }
