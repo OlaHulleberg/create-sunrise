@@ -6827,7 +6827,7 @@ mod tests {
         let fed = crate::burner::Burner {
             fuel: crate::burner::Fuel::from_index(1),
             remaining: 400,
-            creative: None,
+            ..crate::burner::Burner::default()
         };
         w.dims[0].burner_checks.clear();
         w.read_burner(0, burner, fed);

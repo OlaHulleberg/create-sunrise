@@ -6,6 +6,7 @@
 
 use crate::glue::states;
 use create_engine::Block;
+use create_engine::burner::Burner;
 use create_engine::fan::Heat;
 use create_engine::kinetics::Dir;
 use mod_api::{BlockEntityDrawContext, ClientHost, ModelRef, TerrainModelOptions, TerrainUvShift};
@@ -24,9 +25,11 @@ const SUPER_FLAME_SCROLL: &str = "create:block/blaze_burner_flame_superheated_sc
 /// `LightTexture.FULL_BRIGHT`.
 const FULL_BRIGHT: u32 = 0xF0F0;
 
-/// One burner's animation: `headAngle` and `headAnimation`, this tick's and the last.
+/// One burner's animation: `headAngle` and `headAnimation`, this tick's and the last, and its
+/// client-side `stockKeeper` with the lazy tick that sets it.
 #[derive(Clone, Copy, Debug)]
 struct Head {
+    burner: Burner,
     angle: f32,
     last_angle: f32,
     sink: f32,
@@ -82,7 +85,22 @@ fn heats_above(host: &dyn ClientHost, pos: [i32; 3]) -> bool {
     matches!(block, Some(Block::Basin | Block::FluidTank))
 }
 
-/// `tickAnimation` for every burner drawn: the head turns to the local player while idle, to
+/// `BlazeBurnerBlockEntity.getStockTicker`: a stock ticker on one of the burner's sides.
+fn beside_ticker(host: &dyn ClientHost, pos: [i32; 3]) -> bool {
+    let Some(level) = host.level(host.dimension()) else {
+        return false;
+    };
+    [[1, 0], [-1, 0], [0, 1], [0, -1]].iter().any(|[dx, dz]| {
+        level
+            .block_state(host, [pos[0] + dx, pos[1], pos[2] + dz])
+            .and_then(states::id)
+            .and_then(|id| crate::glue::client_table(host, |t| t.get(id).map(|(b, _)| b)).flatten())
+            == Some(Block::StockTicker)
+    })
+}
+
+/// The lazy tick (rate 10) of every burner drawn, which finds a stock ticker beside it
+/// (`lazyTick`), then `tickAnimation` for each: the head turns to the local player while idle, to
 /// its front while it heats something; it sinks under a basin.
 pub fn tick(host: &dyn ClientHost) {
     let positions: Vec<[i32; 3]> = HEADS.with_borrow(|h| h.keys().copied().collect());
@@ -113,6 +131,7 @@ pub fn tick(host: &dyn ClientHost) {
             let Some(head) = h.get_mut(&pos) else {
                 return;
             };
+            head.burner.lazy_tick(|| beside_ticker(host, pos));
             head.last_angle = head.angle;
             head.last_sink = head.sink;
             if active {
@@ -135,9 +154,9 @@ pub fn tick(host: &dyn ClientHost) {
     }
 }
 
-/// `renderShared` for the burner at `pos` of `heat` facing `facing`; beside a stock ticker it is
-/// its keeper (`stockKeeper`): lit at least as a fading blaze (`getHeatLevelForRender`) and
-/// wearing the logistics hat.
+/// `renderShared` for the burner at `pos` of `heat` facing `facing`; a stock keeper (`stockKeeper`,
+/// found by its lazy tick, or `keeper` for a burner drawn in a screen's scene) is lit at least as
+/// a fading blaze (`getHeatLevelForRender`) and wears the logistics hat.
 pub fn draw(
     draw: &mut dyn BlockEntityDrawContext,
     pos: [i32; 3],
@@ -153,6 +172,7 @@ pub fn draw(
         *h.entry(pos).or_insert_with(|| {
             let a = front_angle(facing);
             Head {
+                burner: Burner::default(),
                 angle: a,
                 last_angle: a,
                 sink: 0.0,
@@ -167,10 +187,12 @@ pub fn draw(
     let hash = (pos[0].wrapping_mul(31).wrapping_add(pos[1]))
         .wrapping_mul(31)
         .wrapping_add(pos[2]);
-    let heat = if keeper { heat.max(Heat::Fading) } else { heat };
+    let mut burner = head.burner;
+    burner.stock_keeper |= keeper;
+    let heat = burner.render_heat(heat);
     let wear = Wear {
         goggles,
-        hat: keeper,
+        hat: burner.stock_keeper,
     };
     shared(draw, heat, angle, animation, true, wear, hash);
 }
