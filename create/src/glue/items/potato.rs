@@ -16,17 +16,17 @@ use crate::glue::owned::LevelLists as _;
 use crate::glue::owned::OwnedInventory as _;
 use create_engine::potato::{self, Type};
 use mod_api::{
-    ActiveEffect, AttachmentCodec, AttachmentError, AttachmentType, BlockEntityDrawContext,
-    BlockFace, ClientHost, ClipHit, Compound, EntityPart, EntityRef, EntityRenderState,
-    EntityRenderer, EntitySpawn, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy,
-    Hand, Holder, Host, HostSide, HostTransaction, Identifier, InteractionResult,
-    ItemDisplayContext, ItemKey, ItemPart, ItemPlace, ItemStack, LevelRef, ParticleKey,
-    ParticleOptions, PlayerRef, Registrar, RegistrationContext, ServerHost, SoundSource, SpawnBody,
-    Tag, Text, TooltipEvent, UseItemEvent,
+    ActiveEffect, AttachmentCodec, AttachmentDescriptor, AttachmentError, AttachmentKey,
+    BlockEntityDrawContext, BlockFace, ClientHost, ClipHit, Compound, EntityPart, EntityRef,
+    EntityRenderState, EntityRenderer, EntitySpawn, GeneralEntityCategory, GeneralEntityTickEvent,
+    GeneralSavePolicy, Hand, Holder, Host, HostSide, HostTransaction, Identifier,
+    InteractionResult, ItemDisplayContext, ItemKey, ItemPart, ItemPlace, ItemStack, LevelRef,
+    ParticleKey, ParticleOptions, PlayerRef, Registrar, RegistrationContext, ServerHost,
+    SoundSource, SpawnBody, Tag, Text, TooltipEvent, UseItemEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, HashSet};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
 const CANNON: &str = "create:potato_cannon";
 const SHOT: &str = "create:potato_projectile";
@@ -43,45 +43,63 @@ struct Ammo {
     kind: &'static Type,
 }
 
-static AMMO: AttachmentType<Option<Arc<Ammo>>> = AttachmentType {
-    namespace: "create",
-    name: "potato_ammo",
-    default: || None,
-    codec: Some(AttachmentCodec {
-        encode: |ammo| Ok(ammo.as_ref().ok_or(AttachmentError::Decode)?.saved.clone()),
-        decode: |saved| {
-            let Some(Tag::String(id)) = saved.get(&"id".into()) else {
-                return Err(AttachmentError::Decode);
-            };
-            if !matches!(
-                saved.get(&"count".into()),
-                None | Some(Tag::Byte(1) | Tag::Short(1) | Tag::Int(1) | Tag::Long(1))
-            ) {
-                return Err(AttachmentError::Decode);
-            }
-            let id = id.to_string_lossy();
-            let item = AMMO_KEYS
-                .get()
-                .and_then(|keys| keys.get(id.as_str()))
-                .ok_or(AttachmentError::Decode)?;
-            let kind = potato::type_for(id.as_ref()).ok_or(AttachmentError::Decode)?;
-            let mut stack = ItemStack::of(*item);
-            match saved.get(&"components".into()) {
-                Some(Tag::Compound(patch)) => stack
-                    .set_components(patch.clone())
-                    .map_err(|_| AttachmentError::Decode)?,
-                None => {}
-                _ => return Err(AttachmentError::Decode),
-            }
-            Ok(Some(Arc::new(Ammo {
-                saved: saved.clone(),
-                stack,
-                kind,
-            })))
-        },
-    }),
-    copy_on_death: false,
-    sync: true,
+/// The keys the registrar issued for this load's attachments (a reinstall issues new ones).
+static AMMO: RwLock<Option<AttachmentKey<Option<Arc<Ammo>>>>> = RwLock::new(None);
+static STUCK: RwLock<Option<AttachmentKey<Arc<Mutex<Option<Stuck>>>>>> = RwLock::new(None);
+static FLIGHT: RwLock<Option<AttachmentKey<Flight>>> = RwLock::new(None);
+
+/// The issued key in `slot`, once registration has run.
+fn issued<T>(slot: &RwLock<Option<AttachmentKey<T>>>) -> Option<AttachmentKey<T>> {
+    slot.read().unwrap_or_else(|err| err.into_inner()).clone()
+}
+
+/// Declares one attachment and keeps the key the registrar issues for it.
+macro_rules! declare {
+    ($r:expr, $slot:expr, $descriptor:expr) => {
+        match $r.register_attachment_type($descriptor) {
+            Ok(key) => *$slot.write().unwrap_or_else(|err| err.into_inner()) = Some(key),
+            Err(e) => crate::create_log!("[create] declaring potato projectile data: {e:?}"),
+        }
+    };
+}
+
+fn no_ammo() -> Option<Arc<Ammo>> {
+    None
+}
+
+/// Saved and sent to the clients, which draw the ammunition.
+const AMMO_CODEC: AttachmentCodec<Option<Arc<Ammo>>> = AttachmentCodec {
+    encode: |ammo| Ok(ammo.as_ref().ok_or(AttachmentError::Decode)?.saved.clone()),
+    decode: |saved| {
+        let Some(Tag::String(id)) = saved.get(&"id".into()) else {
+            return Err(AttachmentError::Decode);
+        };
+        if !matches!(
+            saved.get(&"count".into()),
+            None | Some(Tag::Byte(1) | Tag::Short(1) | Tag::Int(1) | Tag::Long(1))
+        ) {
+            return Err(AttachmentError::Decode);
+        }
+        let id = id.to_string_lossy();
+        let item = AMMO_KEYS
+            .get()
+            .and_then(|keys| keys.get(id.as_str()))
+            .ok_or(AttachmentError::Decode)?;
+        let kind = potato::type_for(id.as_ref()).ok_or(AttachmentError::Decode)?;
+        let mut stack = ItemStack::of(*item);
+        match saved.get(&"components".into()) {
+            Some(Tag::Compound(patch)) => stack
+                .set_components(patch.clone())
+                .map_err(|_| AttachmentError::Decode)?,
+            None => {}
+            _ => return Err(AttachmentError::Decode),
+        }
+        Ok(Some(Arc::new(Ammo {
+            saved: saved.clone(),
+            stack,
+            kind,
+        })))
+    },
 };
 
 #[derive(Clone, Copy, Default)]
@@ -98,47 +116,36 @@ struct Stuck {
     fall: f64,
 }
 
-// The target and follow offsets are transient in Create as well. Read and update them in
-// place rather than re-encoding the saved flight every tick.
-static STUCK: AttachmentType<Arc<Mutex<Option<Stuck>>>> = AttachmentType {
-    namespace: "create",
-    name: "potato_stuck",
-    default: Default::default,
-    codec: None,
-    copy_on_death: false,
-    sync: false,
-};
+// The target and follow offsets are transient in Create as well (the attachment has no codec).
+// Read and update them in place rather than re-encoding the saved flight every tick.
+fn no_stuck() -> Arc<Mutex<Option<Stuck>>> {
+    Arc::default()
+}
 
-static FLIGHT: AttachmentType<Flight> = AttachmentType {
-    namespace: "create",
-    name: "potato_flight",
-    default: Flight::default,
-    codec: Some(AttachmentCodec {
-        encode: |flight| {
-            Ok(Compound::from([
-                ("Recovery".into(), Tag::Float(flight.recovery.to_bits())),
-                ("LeftOwner".into(), Tag::Byte(i8::from(flight.left_owner))),
-            ]))
-        },
-        decode: |saved| {
-            let (Some(Tag::Float(recovery)), Some(Tag::Byte(left_owner))) = (
-                saved.get(&"Recovery".into()),
-                saved.get(&"LeftOwner".into()),
-            ) else {
-                return Err(AttachmentError::Decode);
-            };
-            let recovery = f32::from_bits(*recovery);
-            if !(0.0..=1.0).contains(&recovery) || !matches!(left_owner, 0 | 1) {
-                return Err(AttachmentError::Decode);
-            }
-            Ok(Flight {
-                recovery,
-                left_owner: *left_owner == 1,
-            })
-        },
-    }),
-    copy_on_death: false,
-    sync: false,
+/// Saved with the shot, not sent.
+const FLIGHT_CODEC: AttachmentCodec<Flight> = AttachmentCodec {
+    encode: |flight| {
+        Ok(Compound::from([
+            ("Recovery".into(), Tag::Float(flight.recovery.to_bits())),
+            ("LeftOwner".into(), Tag::Byte(i8::from(flight.left_owner))),
+        ]))
+    },
+    decode: |saved| {
+        let (Some(Tag::Float(recovery)), Some(Tag::Byte(left_owner))) = (
+            saved.get(&"Recovery".into()),
+            saved.get(&"LeftOwner".into()),
+        ) else {
+            return Err(AttachmentError::Decode);
+        };
+        let recovery = f32::from_bits(*recovery);
+        if !(0.0..=1.0).contains(&recovery) || !matches!(left_owner, 0 | 1) {
+            return Err(AttachmentError::Decode);
+        }
+        Ok(Flight {
+            recovery,
+            left_owner: *left_owner == 1,
+        })
+    },
 };
 
 static ITEM_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
@@ -169,47 +176,68 @@ static AIR_TYPE: std::sync::OnceLock<mod_api::ParticleType<()>> = std::sync::Onc
 struct Air;
 
 impl mod_api::ParticleProvider for Air {
-    fn tick(
+    fn create_particle(
         &self,
-        particles: &mut mod_api::ParticleBatch,
+        spawn: &mut mod_api::ParticleSpawn<'_, ()>,
+        particle: &mut dyn mod_api::ParticleTickView,
+    ) -> Option<Box<dyn mod_api::CustomParticle>> {
+        let velocity = spawn.velocity;
+        let len = velocity.iter().map(|v| v * v).sum::<f64>().sqrt();
+        if len == 0.0 {
+            return None;
+        }
+        let mut rgba = particle.rgba();
+        rgba[3] = 0.25;
+        particle.set_rgba(rgba);
+        let size = particle.size() * 0.75;
+        particle.set_size(size);
+        particle.set_lifetime(((len / 0.25) as i32).min(60) as _);
+        Some(Box::new(Twirl {
+            velocity,
+            origin: particle.previous_position(),
+        }))
+    }
+}
+
+/// One air particle: it goes from `origin` along `velocity`, twirling.
+struct Twirl {
+    velocity: [f64; 3],
+    origin: [f64; 3],
+}
+
+impl mod_api::CustomParticle for Twirl {
+    fn tick(
+        &mut self,
+        particle: &mut dyn mod_api::ParticleTickView,
         _level: &dyn mod_api::ParticleLevelView,
     ) {
-        let one = |p: &mut mod_api::ModParticle| {
-            let velocity = p.velocity;
-            let h = |salt: u64| {
-                let mut x = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
-                for v in velocity {
-                    x = (x ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
-                }
-                ((x >> 11) % 10_000) as f64 / 10_000.0
-            };
-            if p.age <= 1 {
-                p.state[..3].copy_from_slice(&p.previous);
-                let len = p.velocity.iter().map(|v| v * v).sum::<f64>().sqrt();
-                p.lifetime = ((len / 0.25) as i32).min(60);
-                p.size *= 0.75;
-                p.rgba[3] = 0.25;
-                if len == 0.0 {
-                    p.removed = true;
-                    return;
-                }
+        if !particle.advance_age() {
+            return;
+        }
+        let velocity = self.velocity;
+        let h = |salt: u64| {
+            let mut x = salt.wrapping_mul(0x9E37_79B9_7F4A_7C15);
+            for v in velocity {
+                x = (x ^ v.to_bits()).wrapping_mul(0x0100_0000_01B3);
             }
-            let life = f64::from(p.lifetime.max(1));
-            let progress = (f64::from(p.age) / life).powf(1.0);
-            let radius = h(1) / 6.0;
-            let angle = ((progress * 2.0 * 360.0 + h(2) * 360.0) % 360.0).to_radians();
-            let (sin, cos) = angle.sin_cos();
-            // `VecHelper.rotate((0, r, 0), angle, X or Z)`.
-            let twirl = if h(3) < 0.5 {
-                [0.0, radius * cos, radius * sin]
-            } else {
-                [-radius * sin, radius * cos, 0.0]
-            };
-            p.position = std::array::from_fn(|i| p.state[i] + p.velocity[i] * progress + twirl[i]);
-            // `setSpriteFromAge` over its 8 sprites.
-            p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
+            ((x >> 11) % 10_000) as f64 / 10_000.0
         };
-        particles.iter_mut().for_each(one);
+        let life = (particle.lifetime() as f64).max(1.0);
+        let progress = particle.age() as f64 / life;
+        let radius = h(1) / 6.0;
+        let angle = ((progress * 2.0 * 360.0 + h(2) * 360.0) % 360.0).to_radians();
+        let (sin, cos) = angle.sin_cos();
+        // `VecHelper.rotate((0, r, 0), angle, X or Z)`.
+        let twirl = if h(3) < 0.5 {
+            [0.0, radius * cos, radius * sin]
+        } else {
+            [-radius * sin, radius * cos, 0.0]
+        };
+        let _ = particle.set_position(std::array::from_fn(|i| {
+            self.origin[i] + velocity[i] * progress + twirl[i]
+        }));
+        // `setSpriteFromAge` over its 8 sprites.
+        particle.set_sprite_from_age();
     }
 }
 
@@ -257,15 +285,24 @@ impl Subsystem for PotatoCannon {
             .map(|id| r.entity_type_key(&id))
             .collect(),
         );
-        for (id, sync) in [
-            ("create:potato_ammo", true),
-            ("create:potato_flight", false),
-            ("create:potato_stuck", false),
-        ] {
-            if let Err(e) = r.register_attachment_type(id, sync) {
-                crate::create_log!("[create] declaring potato projectile data: {e:?}");
-            }
-        }
+        declare!(
+            r,
+            AMMO,
+            AttachmentDescriptor::new("create:potato_ammo", no_ammo)
+                .serialize(AMMO_CODEC)
+                .sync(AMMO_CODEC)
+        );
+        declare!(
+            r,
+            FLIGHT,
+            AttachmentDescriptor::new("create:potato_flight", Flight::default)
+                .serialize(FLIGHT_CODEC)
+        );
+        declare!(
+            r,
+            STUCK,
+            AttachmentDescriptor::new("create:potato_stuck", no_stuck)
+        );
         if let Err(e) = r.declare_general_entity(
             "potato_projectile",
             GeneralEntityCategory::Misc,
@@ -290,7 +327,11 @@ impl Subsystem for PotatoCannon {
         renderers.register(SHOT.to_owned(), Arc::new(Projectile));
     }
 
-    fn camera_pose(&self, _host: &dyn ClientHost, event: &mut mod_api::CameraPoseEvent<'_>) {
+    fn compute_camera_angles(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::ComputeCameraAnglesEvent,
+    ) {
         CAMERA.set([event.yaw, event.pitch]);
     }
 
@@ -308,7 +349,7 @@ impl Subsystem for PotatoCannon {
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
         if let Some(&ty) = AIR_TYPE.get() {
-            providers.register_sprite_set(ty, std::sync::Arc::new(Air));
+            providers.register_sprite_set(ty, |_sprites| Air);
         }
     }
 }
@@ -335,10 +376,13 @@ impl EntityRenderer for Projectile {
         entity: &EntityRenderState,
         draw: &mut dyn BlockEntityDrawContext,
     ) -> Result<(), String> {
+        let Some(key) = issued(&AMMO) else {
+            return Ok(());
+        };
         let Some(ammo) = entity
             .attachments
             .as_ref()
-            .and_then(|a| a.get(&AMMO).ok().flatten())
+            .and_then(|a| a.get(&key).ok().flatten())
             .and_then(Option::as_ref)
         else {
             return Ok(());
@@ -381,7 +425,7 @@ impl ItemPart for CannonPart {
     }
 
     /// `PotatoCannonItem.appendHoverText`: the ammunition found and what it does.
-    fn tooltip(&self, host: &dyn ClientHost, event: &mut TooltipEvent<'_>) {
+    fn tooltip(&self, host: &dyn ClientHost, event: &mut TooltipEvent<'_, '_>) {
         let Some(player) = host.local_player() else {
             return;
         };
@@ -397,16 +441,16 @@ impl ItemPart for CannonPart {
                 .replace("%1$s", &value);
             (Text::literal(format!(" {text}")), DARK_GREEN)
         };
-        event.lines.push((Text::literal(""), u32::MAX));
+        let _ = event.lines.push((Text::literal(""), u32::MAX));
         let name = host.hover_name(&stack).unwrap_or_default();
-        event.lines.push((name.append(Text::literal(":")), GRAY));
-        event
+        let _ = event.lines.push((name.append(Text::literal(":")), GRAY));
+        let _ = event
             .lines
             .push(line("attack_damage", t.damage.to_string()));
-        event
+        let _ = event
             .lines
             .push(line("reload_ticks", t.reload_ticks.to_string()));
-        event.lines.push(line("knockback", t.knockback.to_string()));
+        let _ = event.lines.push(line("knockback", t.knockback.to_string()));
     }
 }
 
@@ -521,6 +565,9 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
     let Some(item) = shot_stack.to_nbt(host) else {
         return false;
     };
+    let (Some(ammo_key), Some(flight_key)) = (issued(&AMMO), issued(&FLIGHT)) else {
+        return false;
+    };
     let ammo = Some(Arc::new(Ammo {
         saved: item,
         stack: shot_stack.clone(),
@@ -538,8 +585,8 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
                 continue;
             };
             let holder = Holder::Entity(e.id());
-            AMMO.set(host, holder, ammo.clone())?;
-            FLIGHT.set(host, holder, Flight::default())?;
+            ammo_key.set(host, holder, ammo.clone())?;
+            flight_key.set(host, holder, Flight::default())?;
             shots.push(e);
         }
         Ok::<_, AttachmentError>(shots)
@@ -551,7 +598,7 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
         return false;
     };
     if recovery > 0.0
-        && FLIGHT
+        && flight_key
             .set(
                 host,
                 Holder::Entity(first.id()),
@@ -675,9 +722,14 @@ fn fire(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> bool {
 /// `PotatoProjectileEntity.tick`: follow a stuck target or sweep the flight vector.
 fn fly(host: &mut dyn ServerHost, level: LevelRef, e: EntityRef) {
     let holder = Holder::Entity(e.id());
+    let (Some(ammo_key), Some(flight_key), Some(stuck_key)) =
+        (issued(&AMMO), issued(&FLIGHT), issued(&STUCK))
+    else {
+        return;
+    };
     let (Ok(Some(Some(ammo))), Ok(Some(mut flight))) = (
-        AMMO.get_existing(host, holder),
-        FLIGHT.get_existing(host, holder),
+        ammo_key.get_existing(host, holder, |value| value.cloned()),
+        flight_key.get_existing(host, holder, |value| value.copied()),
     ) else {
         e.remove(host, mod_api::RemovalReason::Discarded);
         return;
@@ -685,7 +737,7 @@ fn fly(host: &mut dyn ServerHost, level: LevelRef, e: EntityRef) {
     let (Some(from), Some(velocity)) = (e.position(host), e.velocity(host)) else {
         return;
     };
-    if let Ok(Some(stuck)) = STUCK.get_existing(host, holder) {
+    if let Ok(Some(stuck)) = stuck_key.get_existing(host, holder, |value| value.cloned()) {
         let follow = *stuck.lock().unwrap_or_else(|err| err.into_inner());
         if let Some(mut follow) = follow {
             if alive(host, follow.target)
@@ -729,7 +781,7 @@ fn fly(host: &mut dyn ServerHost, level: LevelRef, e: EntityRef) {
             owner,
             &mut flight.left_owner,
         );
-        if flight.left_owner != had_left && FLIGHT.set(host, holder, flight).is_err() {
+        if flight.left_owner != had_left && flight_key.set(host, holder, flight).is_err() {
             return;
         }
         if let Some(hit) = candidate {
@@ -739,7 +791,7 @@ fn fly(host: &mut dyn ServerHost, level: LevelRef, e: EntityRef) {
                     return;
                 }
                 Impact::Stick(follow) => {
-                    if let Ok(stuck) = STUCK.get(host, holder) {
+                    if let Ok(stuck) = stuck_key.get(host, holder, Clone::clone) {
                         *stuck.lock().unwrap_or_else(|err| err.into_inner()) = Some(follow);
                         e.set_velocity(host, [0.0; 3]);
                         return;
@@ -845,9 +897,10 @@ fn leave_item(
 ) {
     let chance = std::mem::take(&mut flight.recovery);
     let recovered = chance > 0.0
-        && FLIGHT
-            .set(host, Holder::Entity(projectile.id()), flight)
-            .is_ok()
+        && issued(&FLIGHT).is_some_and(|key| {
+            key.set(host, Holder::Entity(projectile.id()), flight)
+                .is_ok()
+        })
         && level
             .with_random(host, |r| r.next_double())
             .is_some_and(|roll| potato::recovers(chance, roll));
@@ -1184,7 +1237,7 @@ mod tests {
             recovery: 0.375,
             left_owner: true,
         };
-        let codec = FLIGHT.codec.as_ref().unwrap();
+        let codec = &FLIGHT_CODEC;
         let saved = (codec.encode)(&flight).unwrap();
         let loaded = (codec.decode)(&saved).unwrap();
         assert_eq!(loaded.recovery, 0.375);
@@ -1204,7 +1257,7 @@ mod tests {
         host.registries.resolve_items([id.clone()]).unwrap();
         let key = host.item_key(&id).unwrap();
         AMMO_KEYS.get_or_init(|| HashMap::from([("minecraft:potato", key)]));
-        let codec = AMMO.codec.as_ref().unwrap();
+        let codec = &AMMO_CODEC;
         assert!((codec.decode)(&Compound::new()).is_err());
         let saved = ItemStack::of(key).to_nbt(&host).unwrap();
         let decoded = (codec.decode)(&saved).unwrap().unwrap();
@@ -1227,7 +1280,7 @@ mod tests {
 
     #[test]
     fn saved_flight_refuses_bad_recovery_and_owner_exit() {
-        let codec = FLIGHT.codec.as_ref().unwrap();
+        let codec = &FLIGHT_CODEC;
         for chance in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY, -0.1, 1.1] {
             let mut saved = (codec.encode)(&Flight::default()).unwrap();
             saved.insert("Recovery".into(), Tag::Float(chance.to_bits()));

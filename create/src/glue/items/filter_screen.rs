@@ -548,6 +548,14 @@ impl MenuPart for FilterScreen {
         super::filters::menu_clicked(host, event)
     }
 
+    fn menu_removed(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::MenuRemovedEvent<'_>,
+    ) {
+        super::filters::menu_removed(host, event);
+    }
+
     /// The ghost slots take nothing from the cursor and give nothing up: the server's clicks
     /// copy into them, and the client's own prediction leaves them alone.
     fn menu_slot_rules(&self, _host: &dyn Host, event: &mut mod_api::MenuSlotRulesEvent<'_>) {

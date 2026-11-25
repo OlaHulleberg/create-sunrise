@@ -1596,7 +1596,7 @@ fn clear_list(host: &mut dyn ServerHost, player: PlayerRef) {
 
 /// `MenuBase.removed` → `saveData`: the settings written into the filter, wherever the menu's
 /// clicks left it.
-pub(super) fn menu_closed(host: &mut dyn ServerHost, event: &mod_api::MenuClosedEvent) {
+pub(super) fn menu_removed(host: &mut dyn ServerHost, event: &mod_api::MenuRemovedEvent<'_>) {
     let Some(session) =
         SESSIONS.with_borrow_mut(|m| m.remove(&event.uuid).filter(|s| s.window == event.window))
     else {
