@@ -166,23 +166,6 @@ fn decode(v: [f64; 3]) -> Spark {
     }
 }
 
-/// The spark kept between ticks in one number: `decode`'s velocity, packed.
-fn pack(v: [f64; 3]) -> f64 {
-    // Colour (24 bits), then the second word (16 bits), then the third (8): 48 bits, and one
-    // more so it is never 0 (a particle's state starts at 0).
-    let (a, b, c) = (v[0] as u64, v[1] as u64, v[2] as u64);
-    (1u64 << 48 | a << 24 | (b & 0xFFFF) << 8 | (c & 0xFF)) as f64
-}
-
-fn unpack(s: f64) -> [f64; 3] {
-    let s = s as u64;
-    [
-        ((s >> 24) & 0xFF_FFFF) as f64,
-        ((s >> 8) & 0xFFFF) as f64,
-        (s & 0xFF) as f64,
-    ]
-}
-
 /// The client's tick: the animation clock moves on, and goggles are worn or not.
 pub(super) fn client_tick(goggles: bool) {
     TICKS.fetch_add(1, Ordering::Relaxed);
@@ -208,68 +191,96 @@ fn rotate(v: [f64; 3], deg: f64, axis: Axis) -> [f64; 3] {
 pub struct Indicator;
 
 impl ParticleProvider for Indicator {
-    fn tick(
+    fn create_particle(
         &self,
-        particles: &mut mod_api::ParticleBatch,
+        _spawn: &mut mod_api::ParticleSpawn<'_, ()>,
+        _particle: &mut dyn mod_api::ParticleTickView,
+    ) -> Option<Box<dyn mod_api::CustomParticle>> {
+        Some(Box::new(Instance { placed: None }))
+    }
+}
+
+/// A spark where it stands: the origin it circles and what it carries.
+#[derive(Clone, Copy)]
+struct Placed {
+    origin: [f64; 3],
+    spark: Spark,
+}
+
+/// One live indicator: `placed` is empty until its first tick takes its data.
+struct Instance {
+    placed: Option<Placed>,
+}
+
+impl mod_api::CustomParticle for Instance {
+    fn tick(
+        &mut self,
+        p: &mut dyn mod_api::ParticleTickView,
         _level: &dyn mod_api::ParticleLevelView,
     ) {
-        let one = |p: &mut mod_api::ModParticle| {
-            if p.state[3] == 0.0 {
+        let Placed { origin, spark: s } = match self.placed {
+            Some(placed) => placed,
+            None => {
                 if !GOGGLES.load(Ordering::Relaxed) {
-                    p.removed = true;
+                    p.remove();
                     return;
                 }
-                let s = decode(p.velocity);
+                let s = decode(p.velocity());
                 // `lifeSpan + random.nextInt(32)`: the spawn's random size picks the 32.
-                let random = p.size.to_bits() % 32;
-                p.lifetime = 10 + random as i32;
-                p.size *= 0.75;
+                let random = p.size().to_bits() % 32;
+                p.set_lifetime(10 + random as i32);
+                p.set_size(p.size() * 0.75);
                 let white = create_engine::gauge::mix_colors(s.color, 0xFF_FFFF, 0.5);
-                p.rgba = [
+                p.set_rgba([
                     ((white >> 16) & 0xFF) as f32 / 255.0,
                     ((white >> 8) & 0xFF) as f32 / 255.0,
                     (white & 0xFF) as f32 / 255.0,
                     1.0,
-                ];
-                p.state = [
-                    p.position[0],
-                    p.position[1],
-                    p.position[2],
-                    pack(p.velocity),
-                ];
-                p.velocity = [0.0; 3];
-            }
-            let s = decode(unpack(p.state[3]));
-            let age = f64::from(p.age);
-            let lifetime = f64::from(p.lifetime.max(1));
-            // `radius += (radius2 - radius) * .1` after each move, from radius1.
-            let radius = s.r2 + (s.r1 - s.r2) * 0.9f64.powi(p.age - 1);
-            let time = TICKS.load(Ordering::Relaxed) as f64;
-            let speed = f64::from(s.speed);
-            let mut angle = (time * speed) % 360.0 - speed / 2.0 * age * (age / lifetime);
-            if s.speed < 0 && s.axis == Axis::Y {
-                angle += 180.0;
-            }
-            let offset = if s.axis == Axis::Y {
-                [radius, 0.0, 0.0]
-            } else {
-                [0.0, radius, 0.0]
-            };
-            let r = rotate(offset, angle, s.axis);
-            p.position = [p.state[0] + r[0], p.state[1] + r[1], p.state[2] + r[2]];
-            // `setSpriteFromAge` over the eight glitter sprites.
-            p.frame = (p.age * 7 / p.lifetime.max(1)).clamp(0, 7) as u32;
-            let half = p.lifetime / 2;
-            if p.age > half {
-                p.rgba[3] = 1.0 - (p.age - half) as f32 / p.lifetime as f32;
-                // `setFadeColor`: a fifth of the way to the level's colour each tick.
-                let fade = [16, 8, 0].map(|sh| ((s.color >> sh) & 0xFF) as f32 / 255.0);
-                for (c, f) in p.rgba.iter_mut().zip(fade) {
-                    *c += (f - *c) * 0.2;
-                }
+                ]);
+                p.set_velocity([0.0; 3]);
+                let placed = Placed {
+                    origin: p.position(),
+                    spark: s,
+                };
+                self.placed = Some(placed);
+                placed
             }
         };
-        particles.iter_mut().for_each(one);
+        if !p.advance_age() {
+            return;
+        }
+        let (age, lifetime_ticks) = (p.age(), p.lifetime());
+        let age_f = f64::from(age);
+        let lifetime = f64::from(lifetime_ticks.max(1));
+        // `radius += (radius2 - radius) * .1` after each move, from radius1.
+        let radius = s.r2 + (s.r1 - s.r2) * 0.9f64.powi(age - 1);
+        let time = TICKS.load(Ordering::Relaxed) as f64;
+        let speed = f64::from(s.speed);
+        let mut angle = (time * speed) % 360.0 - speed / 2.0 * age_f * (age_f / lifetime);
+        if s.speed < 0 && s.axis == Axis::Y {
+            angle += 180.0;
+        }
+        let offset = if s.axis == Axis::Y {
+            [radius, 0.0, 0.0]
+        } else {
+            [0.0, radius, 0.0]
+        };
+        let r = rotate(offset, angle, s.axis);
+        p.set_previous_position(p.position());
+        p.set_position([origin[0] + r[0], origin[1] + r[1], origin[2] + r[2]]);
+        // `setSpriteFromAge` over the eight glitter sprites.
+        p.set_sprite_index((age * 7 / lifetime_ticks.max(1)).clamp(0, 7) as usize);
+        let half = lifetime_ticks / 2;
+        if age > half {
+            let mut rgba = p.rgba();
+            rgba[3] = 1.0 - (age - half) as f32 / lifetime_ticks as f32;
+            // `setFadeColor`: a fifth of the way to the level's colour each tick.
+            let fade = [16, 8, 0].map(|sh| ((s.color >> sh) & 0xFF) as f32 / 255.0);
+            for (c, f) in rgba.iter_mut().zip(fade) {
+                *c += (f - *c) * 0.2;
+            }
+            p.set_rgba(rgba);
+        }
     }
 }
 
@@ -280,7 +291,7 @@ mod tests {
     #[test]
     fn a_spark_keeps_its_data() {
         let v = encode(0xFF55FF, -30, Axis::Y, 2.25, 2.5);
-        let s = decode(unpack(pack(v)));
+        let s = decode(v);
         assert_eq!(
             s,
             Spark {

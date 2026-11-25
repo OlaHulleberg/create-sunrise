@@ -11,8 +11,10 @@ use crate::glue::names::Named as _;
 use crate::glue::packages::body::{CustomData, set_custom};
 use create_engine::gzip;
 use create_engine::schematic::{Nbt, SchematicData, SchematicUpload, UploadRetention};
-use mod_api::{ConfigEntryKind, ConfigFileError, ConfigFiles, ConfigPath, Host, ItemStack, Tag};
+use mod_api::{Host, ItemStack, Tag};
 use std::collections::HashMap;
+use std::io;
+use std::path::{Component, Path, PathBuf};
 
 /// `SchematicItem.loadSchematic`'s `NbtAccounter.create(0x20000000L)`.
 const MAX_BYTES: usize = 0x2000_0000;
@@ -20,12 +22,20 @@ const MAX_BYTES: usize = 0x2000_0000;
 /// The folder under the mod's data root.
 const ROOT: &str = "schematics";
 
-fn path(rel: &str) -> Option<ConfigPath> {
-    ConfigPath::new(&format!("{ROOT}/{rel}")).ok()
+/// `rel` under the mod's bulk data folder (`<instance>/sunrise-mod-data/create/schematics`).
+/// Names come from clients, so only plain components are taken: no `..`, root or prefix.
+fn path(host: &dyn Host, rel: &str) -> Option<PathBuf> {
+    let rel = Path::new(rel);
+    let plain =
+        !rel.as_os_str().is_empty() && rel.components().all(|c| matches!(c, Component::Normal(_)));
+    plain.then(|| folder(host).join(rel))
 }
 
-fn files(host: &dyn Host) -> &'static dyn ConfigFiles {
-    host.data_files()
+fn folder(host: &dyn Host) -> PathBuf {
+    host.instance_dir()
+        .join("sunrise-mod-data")
+        .join("create")
+        .join(ROOT)
 }
 
 pub(crate) fn to_engine(t: &Tag) -> Nbt {
@@ -97,7 +107,7 @@ fn write_named(tag: &Tag) -> Option<Vec<u8>> {
 
 /// A structure file under `schematics/` (`NbtIo.read` of the gzip stream), once per load.
 pub fn read_structure(host: &dyn Host, rel: &str) -> Option<Nbt> {
-    let bytes = files(host).read(&path(rel)?).ok()?;
+    let bytes = std::fs::read(path(host, rel)?).ok()?;
     let raw = match gzip::decode(&bytes, MAX_BYTES) {
         Ok(raw) => raw,
         Err(e) => {
@@ -117,47 +127,38 @@ pub fn read_structure(host: &dyn Host, rel: &str) -> Option<Nbt> {
 /// `NbtIo.writeCompressed` to a file under `schematics/` (its folders made, an old file
 /// replaced); its size.
 pub fn write_structure(host: &dyn Host, rel: &str, tag: &Nbt) -> Result<u64, String> {
-    let file = path(rel).ok_or("not a file name")?;
+    let file = path(host, rel).ok_or("not a file name")?;
     let raw = write_named(&to_game(tag)).ok_or("not writable as NBT")?;
     let gz = gzip::encode(&raw);
-    files(host)
-        .write(&file, &gz)
-        .map_err(|e| format!("{e:?}"))?;
+    if let Some(parent) = file.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(&file, &gz).map_err(|e| e.to_string())?;
     Ok(gz.len() as u64)
 }
 
 /// The schematics saved in `schematics/` (`ClientSchematicLoader.refresh`: its `.nbt` files, by
 /// name).
 pub fn local_files(host: &dyn Host) -> Vec<String> {
-    let Ok(folder) = ConfigPath::new(ROOT) else {
+    let Ok(entries) = std::fs::read_dir(folder(host)) else {
         return Vec::new();
     };
-    let mut out = Vec::new();
-    let mut after: Option<String> = None;
-    while let Ok(page) = files(host).list(&folder, after.as_deref(), 256) {
-        let Some(last) = page.last().map(|e| e.name.clone()) else {
-            break;
-        };
-        out.extend(
-            page.into_iter()
-                .map(|e| e.name)
-                .filter(|n| n.ends_with(".nbt")),
-        );
-        after = Some(last);
-    }
+    let mut out: Vec<String> = entries
+        .flatten()
+        .filter_map(|e| e.file_name().into_string().ok())
+        .filter(|n| n.ends_with(".nbt"))
+        .collect();
     out.sort();
     out
 }
 
 pub fn exists(host: &dyn Host, rel: &str) -> bool {
-    path(rel).is_some_and(|p| matches!(files(host).stat(&p), Ok(Some(_))))
+    path(host, rel).is_some_and(|p| p.exists())
 }
 
 pub fn size(host: &dyn Host, rel: &str) -> Option<u64> {
-    match files(host).stat(&path(rel)?) {
-        Ok(Some(s)) if s.kind == ConfigEntryKind::File => Some(s.len),
-        _ => None,
-    }
+    let meta = std::fs::metadata(path(host, rel)?).ok()?;
+    meta.is_file().then(|| meta.len())
 }
 
 /// Store a local schematic as its owner's upload, evicting the oldest at the cap.
@@ -167,39 +168,45 @@ pub(super) fn upload(
     from: &str,
     to: &str,
     upload: SchematicUpload,
-) -> Result<(), ConfigFileError> {
-    let from = path(from).ok_or(ConfigFileError::InvalidPath)?;
-    let to = path(to).ok_or(ConfigFileError::InvalidPath)?;
-    let (folder, name) = to
-        .as_str()
-        .rsplit_once('/')
-        .ok_or(ConfigFileError::InvalidPath)?;
-    let upload_folder = ConfigPath::new(folder)?;
-    let service = files(host);
-    let bytes = service.read(&from)?;
+) -> io::Result<()> {
+    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "not a file name");
+    let from = path(host, from).ok_or_else(invalid)?;
+    let to = path(host, to).ok_or_else(invalid)?;
+    let upload_folder = to.parent().ok_or_else(invalid)?;
+    let name = to
+        .file_name()
+        .and_then(|n| n.to_str())
+        .ok_or_else(invalid)?;
+    let bytes = std::fs::read(&from)?;
 
     let mut retention = UploadRetention::default();
-    let mut after = None;
-    loop {
-        let page = match service.list(&upload_folder, after.as_deref(), 256) {
-            Ok(page) => page,
-            Err(ConfigFileError::NotFound) => break,
-            Err(error) => return Err(error),
-        };
-        let Some(last) = page.last() else {
-            break;
-        };
-        after = Some(last.name.clone());
-        for entry in page {
-            if entry.stat.kind == ConfigEntryKind::File {
-                retention.record(upload, name, entry.name, entry.stat.modified_millis);
+    match std::fs::read_dir(upload_folder) {
+        Ok(entries) => {
+            for entry in entries.flatten() {
+                let Ok(meta) = entry.metadata() else {
+                    continue;
+                };
+                let Ok(entry_name) = entry.file_name().into_string() else {
+                    continue;
+                };
+                if meta.is_file() {
+                    let modified = meta
+                        .modified()
+                        .ok()
+                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map_or(0, |d| d.as_millis() as u64);
+                    retention.record(upload, name, entry_name, modified);
+                }
             }
         }
+        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
+        Err(e) => return Err(e),
     }
     if let Some(oldest) = retention.evict() {
-        service.remove(&ConfigPath::try_from(format!("{folder}/{oldest}"))?)?;
+        std::fs::remove_file(upload_folder.join(oldest))?;
     }
-    service.write(&to, &bytes)
+    std::fs::create_dir_all(upload_folder)?;
+    std::fs::write(&to, &bytes)
 }
 
 const KEYS: [&str; 7] = [

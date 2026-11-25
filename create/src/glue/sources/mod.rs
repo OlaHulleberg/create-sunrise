@@ -19,11 +19,10 @@ use create_engine::Block;
 use create_engine::client::Draw;
 use create_engine::dye;
 use mod_api::{
-    ClientHost, Compound, EquipmentSlot, Flow, HostSide, ModBlockEntity, ParticleProviders,
-    Registrar, RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
+    ClientHost, Compound, EquipmentSlot, Flow, HostSide, ParticleProviders, Registrar,
+    RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
 };
 use std::cell::RefCell;
-use std::sync::Arc;
 
 /// The block entity data keys the sources' clients read.
 const SYNCED: &[&str] = &[
@@ -151,7 +150,12 @@ impl Subsystem for Sources {
         waterwheels::draws_itself(block, part) || handles::draws_itself(block, part)
     }
 
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+    fn animated(
+        &self,
+        block: Block,
+        pos: [i32; 3],
+        entity: &mod_api::BlockEntityDataView<'_>,
+    ) -> bool {
         handles::animated(block, pos, entity) || stress::flash_color(pos).is_some()
     }
 
@@ -170,7 +174,7 @@ impl Subsystem for Sources {
 
     fn particle_providers(&self, providers: &mut dyn ParticleProviders) {
         if let Some(&ty) = indicators::TYPE.get() {
-            providers.register_sprite_set(ty, Arc::new(indicators::Indicator));
+            providers.register_sprite_set(ty, |_sprites| indicators::Indicator);
         }
     }
 
