@@ -5,15 +5,22 @@ import net.minecraft.core.BlockPos;
 import net.minecraft.core.registries.BuiltInRegistries;
 import net.minecraft.commands.arguments.blocks.BlockStateParser;
 import net.minecraft.server.level.ServerLevel;
+import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
+import net.minecraft.world.level.block.state.BlockState;
 import net.minecraft.world.level.levelgen.structure.BoundingBox;
 import net.minecraft.world.level.storage.ServerLevelData;
 
 /** Native environmental fluid ticks for the Rust driver, in a suspended per-case namespace.
  * Block entities and scheduled block ticks do not run here. Create's fluid network is run
- * exclusively by Rust; only the public native fluid tick scheduler advances. */
+ * exclusively by Rust; only the public native fluid tick scheduler advances.
+ * The world is a mirror: Create blocks and every mirrored change are the Rust engine's, the
+ * environment's blocks and reactions the host's. A mirrored change of a Create block is a move,
+ * as Create's own rules for it (chain destruction, brackets) already ran in the engine, and
+ * nothing here removes or replaces a Create block but a mirrored change. */
 final class FluidHost {
     private static final BlockPos ORIGIN = new BlockPos(2048, 0, 2048);
+    private static final String CREATE = "create";
     // Only one namespace is materialized at a time, just like ordinary Java cases.
     // Suspended peers have no blocks, entities or ticks in the shared level.
     private static final java.util.Map<String, Session> sessions = new java.util.LinkedHashMap<>();
@@ -40,6 +47,43 @@ final class FluidHost {
     static void abortIfOwner(ServerLevel level, String key) {
         Session session = sessions.remove(key);
         if (session != null) PlayerActor.release(level, session.actor);
+    }
+    private static boolean isCreate(BlockState state) {
+        return CREATE.equals(BuiltInRegistries.BLOCK.getKey(state.getBlock()).getNamespace());
+    }
+    /** Create blocks are the Rust engine's. Java Create's callbacks may change one, or put one
+     * where the engine has none: the engine's block goes back, and the frame fails if it does
+     * not stay. */
+    private static void mirror(ServerLevel level, JsonObject request, Session session, java.util.Map<BlockPos,BlockState> sent) {
+        for(int round=0;;round++) {
+            var drifted=new java.util.LinkedHashMap<BlockPos,BlockState>();
+            for(var value:request.getAsJsonArray("region")) {
+                var xyz=value.getAsJsonArray();
+                var pos=ORIGIN.offset(xyz.get(0).getAsInt(),xyz.get(1).getAsInt(),xyz.get(2).getAsInt());
+                var engine=sent.getOrDefault(pos,session.blocks.getOrDefault(pos,Blocks.AIR.defaultBlockState()));
+                if(!held(engine,level.getBlockState(pos))) drifted.put(pos.immutable(),engine);
+            }
+            if(drifted.isEmpty()) return;
+            if(round>1) throw new IllegalStateException("fluid host: Create blocks will not stay the engine's: "+drifted);
+            for(var entry:drifted.entrySet()) {
+                level.setBlock(entry.getKey(),entry.getValue(),18|Block.UPDATE_MOVE_BY_PISTON);
+                var saved=session.blockEntities.get(entry.getKey());
+                if(saved==null) continue;
+                var entity=level.getBlockEntity(entry.getKey());
+                if(entity==null) throw new IllegalStateException("fluid host lost block entity at "+entry.getKey());
+                entity.loadWithComponents(saved,level.registryAccess());
+            }
+            CaseIsolation.disposeUnobservedDrops(level,ORIGIN);
+        }
+    }
+    /** Whether the host holds the engine's block there: another environment block is the host's
+     * own doing, a Create block is the engine's unless only its waterlogging differs. */
+    private static boolean held(BlockState engine, BlockState host) {
+        if(!isCreate(engine)&&!isCreate(host)) return true;
+        if(engine.getBlock()!=host.getBlock()) return false;
+        for(var value:engine.getValues().entrySet())
+            if(!value.getKey().getName().equals("waterlogged")&&!host.getValues().get(value.getKey()).equals(value.getValue())) return false;
+        return true;
     }
     static JsonObject handle(ServerLevel level, JsonObject request) throws Exception {
         reapStale(level);
@@ -113,12 +157,15 @@ final class FluidHost {
         long clock=request.get("clock").getAsLong();
         var data=(ServerLevelData)level.getLevelData();
         data.setGameTime(epoch+clock-(request.has("bucket")?0:1));
+        var sent=new java.util.LinkedHashMap<BlockPos,BlockState>();
         for(var value:request.getAsJsonArray("changes")) {
             var change=value.getAsJsonObject();var xyz=change.getAsJsonArray("pos");
             var pos=ORIGIN.offset(xyz.get(0).getAsInt(),xyz.get(1).getAsInt(),xyz.get(2).getAsInt());
             var state=BlockStateParser.parseForBlock(BuiltInRegistries.BLOCK.asLookup(),change.get("state").getAsString(),false).blockState();
-            level.setBlock(pos,state,3);
+            sent.put(pos,state);
+            level.setBlock(pos,state,Block.UPDATE_ALL|(isCreate(state)||isCreate(level.getBlockState(pos))?Block.UPDATE_MOVE_BY_PISTON:0));
         }
+        mirror(level,request,session,sent);
         if(request.has("bucket")) {
             WorldBucketInput.apply(level,actor,ORIGIN,request.getAsJsonObject("bucket"));
         } else {
@@ -137,6 +184,7 @@ final class FluidHost {
             }
             FluidBounds.check(level,ORIGIN,request.getAsJsonArray("region"));
         }
+        mirror(level,request,session,sent);
         // The native flow vector at the requested cells (`FluidState.getFlow`), which water
         // wheels read through `WaterWheelBlockEntity.getFlowVectorAtPosition`. Queried after
         // this frame's fluid ticks, like the level's own scheduled block ticks.

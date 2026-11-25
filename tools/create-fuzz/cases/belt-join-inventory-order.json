@@ -1,0 +1,255 @@
+{
+ "blocks": [
+  {
+   "pos": [
+    0,
+    8,
+    0
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    0,
+    8,
+    2
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    0,
+    8,
+    4
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "pos": [
+    0,
+    8,
+    7
+   ],
+   "state": "create:shaft[axis=x,waterlogged=false]"
+  },
+  {
+   "motor": 32,
+   "pos": [
+    -1,
+    8,
+    0
+   ],
+   "state": "create:creative_motor[facing=east]"
+  }
+ ],
+ "checkpoints": [
+  62,
+  63,
+  64,
+  65,
+  66
+ ],
+ "events": [
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    0
+   ],
+   "tick": 10
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    2
+   ],
+   "tick": 16
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    7
+   ],
+   "tick": 22
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.5
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    4
+   ],
+   "tick": 28
+  },
+  {
+   "action": {
+    "input": {
+     "kind": "drop_on",
+     "stack": {
+      "count": 2,
+      "item": "minecraft:gold_ingot"
+     }
+    },
+    "kind": "item"
+   },
+   "pos": [
+    0,
+    8,
+    0
+   ],
+   "tick": 36
+  },
+  {
+   "action": {
+    "input": {
+     "kind": "drop_on",
+     "stack": {
+      "count": 9,
+      "item": "minecraft:gold_ingot"
+     }
+    },
+    "kind": "item"
+   },
+   "pos": [
+    0,
+    8,
+    5
+   ],
+   "tick": 38
+  },
+  {
+   "action": {
+    "input": {
+     "kind": "drop_on",
+     "stack": {
+      "count": 3,
+      "item": "minecraft:diamond"
+     }
+    },
+    "kind": "item"
+   },
+   "pos": [
+    0,
+    8,
+    6
+   ],
+   "tick": 40
+  },
+  {
+   "action": {
+    "input": {
+     "kind": "drop_on",
+     "stack": {
+      "count": 1,
+      "item": "minecraft:iron_ingot"
+     }
+    },
+    "kind": "item"
+   },
+   "pos": [
+    0,
+    8,
+    4
+   ],
+   "tick": 42
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.95
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    2
+   ],
+   "tick": 50
+  },
+  {
+   "action": {
+    "face": "up",
+    "hit": [
+     0.5,
+     1.0,
+     0.95
+    ],
+    "item": "create:belt_connector",
+    "kind": "use",
+    "pitch": 0.0,
+    "sneaking": false,
+    "yaw": 0.0
+   },
+   "pos": [
+    0,
+    8,
+    3
+   ],
+   "tick": 62
+  }
+ ],
+ "seed": 25955,
+ "ticks": 70,
+ "version": 3
+}
