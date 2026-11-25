@@ -866,7 +866,7 @@ mod tests {
         gearbox_drops(&mut t);
         let pools = t["pools"].as_array().unwrap();
         assert_eq!(pools.len(), 2);
-        assert_eq!(pools[0]["conditions"][1]["properties"]["axis"], "y");
+        assert_eq!(pools[0]["conditions"][1]["state"]["axis"], "y");
         assert_eq!(pools[1]["conditions"][0]["type"], "minecraft:inverted");
         assert_eq!(pools[1]["entries"][0]["name"], "create:vertical_gearbox");
     }
