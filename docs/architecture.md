@@ -11,7 +11,7 @@ Create as a native Rust mod on the mod SDK (`mod_api`). Paths are under `create/
 | `src/engine/` | `create-engine`: Create's rules as plain Rust, no game types, unit-tested. |
 | `src/glue/` | Game glue on `mod_api`, one module per subsystem. |
 | `data/`, `assets/` | Generated block, item and fluid declarations and partial-model block states. |
-| `../tools/create-data/` | `compile`: Create's MIT data → `data/`, `assets/`, `src/engine/src/generated.rs`. `prepare`: this repo + Create's jar → a playable mod folder. |
+| `../tools/create-data/` | `compile`: Create's MIT data → `data/`, `assets/`, `src/engine/src/generated.rs`. `registry`: the jar's MIT data, and references to its assets by id. |
 
 ## Engine and glue
 

@@ -2951,8 +2951,8 @@ pub const PARTIALS: [(&str, &str, &str); 207] = [
         "create:block/hose_pulley/rope_half_magnet",
         "up",
     ),
-    // CouplingRenderer's pieces (`AllPartialModels.COUPLING_*`: entity models the prepare step
-    // copies under `block/`, their texture on the block atlas), posed by the glue.
+    // CouplingRenderer's pieces (`AllPartialModels.COUPLING_*`: entity models the registry names
+    // under `block/` by parent, their texture on the block atlas), posed by the glue.
     (
         "part_coupling_attachment",
         "create:block/minecart_coupling/attachment",

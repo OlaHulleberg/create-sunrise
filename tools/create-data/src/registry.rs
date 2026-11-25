@@ -481,6 +481,24 @@ fn read_data(jar: &mut zip::ZipArchive<fs::File>) -> Result<BTreeMap<String, Vec
         .collect()
 }
 
+/// The files under `dir`, by their paths from `root`.
+fn walk(root: &Path, dir: &Path, out: &mut BTreeMap<String, Vec<u8>>) -> Result<(), String> {
+    for e in fs::read_dir(dir).map_err(|e| format!("{}: {e}", dir.display()))? {
+        let p = e.map_err(|e| e.to_string())?.path();
+        if p.is_dir() {
+            walk(root, &p, out)?;
+        } else {
+            let rel = p
+                .strip_prefix(root)
+                .unwrap()
+                .to_string_lossy()
+                .replace('\\', "/");
+            out.insert(rel, fs::read(&p).map_err(|e| e.to_string())?);
+        }
+    }
+    Ok(())
+}
+
 fn git_blob(bytes: &[u8]) -> String {
     use sha1::{Digest, Sha1};
     let mut digest = Sha1::new();
@@ -598,7 +616,7 @@ pub fn generate(
     let visual_assets = visuals::assets(|path| jar.index_for_name(path).is_some())?;
     let visual_count = visual_assets.len();
     let mut declarations = BTreeMap::new();
-    crate::prepare::walk(
+    walk(
         mod_dir,
         &mod_dir.join("data/create/sunrise"),
         &mut declarations,
@@ -652,7 +670,7 @@ pub fn generate(
     for tree in ["data", "assets"] {
         let dir = mod_dir.join(tree);
         if dir.exists() {
-            crate::prepare::walk(mod_dir, &dir, &mut current)?;
+            walk(mod_dir, &dir, &mut current)?;
         }
     }
     current.retain(|path, _| owned(path));
@@ -951,7 +969,7 @@ mod tests {
 /// mechanical crafting, crafting, cooking and stonecutting recipes alike) holds at least one
 /// item: a recipe whose ingredient names an empty or missing tag finds nothing, so a machine or
 /// crafting table never takes its items. Runs where Create's jar is at hand (`$CREATE_JAR`, else
-/// the `prepare` download cache).
+/// the registry's download cache).
 #[cfg(test)]
 mod c_tags_resolve {
     use super::*;
@@ -992,7 +1010,7 @@ mod c_tags_resolve {
             })
             .filter(|p| p.is_file());
         let Some(jar) = jar else {
-            eprintln!("no Create jar at hand ($CREATE_JAR or the prepare cache): skipped");
+            eprintln!("no Create jar at hand ($CREATE_JAR or the registry's cache): skipped");
             return;
         };
         let files = read_data(&mut open_jar(&jar).unwrap()).unwrap();

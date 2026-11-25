@@ -62,37 +62,24 @@ glass kinds. The full list: **[API_GAPS.md](API_GAPS.md)**.
 > [!NOTE]
 > Create's textures, models and sounds are All Rights Reserved, so they are not in this repository. Your own
 > machine downloads Create's official jar from Modrinth, where the Create Team publishes it, and checks it
-> against the hash pinned here. This repository ships MIT data, asset references and the port's own assets,
-> never the jar or its protected assets. Full framed glass and nonrandom windows connect using the original jar's
-> sheets by reference. Local `prepare` is still needed for the other connected textures, tinted copies,
-> model-derived placement ghosts and other assets not yet supplied by references.
+> against the hash pinned here; the game reads Create's assets from it by id. This repository ships MIT data,
+> asset references and the port's own assets, never the jar or its protected assets.
 
-You need:
-
-- **The Sunrise launcher**, from [playsunrise.net/download](https://playsunrise.net/download), and a Minecraft:
-  Java Edition account. Play once so the launcher has an instance.
-- **Rust** ([rustup](https://rustup.rs)), for the one-time prepare step.
-
-Then:
+You need **the Sunrise launcher**, from [playsunrise.net/download](https://playsunrise.net/download), and a
+Minecraft: Java Edition account. Play once so the launcher has an instance. Then:
 
 ```sh
 git clone https://github.com/OlaHulleberg/create-sunrise.git
-cd create-sunrise/tools/create-data
+cd create-sunrise
 
-# Assemble the mod. This downloads Create's official jar from Modrinth into your cache
-# and checks its SHA-512. Offline? Add --jar /path/to/create-1.21.1-6.0.10.jar
-cargo run --release -- prepare --out ../../target/create-mod/create
-
-# Build it into your instance, then play.
-cd ../..
-sunrise-launcher native-build target/create-mod --instance "My Instance" --trust-native-code
+# Build the mod into your instance, then play. Playing downloads Create's official jar from Modrinth
+# and checks its SHA-512.
+sunrise-launcher native-build create --instance "My Instance" --trust-native-code
 sunrise-launcher play --instance "My Instance" --allow-jar-downloads
 ```
 
 Or start the instance from the launcher's window: it asks before downloading Create's jar into the instance.
 Native mods run with your rights, which is why the launcher asks for `--trust-native-code`.
-
-The folder in `target/create-mod` holds files made from Create's assets. It is for your own game: don't share it.
 
 > [!NOTE]
 > The port follows Create 6.0.11's source. Its assets come from the newest published jar, 1.21.1-6.0.10
@@ -148,7 +135,7 @@ rustup toolchain install 1.99.1 --target wasm32-unknown-unknown
 cd create && cargo sunrise-mod check        # fetches the pinned SDK into create/.sunrise/, then checks
 ```
 
-`create-data prepare` and `native-build` (see [Install](#install)) turn the checkout into a playable mod.
+`native-build` (see [Install](#install)) turns the checkout into a playable mod.
 After a change to Create's data, regenerate the committed tables and declarations from a Create checkout:
 
 ```sh
@@ -184,7 +171,7 @@ create/                 The native mod: what the launcher builds
   src/glue/             The game glue on the mod API, one module per subsystem
   src/engine/           create-engine: Create's rules as plain Rust, no game types
   data/, assets/        Generated block, item and fluid declarations
-tools/create-data/      compile: tables; registry: MIT overlays and asset references; prepare: local assets
+tools/create-data/      compile: tables; registry: MIT overlays and asset references
 tools/create-fuzz/      Differential fuzzer: the engine against Create's Java (development only)
 docs/                   Architecture and README media
 ```
