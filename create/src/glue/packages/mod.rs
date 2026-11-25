@@ -597,8 +597,15 @@ impl Subsystem for Packages {
         host: &dyn ClientHost,
         event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        frog_target::submit_custom_geometry(host, event);
         frog_draw::submit_custom_geometry(host, event);
+    }
+
+    fn prepare_render_buffers(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+        frog_target::prepare_render_buffers(host, event);
     }
 
     /// `PackagePortPlacementPacket`: a frogport placed by a player takes the point chosen.

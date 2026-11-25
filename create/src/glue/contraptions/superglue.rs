@@ -127,20 +127,19 @@ pub(super) fn from_server(data: &[u8]) {
 /// areas near (the one the crosshair is in highlighted), and the selection from the first
 /// corner to the block looked at (`getCurrentSelectionBox`; `FAIL` 24 blocks or more away, or
 /// sneaking to discard).
-pub(super) fn render(
+fn outlines(
     host: &dyn mod_api::ClientHost,
-    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
-) {
+) -> (Vec<mod_api::WorldLine>, Vec<mod_api::PipelineQuad>) {
     use mod_api::CrosshairTarget;
     let Some(player) = host.local_player() else {
-        return;
+        return Default::default();
     };
     let holding = held(host, player, Hand::Main).is_some_and(|s| s.item().name(host) == ITEM);
     if !holding {
-        return;
+        return Default::default();
     }
     let Some((first, areas)) = SEEN.with_borrow(Clone::clone) else {
-        return;
+        return Default::default();
     };
     let hovered = match host.crosshair_target() {
         Some(CrosshairTarget::Block { pos, .. }) => Some([pos.x, pos.y, pos.z]),
@@ -174,14 +173,29 @@ pub(super) fn render(
         box_faces(&mut faces, (min, max), colour, camera);
         box_lines(&mut lines, (min, max), colour, 4.0);
     }
+    (lines, faces)
+}
+
+/// The glue areas' and the selection's faces (`outlines`), textured.
+pub(super) fn render(
+    host: &dyn mod_api::ClientHost,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+) {
+    let (_, faces) = outlines(host);
     if !faces.is_empty()
         && let Some(glue) = crate::glue::pipelines::resolve(host, Textured::Glue)
     {
         let _ = event.draw.pipeline_quads(glue, &faces);
     }
-    if !lines.is_empty() {
-        let _ = event.draw.lines(&lines);
-    }
+}
+
+/// The glue areas' and the selection's edges (`outlines`).
+pub(super) fn prepare_render_buffers(
+    host: &dyn mod_api::ClientHost,
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+) {
+    let (lines, _) = outlines(host);
+    crate::glue::subsystem::prepare_lines(event, &lines);
 }
 
 /// `AABBOutline.renderBoxFaces` with no highlighted face: the six faces of the blocks `min`

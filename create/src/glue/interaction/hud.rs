@@ -514,31 +514,24 @@ fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
         .collect()
 }
 
-/// `ValueBox.render` of the highlighted box (`passive(false)`): Create's `VALUE_BOX_HOVER_4PX`
-/// frame round the box (the icon atlas through the glue's world pipeline, else white lines),
-/// and an option box's icon (`IconValueBox.renderContents`) on the face looked at. A number's
-/// box is the block entity's to draw (`value_text`).
-pub(super) fn value_box_outline(
+/// `ValueBox.render` of the highlighted box (`passive(false)`), the white lines: the hovered
+/// gauge panel's outline, or the frame round the box where the icon atlas has no world pipeline
+/// (`value_box_outline` draws the frame with it).
+pub(super) fn prepare_render_buffers(
     host: &dyn ClientHost,
-    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
 ) {
     use mod_api::{WorldDepth, WorldLine};
     let mut panel = Vec::new();
     if crate::glue::stock::gauge_client::hover_outline(host, &mut panel) {
-        let _ = event.draw.lines(&panel);
+        crate::glue::subsystem::prepare_lines(event, &panel);
         return;
     }
     let icons = crate::glue::pipelines::resolve(host, crate::glue::pipelines::Textured::Icons);
-    let mut quads = Vec::new();
     if let Some((pos, side, slot)) = super::board::hovered_slot(host) {
         let frame = BoxFrame::of(host, pos, side, slot);
         match (icons, frame) {
-            (Some(_), Some(f)) => {
-                // `scale(-2.01, -2.01, 2.01)`, `translate(-8 / 16, -8 / 16, -0.5 / 16)`.
-                let at =
-                    |x: f64, y: f64| f.world([-2.01 * (x - 0.5), -2.01 * (y - 0.5), -2.01 / 32.0]);
-                quads.push(icon_quad(at, VALUE_BOX_HOVER_4PX));
-            }
+            (Some(_), Some(_)) => {}
             _ => {
                 let n = side.offset();
                 let axis = (0..3).find(|i| n[*i] != 0).unwrap_or(1);
@@ -572,9 +565,33 @@ pub(super) fn value_box_outline(
                         )
                     })
                     .collect();
-                let _ = event.draw.lines(&lines);
+                crate::glue::subsystem::prepare_lines(event, &lines);
             }
         }
+    }
+}
+
+/// `ValueBox.render` of the highlighted box (`passive(false)`): Create's `VALUE_BOX_HOVER_4PX`
+/// frame round the box (the icon atlas through the glue's world pipeline; its white lines
+/// without are `prepare_render_buffers`'), and an option box's icon
+/// (`IconValueBox.renderContents`) on the face looked at. A number's box is the block entity's
+/// to draw (`value_text`).
+pub(super) fn value_box_outline(
+    host: &dyn ClientHost,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+) {
+    if crate::glue::stock::gauge_client::hover_outline(host, &mut Vec::new()) {
+        return;
+    }
+    let icons = crate::glue::pipelines::resolve(host, crate::glue::pipelines::Textured::Icons);
+    let mut quads = Vec::new();
+    if let Some((pos, side, slot)) = super::board::hovered_slot(host)
+        && let Some(f) = BoxFrame::of(host, pos, side, slot)
+        && icons.is_some()
+    {
+        // `scale(-2.01, -2.01, 2.01)`, `translate(-8 / 16, -8 / 16, -0.5 / 16)`.
+        let at = |x: f64, y: f64| f.world([-2.01 * (x - 0.5), -2.01 * (y - 0.5), -2.01 / 32.0]);
+        quads.push(icon_quad(at, VALUE_BOX_HOVER_4PX));
     }
     // The option's icon on the box of the face looked at (`ScrollValueRenderer` draws the box
     // of the face looked at, hovered or not).

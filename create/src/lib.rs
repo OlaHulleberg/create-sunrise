@@ -584,6 +584,7 @@ impl Hooks for Create {
         host: &dyn ClientHost,
         event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
     ) {
+        crate::glue::subsystem::clear_prepared_overlays();
         for s in SUBSYSTEMS {
             s.prepare_render_buffers(host, event);
         }
@@ -594,6 +595,7 @@ impl Hooks for Create {
         host: &dyn ClientHost,
         event: &mut mod_api::RenderLevelStageEvent<'_>,
     ) {
+        crate::glue::subsystem::draw_prepared_overlays(event);
         for s in SUBSYSTEMS {
             s.render_level_stage(host, event);
         }

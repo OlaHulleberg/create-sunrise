@@ -298,7 +298,14 @@ impl Subsystem for Trains {
         event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         super::carriage_draw::submit_custom_geometry(host, event);
-        super::relocate::submit_custom_geometry(event);
+    }
+
+    fn prepare_render_buffers(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+        super::relocate::prepare_render_buffers(event);
     }
 
     /// A station's flag moving and an invalid signal's blink (`SignalRenderer`) are drawn every

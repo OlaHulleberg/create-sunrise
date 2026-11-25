@@ -387,7 +387,7 @@ pub(super) fn prepare_render_buffers(
             ));
         }
     }
-    super::prepare_lines(event, &lines);
+    crate::glue::subsystem::prepare_lines(event, &lines);
     if let Some(face) = face {
         let o = face.offset();
         let axis = (0..3).find(|&i| o[i] != 0).unwrap_or(1);
@@ -416,7 +416,7 @@ pub(super) fn prepare_render_buffers(
             0x4068_86C5,
             WorldDepth::Tested,
         );
-        super::prepare_quads(event, &[quad]);
+        crate::glue::subsystem::prepare_quads(event, &[quad]);
     }
 }
 

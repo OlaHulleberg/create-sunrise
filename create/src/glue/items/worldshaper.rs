@@ -521,7 +521,18 @@ fn outlined(host: &dyn ClientHost) -> Option<Vec<[i32; 3]>> {
 }
 
 /// `Outliner.showCluster(..).colored(0xbfbfbf).lineWidth(1 / 32f)`: the outer edges of the
-/// blocks' union, and its outer faces.
+/// blocks' union (its outer faces are `submit_custom_geometry`'s).
+pub(super) fn prepare_render_buffers(event: &mut mod_api::PrepareRenderBuffersEvent<'_>) {
+    let lines = OUTLINED.with_borrow(|cells| {
+        if cells.is_empty() {
+            return Vec::new();
+        }
+        cluster(cells).0
+    });
+    crate::glue::subsystem::prepare_lines(event, &lines);
+}
+
+/// The blocks' union's outer faces (`Outliner.showCluster`), textured.
 pub(super) fn submit_custom_geometry(
     host: &dyn ClientHost,
     event: &mut SubmitCustomGeometryEvent<'_>,
@@ -530,7 +541,7 @@ pub(super) fn submit_custom_geometry(
         if cells.is_empty() {
             return;
         }
-        let (lines, faces, uvs) = cluster(cells);
+        let (_, faces, uvs) = cluster(cells);
         // `withFaceTexture(AllSpecialTextures.CHECKERED)`: each face the checkerboard from the
         // block atlas, in the outline's colour; without the pipeline the edges alone.
         if let Some(p) = crate::glue::pipelines::resolve(host, Textured::Checkered) {
@@ -541,7 +552,6 @@ pub(super) fn submit_custom_geometry(
                 .collect();
             let _ = event.draw.pipeline_quads(p, &faces);
         }
-        let _ = event.draw.lines(&lines);
     });
 }
 
