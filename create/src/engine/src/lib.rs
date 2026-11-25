@@ -4,6 +4,7 @@
 pub mod actors;
 pub mod arm;
 pub mod basin;
+pub mod basin_operator;
 pub mod belt;
 pub mod belt_connector;
 pub mod bezier;

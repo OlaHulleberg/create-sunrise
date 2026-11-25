@@ -187,7 +187,7 @@ pub fn click(lv: &mut ServerLevel<'_>, pos: [i32; 3], click: &mod_api::BlockClic
         d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
         // `withCallback`: a basin's mixer or press looks again.
         if block == Block::Basin {
-            d.mixer_checks.push([pos[0], pos[1] + 2, pos[2]]);
+            d.notify_basin_contents(pos);
         }
         old
     })
