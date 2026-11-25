@@ -207,6 +207,11 @@ impl BlockPart for Placement {
                 let s = set(default, "facing", super::super::kinetics::dir_name(f));
                 return Some(Some(set(s, "shape", shape.name())));
             }
+            // SignalBlock.getStateForPlacement: powered by `hasNeighborSignal`, nothing else.
+            Block::TrackSignal => {
+                let powered = level.has_neighbor_signal(pos)?;
+                return Some(Some(set(default, "powered", flag(powered))));
+            }
             // HorizontalKineticBlock.getStateForPlacement: facing the player.
             Block::WeightedEjector => {
                 let f = create_engine::place::horizontal_direction(yaw).opposite();
@@ -226,10 +231,17 @@ impl BlockPart for Placement {
             }
             _ => {}
         }
-        // `GearshiftBlock.getStateForPlacement` (inherited by ClutchBlock):
-        // choose power here, not when an arbitrary state is inserted into the world.
-        let default = if matches!(block, Block::Clutch | Block::Gearshift)
-            && let Some(powered) = level.has_neighbor_signal(pos)
+        // `GearshiftBlock.getStateForPlacement` (inherited by ClutchBlock), and the same read in
+        // `ChainGearshiftBlock`, `StickerBlock` and `RedstoneRequesterBlock`: choose power here,
+        // not when an arbitrary state is inserted into the world.
+        let default = if matches!(
+            block,
+            Block::Clutch
+                | Block::Gearshift
+                | Block::AdjustableChainGearshift
+                | Block::Sticker
+                | Block::RedstoneRequester
+        ) && let Some(powered) = level.has_neighbor_signal(pos)
         {
             set(default, "powered", flag(powered))
         } else {
