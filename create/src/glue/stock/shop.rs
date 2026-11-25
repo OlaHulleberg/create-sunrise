@@ -97,6 +97,8 @@ struct Cloth {
     /// What its ticker's network holds of each item of its order, for its clients' overlay
     /// (`getStockLevelForTrade` on a client reads the ticker's last snapshot).
     stock: Vec<i32>,
+    /// `SmartBlockEntity`'s lazy tick state (the default rate, 10), for `lazyTick`.
+    lazy: create_engine::block_entity::SmartBlockEntity,
 }
 
 impl Default for Cloth {
@@ -109,6 +111,7 @@ impl Default for Cloth {
             price_count: 1,
             occluded: false,
             stock: Vec::new(),
+            lazy: create_engine::block_entity::SmartBlockEntity::default(),
         }
     }
 }
@@ -299,6 +302,7 @@ fn cloth_of(host: &dyn Host, c: &Compound) -> Cloth {
         price_count: int(c.get(&"PriceCount".into())).unwrap_or(1).max(1) as u32,
         occluded: matches!(c.get(&"Occluded".into()), Some(Tag::Byte(b)) if *b != 0),
         stock: ints(c.get(&"Stock".into())),
+        lazy: create_engine::block_entity::SmartBlockEntity::default(),
     }
 }
 
@@ -416,8 +420,8 @@ fn occluded(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> bool {
     ) == Some(true)
 }
 
-/// Cloths changed since the last tick; then the shops' `lazyTick` (every 10 ticks): their tags
-/// follow what is beside them.
+/// Cloths changed since the last tick; then the shops' `lazyTick` (`SmartBlockEntity`'s, rate
+/// 10): their tags follow what is beside them.
 pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let mine: Vec<[i32; 3]> = CHANGED.with_borrow_mut(|c| {
@@ -432,19 +436,23 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
         let is = super::block_at(lv, pos);
         block_moved(lv, pos, is);
     }
-    if lv.game_time() % 10 != 0 {
-        return;
-    }
-    let shops: Vec<([i32; 3], Dir, bool)> = cloths(lv.dim, |m| {
+    let shops: Vec<[i32; 3]> = cloths(lv.dim, |m| {
         m.iter()
             .filter(|(_, c)| c.shop.is_some())
-            .map(|(p, c)| (*p, c.facing, c.occluded))
+            .map(|(p, _)| *p)
             .collect()
     });
-    for (pos, facing, was) in shops {
-        if !lv.is_loaded(pos) {
-            continue;
-        }
+    let loaded: Vec<[i32; 3]> = shops.into_iter().filter(|p| lv.is_loaded(*p)).collect();
+    let due: Vec<([i32; 3], Dir)> = cloths(lv.dim, |m| {
+        loaded
+            .into_iter()
+            .filter_map(|p| {
+                let c = m.get_mut(&p)?;
+                c.lazy.tick().then_some((p, c.facing))
+            })
+            .collect()
+    });
+    for (pos, facing) in due {
         let now = occluded(lv, pos, facing);
         let stock = order_stock(lv, pos);
         let changed = cloths(lv.dim, |m| {
@@ -457,7 +465,6 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
         if changed == Some(true) {
             show(lv, pos);
         }
-        let _ = was;
     }
 }
 
