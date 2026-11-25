@@ -160,33 +160,6 @@ fn sliding_door_states(path: &str, bytes: &[u8]) -> Option<Value> {
     Some(json!({ "multipart": cases }))
 }
 
-/// The tinted copy's path of a model the glue draws coloured (`<model>_tinted.json`).
-fn tinted_model(path: &str) -> Option<String> {
-    let rest = path.strip_prefix("assets/create/models/block/")?;
-    let coloured = rest.starts_with("factory_gauge/connections/")
-        || rest == "mechanical_arm/lower_body.json"
-        || rest == "mechanical_arm/upper_body.json"
-        || rest == "track_overlay/assembling.json";
-    let stem = rest.strip_suffix(".json").filter(|_| coloured)?;
-    Some(format!("assets/create/models/block/{stem}_tinted.json"))
-}
-
-/// Every face of a model's elements takes tint index 0.
-fn tint_faces(doc: &mut Value) {
-    let Some(elements) = doc.get_mut("elements").and_then(Value::as_array_mut) else {
-        return;
-    };
-    for e in elements {
-        if let Some(faces) = e.get_mut("faces").and_then(Value::as_object_mut) {
-            for f in faces.values_mut() {
-                if let Some(f) = f.as_object_mut() {
-                    f.insert("tintindex".into(), json!(0));
-                }
-            }
-        }
-    }
-}
-
 pub(crate) struct ItemModel {
     target: String,
     pub(crate) custom: Option<Value>,
@@ -384,20 +357,6 @@ pub fn prepare(repo: &Path, sources: &[PathBuf], out: &Path) -> Result<String, S
             copied += 1;
         }
     }
-    // Tinted copies of the models the glue colours as Create does (`SuperByteBuffer.color`): a
-    // factory gauge's arrows (`FactoryPanelRenderer.renderPath`) and a dancing arm's body
-    // (`ArmRenderer`'s rainbow). Made from the player's jar, never committed.
-    let mut tinted = 0;
-    for (path, bytes) in &files {
-        let Some(name) = tinted_model(path) else {
-            continue;
-        };
-        let mut doc: Value = serde_json::from_slice(bytes).map_err(|e| format!("{path}: {e}"))?;
-        tint_faces(&mut doc);
-        put(&name, &serde_json::to_vec_pretty(&doc).unwrap())?;
-        tinted += 1;
-    }
-    let _ = tinted;
     // Connected textures, as OptiFine's: a ctm properties file per block and sheet, the tiles.
     let read = |p: &str| -> Option<Vec<u8>> {
         fs::read(tmp.join(p)).ok().or_else(|| files.get(p).cloned())

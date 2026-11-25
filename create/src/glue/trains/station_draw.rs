@@ -3,7 +3,7 @@
 //! track and swung up as `transformFlag` does), the station marker on its track
 //! (`TrackTargetingBehaviour.render` of `track_overlay/station`), and in assembly mode the
 //! assembly track's `track_overlay/assembling` where a bogey may go and where one is, blue and
-//! green (a copy of the model with every face tinted, made by `create-data prepare`).
+//! green.
 //!
 //! The server keeps what clients need in the station's block entity data (`KEY`), refreshed
 //! every ten ticks and when its train comes or goes. The station keeps no facing along its track
@@ -27,9 +27,8 @@ pub const FLAG_ON: &str = "create:block/track_station/flag_on";
 pub const FLAG_OFF: &str = "create:block/track_station/flag_off";
 pub const FLAG_ASSEMBLE: &str = "create:block/track_station/flag_assemble";
 pub const OVERLAY: &str = "create:block/track_overlay/station";
-/// The assembly overlay with every face tinted (made by `create-data prepare`), coloured as
-/// Create's `SuperByteBuffer.color` colours it.
-pub const ASSEMBLING: &str = "create:block/track_overlay/assembling_tinted";
+/// The assembly overlay, coloured as Create's `SuperByteBuffer.color` colours it.
+pub const ASSEMBLING: &str = "create:block/track_overlay/assembling";
 pub const SIGNAL: &str = "create:block/track_overlay/signal";
 pub const SIGNAL_DUAL: &str = "create:block/track_overlay/signal_dual";
 pub const OBSERVER: &str = "create:block/track_overlay/observer";
@@ -479,12 +478,11 @@ pub fn draw(
         } else {
             None
         };
-        // `SuperByteBuffer.color`, through the tinted copy's tint index.
+        // `SuperByteBuffer.color`.
         if let Some(colour) = colour
             && let Some(m) = model(host, ASSEMBLING)
         {
-            let mut options = mod_api::TerrainModelOptions::default();
-            options.tint = colour;
+            let options = mod_api::TerrainModelOptions::default().with_color(0xFF00_0000 | colour);
             let _ = draw.terrain_model(m, options);
         }
     }
