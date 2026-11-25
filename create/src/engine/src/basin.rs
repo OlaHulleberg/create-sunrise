@@ -6,6 +6,7 @@
 use crate::fan::Heat;
 use crate::processing::{Output, Rng, Slot, insert_stacked};
 use crate::tank::Fluid;
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 /// `BasinBlockEntity`'s fluid tanks: two inputs and two outputs of a bucket each.
 pub const TANK: u32 = 1000;
@@ -260,9 +261,189 @@ pub fn insert_one_stack(slots: &mut [Slot], item: &str, count: u8, max: u8) -> u
     insert_stacked(&mut slots[at..at + 1], item, count, max)
 }
 
-/// `getMatchingRecipes`: the recipes that would apply now, those with the most ingredients first.
+/// `IntArrayTrie`: values stored under sorted `u32` keys, looked up for every key that is a
+/// subset of a pool. Children are walked in ascending order, so a lookup is deterministic (Java's
+/// `Int2ObjectOpenHashMap` walks them in hash order).
+struct IntArrayTrie<V> {
+    root: TrieNode<V>,
+}
+
+struct TrieNode<V> {
+    children: BTreeMap<u32, TrieNode<V>>,
+    values: Vec<V>,
+}
+
+impl<V> TrieNode<V> {
+    fn new() -> TrieNode<V> {
+        TrieNode {
+            children: BTreeMap::new(),
+            values: Vec::new(),
+        }
+    }
+}
+
+impl<V: Copy> IntArrayTrie<V> {
+    fn new() -> IntArrayTrie<V> {
+        IntArrayTrie {
+            root: TrieNode::new(),
+        }
+    }
+
+    /// `insert`: `key` must be sorted.
+    fn insert(&mut self, key: &[u32], value: V) {
+        let mut node = &mut self.root;
+        for &k in key {
+            node = node.children.entry(k).or_insert_with(TrieNode::new);
+        }
+        node.values.push(value);
+    }
+
+    /// `lookup`: the values of every key within `pool`, depth first: a node's own values, then
+    /// its children's.
+    fn lookup(&self, pool: &BTreeSet<u32>) -> Vec<V> {
+        let mut out = Vec::new();
+        Self::dfs(&self.root, pool, &mut out);
+        out
+    }
+
+    fn dfs(node: &TrieNode<V>, pool: &BTreeSet<u32>, out: &mut Vec<V>) {
+        out.extend_from_slice(&node.values);
+        // Whichever is smaller is walked, as in Java.
+        if node.children.len() > pool.len() {
+            for key in pool {
+                if let Some(child) = node.children.get(key) {
+                    Self::dfs(child, pool, out);
+                }
+            }
+        } else {
+            for (key, child) in &node.children {
+                if pool.contains(key) {
+                    Self::dfs(child, pool, out);
+                }
+            }
+        }
+    }
+}
+
+/// `RecipeTrie`'s `AbstractVariant`: an item or a fluid a basin can hold.
+#[derive(Clone, PartialEq, Eq, Hash)]
+enum Variant {
+    Item(String),
+    Fluid(Fluid),
+}
+
+/// `RecipeTrie`'s `AbstractIngredient`: the variants an ingredient takes (items sorted), or the
+/// universal one for an empty ingredient or a fluid of no amount, which any pool has.
+#[derive(PartialEq, Eq, Hash)]
+enum Abstract {
+    Universal,
+    Items(Vec<String>),
+    Fluid(Fluid),
+}
+
+/// `RecipeTrie` over a slice of recipes: each is stored under the sorted ids of its distinct
+/// ingredients (items and fluids), and a lookup finds those whose ingredients the basin's
+/// contents can all satisfy.
+///
+/// Ids go in the order the ingredients are first met, as Java assigns them over the recipe
+/// manager's list, where vanilla's recipes come before mods' (data pack load order): the
+/// recipes are met by namespace (`minecraft` first), then by id, so the order is the same
+/// whichever order the slice has.
+struct RecipeTrie {
+    trie: IntArrayTrie<usize>,
+    /// The ids of the ingredients each variant is one of.
+    ingredients: HashMap<Variant, Vec<u32>>,
+}
+
+/// `AbstractIngredient.Universal`'s id.
+const UNIVERSAL: u32 = 0;
+
+impl RecipeTrie {
+    fn new(recipes: &[Recipe]) -> RecipeTrie {
+        let mut ids: HashMap<Abstract, u32> = HashMap::from([(Abstract::Universal, UNIVERSAL)]);
+        let mut ingredients: HashMap<Variant, Vec<u32>> = HashMap::new();
+        let mut trie = IntArrayTrie::new();
+        let mut order: Vec<usize> = (0..recipes.len()).collect();
+        let met = |i: usize| {
+            let id = recipes[i].id.as_str();
+            (!id.starts_with("minecraft:"), id)
+        };
+        order.sort_by(|&a, &b| met(a).cmp(&met(b)));
+        for i in order {
+            let recipe = &recipes[i];
+            let from_items = recipe.ingredients.iter().map(|ingredient| {
+                if ingredient.is_empty() {
+                    return Abstract::Universal;
+                }
+                let mut items = ingredient.clone();
+                items.sort();
+                items.dedup();
+                Abstract::Items(items)
+            });
+            let from_fluids = recipe.fluids.iter().map(|&(fluid, amount)| {
+                if amount == 0 {
+                    Abstract::Universal
+                } else {
+                    Abstract::Fluid(fluid)
+                }
+            });
+            let mut key = BTreeSet::new();
+            for ingredient in from_items.chain(from_fluids) {
+                let id = match ids.get(&ingredient) {
+                    Some(&id) => id,
+                    None => {
+                        let id = ids.len() as u32;
+                        let variants: Vec<Variant> = match &ingredient {
+                            Abstract::Universal => Vec::new(),
+                            Abstract::Items(items) => {
+                                items.iter().cloned().map(Variant::Item).collect()
+                            }
+                            Abstract::Fluid(fluid) => vec![Variant::Fluid(*fluid)],
+                        };
+                        for variant in variants {
+                            ingredients.entry(variant).or_default().push(id);
+                        }
+                        ids.insert(ingredient, id);
+                        id
+                    }
+                };
+                key.insert(id);
+            }
+            let key: Vec<u32> = key.into_iter().collect();
+            trie.insert(&key, i);
+        }
+        RecipeTrie { trie, ingredients }
+    }
+
+    /// `lookup` of `getVariants`: the recipes made of (some of) what the basin holds, in trie
+    /// order.
+    fn lookup(&self, slots: &[Slot], tanks: &Tanks) -> Vec<usize> {
+        let mut pool = BTreeSet::from([UNIVERSAL]);
+        let items = slots
+            .iter()
+            .flatten()
+            .map(|(item, _)| Variant::Item(item.clone()));
+        let fluids = tanks
+            .output
+            .iter()
+            .chain(&tanks.input)
+            .flatten()
+            .map(|&(fluid, _)| Variant::Fluid(fluid));
+        for variant in items.chain(fluids) {
+            if let Some(ids) = self.ingredients.get(&variant) {
+                pool.extend(ids);
+            }
+        }
+        self.trie.lookup(&pool)
+    }
+}
+
+/// `getMatchingRecipes`: the recipes that would apply now, found through `RecipeTrie` and then
+/// those with the most ingredients first (a stable sort, so equal counts keep the trie's order).
 pub fn matching(recipes: &[Recipe], slots: &[Slot], tanks: &Tanks, cx: &Context) -> Vec<usize> {
-    let mut out: Vec<usize> = (0..recipes.len())
+    let mut out: Vec<usize> = RecipeTrie::new(recipes)
+        .lookup(slots, tanks)
+        .into_iter()
         .filter(|&i| {
             apply(
                 &mut slots.to_vec(),
@@ -771,5 +952,98 @@ mod admits_tests {
     fn output_slots_refuse() {
         let slots = vec![None; SLOTS];
         assert!(!admits_slot(&slots, OUTPUTS.start, &"a", same));
+    }
+
+    #[test]
+    fn the_trie_finds_subsets_depth_first_in_key_order() {
+        let mut trie = IntArrayTrie::new();
+        trie.insert(&[2, 3], "c");
+        trie.insert(&[3], "d");
+        trie.insert(&[1, 2], "a");
+        trie.insert(&[], "e");
+        trie.insert(&[1], "b");
+        trie.insert(&[1], "b2");
+        trie.insert(&[4], "never");
+        let lookup = |pool: &[u32]| trie.lookup(&pool.iter().copied().collect());
+        assert_eq!(lookup(&[1, 2, 3]), ["e", "b", "b2", "a", "c", "d"]);
+        assert_eq!(lookup(&[3, 1]), ["e", "b", "b2", "d"]);
+        assert_eq!(lookup(&[2, 3]), ["e", "c", "d"]);
+        assert_eq!(lookup(&[2]), ["e"], "a key needs all of its ids");
+        assert_eq!(lookup(&[]), ["e"]);
+    }
+
+    fn cx(heat: Heat) -> Context<'static> {
+        Context {
+            heat,
+            max: &|_| 64,
+            remainder: &|_| None,
+            spout: false,
+        }
+    }
+
+    fn recipe(id: &str, items: &[&str], fluids: &[(Fluid, u32)]) -> Recipe {
+        Recipe {
+            id: id.into(),
+            ingredients: items.iter().map(|i| vec![(*i).into()]).collect(),
+            results: vec![Output {
+                item: "minecraft:stick".into(),
+                count: 1,
+                chance: 1.0,
+            }],
+            time: 0,
+            heat: HeatReq::None,
+            fluids: fluids.to_vec(),
+            fluid_results: vec![],
+        }
+    }
+
+    #[test]
+    fn packed_mud_comes_before_mud_mixing_in_either_list_order() {
+        let mud_mixing = recipe(
+            "create:mixing/mud_by_mixing",
+            &["minecraft:dirt"],
+            &[(Fluid::Water, 250)],
+        );
+        let packed_mud = recipe(
+            "minecraft:packed_mud",
+            &["minecraft:mud", "minecraft:wheat"],
+            &[],
+        );
+        let mut slots: Vec<Slot> = vec![None; SLOTS];
+        slots[0] = Some(("minecraft:dirt".into(), 1));
+        slots[1] = Some(("minecraft:mud".into(), 1));
+        slots[2] = Some(("minecraft:wheat".into(), 1));
+        let mut tanks = Tanks::default();
+        tanks.input[0] = Some((Fluid::Water, 1000));
+        for list in [
+            [mud_mixing.clone(), packed_mud.clone()],
+            [packed_mud.clone(), mud_mixing.clone()],
+        ] {
+            let found: Vec<&str> = matching(&list, &slots, &tanks, &cx(Heat::None))
+                .into_iter()
+                .map(|i| list[i].id.as_str())
+                .collect();
+            assert_eq!(
+                found,
+                ["minecraft:packed_mud", "create:mixing/mud_by_mixing"]
+            );
+        }
+    }
+
+    #[test]
+    fn more_ingredients_come_first_whatever_the_trie_order() {
+        let two = recipe("minecraft:a", &["minecraft:dirt", "minecraft:mud"], &[]);
+        let three = recipe(
+            "create:b",
+            &["minecraft:dirt", "minecraft:mud", "minecraft:wheat"],
+            &[],
+        );
+        let mut slots: Vec<Slot> = vec![None; SLOTS];
+        slots[0] = Some(("minecraft:dirt".into(), 1));
+        slots[1] = Some(("minecraft:mud".into(), 1));
+        slots[2] = Some(("minecraft:wheat".into(), 1));
+        let list = [two, three];
+        let found = matching(&list, &slots, &Tanks::default(), &cx(Heat::None));
+        assert_eq!(found, vec![1, 0]);
     }
 }
