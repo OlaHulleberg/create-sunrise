@@ -542,11 +542,7 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
         let values = fluid_overflow_values(&fluids_left);
         set_values(lv, pos, &values);
         if list.is_empty() && fluids_left.is_empty() {
-            with_world(|w| {
-                w.dims[lv.dim]
-                    .mixer_checks
-                    .push([pos[0], pos[1] + 2, pos[2]])
-            });
+            with_world(|w| w.dims[lv.dim].notify_basin_contents(pos));
         }
     }
     seen.retain(|(_, at)| now - at < OUTPUT_ANIMATION_TIME);
@@ -555,11 +551,7 @@ fn clear_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], now: i64) -> bool {
         values.push((OVERFLOW_KEY, Some(overflow_tag(&list))));
         if list.is_empty() && fluids_left.is_empty() {
             // `notifyChangeOfContents`: its mixer or press may go on.
-            with_world(|w| {
-                w.dims[lv.dim]
-                    .mixer_checks
-                    .push([pos[0], pos[1] + 2, pos[2]])
-            });
+            with_world(|w| w.dims[lv.dim].notify_basin_contents(pos));
         }
     }
     if seen != seen_before {

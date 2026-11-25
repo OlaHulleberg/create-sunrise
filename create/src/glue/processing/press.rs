@@ -142,7 +142,7 @@ fn press_in_world(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
 /// The deployers the depots under them asked for (`DepotBehaviour.tick` with
 /// `BeltDeployerCallbacks`), idle presses looking at the ground under them, then the presses
 /// whose cycle changed told to clients. A press over a depot is asked at the depot's turn
-/// (`depot_turn`) and moves its head at its own (`tick_press`), in the transport walk.
+/// (`depot_turn`) and moves its head at its own (`press_turn`), in the transport walk.
 pub fn tick_presses(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     if recipes::ready() {
@@ -180,7 +180,7 @@ pub fn tick_presses(lv: &mut ServerLevel<'_>) {
 /// asked `isBlocked`), with the press two above (`BeltPressingCallbacks`): the press starts on
 /// a stack a pressing recipe takes (a sequenced assembly's pressing step first), and at the
 /// head's lowest point one of it is pressed. A press registered after the depot moves in the
-/// same tick (`tick_press`).
+/// same tick (`press_turn`).
 pub(crate) fn depot_turn(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     use press::Step;
     let dim = lv.dim;
@@ -232,20 +232,62 @@ pub(crate) fn depot_turn(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     });
 }
 
-/// `PressingBehaviour.tick` of the running press at `at`, at its turn in the transport walk:
-/// its head moves; on the ground it presses at the bottom (`applyInWorld`), over a basin it
-/// compacts there (`tryProcessInBasin`) and looks again when done (`onPressingCompleted`).
-pub(crate) fn tick_press(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
+/// `MechanicalPressBlockEntity.tick` at the press's turn in the level's block-entity order
+/// (`BasinOperatingBlockEntity.tick`): a basin emptied or removed stops the cycle and ends the
+/// turn; else a look at the basin it was asked for (`basinChecker`, `updateBasin`) may start a
+/// cycle over it, and then the head moves (`PressingBehaviour.tick`, added after the checker): on
+/// the ground it presses at the bottom (`applyInWorld`), over a basin it compacts there
+/// (`tryProcessInBasin`), and a finished cycle goes on at once or looks again
+/// (`onPressingCompleted`).
+pub(crate) fn press_turn(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
     use press::{Mode, Tick};
     let dim = lv.dim;
     if !recipes::ready() {
         return;
     }
+    let (removed, look) = with_world(|w| {
+        let Some(o) = w.dims[dim].operators.get_mut(&at) else {
+            return (false, false);
+        };
+        let removed = o.take_removed();
+        (removed, !removed && o.checker.take())
+    })
+    .unwrap_or_default();
+    if removed {
+        // `onBasinRemoved`: the cycle stops, its clients are told.
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            if let Some(p) = d.presses.get_mut(&at) {
+                p.running = false;
+                p.ticks = 0;
+            }
+            d.press_changes.push(at);
+        });
+        return;
+    }
+    if look {
+        super::basin::press_on_basin(lv, at);
+    }
     match with_world(|w| w.tick_press(dim, at)).flatten() {
         Some((Mode::World, Tick::Down)) => press_in_world(lv, at),
         Some((Mode::Basin, Tick::Down)) => super::basin::compact_in_basin(lv, at),
-        Some((Mode::Basin, Tick::Done)) => {
-            with_world(|w| w.dims[dim].mixer_checks.push(at));
+        Some((_, Tick::Done)) => {
+            // `onPressingCompleted`.
+            let Some(mut p) = with_world(|w| w.dims[dim].presses.get(&at).copied()).flatten()
+            else {
+                return;
+            };
+            let after = p.on_completed(|| super::basin::press_recipe_fits(lv, at));
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                match after {
+                    press::After::Restarted => {
+                        d.presses.insert(at, p);
+                        d.press_changes.push(at);
+                    }
+                    press::After::Look => d.schedule_basin_check(at),
+                }
+            });
         }
         _ => {}
     }

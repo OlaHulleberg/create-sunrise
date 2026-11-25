@@ -786,7 +786,11 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 continue;
             }
             create_engine::world::TransportTick::Press(p) => {
-                crate::glue::processing::tick_press(lv, p);
+                crate::glue::processing::press_turn(lv, p);
+                continue;
+            }
+            create_engine::world::TransportTick::Mixer(p) => {
+                crate::glue::processing::mixer_turn(lv, p);
                 continue;
             }
             create_engine::world::TransportTick::Saw(p) => {
