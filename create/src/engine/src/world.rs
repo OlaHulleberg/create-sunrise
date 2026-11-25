@@ -275,9 +275,8 @@ pub struct Dimension {
     diode_saved: HashMap<[i32; 3], (i32, i32)>,
     pub diode_checks: Vec<([i32; 3], i64)>,
     pub diode_ticks: Vec<([i32; 3], i64)>,
-    /// Rose quartz lamps just placed (`getStateForPlacement`: `powered` as placed), those whose
-    /// neighbours changed, and their scheduled ticks (position, game time due).
-    pub lamp_placed: Vec<[i32; 3]>,
+    /// Rose quartz lamps whose neighbours changed, and their scheduled ticks (position, game
+    /// time due).
     pub lamp_checks: Vec<[i32; 3]>,
     pub lamp_ticks: Vec<([i32; 3], i64)>,
     /// Fluid tanks: each tank block's controller and each controller's tank; tanks saved with
@@ -1923,9 +1922,6 @@ impl CreateWorld {
                 self.table.get(old).map(|(b, _)| b),
                 self.table.get(new).map(|(b, _)| b),
             );
-            if is_block == Some(Block::RoseQuartzLamp) && was_block != Some(Block::RoseQuartzLamp) {
-                self.dims[dim].lamp_placed.push(pos);
-            }
             if was_block == Some(Block::Basin) && is_block != Some(Block::Basin) {
                 // `BasinBlockEntity.remove` -> `onEmptied`, as when it is simply broken.
                 self.dims[dim].basin_contents.remove(&pos);
@@ -2423,7 +2419,6 @@ impl CreateWorld {
                 .retain(|p| (p.0[0] >> 4, p.0[2] >> 4) != (cx, cz));
             d.diode_ticks
                 .retain(|p| (p.0[0] >> 4, p.0[2] >> 4) != (cx, cz));
-            d.lamp_placed.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.lamp_checks.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.lamp_ticks
                 .retain(|p| (p.0[0] >> 4, p.0[2] >> 4) != (cx, cz));
@@ -11703,9 +11698,8 @@ mod tests {
         assert!(w.dims[0].diodes[&p].running);
         w.block_changed(0, p, timer, 0);
         assert!(w.dims[0].diode_running.is_empty());
-        // A lamp placed is looked at; a lamp is known by position for the signal hook.
+        // A lamp is known by position for the signal hook.
         w.block_changed(0, [1, 64, 0], 0, lamp);
-        assert_eq!(w.dims[0].lamp_placed, [[1, 64, 0]]);
         assert_eq!(w.block_at(0, [1, 64, 0]), Some(Block::RoseQuartzLamp));
         w.neighbor_changed(0, [1, 64, 0], lamp);
         assert_eq!(w.dims[0].lamp_checks, [[1, 64, 0]]);
