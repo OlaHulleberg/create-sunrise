@@ -73,9 +73,12 @@ struct DecorBlock;
 impl mod_api::BlockPart for DecorBlock {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let mut dimension = String::new();
         let (player, mut lv) = clicked(host, click, &mut dimension)?;
@@ -133,9 +136,12 @@ impl mod_api::BlockPart for DecorBlock {
     /// `DeskBellBlock.useWithoutItem`: its ding, `powered` for 20 ticks.
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let (block, _) = block_of(states::id(event.state)?)?;
         let mut dimension = String::new();
@@ -485,9 +491,12 @@ struct TableCloth;
 impl mod_api::BlockPart for TableCloth {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         if event.click.stack.is_none() {
             return Some(InteractionResult::TryWithEmptyHand);
         }
@@ -496,9 +505,12 @@ impl mod_api::BlockPart for TableCloth {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         use_cloth(host, event.click, event.state)
     }
 }
@@ -625,9 +637,12 @@ impl mod_api::BlockPart for Sail {
     /// dye gives cloth sails its colour (`applyDye`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         let item = stack.item();

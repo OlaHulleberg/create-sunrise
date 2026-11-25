@@ -61,7 +61,7 @@ fn dir_of(d: mod_api::Direction) -> Dir {
 pub(crate) fn in_water(level: &dyn LevelHost, event: &StateForPlacementEvent<'_>) -> bool {
     level
         .block_state_id("minecraft:water")
-        .and_then(|w| level.state_fluid_state(w))
+        .and_then(|w| w.fluid_state(&level.block_states()))
         .is_some_and(|w| event.fluid.source && event.fluid.fluid == w.fluid)
 }
 

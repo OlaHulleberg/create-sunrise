@@ -62,7 +62,7 @@ use create_engine::display::{
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockPart, BlockState, ClientHost, Command, CommandArgumentValue, Compound, Flow,
-    Host, InteractionResult, ItemStack, PlayerRef, Registrar, RegistrationContext,
+    Host, HostSide, InteractionResult, ItemStack, PlayerRef, Registrar, RegistrationContext,
     ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
     ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StateForPlacementEvent, Tag,
@@ -105,7 +105,7 @@ impl Subsystem for Display {
     /// it flashes (`bulb`), and nixie tubes as Create's renderer does: one on a train signal shows
     /// its lights (and an invalid one's blink) as the signal changes (`NixieTubeBlockEntity.tick`
     /// looks at it each tick).
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         display::is_nixie(block)
             || (block == Block::DisplayBoard && client::animated(pos, entity))
             || (block == Block::DisplayLink && bulb::animated(pos, entity))
@@ -244,12 +244,12 @@ impl Subsystem for Display {
     }
 
     /// The display link bulbs' and the nixie signals' glows (additive world quads).
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        bulb::render_level_stage(host, event);
+        bulb::submit_custom_geometry(host, event);
         client::render_signal_glows(host, event);
     }
 
@@ -364,7 +364,9 @@ pub(crate) fn item_name(id: &str) -> String {
 
 /// The value of property `key` of the block at `pos`.
 fn property(lv: &ServerLevel<'_>, pos: [i32; 3], key: &str) -> Option<String> {
-    lv.level.block_property(&*lv.host, pos, key)
+    lv.level
+        .block_property(&*lv.host, pos, key)
+        .map(str::to_owned)
 }
 
 /// The block's name at `pos` (`minecraft:target`).
@@ -795,8 +797,9 @@ fn read_source(lv: &mut ServerLevel<'_>, pos: [i32; 3], source: Source) -> Readi
                 return Reading::Count(None);
             }
             let tagged = |p: [i32; 3], tag: &str| {
-                lv.block_state(p)
-                    .is_some_and(|s| lv.host.block_in_tag(s.block(), tag) == Some(true))
+                lv.block_state(p).is_some_and(|s| {
+                    crate::glue::block_in_tag(lv.host.tags(), s.block(), tag) == Some(true)
+                })
             };
             let power = display::bookshelf_offsets()
                 .into_iter()
@@ -1707,9 +1710,13 @@ struct NixieBlock;
 impl BlockPart for NixieBlock {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        // Writes are the server's; the client leaves the click to the template's prediction.
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let Some(stack) = event.click.stack.cloned() else {
             return Some(InteractionResult::TryWithEmptyHand);
         };
@@ -1718,9 +1725,12 @@ impl BlockPart for NixieBlock {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         use_nixie(host, event.click, None)
     }
 }
@@ -1843,13 +1853,13 @@ impl BlockPart for DisplayBlock {
     /// display board takes a click on one of its lines (`FlapDisplayBlock.useItemOn`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
         let (block, _) = states::id(event.state).and_then(info)?;
-        match block {
-            Block::DisplayLink => Some(InteractionResult::TryWithEmptyHand),
-            Block::DisplayBoard => use_board(host, event.click),
+        match (block, host) {
+            (Block::DisplayLink, _) => Some(InteractionResult::TryWithEmptyHand),
+            (Block::DisplayBoard, HostSide::Server(host)) => use_board(host, event.click),
             _ => None,
         }
     }
@@ -1858,9 +1868,12 @@ impl BlockPart for DisplayBlock {
     /// the player is told it has no target.
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let (block, _) = states::id(event.state).and_then(info)?;
         if block != Block::DisplayLink {
             return None;

@@ -251,10 +251,10 @@ pub(super) fn draw(host: &dyn ClientHost, draw: &mut dyn DrawContext) {
 const INDICATOR: &str = "create:gui/placement_indicator";
 
 /// The ghost at the current target (`GhostBlocks.renderAll`): shown while a helper has one.
-pub(super) fn draw_ghost(host: &dyn ClientHost, event: &mut mod_api::RenderLevelStageEvent<'_>) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+pub(super) fn draw_ghost(
+    host: &dyn ClientHost,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+) {
     let Some(target) = TARGET.get() else {
         return;
     };

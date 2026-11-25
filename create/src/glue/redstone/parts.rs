@@ -14,7 +14,7 @@ use crate::glue::world::{level_index, try_with_world, with_world};
 use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
-    BlockClick, BlockPart, BlockSignalEvent, BlockState, ContentsChangedEvent, Flow,
+    BlockClick, BlockPart, BlockSignalEvent, BlockState, ContentsChangedEvent, Flow, HostSide,
     InteractionResult, IsSignalSourceEvent, LevelHost, LevelWriteHost, MinecartPassEvent,
     Registrar, ServerHost, StateForPlacementEvent, TickBlockEvent, UseItemOnEvent,
     UseWithoutItemEvent,
@@ -181,9 +181,12 @@ impl BlockPart for RedstoneBlock {
 
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let held = event.click.stack.map(|s| s.item().name(&*host));
         if held.is_none() {
             // `useWithoutItem` takes an empty hand.
@@ -194,9 +197,12 @@ impl BlockPart for RedstoneBlock {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         use_block(host, event.state, event.click, None)
     }
 

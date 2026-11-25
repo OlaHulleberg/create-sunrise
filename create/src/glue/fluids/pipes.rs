@@ -74,9 +74,7 @@ fn open_end(lv: &ServerLevel<'_>, p: [i32; 3], toward: Option<Dir>) -> bool {
             .block_face_sturdy(&*lv.host, p, face, mod_api::SupportType::Full)
             == Some(true);
         if sturdy
-            && lv
-                .host
-                .block_in_tag(state.block(), "create:fan_transparent")
+            && crate::glue::block_in_tag(lv.host.tags(), state.block(), "create:fan_transparent")
                 != Some(true)
         {
             return false;
@@ -552,10 +550,11 @@ fn boiler_heater(lv: &ServerLevel<'_>, p: [i32; 3]) -> i32 {
     let Some(state) = lv.block_state(p) else {
         return steam::NO_HEAT;
     };
-    if lv
-        .host
-        .block_in_tag(state.block(), "create:passive_boiler_heaters")
-        != Some(true)
+    if crate::glue::block_in_tag(
+        lv.host.tags(),
+        state.block(),
+        "create:passive_boiler_heaters",
+    ) != Some(true)
     {
         return steam::NO_HEAT;
     }

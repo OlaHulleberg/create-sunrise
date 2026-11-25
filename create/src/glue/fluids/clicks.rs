@@ -20,8 +20,8 @@ use create_engine::kinetics::Dir;
 use create_engine::tank::Fluid;
 use mod_api::{
     BlockPart, ClientHost, Flow, Hand, HostSide, InteractionResult,
-    ItemAfterVerticalCollisionEvent, ItemStack, PlayerRef, RightClickBlockEvent, ServerHost,
-    SoundSource, UseItemOnEvent,
+    ItemAfterVerticalCollisionEvent, ItemStack, PlayerRef, RightClickBlockEvent, SoundSource,
+    UseItemOnEvent,
 };
 
 /// The blocks whose clicks are this module's.
@@ -43,9 +43,12 @@ pub(super) struct Clicks;
 impl BlockPart for Clicks {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.player(click.player)?;
         let dimension = click.dimension.key().id().to_owned();

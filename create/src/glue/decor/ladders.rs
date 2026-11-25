@@ -13,7 +13,7 @@ use create_engine::Block;
 use create_engine::kinetics::Dir;
 use mod_api::{
     BlockClick, BlockState, CanSurviveEvent, Hand, InteractionResult, ItemStack, PlayerRef,
-    Registrar, ServerHost, SupportType, UseItemOnEvent,
+    Registrar, SupportType, UseItemOnEvent,
 };
 
 /// Create's metal ladders.
@@ -65,9 +65,12 @@ impl mod_api::BlockPart for Ladder {
     /// `MetalLadderBlock.useItemOn`: the placement helper, not sneaking.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         let player = host.player(click.player)?;

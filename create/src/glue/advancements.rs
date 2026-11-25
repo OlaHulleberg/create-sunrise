@@ -25,13 +25,12 @@ use mod_api::{
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 /// `SimpleCreateTrigger`'s test: a built-in trigger has no conditions.
 struct Always;
 
 impl CriterionTest for Always {
-    fn test(&self, _criterion: &dyn CriterionContext) -> Result<bool, CriterionTestError> {
+    fn test(&mut self, _criterion: &dyn CriterionContext) -> Result<bool, CriterionTestError> {
         Ok(true)
     }
 }
@@ -41,7 +40,7 @@ pub(crate) fn award(host: &mut dyn ServerHost, player: PlayerRef, name: &str) {
     let Ok(trigger) = Identifier::parse(&format!("create:{name}_builtin")) else {
         return;
     };
-    if let Err(e) = player.trigger_criterion(host, &trigger, Arc::new(Always)) {
+    if let Err(e) = player.trigger_criterion(host, &trigger, &mut Always) {
         crate::create_log!("[create] the {name} advancement's trigger was refused: {e:?}");
     }
 }
@@ -192,7 +191,7 @@ pub(crate) fn pressed(lv: &mut ServerLevel<'_>, pos: [i32; 3], result: Option<(&
         .ok()
         .and_then(|id| host.item_key(&id))
         .and_then(|k| host.item_block(k))
-        .and_then(|b| host.block_in_tag(b, "create:tracks"))
+        .and_then(|b| crate::glue::block_in_tag(host.tags(), b, "create:tracks"))
         .unwrap_or(false);
     if !track {
         return;

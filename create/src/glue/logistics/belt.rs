@@ -219,10 +219,7 @@ pub fn update_cover(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         f64::from(above[1]) + 1.0,
         f64::from(above[2]) + 1.0,
     ];
-    let boxes = lv
-        .level
-        .collision_boxes(&*lv.host, cell)
-        .unwrap_or_default();
+    let boxes = crate::glue::collision_boxes(lv.level, &*lv.host, cell).unwrap_or_default();
     let covered = !excluded && !boxes.is_empty() && {
         let lo = |k: usize| boxes.iter().map(|b| b[k]).fold(f64::MAX, f64::min);
         let hi = |k: usize| boxes.iter().map(|b| b[k + 3]).fold(f64::MIN, f64::max);

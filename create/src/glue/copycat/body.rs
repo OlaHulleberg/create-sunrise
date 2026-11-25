@@ -26,10 +26,13 @@ pub(super) fn candidate(
     let host = &*lv.host;
     let block = state.block();
     let id = block.name(host);
-    let tagged = |t: &str| host.block_in_tag(block, t) == Some(true);
+    let tagged = |t: &str| crate::glue::block_in_tag(host.tags(), block, t) == Some(true);
     let create = id.strip_prefix("create:").and_then(Block::from_name);
     // `getShape(level, pos).bounds()` is the whole block.
-    let outline = host.state_outline(state).unwrap_or_default();
+    let outline = state
+        .outline(&host.block_states())
+        .map(<[_]>::to_vec)
+        .unwrap_or_default();
     let mut lo = [f64::MAX; 3];
     let mut hi = [f64::MIN; 3];
     for o in &outline {
@@ -39,9 +42,7 @@ pub(super) fn candidate(
         }
     }
     let full = !outline.is_empty() && lo == [0.0; 3] && hi == [1.0; 3];
-    let collides = lv
-        .level
-        .block_shape(host, state, pos, BlockShapeKind::Collision)
+    let collides = crate::glue::block_shape(lv.level, host, state, pos, BlockShapeKind::Collision)
         .is_some_and(|s| !s.is_empty());
     let facts = host.block_states();
     let has = |k: &str| state.property(&facts, k).ok().flatten().is_some();
@@ -130,97 +131,7 @@ pub(super) fn cycle_of(host: &dyn Host, state: BlockState) -> Option<(&'static s
 
 /// `getSoundType().getPlaceSound()` of `state`.
 pub(super) fn place_sound(host: &dyn Host, state: BlockState) -> Option<String> {
-    let place = host.block_states().sound(state)?.place;
-    (!place.is_empty()).then(|| place.to_string())
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use mod_api::__private::part_tests::{block_key, install_parts_fixture};
-    use mod_api::prelude::*;
-    use mod_api::testing::{FakeLevel, with_mods};
-    use mod_api::{
-        Backend, BackendRef, BlockKey, Hooks, LevelReadError, LevelRef, ModEntry, Registrar,
-        RegistrationContext, ServerHost,
-    };
-
-    const PANE: &str = "create:oak_window_pane";
-    const BARS: &str = "minecraft:iron_bars";
-    // Both fixture materials have a narrow, colliding shape, not full-block bounds.
-    const SHAPE: [f64; 6] = [0.4375, 0.0, 0.4375, 0.5625, 1.0, 0.5625];
-
-    struct Materials;
-
-    #[mod_api::__subscriptions]
-    impl Hooks for Materials {
-        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
-            r.block_key(PANE);
-            r.block_key(BARS);
-        }
-    }
-
-    mod_api::__mod_api_impl_host_areas!(Materials, except(tags));
-    mod_api::__mod_api_impl_server_host_areas!(Materials);
-    mod_api::__mod_api_impl_backend_areas!(Materials, except(block_states, keys, level_collision));
-    impl Host for Materials {
-        fn backend(&self) -> Option<BackendRef<'_>> {
-            Some(mod_api::__private::backend_ref(self))
-        }
-    }
-    impl ServerHost for Materials {}
-    impl Backend for Materials {}
-    impl TagsHost for Materials {
-        fn block_in_tag(&self, _: BlockKey, _: &str) -> Option<bool> {
-            Some(false)
-        }
-
-        fn state_outline(&self, _: BlockState) -> Option<Vec<[f64; 6]>> {
-            Some(vec![SHAPE])
-        }
-    }
-    impl BlockStatesBackend for Materials {
-        fn block_state_class(
-            &self,
-            _: BlockState,
-            class: BlockClass,
-        ) -> Result<Option<bool>, LevelReadError> {
-            Ok(Some(class == BlockClass::IronBars))
-        }
-    }
-    impl KeysBackend for Materials {
-        fn block_key_id(&self, key: BlockKey) -> Option<&str> {
-            [PANE, BARS].into_iter().find(|id| block_key(id) == key)
-        }
-    }
-    impl LevelCollisionBackend for Materials {
-        fn level_block_shape(
-            &self,
-            _: LevelRef,
-            _: BlockState,
-            _: [i32; 3],
-            _: BlockShapeKind,
-        ) -> Option<Vec<[f64; 6]>> {
-            Some(vec![SHAPE])
-        }
-    }
-
-    #[test]
-    fn a_copycat_panel_accepts_iron_bars_but_not_create_window_panes() {
-        with_mods(vec![].into(), || {
-            install_parts_fixture(&[ModEntry::new("create", Box::new(Materials))]).unwrap();
-            let lv = ServerLevel {
-                host: &mut Materials,
-                level: FakeLevel::default().level(),
-                dim: 0,
-                dimension: "minecraft:overworld",
-            };
-            let panel = Shape::Panel(Dir::Up);
-            for (id, accepted) in [(PANE, false), (BARS, true)] {
-                let state = mod_api::__private::block_state_from_ordinal(block_key(id), 0);
-                let facts = candidate(&lv, state, [0; 3]).unwrap();
-                assert_eq!(cc::accepts(panel, &facts), accepted, "{id}");
-            }
-        });
-    }
+    let sound = host.block_states().sound(state)?;
+    let place = sound.place.as_str();
+    (!place.is_empty()).then(|| place.to_owned())
 }

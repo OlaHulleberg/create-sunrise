@@ -12,9 +12,8 @@ use create_engine::kinetics::Dir;
 use create_engine::parts::StateInfo;
 use create_engine::tank::Fluid;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart,
-    BlockEntityRenderBoundingBoxEvent, BlockPart, ClientHost, FluidBoxOptions, FluidStack,
-    ModBlockEntity, Registrar, Tag,
+    BlockEntityClientTickEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart,
+    ClientHost, FluidBoxOptions, FluidStack, Registrar, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -71,8 +70,8 @@ pub(super) fn reset() {
 
 /// A pulley's hose as its block entity shows it: offset, blocks a tick it moves, and the game
 /// time it was at.
-fn shown_hose(entity: &ModBlockEntity) -> Option<(f32, f32, i64)> {
-    let Some(Tag::List(l)) = entity.nbt.get(&HOSE.into()) else {
+fn shown_hose(entity: crate::glue::EntityData<'_>) -> Option<(f32, f32, i64)> {
+    let Some(Tag::List(l)) = entity.nbt().get(&HOSE.into()) else {
         return None;
     };
     match l.as_slice() {
@@ -85,7 +84,7 @@ fn shown_hose(entity: &ModBlockEntity) -> Option<(f32, f32, i64)> {
 
 /// Whether the block entity of `block` at `pos` moves this frame: a valve's pointer turning, a
 /// hose going up or down.
-pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         Block::FluidValve => VALVES.with_borrow(|v| {
             v.get(&pos)
@@ -95,7 +94,7 @@ pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
         Block::ItemDrain => super::drawn::animated(entity),
         Block::SteamEngine => super::engine::animated(entity),
         Block::Spout => super::spouted::animated(entity),
-        Block::SteamWhistle => whistle_blows(&entity.nbt).is_some_and(|(on, _)| on),
+        Block::SteamWhistle => whistle_blows(entity.nbt()).is_some_and(|(on, _)| on),
         Block::FluidTank => GAUGES.with_borrow(|g| g.get(&pos).is_some_and(|g| !g.settled)),
         Block::GlassFluidPipe => super::flows::animated(entity),
         _ => false,
@@ -114,27 +113,6 @@ impl BlockPart for FluidEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for FluidEntity {
-    fn block_entity_client_ticks(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut BlockEntityClientTicksEvent<'_>,
-    ) {
-        // Pipes, valves and pumps spawn their flows' particles (`flows`).
-        if matches!(
-            event.block,
-            "create:fluid_valve"
-                | "create:steam_engine"
-                | "create:steam_whistle"
-                | "create:fluid_pipe"
-                | "create:encased_fluid_pipe"
-                | "create:glass_fluid_pipe"
-                | "create:smart_fluid_pipe"
-                | "create:mechanical_pump"
-        ) {
-            event.ticks = true;
-        }
-    }
-
     /// Each client tick: a valve's pointer sets off at a new speed and takes a step
     /// (`tickChaser`).
     fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
@@ -224,13 +202,13 @@ impl BlockEntityPart for FluidEntity {
         };
         match block {
             Block::FluidTank | Block::CreativeFluidTank => {
-                if let Some(m) = shown_tank(event.entity) {
+                if let Some(m) = shown_tank(event.entity.into()) {
                     let (w, h) = (f32::from(m.width), f32::from(m.height));
                     *event.bounds = [-1.0, -1.0, -1.0, w + 1.0, h + 1.0, w + 1.0];
                 }
             }
             Block::HosePulley => {
-                if let Some((offset, _, _)) = shown_hose(event.entity) {
+                if let Some((offset, _, _)) = shown_hose(event.entity.into()) {
                     event.bounds[1] = event.bounds[1].min(-offset - 2.0);
                 }
             }
@@ -322,8 +300,8 @@ pub(crate) fn fluid_box(
         } else {
             options
         };
-        draw.fluid_box(&FluidStack::new(key, amount.max(1)), bounds, options)
-            .is_ok()
+        draw.fluid_box(&FluidStack::new(key, amount.max(1)), bounds, options);
+        true
     });
     if drawn {
         return;
@@ -362,7 +340,7 @@ pub(crate) fn fluid_box(
             draw.push();
             draw.translate(min);
             draw.scale([max[0] - min[0], max[1] - min[1], max[2] - min[2]]);
-            draw.block(part, &[("facing", "up")]);
+            crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
             draw.pop();
         }
     }
@@ -393,7 +371,7 @@ fn draw_hose(event: &mut crate::glue::Submit<'_>) {
         };
         draw.push();
         draw.translate([0.0, -down, 0.0]);
-        draw.block(part, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
         draw.pop();
     }
     if per_tick == 0.0 {
@@ -449,7 +427,7 @@ fn draw_pointer(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     draw.rotate_about([0.0, 1.0, 0.0], yaw, c);
     draw.rotate_about([1.0, 0.0, 0.0], pitch, c);
     draw.rotate_about([0.0, 1.0, 0.0], pointer_offset(pipe, shaft), c);
-    draw.block(part, &[("facing", dir_name(Dir::Up))]);
+    crate::glue::states::draw_block(&mut *draw, part, &[("facing", dir_name(Dir::Up))]);
     draw.pop();
     if !moving {
         draw.keep();
@@ -460,7 +438,7 @@ fn draw_pointer(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
 /// place, turn and tilt, the value box's scale), drawn as `ValueBoxRenderer
 /// .renderItemIntoValueBox` does: a block at its full size, a flat item at half pushed back.
 fn draw_pipe_filter(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
-    let Some(Tag::String(id)) = event.entity.nbt.get(&super::plumbing::FILTER.into()) else {
+    let Some(Tag::String(id)) = event.entity.nbt().get(&super::plumbing::FILTER.into()) else {
         return;
     };
     let id = id.to_string_lossy();
@@ -517,7 +495,7 @@ fn draw_whistle(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     };
     let draw = &mut *event.draw;
     let now = draw.game_time() as f32 + draw.partial();
-    let (on, at) = whistle_blows(&event.entity.nbt).unwrap_or((false, 0));
+    let (on, at) = whistle_blows(event.entity.nbt()).unwrap_or((false, 0));
     let t = (now - at as f32).max(0.0);
     let mut offset = if on {
         1.0 - 0.5f32.powf(t)
@@ -535,7 +513,7 @@ fn draw_whistle(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
     }
     draw.push();
     draw.translate([0.0, offset * 4.0 / 16.0, 0.0]);
-    draw.block(part, &[("facing", dir_name(facing))]);
+    crate::glue::states::draw_block(&mut *draw, part, &[("facing", dir_name(facing))]);
     draw.pop();
     if !on {
         draw.keep();
@@ -550,7 +528,7 @@ fn draw_whistle(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
 /// swinging to the boiler's level (`gauge.chase(target, .125, EXP)` as the boiler's data comes).
 /// Whether it stands still (it may be kept).
 fn draw_boiler(event: &mut crate::glue::Submit<'_>, m: &create_engine::tank::Multi) -> bool {
-    let Some(Tag::IntArray(v)) = event.entity.nbt.get(&super::BOILER.into()) else {
+    let Some(Tag::IntArray(v)) = event.entity.nbt().get(&super::BOILER.into()) else {
         GAUGES.with_borrow_mut(|g| g.remove(&event.pos));
         return true;
     };
@@ -618,13 +596,13 @@ fn draw_boiler(event: &mut crate::glue::Submit<'_>, m: &create_engine::tank::Mul
         draw.rotate_about([0.0, 1.0, 0.0], -y_rot - 90.0, [0.0; 3]);
         draw.translate([-0.5, -0.5, -0.5]);
         draw.translate([w / 2.0 - 6.0 / 16.0, 0.0, 0.0]);
-        draw.block(gauge, &[("facing", "south")]);
+        crate::glue::states::draw_block(&mut *draw, gauge, &[("facing", "south")]);
         draw.rotate_about(
             [1.0, 0.0, 0.0],
             -145.0 * progress + 90.0,
             [0.0, 6.0 / 16.0, 8.0 / 16.0],
         );
-        draw.block(dial, &[("facing", "south")]);
+        crate::glue::states::draw_block(&mut *draw, dial, &[("facing", "south")]);
         draw.pop();
     }
     settled

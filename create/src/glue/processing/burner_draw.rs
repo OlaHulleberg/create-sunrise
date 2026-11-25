@@ -231,7 +231,7 @@ fn shared(
         draw.push();
         draw.translate([0.0, head_y, 0.0]);
         draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
-        draw.block(part, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
         draw.pop();
     }
     // `drawGoggles`: on the head, smaller on the inert one.
@@ -248,7 +248,7 @@ fn shared(
         draw.push();
         draw.translate([0.0, head_y + 0.5, 0.0]);
         draw.rotate_about([0.0, 1.0, 0.0], angle, [0.5; 3]);
-        draw.block(part, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
         draw.pop();
     }
     // `drawHat`: the logistics hat on the head, smaller on the inert one.
@@ -264,7 +264,7 @@ fn shared(
         }
         draw.rotate_about([0.0, 1.0, 0.0], angle + 180.0, [0.5; 3]);
         draw.translate([0.5, 0.0, 0.5]);
-        draw.block(part, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
         draw.pop();
     }
     if heat >= Heat::Fading {
@@ -281,7 +281,7 @@ fn shared(
             if let Some(part) = states::partial(name) {
                 draw.push();
                 draw.translate([0.0, y, 0.0]);
-                draw.block(part, &[("facing", "up")]);
+                crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
                 draw.pop();
             }
         }

@@ -179,27 +179,21 @@ pub fn sit_entity(host: &mut dyn ServerHost, dim: usize, rider: EntityRef, at: T
     let Some(f) = frame(dim, at) else {
         return false;
     };
-    let Some(dimension) = rider
-        .level(&*host)
-        .and_then(|l| l.dimension().id(&*host).map(str::to_owned))
-    else {
+    let Some(level) = rider.level(&*host) else {
         return false;
     };
     if rider.vehicle(&*host).is_some() {
         rider.stop_riding(host);
     }
-    let got = host.summon(
-        &dimension,
+    let Ok(Some(stand)) = level.summon(
+        host,
         "minecraft:item_display",
         f.seat(at.local),
         stand_nbt(),
-    );
-    let Some(id) = got else {
+    ) else {
         return false;
     };
-    let Some(stand) = host.entity(id) else {
-        return false;
-    };
+    let id = stand.id();
     let rode = rider.start_riding(host, stand, true).is_ok();
     if !rode {
         stand.discard(host);
@@ -264,7 +258,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
     for s in seated {
         let stand: Option<EntityRef> = lv.host.entity(s.stand);
         let ridden = stand
-            .and_then(|e| e.passengers(&*lv.host))
+            .and_then(|e| crate::glue::passengers(e, &*lv.host))
             .is_some_and(|p| !p.is_empty());
         let f = frame(dim, s.at);
         match (stand, f) {

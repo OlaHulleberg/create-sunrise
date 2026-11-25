@@ -195,10 +195,7 @@ pub fn server_message(data: &[u8]) {
 /// next, 0.925 below them, a quarter block thick for a bogey's own pair and a sixth across the
 /// gap to the next, green (`0x95CD41`), the last red (`0xEA5C2B`) where the train won't fit. Each
 /// is drawn as its box's top face and its centre line.
-pub fn render_level_stage(event: &mut mod_api::RenderLevelStageEvent<'_>) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+pub fn submit_custom_geometry(event: &mut mod_api::SubmitCustomGeometryEvent<'_>) {
     let (quads, lines) = PREVIEW.with_borrow(|p| {
         let mut quads = Vec::new();
         let mut lines = Vec::new();

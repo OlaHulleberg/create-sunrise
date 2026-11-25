@@ -156,8 +156,37 @@ pub struct Submit<'a> {
     pub pos: [i32; 3],
     pub block: &'a str,
     pub state: mod_api::BlockState,
-    pub entity: &'a mod_api::ModBlockEntity,
+    pub entity: EntityData<'a>,
     pub draw: &'a mut dyn mod_api::BlockEntityDrawContext,
+}
+
+/// The saved data of the block entity a draw reads: the event's borrowed view, or a structure's
+/// carried copy, which the API cannot lend as a view.
+#[derive(Clone, Copy)]
+pub enum EntityData<'a> {
+    /// The data the game lends a callback.
+    View(mod_api::BlockEntityDataView<'a>),
+    /// A structure's carried copy.
+    Carried(&'a mod_api::Compound),
+}
+
+impl<'a> EntityData<'a> {
+    pub fn new(nbt: &'a mod_api::Compound) -> Self {
+        Self::Carried(nbt)
+    }
+
+    pub fn nbt(&self) -> &mod_api::Compound {
+        match self {
+            Self::View(view) => view.nbt(),
+            Self::Carried(nbt) => nbt,
+        }
+    }
+}
+
+impl<'a> From<mod_api::BlockEntityDataView<'a>> for EntityData<'a> {
+    fn from(view: mod_api::BlockEntityDataView<'a>) -> Self {
+        Self::View(view)
+    }
 }
 
 impl<'a> Submit<'a> {
@@ -166,7 +195,7 @@ impl<'a> Submit<'a> {
             pos: event.pos,
             block: event.block,
             state: event.state,
-            entity: event.entity,
+            entity: event.entity.into(),
             draw: &mut *event.draw,
         }
     }
@@ -273,6 +302,96 @@ pub fn client_reset(_host: &mut dyn ClientHost) {
     models::forget();
     for s in SUBSYSTEMS {
         s.client_reset();
+    }
+}
+
+/// Whether `block` is in the block tag named `tag` (`minecraft:rails`): the tag's key is looked
+/// up in `tags` by its name, and `None` when the name or the tag does not exist.
+pub fn block_in_tag(tags: &dyn mod_api::Tags, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
+    tags.block_in_tag(block, tags.key(&mod_api::Identifier::parse(tag).ok()?)?)
+}
+
+/// The block-local boxes of `state`'s `kind` shape at `pos` (`BlockState.getShape`,
+/// `getCollisionShape`), none when the level or state is unavailable.
+pub fn block_shape(
+    level: mod_api::LevelRef,
+    host: &dyn mod_api::Host,
+    state: mod_api::BlockState,
+    pos: [i32; 3],
+    kind: mod_api::BlockShapeKind,
+) -> Option<Vec<[f64; 6]>> {
+    let mut boxes = Vec::new();
+    level
+        .visit_block_shape(host, state, pos, kind, &mut |b| {
+            boxes.push(b);
+            std::ops::ControlFlow::Continue(())
+        })
+        .map(|_| boxes)
+}
+
+/// The world-space boxes of the block collision shapes meeting `bounds`
+/// (`CollisionGetter.getBlockCollisions`), none when the level is unavailable.
+pub fn collision_boxes(
+    level: mod_api::LevelRef,
+    host: &dyn mod_api::Host,
+    bounds: [f64; 6],
+) -> Option<Vec<[f64; 6]>> {
+    let mut boxes = Vec::new();
+    level
+        .visit_block_collisions(host, bounds, &mut |shape| {
+            boxes.extend(shape.boxes());
+            std::ops::ControlFlow::Continue(())
+        })
+        .map(|_| boxes)
+}
+
+/// The entities riding `entity`, none when it cannot be read.
+pub fn passengers(
+    entity: mod_api::EntityRef,
+    host: &dyn mod_api::Host,
+) -> Option<Vec<mod_api::EntityRef>> {
+    let mut riders = Vec::new();
+    entity
+        .visit_passengers(host, &mut |rider| {
+            riders.push(rider);
+            std::ops::ControlFlow::Continue(())
+        })
+        .ok()
+        .map(|_| riders)
+}
+
+/// `living`'s modifiers on `attribute`, none when it cannot be read; one whose id does not parse
+/// is left out.
+pub fn attribute_modifiers(
+    living: mod_api::LivingRef,
+    host: &dyn mod_api::Host,
+    attribute: &str,
+) -> Option<Vec<mod_api::AttributeModifier>> {
+    let mut modifiers = Vec::new();
+    living
+        .visit_attribute_modifiers(host, attribute, &mut |m| {
+            if let Ok(id) = mod_api::Identifier::parse(m.id) {
+                modifiers.push(mod_api::AttributeModifier::new(id, m.amount, m.operation));
+            }
+            std::ops::ControlFlow::Continue(())
+        })
+        .ok()
+        .map(|_| modifiers)
+}
+
+/// The menu `uuid`'s player has open, when its window is `window`.
+pub fn open_menu(host: &dyn mod_api::Host, uuid: u128, window: i32) -> Option<mod_api::MenuRef> {
+    let menu = host.player(uuid)?.container_menu(host)?;
+    (menu.container_id(host) == Some(window)).then_some(menu)
+}
+
+/// Closes the menu `uuid`'s player has open (`ServerPlayer.closeContainer`).
+pub fn close_menu(host: &mut dyn mod_api::ServerHost, uuid: u128) {
+    if let Some(menu) = host
+        .player(uuid)
+        .and_then(|player| player.container_menu(&*host))
+    {
+        menu.close_container(host);
     }
 }
 

@@ -19,7 +19,7 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
     BlockEntityPart, BlockPart, BlockState, CanSurviveEvent, ClientHost, Compound, Flow, Hand,
-    HostBlockStates, InteractionResult, Registrar, RightClickBlockEvent, ServerHost, Tag,
+    HostBlockStates, HostSide, InteractionResult, Registrar, RightClickBlockEvent, Tag,
     UseItemOnEvent,
 };
 
@@ -186,9 +186,12 @@ struct Wheel;
 impl BlockPart for Wheel {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let dimension = click.dimension.key().id().to_owned();
         let item = click.stack.map(|s| s.item().name(&*host));
@@ -276,8 +279,8 @@ impl BlockEntityPart for Drawn {
         if !matches!(block, Block::WaterWheel | Block::LargeWaterWheel) {
             return;
         }
-        let speeds = kinetics::speeds_of(&event.entity.nbt);
-        let wood = wood_of(&event.entity.nbt);
+        let speeds = kinetics::speeds_of(event.entity.nbt());
+        let wood = wood_of(event.entity.nbt());
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
         let extension = own.contains(&("extension", "true"));
@@ -292,7 +295,11 @@ impl BlockEntityPart for Drawn {
             };
             let draw = &mut *event.draw;
             draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
-            draw.block(part, &[("facing", kinetics::dir_name(facing))]);
+            crate::glue::states::draw_block(
+                &mut *draw,
+                part,
+                &[("facing", kinetics::dir_name(facing))],
+            );
             draw.still();
         }
         event.draw.keep();

@@ -110,7 +110,7 @@ pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) 
         })
         .flatten();
         if let Some(stack) = dp.and_then(|dp| deployer::held_stack(&dp, stacks::known_stack)) {
-            event.drops.push(Some(stack));
+            let _ = event.effects.drop_slot(Some(stack));
         }
         return;
     }
@@ -127,11 +127,11 @@ pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) 
     })
     .flatten()
     .unwrap_or_else(|| vec![None; create_engine::processing::INVENTORY_SLOTS]);
-    event.drops.extend(
-        slots
-            .into_iter()
-            .map(|s| s.and_then(|(item, n)| stacks::known_stack(&item, u32::from(n)))),
-    );
+    for slot in slots {
+        let _ = event
+            .effects
+            .drop_slot(slot.and_then(|(item, n)| stacks::known_stack(&item, u32::from(n))));
+    }
 }
 
 pub struct Processing;
@@ -171,7 +171,7 @@ impl Subsystem for Processing {
         &self,
         block: create_engine::Block,
         _pos: [i32; 3],
-        entity: &mod_api::ModBlockEntity,
+        entity: crate::glue::EntityData<'_>,
     ) -> bool {
         client::animated(block, entity)
     }
@@ -202,11 +202,7 @@ impl Subsystem for Processing {
         r.block_entity_capability_before_game(&mod_api::ITEMS, &kind, provide_items);
         client::register(r);
         air::register(r);
-        // Entity Part state is offered to native mods only.
-        #[cfg(not(target_arch = "wasm32"))]
-        if let Err(e) = r.entity_part_with_state("minecraft:horse", fan::Haunted) {
-            crate::create_log!("[create] the haunted horse's progress is refused: {e:?}");
-        }
+        fan::register(r);
         for block in [Block::Basin, Block::MechanicalSaw, Block::Millstone] {
             r.block_part(super::states::key(block), Landing);
         }
@@ -423,7 +419,7 @@ impl Subsystem for Processing {
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
         if let Some(&ty) = air::AIR_FLOW_TYPE.get() {
-            providers.register_sprite_set(ty, std::sync::Arc::new(air::AirFlow));
+            providers.register_sprite_set(ty, |_sprites| air::AirFlow);
         }
     }
 
@@ -722,9 +718,12 @@ struct CrafterUse;
 impl BlockPart for CrafterUse {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut mod_api::UseItemOnEvent<'_>,
     ) -> Option<mod_api::InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let dimension = click.dimension.key().id().to_owned();
         let mut lv = ServerLevel::new(host, &dimension)?;
@@ -844,19 +843,21 @@ impl ServerLevel<'_> {
     pub fn block_tagged(&self, p: [i32; 3], tag: &str) -> bool {
         self.level
             .block(&*self.host, p)
-            .and_then(|k| self.host.block_in_tag(k, tag))
+            .and_then(|k| crate::glue::block_in_tag(self.host.tags(), k, tag))
             .unwrap_or(false)
     }
 
     /// A property of the block at `p`.
     pub fn property(&self, p: [i32; 3], key: &str) -> Option<String> {
-        self.level.block_property(&*self.host, p, key)
+        self.level
+            .block_property(&*self.host, p, key)
+            .map(str::to_owned)
     }
 
     /// The boxes of the block's shape at `p` (`kind`), in blocks from its corner.
     pub fn shape(&self, p: [i32; 3], kind: mod_api::BlockShapeKind) -> Vec<[f64; 6]> {
         self.block_state(p)
-            .and_then(|s| self.level.block_shape(&*self.host, s, p, kind))
+            .and_then(|s| crate::glue::block_shape(self.level, &*self.host, s, p, kind))
             .unwrap_or_default()
     }
 

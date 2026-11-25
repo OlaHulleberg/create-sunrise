@@ -23,9 +23,7 @@ pub(super) fn side(lv: &ServerLevel<'_>, pos: [i32; 3], d: Dir) -> Side {
     let text = super::state_text(host, state);
     let (name, props) = states::split(&text);
     let get = |k: &str| props.iter().find(|(a, _)| *a == k).map(|(_, v)| *v);
-    let empty = lv
-        .level
-        .block_shape(host, state, p, BlockShapeKind::Collision)
+    let empty = crate::glue::block_shape(lv.level, host, state, p, BlockShapeKind::Collision)
         .is_none_or(|s| s.is_empty());
     let bracket = with(lv.dim, |x| x.brackets.get(&p).copied()).is_some_and(|b| b.facing == d);
     let placard_toward = name == "create:placard"

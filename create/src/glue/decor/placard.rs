@@ -38,7 +38,7 @@ impl BlockEntityPart for PlacardEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let item = event.entity.nbt.get(&ITEM.into())?.clone();
+        let item = event.entity.nbt().get(&ITEM.into())?.clone();
         Some(Compound::from([(ITEM.into(), item)]))
     }
 
@@ -55,7 +55,7 @@ impl BlockEntityPart for PlacardEntity {
 
 impl PlacardEntity {
     fn submit(&self, host: &dyn mod_api::ClientHost, event: &mut crate::glue::Submit<'_>) {
-        let Some(Tag::Compound(item)) = event.entity.nbt.get(&ITEM.into()) else {
+        let Some(Tag::Compound(item)) = event.entity.nbt().get(&ITEM.into()) else {
             return;
         };
         if item.is_empty() {

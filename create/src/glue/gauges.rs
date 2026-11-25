@@ -19,8 +19,8 @@ use create_engine::client::{Draw, Model, WheelSpin};
 use create_engine::gauge::{Needle, Shown, dial_faces, dial_pose};
 use create_engine::parts::StateInfo;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart, BlockPart,
-    ClientHost, Compound, ModBlockEntity, ParticleOptions, Registrar, RegistrationContext, Tag,
+    BlockEntityClientTickEvent, BlockEntityPart, BlockPart, ClientHost, Compound, ParticleOptions,
+    Registrar, RegistrationContext, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -51,7 +51,7 @@ impl Subsystem for Gauges {
         draws_itself(block, part)
     }
 
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         animated(block, pos, entity)
     }
 
@@ -188,12 +188,12 @@ pub fn draws_itself(block: Block, d: &Draw) -> bool {
 
 /// Whether the block entity of `block` at `pos` is animated this frame, so its drawing is not
 /// kept: a moving needle, wheel, valve pointer or hose.
-pub fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+pub fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         // A needle still moving, or one whose target the server just changed (its client tick
         // sets it off after this drawing, which must not be kept).
         Block::Speedometer | Block::Stressometer => {
-            let target = shown_of(&entity.nbt).map_or(0.0, |s| s.dial);
+            let target = shown_of(entity.nbt()).map_or(0.0, |s| s.dial);
             CLIENT.with_borrow(|c| {
                 c.needles
                     .get(&pos)
@@ -219,19 +219,6 @@ impl BlockPart for Animated {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Animated {
-    fn block_entity_client_ticks(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut BlockEntityClientTicksEvent<'_>,
-    ) {
-        if matches!(
-            event.block,
-            "create:speedometer" | "create:stressometer" | "create:flywheel"
-        ) {
-            event.ticks = true;
-        }
-    }
-
     fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
         let Some((state, pos, level, shown, target)) = event.subject.with_view(|v| {
             let nbt = v.nbt();
@@ -361,7 +348,7 @@ fn draw_dials(event: &mut crate::glue::Submit<'_>, info: &StateInfo) {
         return;
     };
     // A gauge first seen sets off from 0 toward its target.
-    let target = shown_of(&event.entity.nbt).map_or(0.0, |s| s.dial);
+    let target = shown_of(event.entity.nbt()).map_or(0.0, |s| s.dial);
     let n = CLIENT.with_borrow_mut(|c| {
         *c.needles.entry(event.pos).or_insert_with(|| ClientNeedle {
             needle: Needle {
@@ -396,7 +383,7 @@ fn draw_dials_at(
         draw.push();
         draw.translate(pose.offset);
         draw.rotate_about(axis_vector(pose.axis), pose.angle, [0.5; 3]);
-        draw.block(dial, &[("facing", kinetics::dir_name(face))]);
+        crate::glue::states::draw_block(&mut *draw, dial, &[("facing", kinetics::dir_name(face))]);
         draw.pop();
     }
 }
@@ -409,7 +396,7 @@ fn draw_wheel(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: 
         return;
     };
     let now = event.draw.animation_time();
-    let target = speeds_of(&event.entity.nbt)[0];
+    let target = speeds_of(event.entity.nbt())[0];
     let w = CLIENT.with_borrow_mut(|c| {
         // A wheel first seen starts still, from angle 0, and spins up to its shaft.
         let w = c.wheels.entry(event.pos).or_insert_with(|| ClientWheel {
@@ -430,13 +417,13 @@ fn draw_wheel(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, info: 
     if w.moving {
         draw.push();
         draw.rotate_about(v, w.angle as f32, [0.5; 3]);
-        draw.block(states::key(Block::Flywheel), &own);
+        crate::glue::states::draw_block(&mut *draw, states::key(Block::Flywheel), &own);
         draw.pop();
     } else {
         let rate = w.spin.visual * 0.3;
         let phase = (w.angle - now * f64::from(rate)).rem_euclid(360.0) as f32;
         draw.spin(v, [0.5; 3], rate, phase);
-        draw.block(states::key(Block::Flywheel), &own);
+        crate::glue::states::draw_block(&mut *draw, states::key(Block::Flywheel), &own);
         draw.still();
         draw.keep();
     }

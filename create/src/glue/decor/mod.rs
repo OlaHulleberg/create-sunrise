@@ -318,7 +318,7 @@ impl Subsystem for Decor {
         &[BRACKET, bell::DING, bells::RINGING]
     }
 
-    fn animated(&self, block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
         (block == Block::DeskBell && bell::animated(pos, entity))
             || (bells::is_bell(block) && bells::animated(pos, entity))
     }
@@ -415,8 +415,8 @@ impl Subsystem for Decor {
 
     fn particle_providers(&self, providers: &mut dyn mod_api::ParticleProviders) {
         if let Some(&[soul, base]) = souls::TYPES.get() {
-            providers.register_sprite_set(soul, std::sync::Arc::new(souls::Soul));
-            providers.register_sprite_set(base, std::sync::Arc::new(souls::SoulBase));
+            providers.register_sprite_set(soul, |_| souls::Soul);
+            providers.register_sprite_set(base, |_| souls::SoulBase);
         }
     }
 

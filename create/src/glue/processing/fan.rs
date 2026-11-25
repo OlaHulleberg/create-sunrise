@@ -20,11 +20,13 @@ use create_engine::fan::{self, Catalyst, Current, Heat, Kind, Way};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::{Block, belt, depot, nozzle, processing};
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, Compound, EntityPart,
-    EntityPartState, EntityRef, ItemStack, ParticleOptions, PlayerRef, SoundSource, Tag,
+    AttachmentCodec, AttachmentDescriptor, AttachmentError, AttachmentKey, BlockShapeKind,
+    Compound, EntityPart, EntityPartState, EntityRef, ItemStack, ParticleOptions, PlayerRef,
+    Registrar, SoundSource, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
+use std::sync::RwLock;
 
 /// What a level's clients were last told of its fans: the message, and the players told.
 type Told = (Vec<u8>, Vec<u128>);
@@ -690,29 +692,46 @@ fn affect_entity(lv: &mut ServerLevel<'_>, entity: EntityRef, kind: Kind) {
     }
 }
 
-/// A horse's haunting progress (`getPersistentData().getInt("CreateHaunting")`), saved with it.
-static HAUNTING: AttachmentType<u32> = AttachmentType {
-    namespace: "create",
-    name: "haunting",
-    default: || 0,
-    codec: Some(AttachmentCodec {
-        encode: |n| Ok([("CreateHaunting".into(), Tag::Int(*n as i32))].into()),
-        decode: |saved: &Compound| match saved.get(&"CreateHaunting".into()) {
-            Some(Tag::Int(n)) => Ok((*n).max(0) as u32),
-            _ => Err(AttachmentError::Decode),
-        },
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+/// The key of a horse's haunting progress (`getPersistentData().getInt("CreateHaunting")`),
+/// issued when the attachment is registered.
+static HAUNTING: RwLock<Option<AttachmentKey<u32>>> = RwLock::new(None);
+
+/// Registers the haunting progress, saved with the horse, and the Part that keeps it.
+pub(super) fn register(r: &mut dyn Registrar) {
+    let descriptor =
+        AttachmentDescriptor::<u32>::new("create:haunting", || 0).serialize(AttachmentCodec {
+            encode: |n| Ok([("CreateHaunting".into(), Tag::Int(*n as i32))].into()),
+            decode: |saved: &Compound| match saved.get(&"CreateHaunting".into()) {
+                Some(Tag::Int(n)) => Ok((*n).max(0) as u32),
+                _ => Err(AttachmentError::Decode),
+            },
+        });
+    let key = match r.register_attachment_type(descriptor) {
+        Ok(key) => key,
+        Err(e) => {
+            crate::create_log!("[create] declaring haunting: {e:?}");
+            return;
+        }
+    };
+    *HAUNTING
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = Some(key.clone());
+    if let Err(e) = r.entity_part_with_state("minecraft:horse", Haunted { key }) {
+        crate::create_log!("[create] the haunted horse's progress is refused: {e:?}");
+    }
+}
 
 /// Keeps the haunting progress on each horse (`HauntingType.affectEntity`'s `Horse`).
-pub struct Haunted;
+pub struct Haunted {
+    key: AttachmentKey<u32>,
+}
 #[mod_api::sunrise_part]
 impl EntityPart for Haunted {}
 impl EntityPartState for Haunted {
     type Data = u32;
-    const DATA: &'static AttachmentType<u32> = &HAUNTING;
+    fn state_key(&self) -> &AttachmentKey<u32> {
+        &self.key
+    }
 }
 
 /// `HauntingType.affectEntity` for a horse: 100 ticks in a haunting current, with the soul
@@ -727,7 +746,14 @@ fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
         return;
     };
     let block = at.map(|v| v.floor() + 0.5);
-    let Ok(progress) = Haunted::edit_state(host, entity, |_, n| {
+    let Some(key) = HAUNTING
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .clone()
+    else {
+        return;
+    };
+    let Ok(progress) = Haunted { key }.edit_state(host, entity, |_, _tx, n| {
         let was = *n;
         if was < 100 {
             *n = was + 1;
@@ -780,14 +806,15 @@ fn haunt_horse(lv: &mut ServerLevel<'_>, entity: EntityRef) {
     }
     // `EntityType.SKELETON_HORSE.create`, then `deserializeNBT` of the horse's data.
     let spawned = lv
-        .host
+        .level
         .summon(
-            lv.dimension,
+            &mut *lv.host,
             "minecraft:skeleton_horse",
             at,
             Compound::new(),
         )
-        .and_then(|id| lv.host.entity(id));
+        .ok()
+        .flatten();
     if let Some(s) = spawned {
         s.merge_nbt(&mut *lv.host, saved);
     }

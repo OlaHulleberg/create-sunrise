@@ -75,7 +75,7 @@ impl mod_api::BlockEntityPart for LecternDraw {
         let facing = info.facing.unwrap_or(create_engine::kinetics::Dir::North);
         let yaw = create_engine::decor::horizontal_angle(facing) - 90.0;
         let active = matches!(
-            event.entity.nbt.get(&LECTERN_USER.into()),
+            event.entity.nbt().get(&LECTERN_USER.into()),
             Some(Tag::Byte(1))
         );
         let mine = ACTIVE.get() && CLIENT.with_borrow(|c| c.lectern == Some(event.pos));
@@ -234,7 +234,7 @@ impl Subsystem for Controller {
     }
 
     /// A lectern the local player uses is drawn each frame (its buttons move).
-    fn animated(&self, block: Block, pos: [i32; 3], _entity: &mod_api::ModBlockEntity) -> bool {
+    fn animated(&self, block: Block, pos: [i32; 3], _entity: crate::glue::EntityData<'_>) -> bool {
         block == Block::LecternController
             && ACTIVE.get()
             && CLIENT.with_borrow(|c| c.lectern == Some(pos))
@@ -589,9 +589,12 @@ impl ItemPart for ControllerItem {
     /// Elsewhere the item's own use follows (`use_item`).
     fn on_item_use_first(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut OnItemUseFirstEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.player(click.player)?;
         if !player.may_build(&*host).unwrap_or(false) || sneaking(&*host, Some(player)) {
@@ -896,9 +899,12 @@ impl BlockPart for LecternPart {
     /// (`replaceWithLectern`); else a player in range uses it.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let me = host.player(event.click.player)?;
         let back = sneaking(&*host, Some(me));
         let held = event.click.stack.cloned();

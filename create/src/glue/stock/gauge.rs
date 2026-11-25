@@ -554,7 +554,7 @@ impl mod_api::BlockPart for Collision {
         event: &mut mod_api::CollisionShapeEvent<'_>,
     ) {
         if event.query.entity().is_some() {
-            *event.shape = Some(Vec::new());
+            *event.shape = Some(mod_api::VoxelShape::empty());
         }
     }
 }

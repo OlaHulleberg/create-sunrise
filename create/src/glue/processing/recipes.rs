@@ -189,7 +189,7 @@ fn ingredient(host: &dyn ReloadContext, json: &Value) -> Option<Vec<String>> {
         let items: Vec<String> = host
             .block_keys()
             .into_iter()
-            .filter(|&b| host.block_in_tag(b, tag) == Some(true))
+            .filter(|&b| crate::glue::block_in_tag(host.tags(), b, tag) == Some(true))
             .filter_map(|b| host.block_item(b))
             .map(|i| item_name(host, i))
             .filter(|i| i != "minecraft:air")

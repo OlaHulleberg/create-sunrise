@@ -1,6 +1,6 @@
 # API gaps
 
-What the port is missing as of 2026-11-24, at the Sunrise Dev build `3d34bbe63d` in `create/sunrise-mod.toml`.
+What the port is missing as of 2026-11-25, at the Sunrise Dev build `bdad86d2d3` in `create/sunrise-mod.toml`.
 Each row is an operation the pinned SDK does not offer and the port cannot write itself, with its upstream issue or PR where one exists. APIs the pin already has but the port has not adopted are port work and not listed. The port uses no `[[native.mixin]]` (`docs/architecture.md`), so vanilla behaviour only a mixin could change is listed as a gap. Better APIs wait until after parity. Since `94256510f7`, `Compound` keys iterate in Java's HashMap order (`compound-traversal`): output that relies on sorted keys sorts them itself.
 Links point to the Create 6.0.11 source (`b62e837`) that uses the missing feature.
 
@@ -34,6 +34,18 @@ Links point to the Create 6.0.11 source (`b62e837`) that uses the missing featur
 | Setting the clipboard when a server reply to the player's own command arrives (`set_clipboard_text` works only inside an input event; vanilla's debug-reply copy is not open to mods; sunrise-org/sunrise#5088) | `/create debuginfo` cannot copy its report | [`ServerDebugInfoPacket`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/infrastructure/debugInfo/ServerDebugInfoPacket.java) |
 
 Further general mod-API gaps found by a parity audit are tracked in sunrise-org/sunrise#3938.
+
+## Left out or changed in the move to `bdad86d`
+
+| Missing | Effect in the port |
+|---|---|
+| A choice of render stage for overlay drawing (lines, quads, model instances) | Everything now goes through `submit_custom_geometry`, so the old after-opaque and after-translucent ordering is gone. Overlays draw before opaque terrain, unlit. |
+| The batch capacity query on the draw context | Schematic previews draw in one batch, with no chunking by capacity. |
+| An opt-in poll for block-entity client ticks | The client tickers (gauges, redstone links and the rest) bind for every kinetic state and filter by block. |
+| A menu-removed event for menus the port does not own a `MenuPart` for | The filter menu cleans up through `MenuPart::menu_removed`. The postbox shuts through the player container close hook, which fires after logout and does nothing for a menu without a container id. |
+| Client-side prediction of `use_item_on` and `use_without_item` | Both return nothing on the client. |
+| Draws of a block by properties for blocks that are not Create's | `draw_block` resolves Create's own blocks and partials from a table built when a world opens. |
+| Building a `TagKey` or a block-entity data view in tests | The copycat test `a_copycat_panel_accepts_iron_bars_but_not_create_window_panes` was removed: the fake host cannot supply tags. Structure-carried block-entity copies use the port's own `EntityData` wrapper. |
 
 ## Not used by Create (out of scope until after parity)
 

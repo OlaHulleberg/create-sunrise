@@ -15,10 +15,10 @@ use crate::glue::owned::OwnedEquipment as _;
 use create_engine::kinetics::Dir;
 use mod_api::{
     ClientHost, DrawContext, Flow, Hand, Identifier, InteractionKey,
-    InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, PlayerRef, RenderLevelStage,
-    RenderLevelStageEvent, ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenRenderPostEvent, ServerHost, SoundPlay, Text,
-    WorldDepth, WorldLine, WorldQuad,
+    InteractionKeyMappingTriggeredEvent, MouseScrollingEvent, PlayerRef, ScreenCharTypedPreEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenRenderPostEvent, ServerHost, SoundPlay, SubmitCustomGeometryEvent, Text, WorldDepth,
+    WorldLine, WorldQuad,
 };
 use std::cell::RefCell;
 
@@ -334,8 +334,11 @@ pub(super) fn mouse_scrolling(host: &mut dyn ClientHost, event: &mut MouseScroll
 
 /// The outline: Create's `0x6886c5` box round the selection (or the corner and the block
 /// looked at), its face looked at shaded.
-pub(super) fn render_level_stage(host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-    if event.stage != RenderLevelStage::AfterTranslucentBlocks || !holding(host) {
+pub(super) fn submit_custom_geometry(
+    host: &dyn ClientHost,
+    event: &mut SubmitCustomGeometryEvent<'_>,
+) {
+    if !holding(host) {
         return;
     }
     let (first, second, selected, face) =

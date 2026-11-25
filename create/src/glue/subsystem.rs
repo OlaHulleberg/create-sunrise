@@ -13,15 +13,15 @@
 
 use super::server::ServerLevel;
 use mod_api::{
-    AttackEntityEvent, BreakBlockEvent, CameraPoseEvent, ClientHost, Compound, EntityInteractEvent,
+    AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
     EntityJoinLevelEvent, EntityMountEvent, Flow, HostSide, InputKeyEvent,
     InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelSaveEvent, MenuClosedEvent, MouseScrollingEvent,
-    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent, Registrar,
-    RegistrationContext, RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent,
-    ScreenCharTypedPreEvent, ScreenClosingEvent, ScreenKeyPressedPreEvent,
-    ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
-    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost,
+    LeftClickBlockEvent, LevelSaveEvent, MouseScrollingEvent, PlayerContainerCloseEvent,
+    PlayerContainerOpenEvent, PlayerRef, PlayerTickPostEvent, Registrar, RegistrationContext,
+    RenderGuiPostEvent, RightClickBlockEvent, RightClickItemEvent, ScreenCharTypedPreEvent,
+    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
+    ServerHost,
 };
 
 /// A block about to be placed (`Hooks::entity_place`, or a placement the glue makes itself).
@@ -189,7 +189,7 @@ pub trait Subsystem: Sync {
         &self,
         _block: create_engine::Block,
         _pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        _entity: crate::glue::EntityData<'_>,
     ) -> bool {
         false
     }
@@ -329,11 +329,6 @@ pub trait Subsystem: Sync {
         None
     }
 
-    /// Whether this subsystem's projectiles need `projectile_impact` (`Hooks::hears_projectile_impacts`).
-    fn hears_projectile_impacts(&self) -> bool {
-        false
-    }
-
     /// `Hooks::projectile_impact`: a projectile hit something; cancel to take the hit.
     fn projectile_impact(
         &self,
@@ -400,8 +395,13 @@ pub trait Subsystem: Sync {
     /// `Hooks::input_key`, on the client.
     fn input_key(&self, _host: &mut dyn ClientHost, _event: &mut InputKeyEvent<'_>) {}
 
-    /// `Hooks::camera_pose`, on the client: the camera's turn this frame.
-    fn camera_pose(&self, _host: &dyn ClientHost, _event: &mut CameraPoseEvent<'_>) {}
+    /// `Hooks::compute_camera_angles`, on the client: the camera's turn this frame.
+    fn compute_camera_angles(
+        &self,
+        _host: &dyn ClientHost,
+        _event: &mut mod_api::ComputeCameraAnglesEvent,
+    ) {
+    }
 
     /// `Hooks::mouse_scrolling`, on the client: `Flow::Cancel` when the scroll was taken.
     fn mouse_scrolling(
@@ -489,11 +489,11 @@ pub trait Subsystem: Sync {
     ) {
     }
 
-    /// `Hooks::render_level_stage`: draw in the world at one stage of the frame.
-    fn render_level_stage(
+    /// `Hooks::submit_custom_geometry`: draw in the world at one stage of the frame.
+    fn submit_custom_geometry(
         &self,
         _host: &dyn ClientHost,
-        _event: &mut mod_api::RenderLevelStageEvent<'_>,
+        _event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
     }
 
@@ -535,15 +535,14 @@ pub trait Subsystem: Sync {
     ) {
     }
 
-    /// `Hooks::player_container_close`: a player's menu closed.
+    /// `Hooks::player_container_close`: a player's menu closed (a mod's own menus too: read
+    /// the window with `event.menu.and_then(|menu| menu.container_id(host))`).
     fn player_container_close(
         &self,
         _host: &mut dyn ServerHost,
         _event: &mut PlayerContainerCloseEvent<'_>,
     ) {
     }
-    /// `Hooks::menu_closed`: a menu a mod opened (`open_menu`, `open_mod_menu`) closed.
-    fn menu_closed(&self, _host: &mut dyn ServerHost, _event: &mut MenuClosedEvent) {}
 
     /// `Hooks::screen_render_post`: draw over the open screen (the mod's own, `mod_screen`).
     fn screen_render_post(&self, _host: &dyn ClientHost, _event: &mut ScreenRenderPostEvent<'_>) {}

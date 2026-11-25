@@ -7,6 +7,7 @@ use super::super::states;
 use super::railway::decode_state_names;
 use create_engine::train_controls::{Frame, Target, ray_trace};
 use create_engine::trains::{Motion, Pose};
+use mod_api::HostBlockStates as _;
 use mod_api::{BlockState, ClientHost};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -117,7 +118,7 @@ pub fn carriage_hit(
     let now = now(host);
     let shape = |s: u32| -> Vec<[f64; 6]> {
         state_of(s)
-            .and_then(|st| host.state_outline(st))
+            .and_then(|st| st.outline(&host.block_states()).map(<[_]>::to_vec))
             .unwrap_or_default()
     };
     TRAINS.with_borrow(|trains| {

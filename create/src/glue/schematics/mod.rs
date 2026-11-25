@@ -283,13 +283,13 @@ impl Subsystem for Schematics {
         tools::mouse_scrolling(host, event)
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        quill::render_level_stage(host, event);
-        tools::render_level_stage(host, event);
+        quill::submit_custom_geometry(host, event);
+        tools::submit_custom_geometry(host, event);
     }
 
     fn screen_render_post(
@@ -950,8 +950,7 @@ impl CannonWorld for World<'_, '_> {
                 nbt.insert((*key).into(), Tag::Int(e.block_pos[i]));
             }
         }
-        let dimension = self.lv.dimension.to_owned();
-        let _ = self.lv.host.summon(&dimension, &kind, e.pos, nbt);
+        let _ = self.lv.level.summon(&mut *self.lv.host, &kind, e.pos, nbt);
     }
 
     fn place(&mut self, pos: [i32; 3], state: u32) {
@@ -1025,7 +1024,7 @@ fn merge_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState, 
     for k in ["id", "x", "y", "z"] {
         data.remove(&k.into());
     }
-    if lv.host.block_in_tag(state.block(), "minecraft:all_signs") == Some(true)
+    if crate::glue::block_in_tag(lv.host.tags(), state.block(), "minecraft:all_signs") == Some(true)
         && sign_has_click(&data)
     {
         return;
@@ -1062,8 +1061,7 @@ fn sign_has_click(data: &Compound) -> bool {
 
 /// Whether `state`'s collision shape at `pos` is a whole block (`isCollisionShapeFullBlock`).
 fn full_cube(lv: &ServerLevel<'_>, state: BlockState, pos: [i32; 3]) -> bool {
-    lv.level
-        .block_shape(&*lv.host, state, pos, BlockShapeKind::Collision)
+    crate::glue::block_shape(lv.level, &*lv.host, state, pos, BlockShapeKind::Collision)
         .is_some_and(|boxes| boxes.len() == 1 && boxes[0] == [0.0, 0.0, 0.0, 1.0, 1.0, 1.0])
 }
 
@@ -1163,7 +1161,7 @@ fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mir
         belt,
         // `prepareBlockEntityData`: `AllBlockTags.SAFE_NBT`, or a copycat's `writeSafe`.
         safe_nbt: state.is_some_and(|s| {
-            host.block_in_tag(s.block(), "create:safe_nbt") == Some(true)
+            crate::glue::block_in_tag(host.tags(), s.block(), "create:safe_nbt") == Some(true)
                 || matches!(
                     states::id(s).and_then(block_of),
                     Some(Block::CopycatPanel | Block::CopycatStep)
@@ -1354,7 +1352,7 @@ fn run_uploads(lv: &mut ServerLevel<'_>) {
 /// `ConfigureSchematicannonPacket` from the cannon's screen, and its confirm button.
 fn cannon_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
     if context.id == screens::CONFIRM {
-        host.close_menu(context.player);
+        crate::glue::close_menu(host, context.player);
         return;
     }
     let Some(player) = host.player(context.player) else {
@@ -1516,7 +1514,7 @@ impl BlockEntityPart for SchematicEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let aim = event.entity.nbt.get(&AIM.into())?.clone();
+        let aim = event.entity.nbt().get(&AIM.into())?.clone();
         Some(Compound::from([(AIM.into(), aim)]))
     }
 
@@ -1532,7 +1530,7 @@ impl BlockEntityPart for SchematicEntity {
         let Some(&(connector, pipe)) = BARREL.get() else {
             return;
         };
-        let a = ints(event.entity.nbt.get(&AIM.into()));
+        let a = ints(event.entity.nbt().get(&AIM.into()));
         let (target, default_yaw) = match a.as_slice() {
             [has, x, y, z, yaw] => (
                 (*has != 0).then_some([*x, *y, *z]),
@@ -1546,9 +1544,9 @@ impl BlockEntityPart for SchematicEntity {
         let up = [("facing", "up")];
         draw.push();
         draw.rotate_about([0.0, 1.0, 0.0], turn, [0.5, 0.0, 0.5]);
-        draw.block(connector, &up);
+        crate::glue::states::draw_block(&mut *draw, connector, &up);
         draw.rotate_about([0.0, 0.0, 1.0], pitch, [0.5, 15.0 / 16.0, 0.5]);
-        draw.block(pipe, &up);
+        crate::glue::states::draw_block(&mut *draw, pipe, &up);
         draw.pop();
         draw.keep();
     }

@@ -96,7 +96,7 @@ impl Subsystem for Seats {
         if event.kind == ENTITY_TYPE
             && let Some(dim) = level_index(event.dimension)
         {
-            LOADED.with_borrow_mut(|l| l.push((dim, event.entity)));
+            LOADED.with_borrow_mut(|l| l.push((dim, event.subject.id())));
         }
         Flow::Continue
     }
@@ -139,7 +139,9 @@ pub(crate) fn rider_name(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<String> 
     let dim = lv.dim;
     let seat = SEATS.with_borrow(|s| s.get(&(dim, pos)).copied())?;
     let stand = lv.host.entity(seat.id)?;
-    let rider = stand.passengers(&*lv.host)?.into_iter().next()?;
+    let rider = crate::glue::passengers(stand, &*lv.host)?
+        .into_iter()
+        .next()?;
     rider.name(&*lv.host)
 }
 
@@ -151,7 +153,7 @@ pub fn seated_mob(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<EntityRef> {
         return None;
     }
     let stand = lv.host.entity(seat.0)?;
-    let riders = stand.passengers(&*lv.host)?;
+    let riders = crate::glue::passengers(stand, &*lv.host)?;
     riders
         .into_iter()
         .find(|r| kind_of(lv, *r) != "minecraft:player")
@@ -242,7 +244,7 @@ fn take_back(lv: &mut ServerLevel<'_>) {
             continue;
         }
         // A seat's riders are players or mobs.
-        let riders = e.passengers(&*lv.host).unwrap_or_default();
+        let riders = crate::glue::passengers(e, &*lv.host).unwrap_or_default();
         let player = riders.iter().any(|&r| kind_of(lv, r) == "minecraft:player");
         SEATS.with_borrow_mut(|s| s.insert((dim, pos), Seat { id, player }));
     }
@@ -337,7 +339,11 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
     });
     for (pos, s) in seats {
         let stand = lv.host.entity(s.id);
-        let ridden = stand.is_some_and(|e| !e.passengers(&*lv.host).unwrap_or_default().is_empty());
+        let ridden = stand.is_some_and(|e| {
+            !crate::glue::passengers(e, &*lv.host)
+                .unwrap_or_default()
+                .is_empty()
+        });
         if is_seat(lv, pos) && ridden {
             continue;
         }
@@ -448,9 +454,12 @@ impl BlockPart for SeatPart {
     /// clicking player sits down (taking the seat from a mob on it), at the level's next tick.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let c = clicker(&*host, event.click);
         let pos = event.click.pos;
         let player = event.click.player;

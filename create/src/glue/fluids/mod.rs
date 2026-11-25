@@ -70,8 +70,8 @@ use create_engine::Block;
 use create_engine::parts::StateInfo;
 use create_engine::tank::{Codes, Fluid, MAX_HEIGHT, MAX_WIDTH, Multi, Tank};
 use mod_api::{
-    BlockState, BlockUpdateFlags, Compound, Flow, HostBlockStates, HostSide, ModBlockEntity,
-    Registrar, RegistrationContext, RightClickBlockEvent, StateConstraint, Tag,
+    BlockState, BlockUpdateFlags, Compound, Flow, HostBlockStates, HostSide, Registrar,
+    RegistrationContext, RightClickBlockEvent, StateConstraint, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -217,10 +217,10 @@ pub struct Fluids;
 
 impl Subsystem for Fluids {
     /// The steam engines' and whistles' jets (`engine::render_jets`).
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         _host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         engine::render_jets(event);
     }
@@ -755,8 +755,8 @@ fn set_shown_tank(lv: &mut ServerLevel<'_>, pos: [i32; 3], m: Option<&Multi>) {
 }
 
 /// The tank a block entity shows its clients.
-fn shown_tank(entity: &ModBlockEntity) -> Option<Multi> {
-    tank_in(&entity.nbt)
+fn shown_tank(entity: crate::glue::EntityData<'_>) -> Option<Multi> {
+    tank_in(entity.nbt())
 }
 
 /// The tank block entity data `data` shows.
@@ -799,7 +799,9 @@ fn state_with(lv: &ServerLevel<'_>, name: &str, props: &[(&str, &str)]) -> Optio
 
 /// A property of the state at `pos` (`lit`, `waterlogged`).
 fn property(lv: &ServerLevel<'_>, pos: [i32; 3], key: &str) -> Option<String> {
-    lv.level.block_property(&*lv.host, pos, key)
+    lv.level
+        .block_property(&*lv.host, pos, key)
+        .map(str::to_owned)
 }
 
 /// `BlockState.canBeReplaced()` of the state at `pos`.

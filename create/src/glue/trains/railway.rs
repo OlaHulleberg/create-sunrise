@@ -292,13 +292,13 @@ impl Subsystem for Trains {
         super::carriage_draw::models_baked(&*host);
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
-        super::carriage_draw::render_level_stage(host, event);
-        super::relocate::render_level_stage(event);
+        super::carriage_draw::submit_custom_geometry(host, event);
+        super::relocate::submit_custom_geometry(event);
     }
 
     /// A station's flag moving and an invalid signal's blink (`SignalRenderer`) are drawn every
@@ -307,11 +307,11 @@ impl Subsystem for Trains {
         &self,
         block: create_engine::Block,
         pos: [i32; 3],
-        entity: &mod_api::ModBlockEntity,
+        entity: crate::glue::EntityData<'_>,
     ) -> bool {
         (block == create_engine::Block::TrackStation
-            && super::station_draw::animating(pos, &entity.nbt))
-            || (block == create_engine::Block::TrackSignal && super::tracks::blinking(&entity.nbt))
+            && super::station_draw::animating(pos, entity.nbt()))
+            || (block == create_engine::Block::TrackSignal && super::tracks::blinking(entity.nbt()))
     }
 
     fn client_reset(&self) {
@@ -783,17 +783,23 @@ struct Observer;
 impl BlockPart for Observer {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         use_observer(host, event.click)
     }
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         use_observer(host, event.click)
     }
 

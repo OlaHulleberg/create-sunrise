@@ -163,9 +163,12 @@ impl BlockPart for CopycatBlock {
     /// item's own use (the wrench's is `Copycats::wrench_used`).
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: mod_api::HostSide,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let mod_api::HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         let player = host.player(click.player)?;
@@ -282,7 +285,7 @@ impl BlockPart for CopycatBlock {
 
     /// `CopycatBlock.getFriction`: the material's, at the copycat's position (`getMaterial`:
     /// air without a block entity, the copycat base without a material).
-    fn friction(&self, level: mod_api::LevelSide<'_>, event: &mut FrictionEvent<'_>) {
+    fn friction(&self, level: mod_api::LevelSide<'_>, event: &mut FrictionEvent) {
         let (level, server) = states::level_view(level);
         let pos = [event.pos.x, event.pos.y, event.pos.z];
         let material = match level.block_entity(pos) {
@@ -461,7 +464,7 @@ impl BlockEntityPart for CopycatEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let nbt = &event.entity.nbt;
+        let nbt = &event.entity.nbt();
         let material = nbt.get(&MATERIAL.into())?.clone();
         let special = nbt.get(&SPECIAL.into()).cloned().unwrap_or(Tag::Byte(0));
         Some(Compound::from([
@@ -486,7 +489,7 @@ impl CopycatEntity {
         let Some(shape) = shape_of(host, event.state) else {
             return;
         };
-        let nbt = &event.entity.nbt;
+        let nbt = &event.entity.nbt();
         let text = match nbt.get(&MATERIAL.into()) {
             Some(Tag::String(s)) => s.to_string_lossy(),
             _ => String::new(),
@@ -514,10 +517,11 @@ impl CopycatEntity {
             Drawn::Whole => {
                 let full = host.block_state_string(material).unwrap_or_default();
                 let (_, props) = states::split(&full);
-                draw.block(material.block(), &props);
+                crate::glue::states::draw_block(&mut *draw, material.block(), &props);
             }
             Drawn::Bars(f) => {
-                draw.block(
+                crate::glue::states::draw_block(
+                    &mut *draw,
                     states::key(Block::CopycatBars),
                     &[("facing", cc::dir_name(f))],
                 );

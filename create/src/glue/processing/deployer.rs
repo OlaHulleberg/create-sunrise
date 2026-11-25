@@ -1061,7 +1061,7 @@ fn punch(
     if let Some(sound) = mod_api::HostBlockStates::block_states(&*lv.host).sound(state) {
         let _ = lv.level.play_sound(
             &mut *lv.host,
-            &sound.hit,
+            sound.hit.as_str(),
             centre(at),
             mod_api::SoundSource::Neutral,
             0.25,

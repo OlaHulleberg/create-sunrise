@@ -22,7 +22,7 @@ fn throw(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()> {
     let eye = entity.eye_position(&*host)?;
     let look = entity.view_vector(&*host)?;
     let [yaw, _] = entity.rotation(&*host)?;
-    let dimension = player.dimension(&*host)?.to_string();
+    let level = player.level(&*host)?;
     let count = event.stack.count();
     let used = if sneaking(&*host, player) { 1 } else { count };
     // `look × rotate((-.75, 0, 0), -yRot, Y)`: to the side of the view.
@@ -65,7 +65,7 @@ fn throw(host: &mut dyn ServerHost, event: &UseItemEvent<'_>) -> Option<()> {
                 Tag::List(motion.iter().map(|v| Tag::Double(v.to_bits())).collect()),
             ),
         ]);
-        host.summon(&dimension, "minecraft:experience_orb", at, nbt);
+        let _ = level.summon(host, "minecraft:experience_orb", at, nbt);
     }
     let stack = held(&*host, player, event.hand)?;
     set_held(host, player, event.hand, stack.shrink(used));

@@ -117,13 +117,17 @@ impl Subsystem for Interaction {
         &self,
         _block: create_engine::Block,
         pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        _entity: crate::glue::EntityData<'_>,
     ) -> bool {
         value_text::animated(pos)
     }
 
-    fn camera_pose(&self, _host: &dyn ClientHost, event: &mut mod_api::CameraPoseEvent<'_>) {
-        board::camera_pose(event);
+    fn compute_camera_angles(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::ComputeCameraAnglesEvent,
+    ) {
+        board::camera_angles(event);
     }
 
     /// The use key is taken while a value box's press or board is held.
@@ -151,10 +155,10 @@ impl Subsystem for Interaction {
     }
 
     /// The highlighted value box's outline and the placement helper's ghost.
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         hud::value_box_outline(host, event);
         placement::draw_ghost(host, event);

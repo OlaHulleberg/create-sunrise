@@ -38,40 +38,43 @@ use create_engine::glue::Glue;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::mounted::{self, Mode, Mounted, RailShape};
 use mod_api::{
-    AttachmentCodec, AttachmentHolder, AttachmentQueries, AttachmentType, BlockPart, BlockState,
-    BreakBlockEvent, ClientHost, Compound, EntityInteractEvent, EntityJoinLevelEvent, EntityPart,
-    EntityRef, EntitySpawn, EntityUuid, Flow, GeneralEntityCategory, GeneralEntityTickEvent,
-    GeneralSavePolicy, Holder, Host, HostSide, HostTransaction, InteractionResult, ItemPart,
-    ItemStack, MinecartPassEvent, Registrar, RegistrationContext, RemovalReason,
-    RenderLevelStageEvent, ServerHost, SoundSource, SpawnBody, Tag, Text, UseItemOnEvent,
-    UseOnEvent,
+    AttachmentCodec, AttachmentDescriptor, AttachmentHolder, AttachmentKey, AttachmentQueries,
+    BlockPart, BlockState, BreakBlockEvent, ClientHost, Compound, EntityInteractEvent,
+    EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, EntityUuid, Flow,
+    GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Host, HostSide,
+    HostTransaction, InteractionResult, ItemPart, ItemStack, MinecartPassEvent, Registrar,
+    RegistrationContext, RemovalReason, ServerHost, SoundSource, SpawnBody,
+    SubmitCustomGeometryEvent, Tag, Text, UseItemOnEvent, UseOnEvent,
 };
 use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 
 const CONTRAPTION: &str = "create:contraption";
 
-/// The overworld's ordinary couplings and assembler modes.
-const SAVED: AttachmentType<Compound> = AttachmentType {
-    namespace: "create",
-    name: "minecart_contraptions",
-    default: Compound::new,
-    codec: Some(AttachmentCodec {
-        encode: |data| Ok(data.clone()),
-        decode: |data| Ok(data.clone()),
-    }),
-    copy_on_death: false,
-    sync: false,
-};
-
+/// The issued attachment keys: the overworld's ordinary couplings and assembler modes (`saved`),
+/// and the rider's structure, motion and pending drops.
+///
 /// Blocks, storage and links are only encoded when their saved content changes. The SDK's
-/// hostless codec encodes eagerly on `set`; keep motion and live actor state in the small
-/// motion binding so moving a cart doesn't serialize its whole structure.
-static RIDER_PAYLOAD: AttachmentType<Compound> = AttachmentType {
-    namespace: "create",
-    name: "cart_rider",
-    ..SAVED
+/// codec encodes eagerly on `set`; keep motion and live actor state in the small motion
+/// binding so moving a cart doesn't serialize its whole structure.
+#[derive(Clone)]
+struct Keys {
+    saved: AttachmentKey<Compound>,
+    payload: AttachmentKey<Compound>,
+    motion: AttachmentKey<RiderMotion>,
+    drops: AttachmentKey<Vec<PendingDrop>>,
+}
+
+static KEYS: RwLock<Option<Keys>> = RwLock::new(None);
+
+fn keys() -> Option<Keys> {
+    KEYS.read().ok()?.clone()
+}
+
+const COMPOUND_CODEC: AttachmentCodec<Compound> = AttachmentCodec {
+    encode: |data| Ok(data.clone()),
+    decode: |data| Ok(data.clone()),
 };
 
 #[derive(Clone)]
@@ -80,26 +83,20 @@ enum RiderMotion {
     Live(Arc<OnCart>),
 }
 
-static RIDER_MOTION: AttachmentType<RiderMotion> = AttachmentType {
-    namespace: "create",
-    name: "cart_rider_motion",
-    default: || RiderMotion::Saved(0.0),
-    codec: Some(AttachmentCodec {
-        encode: |motion| {
-            let yaw = match motion {
-                RiderMotion::Saved(yaw) => *yaw,
-                RiderMotion::Live(on) => on.m.turn.yaw,
-            };
-            Ok(Compound::from([("Yaw".into(), Tag::Float(yaw.to_bits()))]))
-        },
-        decode: |saved| match get(saved, "Yaw") {
-            Some(Tag::Float(bits)) => Ok(RiderMotion::Saved(f32::from_bits(*bits))),
-            _ => Err(mod_api::AttachmentError::Decode),
-        },
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+fn encode_motion(motion: &RiderMotion) -> Result<Compound, mod_api::AttachmentError> {
+    let yaw = match motion {
+        RiderMotion::Saved(yaw) => *yaw,
+        RiderMotion::Live(on) => on.m.turn.yaw,
+    };
+    Ok(Compound::from([("Yaw".into(), Tag::Float(yaw.to_bits()))]))
+}
+
+fn decode_motion(saved: &Compound) -> Result<RiderMotion, mod_api::AttachmentError> {
+    match get(saved, "Yaw") {
+        Some(Tag::Float(bits)) => Ok(RiderMotion::Saved(f32::from_bits(*bits))),
+        _ => Err(mod_api::AttachmentError::Decode),
+    }
+}
 
 #[derive(Clone, Debug, PartialEq)]
 struct PendingDrop {
@@ -107,70 +104,122 @@ struct PendingDrop {
     stack: Compound,
 }
 
-static RIDER_DROPS: AttachmentType<Vec<PendingDrop>> = AttachmentType {
-    namespace: "create",
-    name: "cart_rider_drops",
-    default: Vec::new,
-    codec: Some(AttachmentCodec {
-        encode: |drops| {
-            let rows = drops
-                .iter()
-                .map(|drop| {
-                    let mut row = drop.stack.clone();
-                    row.insert("Pos".into(), Tag::IntArray(drop.pos.to_vec()));
-                    Tag::Compound(row)
-                })
-                .collect();
-            Ok(Compound::from([("Drops".into(), Tag::List(rows))]))
-        },
-        decode: |saved| {
-            let Some(Tag::List(rows)) = get(saved, "Drops") else {
-                return Err(mod_api::AttachmentError::Decode);
+#[allow(clippy::ptr_arg)]
+fn encode_drops(drops: &Vec<PendingDrop>) -> Result<Compound, mod_api::AttachmentError> {
+    let rows = drops
+        .iter()
+        .map(|drop| {
+            let mut row = drop.stack.clone();
+            row.insert("Pos".into(), Tag::IntArray(drop.pos.to_vec()));
+            Tag::Compound(row)
+        })
+        .collect();
+    Ok(Compound::from([("Drops".into(), Tag::List(rows))]))
+}
+
+fn decode_drops(saved: &Compound) -> Result<Vec<PendingDrop>, mod_api::AttachmentError> {
+    let Some(Tag::List(rows)) = get(saved, "Drops") else {
+        return Err(mod_api::AttachmentError::Decode);
+    };
+    Ok(rows
+        .iter()
+        .filter_map(|row| {
+            let Tag::Compound(row) = row else { return None };
+            let mut stack = row.clone();
+            let Some(Tag::IntArray(pos)) = stack.remove(&"Pos".into()) else {
+                return None;
             };
-            Ok(rows
-                .iter()
-                .filter_map(|row| {
-                    let Tag::Compound(row) = row else { return None };
-                    let mut stack = row.clone();
-                    let Some(Tag::IntArray(pos)) = stack.remove(&"Pos".into()) else {
-                        return None;
-                    };
-                    Some(PendingDrop {
-                        pos: pos.try_into().ok()?,
-                        stack,
-                    })
-                })
-                .collect())
-        },
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+            Some(PendingDrop {
+                pos: pos.try_into().ok()?,
+                stack,
+            })
+        })
+        .collect())
+}
+
+/// Declare the four attachments once and keep their issued keys.
+fn register_attachments(r: &mut dyn Registrar) {
+    let saved = r.register_attachment_type(
+        AttachmentDescriptor::new("create:minecart_contraptions", Compound::new)
+            .serialize(COMPOUND_CODEC),
+    );
+    let payload = r.register_attachment_type(
+        AttachmentDescriptor::new("create:cart_rider", Compound::new).serialize(COMPOUND_CODEC),
+    );
+    let motion = r.register_attachment_type(
+        AttachmentDescriptor::new("create:cart_rider_motion", || RiderMotion::Saved(0.0))
+            .serialize(AttachmentCodec {
+                encode: encode_motion,
+                decode: decode_motion,
+            }),
+    );
+    let drops = r.register_attachment_type(
+        AttachmentDescriptor::new("create:cart_rider_drops", Vec::new).serialize(AttachmentCodec {
+            encode: encode_drops,
+            decode: decode_drops,
+        }),
+    );
+    match (saved, payload, motion, drops) {
+        (Ok(saved), Ok(payload), Ok(motion), Ok(drops)) => {
+            if let Ok(mut keys) = KEYS.write() {
+                *keys = Some(Keys {
+                    saved,
+                    payload,
+                    motion,
+                    drops,
+                });
+            }
+        }
+        (saved, payload, motion, drops) => {
+            crate::create_log!(
+                "[create] declaring cart attachments: {:?}",
+                [
+                    saved.err(),
+                    payload.err(),
+                    motion.err(),
+                    drops.map(|_| ()).err()
+                ]
+            );
+        }
+    }
+}
 
 fn payload(host: &mut dyn ServerHost, rider: EntityRef) -> Option<Arc<OnCart>> {
+    let keys = keys()?;
     let holder = Holder::Entity(rider.id());
-    let motion = RIDER_MOTION.get_existing(host, holder).ok().flatten();
+    let motion = keys
+        .motion
+        .get_existing(host, holder, |v| v.cloned())
+        .ok()
+        .flatten();
     if let Some(RiderMotion::Live(on)) = motion {
         return Some(on);
     }
-    let saved = RIDER_PAYLOAD.get_existing(host, holder).ok().flatten()?;
+    let saved = keys
+        .payload
+        .get_existing(host, holder, |v| v.cloned())
+        .ok()
+        .flatten()?;
     let mut on = decode_payload(host, &saved, |name| super::car_of_text(host, name))?;
     if let Some(RiderMotion::Saved(yaw)) = motion {
         on.m.turn = mounted::Orientation::at(yaw);
     }
     let on = Arc::new(on);
-    if let Err(e) = RIDER_MOTION.set(host, holder, RiderMotion::Live(on.clone())) {
+    if let Err(e) = keys.motion.set(host, holder, RiderMotion::Live(on.clone())) {
         crate::create_log!("[create] caching cart rider motion: {e:?}");
     }
     Some(on)
 }
 
 fn save_rider(host: &mut dyn ServerHost, rider: EntityRef, on: Arc<OnCart>) -> bool {
+    let Some(keys) = keys() else {
+        return false;
+    };
     let holder = Holder::Entity(rider.id());
     let saved = encode_payload(host, &on, |id| super::car_text(host, id));
     let result = host.transaction(|host, _| {
-        RIDER_PAYLOAD.set(host, holder, saved)?;
-        RIDER_MOTION.set(host, holder, RiderMotion::Live(on))
+        keys.payload.set(host, holder, saved)?;
+        keys.motion.set(host, holder, RiderMotion::Live(on))
     });
     if let Err(e) = result {
         crate::create_log!("[create] saving cart rider: {e:?}");
@@ -447,16 +496,7 @@ impl Subsystem for Carts {
         ) {
             crate::create_log!("[create] cart contraption type was refused: {e:?}");
         }
-        for name in [
-            SAVED.name,
-            RIDER_PAYLOAD.name,
-            RIDER_MOTION.name,
-            RIDER_DROPS.name,
-        ] {
-            if let Err(e) = r.register_attachment_type(&format!("create:{name}"), false) {
-                crate::create_log!("[create] declaring {name}: {e:?}");
-            }
-        }
+        register_attachments(r);
         r.entity_part(CONTRAPTION, ContraptionRider);
         let _ = END_ROD.set(r.particle_key("minecraft:end_rod"));
         let _ = DUST.set(r.particle_key("minecraft:dust"));
@@ -536,8 +576,12 @@ impl Subsystem for Carts {
         coupling_draw::reset();
     }
 
-    fn render_level_stage(&self, host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-        coupling_draw::render_level_stage(host, event);
+    fn submit_custom_geometry(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut SubmitCustomGeometryEvent<'_>,
+    ) {
+        coupling_draw::submit_custom_geometry(host, event);
     }
 
     /// An assembler gone from the world forgets its mode.
@@ -566,8 +610,7 @@ impl Subsystem for Carts {
     ) -> Flow {
         if event.kind.ends_with("minecart")
             && let Some(dim) = level_index(event.dimension)
-            && let Some(entity) = host.entity(event.entity)
-            && let Some(uuid) = entity.uuid(host)
+            && let Some(uuid) = event.subject.uuid(host)
         {
             CARTS.with_borrow_mut(|c| {
                 if c.couplings.carts.contains_key(&uuid) {
@@ -575,7 +618,7 @@ impl Subsystem for Carts {
                         uuid,
                         Known {
                             dim,
-                            entity,
+                            entity: event.subject,
                             rider: None,
                             pos: event.pos,
                             prev: event.pos,
@@ -660,9 +703,7 @@ fn wrench_controller_rail(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let solid = |p: [i32; 3]| {
         let cell = [0, 1, 2, 3, 4, 5].map(|k| f64::from(p[k % 3] + i32::from(k >= 3)));
-        lv.level
-            .collision_boxes(host, cell)
-            .is_some_and(|b| !b.is_empty())
+        crate::glue::collision_boxes(lv.level, host, cell).is_some_and(|b| !b.is_empty())
     };
     let stable = |s: Shape| {
         let high = match s {
@@ -914,9 +955,12 @@ impl BlockPart for AssemblerBlock {
     /// for) and the wrench's `onWrenched` / `onSneakWrenched`.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let stack = click.stack?;
         let item = stack.item().name(&*host);
@@ -1547,7 +1591,10 @@ impl EntityPart for ContraptionRider {
         let Some(mut lv) = ServerLevel::new(host, &dimension) else {
             return;
         };
-        if RIDER_DROPS.has(lv.host, Holder::Entity(rider.id())) == Ok(true) {
+        let Some(keys) = keys() else {
+            return;
+        };
+        if keys.drops.has(lv.host, Holder::Entity(rider.id())) == Ok(true) {
             return;
         }
         let Some(on) = payload(lv.host, rider) else {
@@ -1702,10 +1749,13 @@ fn put_back(lv: &mut ServerLevel<'_>, rider: EntityRef, at: [f64; 3], on: OnCart
     }
     // A detached carrier keeps only its pending drops, never a second saved structure.
     let holder = Holder::Entity(rider.id());
+    let Some(keys) = keys() else {
+        return;
+    };
     let result = lv.host.transaction(|host, _| {
-        RIDER_DROPS.set(host, holder, drops)?;
-        RIDER_PAYLOAD.remove(host, holder)?;
-        RIDER_MOTION.remove(host, holder)?;
+        keys.drops.set(host, holder, drops)?;
+        keys.payload.remove(host, holder)?;
+        keys.motion.remove(host, holder)?;
         Ok::<_, mod_api::AttachmentError>(())
     });
     if let Err(e) = result {
@@ -1716,7 +1766,10 @@ fn put_back(lv: &mut ServerLevel<'_>, rider: EntityRef, at: [f64; 3], on: OnCart
 /// Deliver from the level tick, outside the general entity tick's journal. A handle
 /// returned inside that journal does not confirm that the item survived its join hook.
 fn deliver_drops(lv: &mut ServerLevel<'_>) {
-    let Ok(query) = lv.host.query(&RIDER_DROPS) else {
+    let Some(keys) = keys() else {
+        return;
+    };
+    let Ok(query) = lv.host.query(&keys.drops) else {
         return;
     };
     let mut rows = Vec::new();
@@ -1747,7 +1800,7 @@ fn deliver_drops(lv: &mut ServerLevel<'_>) {
         if refused.is_empty() {
             rider.remove(lv.host, RemovalReason::Discarded);
         } else if refused.len() != drops.len()
-            && let Err(e) = RIDER_DROPS.set(lv.host, Holder::Entity(rider.id()), refused)
+            && let Err(e) = keys.drops.set(lv.host, Holder::Entity(rider.id()), refused)
         {
             crate::create_log!("[create] saving remaining cart drops: {e:?}");
         }
@@ -2043,8 +2096,7 @@ impl ItemPart for ContraptionItem {
                 Tag::Float(0f32.to_bits()),
             ]),
         );
-        let id = lv.host.summon(&dimension, kind, at, nbt)?;
-        let entity = lv.host.entity(id)?;
+        let entity = lv.level.summon(&mut *lv.host, kind, at, nbt).ok()??;
         let nc = Cart::read(lv.host, entity)?;
         let dim = lv.dim;
         let on = item_contraption(event.stack).and_then(|c| {
@@ -2495,10 +2547,14 @@ fn tick_mounted(lv: &mut ServerLevel<'_>, carts: &HashMap<u128, Cart>) -> Vec<Ar
             || before.carried.controls != on.carried.controls
             || before.carried.disabled != on.carried.disabled;
         let on = Arc::new(on);
+        let Some(keys) = keys() else {
+            live.push(before);
+            continue;
+        };
         let saved = if content_changed {
             save_rider(lv.host, rider, on.clone())
         } else {
-            let result = RIDER_MOTION.set(
+            let result = keys.motion.set(
                 lv.host,
                 Holder::Entity(rider.id()),
                 RiderMotion::Live(on.clone()),
@@ -2750,7 +2806,10 @@ fn save(lv: &mut ServerLevel<'_>) {
         ("Couplings".into(), Tag::List(links)),
         ("Assemblers".into(), Tag::List(stations)),
     ]);
-    if let Err(e) = SAVED.set(&mut *lv.host, Holder::Level, data) {
+    let Some(keys) = keys() else {
+        return;
+    };
+    if let Err(e) = keys.saved.set(&mut *lv.host, Holder::Level, data) {
         crate::create_log!("[create] saving ordinary cart couplings and assembler modes: {e:?}");
     }
 }
@@ -2763,7 +2822,13 @@ fn old_contraption_link(tag: &Compound) -> bool {
 /// Restore ordinary couplings and assembler settings; their carts are found by UUID.
 fn load(lv: &mut ServerLevel<'_>) {
     CARTS.with_borrow_mut(|c| c.loaded = true);
-    let data = match SAVED.get_existing(&mut *lv.host, Holder::Level) {
+    let Some(keys) = keys() else {
+        return;
+    };
+    let data = match keys
+        .saved
+        .get_existing(&mut *lv.host, Holder::Level, |v| v.cloned())
+    {
         Ok(Some(data)) => data,
         Ok(None) => return,
         Err(e) => {
@@ -2856,14 +2921,13 @@ mod tests {
             Some(&Tag::String("WEST".into()))
         );
         assert!(!body.contains_key(&"Yaw".into()));
-        let motion = RIDER_MOTION.codec.as_ref().unwrap();
-        let encoded = (motion.encode)(&RiderMotion::Live(Arc::new(on.clone()))).unwrap();
+        let encoded = encode_motion(&RiderMotion::Live(Arc::new(on.clone()))).unwrap();
         assert_eq!(
             encoded,
             Compound::from([("Yaw".into(), Tag::Float(47.5f32.to_bits()))])
         );
         assert!(matches!(
-            (motion.decode)(&encoded),
+            decode_motion(&encoded),
             Ok(RiderMotion::Saved(47.5))
         ));
         let state = |name: &str| (name == "minecraft:oak_planks").then_some(63);
@@ -2931,9 +2995,8 @@ mod tests {
         };
         let left = unjoined_drops(&[vault, gold.clone()], |drop| drop.pos[0] == 3);
         assert_eq!(left, vec![gold.clone()]);
-        let codec = RIDER_DROPS.codec.as_ref().unwrap();
-        let saved = (codec.encode)(&left).unwrap();
-        let reopened = (codec.decode)(&saved).unwrap();
+        let saved = encode_drops(&left).unwrap();
+        let reopened = decode_drops(&saved).unwrap();
         assert_eq!(reopened, vec![gold]);
         assert!(unjoined_drops(&reopened, |_| true).is_empty());
     }

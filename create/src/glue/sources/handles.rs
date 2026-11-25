@@ -19,9 +19,8 @@ use create_engine::dye;
 use create_engine::kinetics::Dir;
 use create_engine::valve;
 use mod_api::{
-    BlockEntityClientTickEvent, BlockEntityClientTicksEvent, BlockEntityPart, BlockPart,
-    CanSurviveEvent, ClientHost, Compound, HostSide, ModBlockEntity, OnChunkUnloadedEvent,
-    Registrar, SoundPlay, SoundSource, Tag,
+    BlockEntityClientTickEvent, BlockEntityPart, BlockPart, CanSurviveEvent, ClientHost, Compound,
+    HostSide, OnChunkUnloadedEvent, Registrar, SoundPlay, SoundSource, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -139,13 +138,13 @@ pub(super) fn draws_itself(block: Block, part: &Draw) -> bool {
 
 /// Whether the handle of `block` at `pos` moves this frame: a crank's while it turns or slows, a
 /// valve handle's while its use lasts.
-pub(super) fn animated(block: Block, pos: [i32; 3], entity: &ModBlockEntity) -> bool {
+pub(super) fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         Block::HandCrank => {
-            let turning = speeds_of(&entity.nbt)[0] != 0.0;
+            let turning = speeds_of(entity.nbt())[0] != 0.0;
             turning || CRANKS.with_borrow(|c| c.get(&pos).is_some_and(|c| c.moving))
         }
-        b if dye::is_valve_handle(b) => use_of(&entity.nbt)
+        b if dye::is_valve_handle(b) => use_of(entity.nbt())
             .is_some_and(|(start, ticks, ..)| NOW.get() < start + i64::from(ticks) + SETTLE),
         _ => false,
     }
@@ -198,8 +197,13 @@ pub(super) fn level_tick(lv: &mut ServerLevel<'_>) {
         let empty = lv
             .block_state(behind)
             .and_then(|state| {
-                lv.level
-                    .block_shape(&*lv.host, state, behind, mod_api::BlockShapeKind::Collision)
+                crate::glue::block_shape(
+                    lv.level,
+                    &*lv.host,
+                    state,
+                    behind,
+                    mod_api::BlockShapeKind::Collision,
+                )
             })
             .is_some_and(|boxes| boxes.is_empty());
         if empty {
@@ -234,16 +238,6 @@ impl BlockPart for Handles {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for Handles {
-    fn block_entity_client_ticks(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut BlockEntityClientTicksEvent<'_>,
-    ) {
-        if event.block == "create:hand_crank" {
-            event.ticks = true;
-        }
-    }
-
     /// `HandCrankBlockEntity.tick`: the handle's speed moves a quarter of the way to the
     /// crank's (`convertToAngular(getSpeed())`), and its angle by that speed.
     fn block_entity_client_tick(&self, event: &mut BlockEntityClientTickEvent<'_>) {
@@ -326,7 +320,7 @@ impl BlockEntityPart for Handles {
         } else if dye::is_valve_handle(block) {
             let text = host.block_state_string(event.state).unwrap_or_default();
             let (_, own) = states::split(&text);
-            let speeds = speeds_of(&event.entity.nbt);
+            let speeds = speeds_of(event.entity.nbt());
             let Some(d) = create_engine::client::draws(block, &info, event.pos, speeds)
                 .into_iter()
                 .find(|d| d.model == Model::Own)
@@ -344,7 +338,7 @@ fn draw_crank(event: &mut crate::glue::Submit<'_>, facing: Dir) {
     let Some(part) = states::partial("part_hand_crank_handle") else {
         return;
     };
-    let target = speeds_of(&event.entity.nbt)[0];
+    let target = speeds_of(event.entity.nbt())[0];
     let c = CRANKS.with_borrow_mut(|c| {
         *c.entry(event.pos).or_insert_with(|| Crank {
             moving: target != 0.0,
@@ -361,7 +355,7 @@ fn draw_crank(event: &mut crate::glue::Submit<'_>, facing: Dir) {
     draw.rotate_about(axis_vector(facing.axis()), angle, [0.5; 3]);
     // `rotateTo(0, 0, -1 -> facing)`: the model's north (its grip's end) points the crank's
     // way, which is the partial's `facing` variant.
-    draw.block(part, &[("facing", kinetics::dir_name(facing))]);
+    crate::glue::states::draw_block(&mut *draw, part, &[("facing", kinetics::dir_name(facing))]);
     draw.pop();
     if !c.moving && target == 0.0 {
         draw.keep();
@@ -380,7 +374,7 @@ fn draw_valve(
     let model = states::key(block);
     let positive = Dir::from_axis(facing.axis(), true) == facing;
     let now = event.draw.game_time();
-    let used = use_of(&event.entity.nbt);
+    let used = use_of(event.entity.nbt());
     // Its value box's number is drawn while it is looked at.
     let keep = !super::super::interaction::value_text::animated(event.pos);
     let draw = &mut *event.draw;
@@ -390,12 +384,12 @@ fn draw_valve(
             let angle = valve::drawn_angle(target, ticks, elapsed, back, positive);
             draw.push();
             draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
-            draw.block(model, own);
+            crate::glue::states::draw_block(&mut *draw, model, own);
             draw.pop();
         }
         _ if d.rpm != 0.0 => {
             draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
-            draw.block(model, own);
+            crate::glue::states::draw_block(&mut *draw, model, own);
             draw.still();
             if keep {
                 draw.keep();
@@ -407,7 +401,7 @@ fn draw_valve(
             });
             draw.push();
             draw.rotate_about(axis_vector(d.axis), angle, [0.5; 3]);
-            draw.block(model, own);
+            crate::glue::states::draw_block(&mut *draw, model, own);
             draw.pop();
             if keep {
                 draw.keep();

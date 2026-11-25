@@ -520,12 +520,9 @@ fn cut_hint(draw: &dyn DrawContext, text: &str) -> Vec<Vec<(String, u32)>> {
 /// box is the block entity's to draw (`value_text`).
 pub(super) fn value_box_outline(
     host: &dyn ClientHost,
-    event: &mut mod_api::RenderLevelStageEvent<'_>,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
 ) {
-    use mod_api::{RenderLevelStage, WorldDepth, WorldLine};
-    if event.stage != RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
+    use mod_api::{WorldDepth, WorldLine};
     let mut panel = Vec::new();
     if crate::glue::stock::gauge_client::hover_outline(host, &mut panel) {
         let _ = event.draw.lines(&panel);

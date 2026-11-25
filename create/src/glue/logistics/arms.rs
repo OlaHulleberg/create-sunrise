@@ -278,10 +278,10 @@ impl Subsystem for Arms {
         super::client::arms_message(host, channel, data)
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         super::client::draw_arm_points(host, event);
     }
@@ -1416,8 +1416,7 @@ impl ejector::World for EjectorWorld<'_, '_> {
         let lv = &*self.lv;
         ejector::clip(from, to, |p| {
             let [x, y, z] = p.map(f64::from);
-            lv.level
-                .collision_boxes(&*lv.host, [x, y, z, x + 1.0, y + 1.0, z + 1.0])
+            crate::glue::collision_boxes(lv.level, &*lv.host, [x, y, z, x + 1.0, y + 1.0, z + 1.0])
                 .unwrap_or_default()
         })
     }

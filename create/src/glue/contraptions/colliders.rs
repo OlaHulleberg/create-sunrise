@@ -20,14 +20,15 @@ use crate::glue::owned::LevelLists as _;
 use create_engine::collider::{self, Aabb, Frame, Pose};
 use create_engine::kinetics::Dir;
 use mod_api::{
-    AttachmentCodec, AttachmentError, AttachmentType, BlockShapeKind, BlockState, Collider,
-    ColliderBox, Compound, EntityJoinLevelEvent, EntityPart, EntityRef, EntitySpawn, Flow,
-    GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder, Registrar,
-    RegistrationContext, RemovalReason, ServerHost, SpawnBody, Tag,
+    AttachmentCodec, AttachmentDescriptor, AttachmentError, AttachmentKey, BlockShapeKind,
+    BlockState, Collider, ColliderBox, Compound, EntityJoinLevelEvent, EntityPart, EntityRef,
+    EntitySpawn, Flow, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder,
+    Registrar, RegistrationContext, RemovalReason, ServerHost, SpawnBody, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::hash::{DefaultHasher, Hash, Hasher};
+use std::sync::RwLock;
 
 /// `ControlledContraptionEntity`: bearings', windmills', clocks', pistons', pulleys' and
 /// elevators' structures.
@@ -74,13 +75,17 @@ struct Placed {
     tick: i64,
 }
 
-/// The structure a stand-in carries, saved with it, so that the one that comes back with its
-/// chunk carries its structure on, solid from the start.
-static CARRYING: AttachmentType<Option<Owner>> = AttachmentType {
-    namespace: "create",
-    name: "carried_structure",
-    default: || None,
-    codec: Some(AttachmentCodec {
+/// The key of the structure a stand-in carries, saved with it, so that the one that comes back
+/// with its chunk carries its structure on, solid from the start. Issued by `register`.
+static CARRYING: RwLock<Option<AttachmentKey<Option<Owner>>>> = RwLock::new(None);
+
+fn carrying() -> Option<AttachmentKey<Option<Owner>>> {
+    CARRYING.read().ok()?.clone()
+}
+
+/// The saved form of the structure a stand-in carries.
+fn carrying_codec() -> AttachmentCodec<Option<Owner>> {
+    AttachmentCodec {
         encode: |owner| {
             let (kind, at, n) = match owner {
                 Some(Owner::Anchor(p, n)) => (0, *p, i32::from(*n)),
@@ -114,10 +119,8 @@ static CARRYING: AttachmentType<Option<Owner>> = AttachmentType {
                 _ => None,
             })
         },
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+    }
+}
 
 thread_local! {
     static PLACED: RefCell<HashMap<(usize, Owner), Placed>> = RefCell::new(HashMap::new());
@@ -171,8 +174,16 @@ impl Subsystem for Colliders {
         for kind in [STATIONARY, GANTRY, CARRIAGE] {
             r.entity_part(kind, Carrying);
         }
-        if let Err(e) = r.register_attachment_type("create:carried_structure", false) {
-            crate::create_log!("[create] declaring carried_structure: {e:?}");
+        match r.register_attachment_type(
+            AttachmentDescriptor::new("create:carried_structure", || None::<Owner>)
+                .serialize(carrying_codec()),
+        ) {
+            Ok(key) => {
+                if let Ok(mut slot) = CARRYING.write() {
+                    *slot = Some(key);
+                }
+            }
+            Err(e) => crate::create_log!("[create] declaring carried_structure: {e:?}"),
         }
     }
 
@@ -193,11 +204,13 @@ impl Subsystem for Colliders {
         if event.loaded_from_disk
             && [STATIONARY, GANTRY, CARRIAGE].contains(&event.kind)
             && let Some(dim) = level_index(event.dimension)
-            && let Some(entity) = host.entity(event.entity)
         {
-            let owner = CARRYING
-                .get_existing(host, Holder::Entity(event.entity))
-                .ok()
+            let entity = event.subject;
+            let owner = carrying()
+                .and_then(|key| {
+                    key.get_existing(host, Holder::Entity(entity.id()), |value| value.copied())
+                        .ok()
+                })
                 .flatten()
                 .flatten();
             let stray = match owner {
@@ -483,7 +496,9 @@ pub fn place(
                 else {
                     return;
                 };
-                let _ = CARRYING.set(&mut *lv.host, Holder::Entity(e.id()), Some(owner));
+                if let Some(key) = carrying() {
+                    let _ = key.set(&mut *lv.host, Holder::Entity(e.id()), Some(owner));
+                }
                 e
             }
         },
@@ -568,8 +583,13 @@ fn boxes(
                 .map(|v| v.floor() as i32);
             let shape = state(*s)
                 .and_then(|state| {
-                    lv.level
-                        .block_shape(&*lv.host, state, cell, BlockShapeKind::Collision)
+                    crate::glue::block_shape(
+                        lv.level,
+                        &*lv.host,
+                        state,
+                        cell,
+                        BlockShapeKind::Collision,
+                    )
                 })
                 .unwrap_or_default();
             (*o, shape)

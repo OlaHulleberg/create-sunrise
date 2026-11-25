@@ -407,10 +407,14 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     {
         return None;
     }
-    let collides = lv
-        .level
-        .block_shape(host, state, at, mod_api::BlockShapeKind::Collision)
-        .is_some_and(|s| !s.is_empty());
+    let collides = crate::glue::block_shape(
+        lv.level,
+        host,
+        state,
+        at,
+        mod_api::BlockShapeKind::Collision,
+    )
+    .is_some_and(|s| !s.is_empty());
     if !collides {
         return None;
     }
@@ -422,7 +426,8 @@ fn paver(lv: &ServerLevel<'_>, player: mod_api::PlayerRef, at: [i32; 3]) -> Opti
     Some(Paver {
         state,
         slab: slab.is_some(),
-        wall: girder || host.block_in_tag(block, "minecraft:walls") == Some(true),
+        wall: girder
+            || crate::glue::block_in_tag(host.tags(), block, "minecraft:walls") == Some(true),
         girder,
     })
 }
@@ -437,9 +442,9 @@ fn free_for(lv: &ServerLevel<'_>, p: [i32; 3], state: BlockState) -> Option<Bloc
     }
     let water = host
         .block_state_id("minecraft:water")
-        .and_then(|w| host.state_fluid_state(w));
-    let source = host
-        .state_fluid_state(at)
+        .and_then(|w| w.fluid_state(&host.block_states()));
+    let source = at
+        .fluid_state(&host.block_states())
         .is_some_and(|f| f.source && water.is_some_and(|w| w.fluid == f.fluid));
     let has = state
         .property(&host.block_states(), "waterlogged")
@@ -1110,7 +1115,7 @@ fn lay_fake_track(lv: &mut ServerLevel<'_>) {
         if present {
             continue;
         }
-        let fluid = lv.host.state_fluid_state(here);
+        let fluid = here.fluid_state(&lv.host.block_states());
         let water = lv
             .host
             .block_state_string(here)
@@ -1163,7 +1168,7 @@ impl BlockEntityPart for TrackEntity {
         &self,
         event: &mut BlockEntityUpdateTagEvent<'_>,
     ) -> Option<Compound> {
-        let nbt = &event.entity.nbt;
+        let nbt = event.entity.nbt();
         let mut out = Compound::new();
         for key in [
             CURVES,
@@ -1187,7 +1192,7 @@ impl BlockEntityPart for TrackEntity {
         if event.state.block() == states::key(Block::TrackSignal) {
             // Its marker, on its track up to 16 blocks away.
             if let Some(Tag::Compound(c)) =
-                crate::glue::kinetics::synced(&event.entity.nbt, super::station_draw::MARK)
+                crate::glue::kinetics::synced(event.entity.nbt(), super::station_draw::MARK)
                 && let Some(Tag::IntArray(t)) = c.get(&"t".into())
                 && let &[x, y, z] = &t[..]
             {
@@ -1202,7 +1207,7 @@ impl BlockEntityPart for TrackEntity {
         if event.state.block() != states::key(Block::Track) {
             return;
         }
-        let curves = saved::curves_of(event.entity.nbt.get(&CURVES.into()));
+        let curves = saved::curves_of(event.entity.nbt().get(&CURVES.into()));
         let origin = event.pos;
         for s in curves {
             for p in [s.from, s.to] {
@@ -1224,17 +1229,17 @@ impl BlockEntityPart for TrackEntity {
         // Hot: every kept block's draw; three compares for any other block.
         let block = event.state.block();
         if block == states::key(Block::TrackStation) {
-            super::station_draw::draw(host, event.draw, event.pos, &event.entity.nbt);
+            super::station_draw::draw(host, event.draw, event.pos, event.entity.nbt());
             return;
         }
         if block == states::key(Block::TrackObserver) {
-            super::station_draw::draw_mark(host, event.draw, &event.entity.nbt);
+            super::station_draw::draw_mark(host, event.draw, event.entity.nbt());
             return;
         }
         if block != states::key(Block::Track) && block != states::key(Block::TrackSignal) {
             return;
         }
-        let nbt = &event.entity.nbt;
+        let nbt = event.entity.nbt();
         if block == states::key(Block::TrackSignal) {
             super::station_draw::draw_mark(host, event.draw, nbt);
         }
@@ -1250,12 +1255,12 @@ impl BlockEntityPart for TrackEntity {
             } else {
                 "part_signal_indicator_off"
             };
-            if let Some(b) = states::partial(name) {
+            if let Some(b) = partial_state(host, name, "up") {
                 let lit = event.draw.light();
                 if on {
                     event.draw.set_light(0x00F0_00F0);
                 }
-                event.draw.block(b, &[("facing", "up")]);
+                event.draw.block(b);
                 event.draw.set_light(lit);
             }
             if !blink {
@@ -1267,7 +1272,7 @@ impl BlockEntityPart for TrackEntity {
         if curves.is_empty() {
             return;
         }
-        let part = states::partial;
+        let part = |name: &str| partial_state(host, name, "south");
         let (Some(tie), Some(left), Some(right)) = (
             part("part_track_tie"),
             part("part_track_segment_left"),
@@ -1304,12 +1309,23 @@ impl BlockEntityPart for TrackEntity {
                     continue;
                 };
                 draw_posed(event.draw, &m, |d| {
-                    d.block(key, &[("facing", "south")]);
+                    d.block(key);
                 });
             }
         }
         event.draw.keep();
     }
+}
+
+/// The state of partial model `name` facing `facing`.
+fn partial_state(host: &dyn ClientHost, name: &str, facing: &str) -> Option<BlockState> {
+    let key = states::partial(name)?;
+    BlockState::of(
+        &host.block_states(),
+        key,
+        &[mod_api::StateConstraint::new("facing", facing)],
+    )
+    .ok()
 }
 
 /// Draws what `f` draws under transform `m` (a translation, a rotation and a stretch along the

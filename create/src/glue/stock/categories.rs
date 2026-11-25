@@ -607,52 +607,52 @@ fn render(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open, mouse: [f
         // (`enableScissor(leftPos + 3, topPos + 16, leftPos + 187, topPos + 19 + 20 * slices)`).
         let top = y + 16.0;
         let bottom = y + 99.0;
-        let _ = draw.push_clip([x + 3.0, top, 184.0, bottom - top]);
-        let mut at = 25.0;
-        for (i, card) in o.cards.iter().enumerate() {
-            let cy = y + at - scroll;
-            at += CARD;
-            if cy + 18.0 < top || cy > bottom {
-                continue;
+        let _ = draw.with_scissor([x + 3.0, top, 184.0, bottom - top], &mut |draw| {
+            let mut at = 25.0;
+            for (i, card) in o.cards.iter().enumerate() {
+                let cy = y + at - scroll;
+                at += CARD;
+                if cy + 18.0 < top || cy > bottom {
+                    continue;
+                }
+                let cx = x + 7.0;
+                draw.sprite(TEX, [38.0, 159.0, 171.0, 18.0], [cx, cy, 171.0, 18.0], None);
+                if i > 0 {
+                    draw.sprite(
+                        TEX,
+                        [211.0, 160.0, 8.0, 8.0],
+                        [cx + 172.0, cy + 2.0, 8.0, 8.0],
+                        None,
+                    );
+                }
+                if i + 1 < o.cards.len() {
+                    draw.sprite(
+                        TEX,
+                        [211.0, 169.0, 8.0, 8.0],
+                        [cx + 172.0, cy + 11.0, 8.0, 8.0],
+                        None,
+                    );
+                }
+                if let Some(s) = card {
+                    draw.item_stack(s, [cx + 14.0, cy + 1.0], 16.0);
+                }
+                let name = card_name(host, card);
+                let mut shown: String = name.chars().take(20).collect::<String>().trim_end().into();
+                if name.chars().count() > 20 {
+                    shown.push_str("...");
+                }
+                draw.text(&shown, [cx + 35.0, cy + 5.0], 0xFF65_6565, false);
             }
-            let cx = x + 7.0;
-            draw.sprite(TEX, [38.0, 159.0, 171.0, 18.0], [cx, cy, 171.0, 18.0], None);
-            if i > 0 {
+            let ny = y + at - scroll;
+            if ny + 18.0 >= top && ny <= bottom {
                 draw.sprite(
                     TEX,
-                    [211.0, 160.0, 8.0, 8.0],
-                    [cx + 172.0, cy + 2.0, 8.0, 8.0],
+                    [38.0, 127.0, 27.0, 18.0],
+                    [x + 7.0, ny, 27.0, 18.0],
                     None,
                 );
             }
-            if i + 1 < o.cards.len() {
-                draw.sprite(
-                    TEX,
-                    [211.0, 169.0, 8.0, 8.0],
-                    [cx + 172.0, cy + 11.0, 8.0, 8.0],
-                    None,
-                );
-            }
-            if let Some(s) = card {
-                draw.item_stack(s, [cx + 14.0, cy + 1.0], 16.0);
-            }
-            let name = card_name(host, card);
-            let mut shown: String = name.chars().take(20).collect::<String>().trim_end().into();
-            if name.chars().count() > 20 {
-                shown.push_str("...");
-            }
-            draw.text(&shown, [cx + 35.0, cy + 5.0], 0xFF65_6565, false);
-        }
-        let ny = y + at - scroll;
-        if ny + 18.0 >= top && ny <= bottom {
-            draw.sprite(
-                TEX,
-                [38.0, 127.0, 27.0, 18.0],
-                [x + 7.0, ny, 27.0, 18.0],
-                None,
-            );
-        }
-        let _ = draw.pop_clip();
+        });
         let cr = confirm_rect(x, y, false);
         icon_button(draw, cr, [0.0, 16.0], inside(cr, mouse));
         // `action(graphics, ..)`: the hovered control's tooltip.

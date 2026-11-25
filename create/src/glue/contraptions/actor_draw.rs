@@ -23,9 +23,7 @@ use create_engine::elevator::ControlsAnim;
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
 use create_engine::psi::{self, ANIMATION, TIMEOUT};
-use mod_api::{
-    BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, ModBlockEntity, Tag,
-};
+use mod_api::{BlockEntityDrawContext, BlockEntityPart, BlockPart, ClientHost, Compound, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
 
@@ -86,7 +84,7 @@ impl Parts for Drawing<'_> {
     }
     fn part(&mut self, name: &str, facing: &'static str) {
         if let Some(key) = states::partial(name) {
-            self.0.block(key, &[("facing", facing)]);
+            crate::glue::states::draw_block(&mut *self.0, key, &[("facing", facing)]);
         }
     }
 }
@@ -560,12 +558,12 @@ fn interface_timer(nbt: &Compound, game_time: i64) -> Option<(i32, i32, f32)> {
 
 /// Whether the placed block draws something that moves each frame: an interface while its timer
 /// runs.
-pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
+pub fn animated(block: Block, entity: crate::glue::EntityData<'_>) -> bool {
     matches!(
         block,
         Block::PortableStorageInterface | Block::PortableFluidInterface
     ) && matches!(
-        super::super::kinetics::synced(&entity.nbt, PSI),
+        super::super::kinetics::synced(entity.nbt(), PSI),
         Some(Tag::Compound(c)) if matches!(c.get(&"Timer".into()), Some(Tag::Int(t)) if *t > 0)
     )
 }
@@ -602,7 +600,7 @@ impl BlockEntityPart for PlacedActors {
             Block::PortableStorageInterface | Block::PortableFluidInterface => {
                 let fluid = block == Block::PortableFluidInterface;
                 let (now, before, distance) =
-                    interface_timer(&event.entity.nbt, draw.game_time()).unwrap_or((0, 0, 0.0));
+                    interface_timer(event.entity.nbt(), draw.game_time()).unwrap_or((0, 0, 0.0));
                 // `getExtensionDistance`: the animation's value squared, times half the reach.
                 let p = timer_progress(before)
                     + (timer_progress(now) - timer_progress(before)) * draw.partial();
@@ -632,13 +630,13 @@ impl BlockEntityPart for PlacedActors {
             // while the controls are off.
             Block::ContraptionControls => {
                 let off = matches!(
-                    super::super::kinetics::synced(&event.entity.nbt, CONTROLS_OFF),
+                    super::super::kinetics::synced(event.entity.nbt(), CONTROLS_OFF),
                     Some(Tag::Byte(1))
                 );
                 draw_controls(&mut Drawing(draw), facing, off);
             }
             Block::GantryCarriage => {
-                let rpm = super::super::kinetics::speeds_of(&event.entity.nbt)[0];
+                let rpm = super::super::kinetics::speeds_of(event.entity.nbt())[0];
                 draw_gantry_cogs(draw, event.pos, facing, info.along_first, rpm);
             }
             _ => {}

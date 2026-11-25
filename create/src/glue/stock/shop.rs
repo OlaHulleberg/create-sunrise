@@ -1292,7 +1292,7 @@ impl BlockEntityPart for ClothEntity {
         // (`decor::cloth`, drawn by its part on this type).
         let shown: Compound = [DATA, crate::glue::decor::cloth::CULL]
             .into_iter()
-            .filter_map(|k| Some((k.into(), event.entity.nbt.get(&k.into())?.clone())))
+            .filter_map(|k| Some((k.into(), event.entity.nbt().get(&k.into())?.clone())))
             .collect();
         (!shown.is_empty()).then_some(shown)
     }
@@ -1307,7 +1307,7 @@ impl BlockEntityPart for ClothEntity {
         event: &mut mod_api::BlockEntitySubmitEvent<'_>,
     ) {
         let event = &mut crate::glue::Submit::of(event);
-        let Some(Tag::Compound(c)) = event.entity.nbt.get(&DATA.into()) else {
+        let Some(Tag::Compound(c)) = event.entity.nbt().get(&DATA.into()) else {
             return;
         };
         let cloth = cloth_of(host, c);
@@ -1333,7 +1333,7 @@ impl BlockEntityPart for ClothEntity {
             if let Some(tag) = states::partial(name) {
                 draw.push();
                 draw.rotate_about([0.0, 1.0, 0.0], rot, centre);
-                draw.block(tag, &[("facing", "up")]);
+                crate::glue::states::draw_block(&mut *draw, tag, &[("facing", "up")]);
                 draw.pop();
             }
             if let Some(price) = &cloth.price {
@@ -1460,22 +1460,22 @@ impl mod_api::ItemPart for ClothItem {
     }
 
     /// `TableClothBlockItem.appendHoverText`: a programmed cloth says so and lists its order.
-    fn tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::TooltipEvent<'_>) {
+    fn tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::TooltipEvent<'_, '_>) {
         let custom = items::custom(event.stack);
         let Some(Tag::Compound(c)) = custom.get(&super::AUTO_REQUEST.into()) else {
             return;
         };
         let line = |key: &str| Text::translate(key, Vec::new());
-        event
+        let _ = event
             .lines
             .push((line("create.table_cloth.shop_configured"), 0xFFAA00));
         for (k, n) in order_of(host, c.get(&"EncodedRequest".into())) {
             let name = host.hover_name(&k.0).unwrap_or_default();
-            event
+            let _ = event
                 .lines
                 .push((name.append(Text::literal(format!(" x{n}"))), 0xAAAAAA));
         }
-        event
+        let _ = event
             .lines
             .push((line("create.logistically_linked.tooltip_clear"), 0x555555));
     }
@@ -1525,12 +1525,12 @@ impl mod_api::ItemPart for ShoppingListPart {
 
     /// `ShoppingListItem.appendHoverText`: the order (grey) and its total cost (gold and
     /// yellow), read from the cloths this client sees; then the hints.
-    fn tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::TooltipEvent<'_>) {
+    fn tooltip(&self, host: &dyn ClientHost, event: &mut mod_api::TooltipEvent<'_, '_>) {
         if let Some(list) = List::of(event.stack) {
             let (order, cost) = client_bake(host, &list);
             for (cost_side, entries) in [(false, order), (true, cost)] {
                 if cost_side {
-                    event.lines.push((Text::literal(""), 0xFFFFFF));
+                    let _ = event.lines.push((Text::literal(""), 0xFFFFFF));
                 }
                 let colour = if cost_side { 0xFFFF55 } else { 0xAAAAAA };
                 if entries.len() == 1 {
@@ -1544,28 +1544,28 @@ impl mod_api::ItemPart for ShoppingListPart {
                     let line = Text::literal(head)
                         .append(host.hover_name(s).unwrap_or_default())
                         .append(Text::literal(format!(" x{n}")));
-                    event.lines.push((line, colour));
+                    let _ = event.lines.push((line, colour));
                 } else {
                     if cost_side {
-                        event.lines.push((
+                        let _ = event.lines.push((
                             Text::translate("create.table_cloth.total_cost", Vec::new()),
                             0xFFAA00,
                         ));
                     }
                     for (s, n) in entries {
                         let name = host.hover_name(&s).unwrap_or_default();
-                        event
+                        let _ = event
                             .lines
                             .push((name.append(Text::literal(format!(" x{n}"))), colour));
                     }
                 }
             }
         }
-        event.lines.push((
+        let _ = event.lines.push((
             Text::translate("create.table_cloth.hand_to_shop_keeper", Vec::new()),
             0xAAAAAA,
         ));
-        event.lines.push((
+        let _ = event.lines.push((
             Text::translate("create.table_cloth.sneak_click_discard", Vec::new()),
             0x555555,
         ));

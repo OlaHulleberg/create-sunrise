@@ -53,10 +53,10 @@ use crate::glue::subsystem::CommandCall;
 use crate::glue::subsystem::Placed;
 use mod_api::{
     AttackEntityEvent, BreakBlockEvent, ClientHost, Compound, Flow, Hand, Host, ItemKey, ItemStack,
-    LeftClickBlockEvent, PlayerRef, Registrar, RegistrationContext, RenderLevelStageEvent,
-    ScreenClosingEvent, ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent,
-    ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
-    ServerHost, Tag, Text,
+    LeftClickBlockEvent, PlayerRef, Registrar, RegistrationContext, ScreenClosingEvent,
+    ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, SubmitCustomGeometryEvent, Tag,
+    Text,
 };
 use std::sync::OnceLock;
 
@@ -340,10 +340,6 @@ impl Subsystem for Items {
         }
     }
 
-    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut mod_api::MenuClosedEvent) {
-        filters::menu_closed(host, event);
-    }
-
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         filters::level_tick(lv);
         symmetry::level_tick(lv);
@@ -416,9 +412,13 @@ impl Subsystem for Items {
     }
 
     /// The mirrors (`SymmetryHandler.onRenderWorld`) and the worldshaper's outline.
-    fn render_level_stage(&self, host: &dyn ClientHost, event: &mut RenderLevelStageEvent<'_>) {
-        symmetry::render_level_stage(host, event);
-        worldshaper::render_level_stage(host, event);
+    fn submit_custom_geometry(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut SubmitCustomGeometryEvent<'_>,
+    ) {
+        symmetry::submit_custom_geometry(host, event);
+        worldshaper::submit_custom_geometry(host, event);
     }
 
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {

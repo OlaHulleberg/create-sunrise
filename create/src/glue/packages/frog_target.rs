@@ -506,13 +506,10 @@ pub(super) fn server_message(channel: &str) -> bool {
 }
 
 /// The point under the crosshair (white) and the chosen one (green), as small boxes.
-pub(super) fn render_level_stage(
+pub(super) fn submit_custom_geometry(
     host: &dyn ClientHost,
-    event: &mut mod_api::RenderLevelStageEvent<'_>,
+    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
 ) {
-    if event.stage != mod_api::RenderLevelStage::AfterTranslucentBlocks {
-        return;
-    }
     let held = host
         .local_player()
         .and_then(|p| super::super::items::held(host, p, mod_api::Hand::Main))

@@ -17,9 +17,9 @@ use create_engine::Block;
 use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
-    BlockPart, BlockState, Compound, Hand, Host, HostTransaction, InteractionResult, ItemStack,
-    MenuClosedEvent, MenuPart, PlayerRef, Registrar, RegistrationContext, ServerHost, SoundSource,
-    UseItemOnEvent, UseWithoutItemEvent,
+    BlockPart, BlockState, Compound, Hand, Host, HostSide, HostTransaction, InteractionResult,
+    ItemStack, MenuPart, PlayerContainerCloseEvent, PlayerRef, Registrar, RegistrationContext,
+    ServerHost, SoundSource, UseItemOnEvent, UseWithoutItemEvent,
 };
 
 use super::processing::TOOLBOX_TYPE;
@@ -58,8 +58,15 @@ impl Subsystem for Blocks {
     }
 
     /// `PostboxBlockEntity.stopOpen`: the last menu closed on a postbox shuts it.
-    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
-        let Some(Some((dim, at))) = with_world(|w| w.postboxes.closed(event.uuid, event.window))
+    fn player_container_close(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut PlayerContainerCloseEvent<'_>,
+    ) {
+        let Some(window) = event.menu.and_then(|menu| menu.container_id(&*host)) else {
+            return;
+        };
+        let Some(Some((dim, at))) = with_world(|w| w.postboxes.closed(event.player.uuid(), window))
         else {
             return;
         };
@@ -150,9 +157,12 @@ struct TemplateBlock;
 impl BlockPart for TemplateBlock {
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.player(click.player)?;
         let dimension = click.dimension.key().id().to_owned();
@@ -179,9 +189,12 @@ impl BlockPart for TemplateBlock {
 
     fn use_without_item(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseWithoutItemEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.player(click.player)?;
         let dimension = click.dimension.key().id().to_owned();
@@ -642,7 +655,9 @@ impl MenuPart for ToolboxButtons {
             return;
         }
         match event.context.id {
-            TOOLBOX_CONFIRM_BUTTON => event.subject.host().close_menu(event.context.player),
+            TOOLBOX_CONFIRM_BUTTON => {
+                crate::glue::close_menu(event.subject.host(), event.context.player)
+            }
             TOOLBOX_DEPOSIT_BUTTON => deposit_all(event),
             _ => {}
         }

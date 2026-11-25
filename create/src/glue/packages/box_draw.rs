@@ -255,11 +255,11 @@ fn flag_of(nbt: &Compound) -> Option<Flag> {
 
 /// Whether a packager's tray or a postbox's flag at `pos` moves now: an animation not yet drawn
 /// to its end.
-pub(super) fn animated(block: Block, pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
+pub(super) fn animated(block: Block, pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
     let key = if matches!(block, Block::Packager | Block::Repackager) {
-        tray_of(&entity.nbt).map(|t| t.start)
+        tray_of(entity.nbt()).map(|t| t.start)
     } else if create_engine::dye::is_postbox(block) {
-        flag_of(&entity.nbt).map(|f| f.since)
+        flag_of(entity.nbt()).map(|f| f.since)
     } else {
         None
     };
@@ -283,7 +283,7 @@ const CENTRE: [f32; 3] = [0.5; 3];
 
 fn part(draw: &mut dyn BlockEntityDrawContext, name: &str) {
     if let Some(p) = states::partial(name) {
-        draw.block(p, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, p, &[("facing", "up")]);
     }
 }
 
@@ -324,7 +324,7 @@ fn draw_packager(
     event: &mut crate::glue::Submit<'_>,
 ) {
     let pos = event.pos;
-    let tray = tray_of(&event.entity.nbt);
+    let tray = tray_of(event.entity.nbt());
     let draw = &mut *event.draw;
     // `FACING.getOpposite()`.
     let facing = facing.unwrap_or(Dir::Down).opposite();
@@ -410,7 +410,7 @@ fn draw_packager(
 /// `transformFlag`.
 fn draw_flag(facing: Option<Dir>, event: &mut crate::glue::Submit<'_>) {
     let pos = event.pos;
-    let flag = flag_of(&event.entity.nbt);
+    let flag = flag_of(event.entity.nbt());
     let draw = &mut *event.draw;
     let t = draw.game_time() as f64 + f64::from(draw.partial());
     let (value, moving) = match flag {
@@ -432,6 +432,6 @@ fn draw_flag(facing: Option<Dir>, event: &mut crate::glue::Submit<'_>) {
     draw.push();
     draw.rotate_about(UP, 180.0 - y_rot(facing), CENTRE);
     draw.rotate_about(EAST, -progress * 90.0, [0.0, 10.0 / 16.0, 2.0 / 16.0]);
-    draw.block(p, &[("facing", "up")]);
+    crate::glue::states::draw_block(&mut *draw, p, &[("facing", "up")]);
     draw.pop();
 }

@@ -999,7 +999,7 @@ impl BlockEntityPart for KineticEntity {
                     .flat_map(|s| s.synced_keys().iter().copied()),
             )
             .map(|k| {
-                let value = event.entity.nbt.get(&k.into()).cloned();
+                let value = event.entity.nbt().get(&k.into()).cloned();
                 (k.into(), value.unwrap_or_else(absent))
             })
             .collect();
@@ -1032,14 +1032,14 @@ impl BlockEntityPart for KineticEntity {
         else {
             return;
         };
-        let speeds = speeds_of(&event.entity.nbt);
+        let speeds = speeds_of(event.entity.nbt());
         let text = host.block_state_string(event.state).unwrap_or_default();
         let (_, own) = states::split(&text);
         // Parts another subsystem draws itself (a gauge's dials, a flywheel's wheel) are left
         // to it; a block another subsystem animates this frame is drawn again next frame, the
         // rest kept turning on the animation clock until the block entity changes.
         let systems = super::SUBSYSTEMS;
-        let source = match event.entity.nbt.get(&SOURCE_FACE.into()) {
+        let source = match event.entity.nbt().get(&SOURCE_FACE.into()) {
             Some(Tag::Int(n)) => create_engine::kinetics::Dir::ALL.get(*n as usize).copied(),
             _ => None,
         };
@@ -1055,7 +1055,7 @@ impl BlockEntityPart for KineticEntity {
         }
         // SpeedControllerRenderer: the bracket a block up, turned across the controller's axis.
         if block == Block::RotationSpeedController
-            && matches!(event.entity.nbt.get(&BRACKET.into()), Some(Tag::Byte(1)))
+            && matches!(event.entity.nbt().get(&BRACKET.into()), Some(Tag::Byte(1)))
             && let Some(part) = states::partial("part_speed_controller_bracket")
         {
             let draw = &mut *event.draw;
@@ -1064,7 +1064,7 @@ impl BlockEntityPart for KineticEntity {
             if info.axis != Some(Axis::X) {
                 draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.5; 3]);
             }
-            draw.block(part, &[("facing", "up")]);
+            crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
             draw.pop();
         }
         super::interaction::value_text::draw(host, event.pos, event.draw);
@@ -1203,8 +1203,8 @@ pub fn draw_turning(
     };
     draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
     match prop {
-        Some(p) => draw.block(model, &[p]),
-        None => draw.block(model, own),
+        Some(p) => crate::glue::states::draw_block(&mut *draw, model, &[p]),
+        None => crate::glue::states::draw_block(&mut *draw, model, own),
     };
     draw.still();
 }
@@ -1233,7 +1233,7 @@ fn draw_turning_colored(
     draw.spin(axis_vector(d.axis), [0.5; 3], d.rpm * 0.3, d.phase);
     let options = mod_api::TerrainModelOptions::default().with_color(color);
     if draw.terrain_model(model, options).is_err() {
-        draw.block(key, &props);
+        crate::glue::states::draw_block(&mut *draw, key, &props);
     }
     draw.still();
 }

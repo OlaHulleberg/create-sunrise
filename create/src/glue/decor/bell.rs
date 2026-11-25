@@ -41,8 +41,8 @@ fn ding_of(nbt: &Compound) -> Option<i64> {
 }
 
 /// Whether the bell at `pos` still rings: a ding not yet drawn to its end.
-pub(super) fn animated(pos: [i32; 3], entity: &mod_api::ModBlockEntity) -> bool {
-    ding_of(&entity.nbt).is_some_and(|t| RUNG.with_borrow(|r| r.get(&pos) != Some(&t)))
+pub(super) fn animated(pos: [i32; 3], entity: crate::glue::EntityData<'_>) -> bool {
+    ding_of(entity.nbt()).is_some_and(|t| RUNG.with_borrow(|r| r.get(&pos) != Some(&t)))
 }
 
 /// `AngleHelper.horizontalAngle`.
@@ -90,7 +90,7 @@ impl BlockEntityPart for BellDraw {
         let draw = &mut *event.draw;
         let pos = event.pos;
         // `animation.getValue(partialTicks)`.
-        let ding = ding_of(&event.entity.nbt);
+        let ding = ding_of(event.entity.nbt());
         let p = ding.map_or(0.0, |t| {
             let since = (draw.game_time() - t) as f32 + draw.partial();
             (1.0 - 0.05 * since.max(0.0)).clamp(0.0, 1.0)
@@ -121,7 +121,7 @@ impl BlockEntityPart for BellDraw {
             draw.push();
             turn(draw);
             draw.translate([0.0, f * -0.75 / 16.0, 0.0]);
-            draw.block(plunger, &[("facing", "up")]);
+            crate::glue::states::draw_block(&mut *draw, plunger, &[("facing", "up")]);
             draw.pop();
         }
         if let Some(bell) = states::partial("part_desk_bell_bell") {
@@ -133,7 +133,7 @@ impl BlockEntityPart for BellDraw {
             draw.translate(CENTRE);
             draw.scale([0.995; 3]);
             draw.translate(CENTRE.map(|v| -v));
-            draw.block(bell, &[("facing", "up")]);
+            crate::glue::states::draw_block(&mut *draw, bell, &[("facing", "up")]);
             draw.pop();
         }
     }

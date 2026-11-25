@@ -7,26 +7,26 @@ use super::client::fluid_box;
 use super::{SPOUT_START, TANK};
 use create_engine::spout::FILLING_TIME;
 use create_engine::tank::Codes;
-use mod_api::{ClientHost, ModBlockEntity, Tag};
+use mod_api::{ClientHost, Tag};
 
 /// The game time the spout's cycle started, while it runs.
-fn start(entity: &ModBlockEntity) -> Option<i64> {
-    match entity.nbt.get(&SPOUT_START.into()) {
+fn start(entity: crate::glue::EntityData<'_>) -> Option<i64> {
+    match entity.nbt().get(&SPOUT_START.into()) {
         Some(Tag::IntArray(v)) => v.first().map(|t| i64::from(*t)),
         _ => None,
     }
 }
 
 /// Whether a spout moves this frame (its cycle runs).
-pub(super) fn animated(entity: &ModBlockEntity) -> bool {
+pub(super) fn animated(entity: crate::glue::EntityData<'_>) -> bool {
     start(entity).is_some()
 }
 
 pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
-    let tank = match event.entity.nbt.get(&TANK.into()) {
+    let tank = match event.entity.nbt().get(&TANK.into()) {
         Some(Tag::IntArray(v)) => match v.as_slice() {
             &[fluid, amount, capacity] if amount > 0 && capacity > 0 => {
-                let keys = super::fluid_keys(&event.entity.nbt, TANK);
+                let keys = super::fluid_keys(event.entity.nbt(), TANK);
                 Codes::fluid(&keys, fluid).map(|f| (f, amount, capacity))
             }
             _ => None,
@@ -82,7 +82,7 @@ pub(super) fn draw(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>) {
     draw.push();
     for name in ["part_spout_top", "part_spout_middle", "part_spout_bottom"] {
         if let Some(part) = states::partial(name) {
-            draw.block(part, &[("facing", "up")]);
+            crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
         }
         draw.translate([0.0, -3.0 * squeeze / 32.0, 0.0]);
     }

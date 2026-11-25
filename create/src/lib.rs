@@ -9,18 +9,18 @@ mod glue;
 use glue::server::ServerLevel;
 use glue::{SUBSYSTEMS, persist, states, world};
 use mod_api::{
-    AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, CameraPoseEvent,
-    ChunkLoadEvent, ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent,
-    EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks,
-    HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent, InteractionResult,
-    KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent,
-    LevelTickPostEvent, LevelWriteHost, MenuClosedEvent, MouseScrollingEvent, NeighborChangedEvent,
-    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent,
-    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, ChunkLoadEvent,
+    ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent, EntityInteractEvent,
+    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
+    InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
+    LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
+    LevelWriteHost, MouseScrollingEvent, NeighborChangedEvent, PlayerContainerCloseEvent,
+    PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerTickPostEvent,
+    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
-    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, StandaloneModelsEvent,
-    TagsUpdatedEvent, WorldLifecycleEvent, WorldPhase,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, ServerStoppedEvent,
+    StandaloneModelsEvent, TagsUpdatedEvent,
 };
 
 #[derive(Default)]
@@ -30,10 +30,7 @@ struct Create;
 impl Hooks for Create {
     fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
         states::register(r);
-        let _ = r.register_attachment_type("create:column", false);
-        let _ = r.register_attachment_type("create:logistics_networks", false);
-        let _ = r.register_attachment_type("create:station_ports", false);
-        let _ = r.register_attachment_type("create:haunting", false);
+        persist::register(r);
 
         for &block in create_engine::Block::ALL.iter() {
             r.block_part(states::key(block), CreateBlock);
@@ -67,22 +64,16 @@ impl Hooks for Create {
         );
     }
 
-    fn world_lifecycle(&self, _host: &mut dyn ServerHost, event: &mut WorldLifecycleEvent<'_>) {
-        match event.phase {
-            WorldPhase::WorldCloseFinal
-            | WorldPhase::WorldOpenFailed
-            | WorldPhase::WorldCloseFailed => {
-                for s in SUBSYSTEMS {
-                    s.world_closed();
-                }
-                world::close();
-                persist::clear();
-                glue::entity_data::clear();
-                glue::net::clear();
-                glue::forget_columns();
-            }
-            _ => {}
+    /// The server is gone, after a failed start too: Create's world closes.
+    fn server_stopped(&self, _host: &mut dyn ServerHost, _event: &mut ServerStoppedEvent) {
+        for s in SUBSYSTEMS {
+            s.world_closed();
         }
+        world::close();
+        persist::clear();
+        glue::entity_data::clear();
+        glue::net::clear();
+        glue::forget_columns();
     }
 
     /// A level opened, before any of its chunks: the first opens Create's world.
@@ -367,14 +358,6 @@ impl Hooks for Create {
         until_cancel(|s| s.attack_entity(host, event))
     }
 
-    fn hears_projectile_impacts(
-        &self,
-        _host: &dyn mod_api::Host,
-        event: &mut mod_api::HearsProjectileImpactsEvent,
-    ) {
-        event.hears |= SUBSYSTEMS.iter().any(|s| s.hears_projectile_impacts());
-    }
-
     fn projectile_impact(
         &self,
         host: &mut dyn ServerHost,
@@ -500,9 +483,13 @@ impl Hooks for Create {
         }
     }
 
-    fn camera_pose(&self, host: &dyn ClientHost, event: &mut CameraPoseEvent<'_>) {
+    fn compute_camera_angles(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut mod_api::ComputeCameraAnglesEvent,
+    ) {
         for s in SUBSYSTEMS {
-            s.camera_pose(host, event);
+            s.compute_camera_angles(host, event);
         }
     }
 
@@ -582,13 +569,13 @@ impl Hooks for Create {
         }
     }
 
-    fn render_level_stage(
+    fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
+        event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
     ) {
         for s in SUBSYSTEMS {
-            s.render_level_stage(host, event);
+            s.submit_custom_geometry(host, event);
         }
     }
 
@@ -615,12 +602,6 @@ impl Hooks for Create {
     ) {
         for s in SUBSYSTEMS {
             s.player_container_close(host, event);
-        }
-    }
-
-    fn menu_closed(&self, host: &mut dyn ServerHost, event: &mut MenuClosedEvent) {
-        for s in SUBSYSTEMS {
-            s.menu_closed(host, event);
         }
     }
 

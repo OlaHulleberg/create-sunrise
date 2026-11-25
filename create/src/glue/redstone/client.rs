@@ -287,19 +287,6 @@ impl BlockPart for RedstoneEntity {}
 
 #[mod_api::sunrise_part]
 impl BlockEntityPart for RedstoneEntity {
-    fn block_entity_client_ticks(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut mod_api::BlockEntityClientTicksEvent<'_>,
-    ) {
-        if matches!(
-            event.block,
-            "create:cuckoo_clock" | "create:mysterious_cuckoo_clock" | "create:analog_lever"
-        ) {
-            event.ticks = true;
-        }
-    }
-
     fn block_entity_client_tick(&self, event: &mut mod_api::BlockEntityClientTickEvent<'_>) {
         let Some((state, pos, speed)) = event
             .subject
@@ -348,7 +335,7 @@ impl BlockEntityPart for RedstoneEntity {
             Block::RedstoneLink => draw_link(host, event.draw, pos),
             Block::AnalogLever => draw_lever(host, event.draw, pos),
             Block::PulseRepeater | Block::PulseExtender | Block::PulseTimer => {
-                draw_diode_indicator(host, event.draw, block, &event.entity.nbt);
+                draw_diode_indicator(host, event.draw, block, event.entity.nbt());
             }
             Block::CuckooClock | Block::MysteriousCuckooClock => {
                 let Some(facing) = facing else {
@@ -383,7 +370,7 @@ fn speed_of(nbt: &mod_api::Compound) -> f32 {
 /// Draws block `name` (`part_cuckoo_pig`, one of the content's part models) facing up.
 fn draw_part(draw: &mut dyn BlockEntityDrawContext, name: &str) {
     if let Some(b) = states::partial(name) {
-        draw.block(b, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, b, &[("facing", "up")]);
     }
 }
 

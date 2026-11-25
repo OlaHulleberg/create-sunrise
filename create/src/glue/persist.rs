@@ -9,22 +9,35 @@
 
 use super::server::ServerLevel;
 use super::subsystem::Subsystem;
-use mod_api::{AttachmentCodec, AttachmentType, Compound, Holder};
+use mod_api::{AttachmentCodec, AttachmentDescriptor, AttachmentKey, Compound, Holder, Registrar};
 use std::cell::RefCell;
 use std::collections::BTreeSet;
+use std::sync::RwLock;
 
-/// The column's data. Saved under `horizon:attachments` / `create` / `column`.
-pub static COLUMN: AttachmentType<Compound> = AttachmentType {
-    namespace: "create",
-    name: "column",
-    default: Compound::new,
-    codec: Some(AttachmentCodec {
-        encode: |data| Ok(data.clone()),
-        decode: |data| Ok(data.clone()),
-    }),
-    copy_on_death: false,
-    sync: false,
-};
+/// The column's data. Saved under `create:column`; the key is issued when the mod registers.
+static COLUMN: RwLock<Option<AttachmentKey<Compound>>> = RwLock::new(None);
+
+/// Declares the column attachment (`Hooks::register`) and keeps its key.
+pub fn register(r: &mut dyn Registrar) {
+    let descriptor =
+        AttachmentDescriptor::new("create:column", Compound::new).serialize(AttachmentCodec {
+            encode: |data| Ok(data.clone()),
+            decode: |data| Ok(data.clone()),
+        });
+    match r.register_attachment_type(descriptor) {
+        Ok(key) => {
+            if let Ok(mut slot) = COLUMN.write() {
+                *slot = Some(key);
+            }
+        }
+        Err(e) => crate::create_log!("[create] the column attachment was refused: {e:?}"),
+    }
+}
+
+/// The issued column key, once the mod has registered.
+fn column_key() -> Option<AttachmentKey<Compound>> {
+    COLUMN.read().ok().and_then(|slot| slot.clone())
+}
 
 thread_local! {
     /// Columns whose data changed since they were last written, by level index.
@@ -51,7 +64,10 @@ pub fn clear() {
 /// The saved data of column `chunk` of `lv`, read when it loads. Empty for a column Create
 /// never wrote.
 pub fn read(lv: &mut ServerLevel<'_>, chunk: [i32; 2]) -> Compound {
-    match COLUMN.get_existing(&mut *lv.host, Holder::Chunk(chunk)) {
+    let Some(key) = column_key() else {
+        return Compound::new();
+    };
+    match key.get_existing(&mut *lv.host, Holder::Chunk(chunk), |data| data.cloned()) {
         Ok(Some(data)) => data,
         Ok(None) => Compound::new(),
         Err(e) => {
@@ -127,6 +143,9 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
         }
         mine.into_iter().map(|(_, c)| c).collect()
     });
+    let Some(key) = column_key() else {
+        return;
+    };
     for chunk in columns {
         let loaded = lv
             .level
@@ -141,11 +160,9 @@ pub fn flush(lv: &mut ServerLevel<'_>, systems: &[&dyn Subsystem]) {
             s.chunk_data_save(lv, chunk, &mut data);
         }
         let result = if data.is_empty() {
-            COLUMN
-                .remove(&mut *lv.host, Holder::Chunk(chunk))
-                .map(|_| ())
+            key.remove(&mut *lv.host, Holder::Chunk(chunk)).map(|_| ())
         } else {
-            COLUMN.set(&mut *lv.host, Holder::Chunk(chunk), data)
+            key.set(&mut *lv.host, Holder::Chunk(chunk), data)
         };
         if let Err(e) = result {
             crate::create_log!(

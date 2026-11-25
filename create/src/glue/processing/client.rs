@@ -23,7 +23,7 @@ use create_engine::tank::Fluid;
 use create_engine::{Block, deployer, press};
 use mod_api::{
     BlockEntityDrawContext, BlockEntityPart, BlockKey, BlockPart, ClientHost, Compound,
-    ItemDisplayContext, ModBlockEntity, Registrar, Tag,
+    ItemDisplayContext, Registrar, Tag,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -76,26 +76,26 @@ pub fn register(r: &mut dyn Registrar) {
 
 /// Whether the client draws `block` moving each frame: its block entity's drawing is not kept.
 /// The press and deployer always; a mixer while it runs; a basin whose items bob on its fluid.
-pub fn animated(block: Block, entity: &ModBlockEntity) -> bool {
+pub fn animated(block: Block, entity: crate::glue::EntityData<'_>) -> bool {
     match block {
         Block::MechanicalPress | Block::Deployer | Block::BlazeBurner => true,
         // A crafter's grid moves while it exports or crafts.
         Block::MechanicalCrafter => matches!(
-            entity.nbt.get(&super::crafter::CRAFTER_KEY.into()),
+            entity.nbt().get(&super::crafter::CRAFTER_KEY.into()),
             Some(Tag::Compound(c)) if matches!(c.get(&"P".into()), Some(Tag::Int(3 | 5)))
         ),
         Block::MechanicalSaw => matches!(
-            entity.nbt.get(&super::saw::SAW_KEY.into()),
+            entity.nbt().get(&super::saw::SAW_KEY.into()),
             Some(Tag::Compound(c)) if c.contains_key(&"Items".into())
         ),
         Block::MechanicalMixer => matches!(
-            entity.nbt.get(&basin_glue::MIXER_KEY.into()),
+            entity.nbt().get(&basin_glue::MIXER_KEY.into()),
             Some(Tag::Compound(c)) if c.contains_key(&"T".into())
         ),
         Block::Basin => {
             // Items bob on fluid or swirl under a mixer.
-            !basin_items(&entity.nbt).is_empty()
-                || !super::spoutput::visualized(&entity.nbt).is_empty()
+            !basin_items(entity.nbt()).is_empty()
+                || !super::spoutput::visualized(entity.nbt()).is_empty()
         }
         _ => false,
     }
@@ -455,17 +455,17 @@ impl MachineDraw {
         match block {
             Block::MechanicalPress => {
                 if let Some(f) = info.facing {
-                    let speed = kinetics::speeds_of(&event.entity.nbt)[0];
+                    let speed = kinetics::speeds_of(event.entity.nbt())[0];
                     draw_press_head(event.draw, event.pos, f, speed);
                 }
             }
             Block::Deployer => {
-                let rpm = kinetics::speeds_of(&event.entity.nbt)[0];
+                let rpm = kinetics::speeds_of(event.entity.nbt())[0];
                 draw_deployer(host, event.draw, event.pos, rpm);
             }
             Block::MechanicalMixer => {
-                let speeds = kinetics::speeds_of(&event.entity.nbt);
-                let offset = mixer_head_offset(&event.entity.nbt, &*event.draw);
+                let speeds = kinetics::speeds_of(event.entity.nbt());
+                let offset = mixer_head_offset(event.entity.nbt(), &*event.draw);
                 for d in parts::draws(block, &info, event.pos, speeds) {
                     if matches!(d.model, Model::MixerPole | Model::MixerHead) {
                         draw_mixer_part(event.draw, &d, offset);
@@ -473,30 +473,30 @@ impl MachineDraw {
                 }
             }
             Block::Basin => {
-                draw_basin(host, event.draw, event.pos, &event.entity.nbt);
+                draw_basin(host, event.draw, event.pos, event.entity.nbt());
                 let facing = info.facing.unwrap_or(Dir::Down);
-                draw_spout_items(host, event.draw, event.pos, facing, &event.entity.nbt);
+                draw_spout_items(host, event.draw, event.pos, facing, event.entity.nbt());
             }
             Block::BlazeBurner => super::burner_draw::draw(
                 event.draw,
                 event.pos,
                 info.heat.unwrap_or(create_engine::fan::Heat::None),
                 info.facing.unwrap_or(Dir::South),
-                event.entity.nbt.get(&basin_glue::GOGGLES_KEY.into()) == Some(&Tag::Byte(1)),
+                event.entity.nbt().get(&basin_glue::GOGGLES_KEY.into()) == Some(&Tag::Byte(1)),
                 beside_ticker(host, event.pos)
                     || event
                         .entity
-                        .nbt
+                        .nbt()
                         .get(&crate::glue::stock::keeper::KEEPER_KEY.into())
                         == Some(&Tag::Byte(1)),
             ),
             Block::MechanicalCrafter => {
-                draw_crafter(host, event.draw, event.pos, &event.entity.nbt);
+                draw_crafter(host, event.draw, event.pos, event.entity.nbt());
             }
             Block::MechanicalSaw => {
-                let speed = kinetics::speeds_of(&event.entity.nbt)[0];
+                let speed = kinetics::speeds_of(event.entity.nbt())[0];
                 draw_saw_blade(event.draw, &info, speed);
-                draw_saw_items(host, event.draw, &info, speed, &event.entity.nbt);
+                draw_saw_items(host, event.draw, &info, speed, event.entity.nbt());
             }
             _ => {}
         }
@@ -507,7 +507,7 @@ impl MachineDraw {
                 block,
                 &info,
                 event.state,
-                &event.entity.nbt,
+                event.entity.nbt(),
             );
         }
     }
@@ -516,7 +516,7 @@ impl MachineDraw {
 /// A partial model of the content (`create:part_*`, one block per facing), turned to `facing`.
 fn draw_partial(draw: &mut dyn BlockEntityDrawContext, partial: Partial, facing: &str) {
     if let Some(keys) = PARTIAL_KEYS.get() {
-        draw.block(keys[partial as usize], &[("facing", facing)]);
+        crate::glue::states::draw_block(&mut *draw, keys[partial as usize], &[("facing", facing)]);
     }
 }
 
@@ -567,7 +567,7 @@ fn draw_deployer(
     // `getHandPose`: a fist in punch mode.
     match states::partial("part_deployer_hand_punching").filter(|_| s.punch) {
         Some(fist) => {
-            draw.block(fist, &[("facing", dir_name(s.facing))]);
+            crate::glue::states::draw_block(&mut *draw, fist, &[("facing", dir_name(s.facing))]);
         }
         None => draw_partial(draw, hand, dir_name(s.facing)),
     }
@@ -714,7 +714,7 @@ fn draw_crafter(
             create_engine::kinetics::Axis::Z => draw.rotate_about([1.0, 0.0, 0.0], 90.0, [0.5; 3]),
             create_engine::kinetics::Axis::Y => {}
         }
-        draw.block(cog, &[("facing", "up")]);
+        crate::glue::states::draw_block(&mut *draw, cog, &[("facing", "up")]);
         draw.still();
         draw.pop();
     }
@@ -723,7 +723,7 @@ fn draw_crafter(
             draw.push();
             draw.rotate_about([0.0, 1.0, 0.0], horizontal_angle(facing) + 90.0, [0.5; 3]);
             draw.rotate_about([1.0, 0.0, 0.0], pointing_x(pointing), [0.5; 3]);
-            draw.block(part, &[("facing", "up")]);
+            crate::glue::states::draw_block(&mut *draw, part, &[("facing", "up")]);
             draw.pop();
         }
     };
@@ -1096,7 +1096,7 @@ fn draw_saw_blade(draw: &mut dyn BlockEntityDrawContext, info: &StateInfo, speed
     if vertical && info.along_first {
         draw.rotate_about([0.0, 1.0, 0.0], 90.0, [0.5; 3]);
     }
-    draw.block(part, &[("facing", dir_name(facing))]);
+    crate::glue::states::draw_block(&mut *draw, part, &[("facing", dir_name(facing))]);
     draw.pop();
 }
 

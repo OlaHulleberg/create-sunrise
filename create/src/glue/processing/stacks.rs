@@ -318,7 +318,7 @@ impl ServerLevel<'_> {
             }
             Some(s) => {
                 if s != d.stack {
-                    let _ = d.item.set_stack(&mut *self.host, s);
+                    let _ = d.item.set_stack(&mut *self.host, Some(s));
                 }
                 if motion != d.velocity {
                     d.entity.set_velocity(&mut *self.host, motion);

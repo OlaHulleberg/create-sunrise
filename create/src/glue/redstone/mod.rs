@@ -183,7 +183,7 @@ impl Subsystem for Redstone {
         &self,
         block: create_engine::Block,
         _pos: [i32; 3],
-        _entity: &mod_api::ModBlockEntity,
+        _entity: crate::glue::EntityData<'_>,
     ) -> bool {
         matches!(
             block,

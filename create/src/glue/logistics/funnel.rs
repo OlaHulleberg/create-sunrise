@@ -736,7 +736,7 @@ pub fn collect_inside(lv: &mut ServerLevel<'_>) {
                 let _ = e.discard(&mut *lv.host);
             }
             Some(l) if l.count() < count => {
-                let _ = item.set_stack(&mut *lv.host, l);
+                let _ = item.set_stack(&mut *lv.host, Some(l));
             }
             _ => continue,
         }
