@@ -500,6 +500,18 @@ impl Mixer {
         self.recipe = Some(recipe);
     }
 
+    /// `continueWithPreviousRecipe` after `applyBasinRecipe` applied the recipe: the head stays
+    /// down for the next one only when nothing waited at the basin's spout before it applied
+    /// (`wasEmpty`, `canContinueProcessing`) and the recipe still fits (`matchBasinRecipe`).
+    /// Whether it stayed.
+    pub fn continue_with_previous_recipe(&mut self, was_empty: bool, still_fits: bool) -> bool {
+        if !was_empty || !still_fits {
+            return false;
+        }
+        self.running_ticks = 20;
+        true
+    }
+
     /// One server tick at `speed` (rpm, signed); `time` the recipe's processing duration.
     pub fn tick(&mut self, speed: f32, time: i32) -> MixStep {
         // `isSpeedRequirementFulfilled` (`MechanicalMixerBlock`'s medium speed): too slow, the
@@ -881,6 +893,61 @@ mod tests {
         let second = run_cycle(&mut m);
         assert_eq!(first, 20 + 1 + 46);
         assert_eq!(second, 20 + 46);
+    }
+
+    /// Ticks `m` at 64 rpm to the tick it applies its recipe on.
+    fn run_to_apply(m: &mut Mixer) {
+        for _ in 0..200 {
+            if m.tick(64.0, 0) == MixStep::Apply {
+                return;
+            }
+        }
+        panic!("the recipe never applied");
+    }
+
+    #[test]
+    fn a_mixer_stays_down_for_a_recipe_that_still_fits() {
+        let mut m = Mixer::default();
+        m.start(0);
+        run_to_apply(&mut m);
+        assert!(m.continue_with_previous_recipe(true, true));
+        assert_eq!(m.running_ticks, 20);
+        // Still at the bottom: a new countdown, then the next apply, with no trip up between.
+        assert_eq!(m.tick(64.0, 0), MixStep::None);
+        assert_eq!((m.running_ticks, m.running), (20, true));
+        run_to_apply(&mut m);
+    }
+
+    #[test]
+    fn a_mixer_goes_up_when_the_recipe_no_longer_fits() {
+        let mut m = Mixer::default();
+        m.start(0);
+        run_to_apply(&mut m);
+        assert!(!m.continue_with_previous_recipe(true, false));
+        assert_eq!(m.running_ticks, 22);
+        // Back up in 18 more ticks, then done.
+        for _ in 0..18 {
+            assert_eq!(m.tick(64.0, 0), MixStep::None);
+        }
+        assert_eq!(m.tick(64.0, 0), MixStep::Done);
+    }
+
+    /// `wasEmpty = basin.canContinueProcessing()`: results that waited at the spout before the
+    /// recipe applied stop the mixer from staying down, whatever the basin holds now.
+    #[test]
+    fn a_mixer_does_not_stay_down_while_results_waited_at_the_spout() {
+        let mut m = Mixer::default();
+        m.start(0);
+        run_to_apply(&mut m);
+        assert!(!m.continue_with_previous_recipe(false, true));
+        assert_eq!(m.running_ticks, 22);
+        // It comes back up and ends the cycle (the glue then looks at the basin again).
+        let mut ticks = 0;
+        while m.tick(64.0, 0) != MixStep::Done {
+            ticks += 1;
+            assert!(ticks < 40, "the cycle never ended");
+        }
+        assert!(!m.running);
     }
 
     #[test]

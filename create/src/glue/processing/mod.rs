@@ -68,8 +68,9 @@ pub(crate) use deployer::activate as activate_deployer;
 pub(crate) use deployer::set_held_stack as set_deployer_held;
 pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
-// The press's depot callbacks and its head's tick, at their turns in logistics' transport walk.
-pub(crate) use press::{depot_turn as press_depot_turn, tick_press};
+// The press's depot callbacks and its own turn, and the mixer's, in logistics' transport walk.
+pub(crate) use basin::mixer_turn;
+pub(crate) use press::{depot_turn as press_depot_turn, press_turn};
 pub(crate) use saw::saw_turn;
 // What the other subsystems call: fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
@@ -322,7 +323,9 @@ impl Subsystem for Processing {
         persist::live_fields(dim, pos, block, fields);
     }
 
-    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, mixers.
+    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, the basins'
+    /// backup checks. Mixers and presses over basins work at their own turns in logistics'
+    /// transport walk.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         // What a removal without side effects (`UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS`) left.
@@ -336,7 +339,7 @@ impl Subsystem for Processing {
         fan::tick_fans(lv);
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
-        basin::tick_mixers(lv);
+        basin::backup_check(lv);
         spoutput::tick(lv);
         basin::show_basins(lv);
     }

@@ -88,6 +88,18 @@ impl Press {
         };
     }
 
+    /// `MechanicalPressBlockEntity.onPressingCompleted`, after the tick that ended the cycle:
+    /// `fits` says whether the recipe it pressed (`currentRecipe`) still fits its basin with
+    /// nothing waiting at the spout; it is asked only over a basin.
+    pub fn on_completed(&mut self, fits: impl FnOnce() -> bool) -> After {
+        if self.mode == Mode::Basin && fits() {
+            self.start(Mode::Basin);
+            After::Restarted
+        } else {
+            After::Look
+        }
+    }
+
     /// `PressingBehaviour.tick` on the server for a running press turning at `speed`.
     pub fn tick(&mut self, speed: f32) -> Tick {
         if !self.running {
@@ -106,6 +118,16 @@ impl Press {
         }
         if down { Tick::Down } else { Tick::Moving }
     }
+}
+
+/// What a press does once its cycle ended (`MechanicalPressBlockEntity.onPressingCompleted`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum After {
+    /// Over a basin whose recipe still fits it starts the next cycle at once
+    /// (`startProcessingBasin`), in the same turn.
+    Restarted,
+    /// Else it looks at its basin at its next turn (`basinChecker.scheduleUpdate`).
+    Look,
 }
 
 /// What a depot does with its held stack under a press this tick.
@@ -295,6 +317,51 @@ mod tests {
         assert!(press.finished);
         press.start(Mode::World);
         assert!(!press.finished);
+    }
+
+    /// Ticks a press over a basin at 512 rpm until its cycle ends.
+    fn run_to_the_end(press: &mut Press) {
+        while press.tick(512.0) != Tick::Done {}
+    }
+
+    #[test]
+    fn a_basin_press_whose_recipe_still_fits_restarts_at_once() {
+        let mut press = Press::default();
+        press.start(Mode::Basin);
+        run_to_the_end(&mut press);
+        assert!(!press.running);
+        assert_eq!(press.on_completed(|| true), After::Restarted);
+        // Running again from the start of the cycle, in the turn it ended.
+        assert!(press.running);
+        assert_eq!(
+            (press.ticks, press.mode, press.finished),
+            (0, Mode::Basin, false)
+        );
+    }
+
+    #[test]
+    fn a_basin_press_whose_recipe_no_longer_fits_looks_again() {
+        let mut press = Press::default();
+        press.start(Mode::Basin);
+        run_to_the_end(&mut press);
+        assert_eq!(press.on_completed(|| false), After::Look);
+        assert!(!press.running);
+        assert!(press.finished);
+    }
+
+    /// Over the ground or a belt the recipe is never asked about: the press only looks again.
+    #[test]
+    fn a_press_over_no_basin_never_asks_whether_a_recipe_fits() {
+        for mode in [Mode::World, Mode::Belt] {
+            let mut press = Press::default();
+            press.start(mode);
+            run_to_the_end(&mut press);
+            assert_eq!(
+                press.on_completed(|| panic!("no basin to match")),
+                After::Look
+            );
+            assert!(!press.running);
+        }
     }
 
     #[test]

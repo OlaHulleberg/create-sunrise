@@ -447,6 +447,8 @@ impl Run {
                     self.w.tick_press(0, p);
                     continue;
                 }
+                // The glue's `mixer_turn`: this harness does not run mixers.
+                create_engine::world::TransportTick::Mixer(_) => continue,
                 // The glue's `saw_turn` (`SawBlockEntity.tick` at the saw's turn).
                 create_engine::world::TransportTick::Saw(p) => {
                     self.tick_saw(p);

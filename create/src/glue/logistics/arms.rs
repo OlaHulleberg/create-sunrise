@@ -596,7 +596,7 @@ impl arm::World for ArmWorld<'_, '_> {
             Kind::Basin if slot < create_engine::basin::SLOTS => {
                 let out = take_slot(lv, pos, slot, amount, simulate)?;
                 if !simulate {
-                    with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+                    with_world(|w| w.dims[dim].notify_basin_contents(pos));
                 }
                 Some(out)
             }
@@ -897,7 +897,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 let slot = inputs.start + at;
                 let left = put_slots(lv, pos, slot..slot + 1, item, count, simulate);
                 if !simulate && left != count {
-                    with_world(|w| w.dims[dim].mixer_checks.push([pos[0], pos[1] + 2, pos[2]]));
+                    with_world(|w| w.dims[dim].notify_basin_contents(pos));
                 }
                 left
             }
