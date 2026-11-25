@@ -24,6 +24,12 @@ thread_local! {
     static COMPRESSED: RefCell<HashMap<String, Vec<basin::Recipe>>> = RefCell::new(HashMap::new());
 }
 
+/// `BasinInventory.insertItem`: the inputs take a stack only in their first empty slot, and
+/// none while another input holds the same item and components; the outputs take nothing.
+pub(crate) fn admits(slots: &[Option<ItemStack>], slot: usize, stack: &ItemStack) -> bool {
+    basin::admits_slot(slots, slot, stack, |a, b| a.is_stackable_with(b))
+}
+
 /// Forgets what was kept for the world.
 pub fn clear() {
     PRESS_CRAFTED.with_borrow_mut(HashMap::clear);
