@@ -371,14 +371,9 @@ pub fn use_basin(
         *slot = (have > need).then_some((fluid, have - need));
         with_world(|w| w.set_basin_fluids(dim, pos, tanks));
         if !creative {
-            let out = crate::glue::logistics::items::stack_of(&*lv.host, &out, 1);
-            if stack.count() <= 1 {
-                items::set_held(lv.host, player, hand, out);
-            } else {
-                items::shrink_held(lv.host, player, hand, 1);
-                if let Some(out) = out {
-                    items::give_back(lv.host, player, out);
-                }
+            items::shrink_held(lv.host, player, hand, 1);
+            if let Some(out) = crate::glue::logistics::items::stack_of(&*lv.host, &out, 1) {
+                items::give_back(lv.host, player, out);
             }
         }
         return true;
