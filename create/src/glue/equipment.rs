@@ -1269,7 +1269,7 @@ impl mod_api::BlockEntityPart for BacktankCogs {
         let turn = |v: [f32; 2]| (0..turns).fold(v, |[x, z], _| [-z, x]);
         let [ax, az] = turn([1.0, 0.0]);
         let [px, pz] = turn([0.0, 11.0 / 16.0 - 0.5]);
-        let speed = super::kinetics::speeds_of(&event.entity.nbt)[0];
+        let speed = super::kinetics::speeds_of(event.entity.nbt())[0];
         let draw = &mut *event.draw;
         draw.spin(
             [ax, 0.0, az],

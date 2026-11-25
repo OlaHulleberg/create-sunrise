@@ -18,9 +18,10 @@ use create_engine::Block;
 use create_engine::sequencer::{self as seq, Instruction, Kind, Speed};
 use mod_api::text::TextStyle;
 use mod_api::{
-    BlockEntityRef, ClientHost, Compound, DrawContext, Flow, Host, InteractionResult, PlayerRef,
-    Registrar, ScreenClosingEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent,
-    ScreenRenderPostEvent, ServerHost, SoundPlay, Tag, Text, UseItemOnEvent,
+    BlockEntityRef, ClientHost, Compound, DrawContext, Flow, Host, HostSide, InteractionResult,
+    PlayerRef, Registrar, ScreenClosingEvent, ScreenMouseButtonPressedPreEvent,
+    ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, SoundPlay, Tag, Text,
+    UseItemOnEvent,
 };
 use std::cell::RefCell;
 
@@ -173,9 +174,12 @@ impl mod_api::BlockPart for Gearshift {
     /// end, pass; else the screen opens.
     fn use_item_on(
         &self,
-        host: &mut dyn ServerHost,
+        host: HostSide<'_>,
         event: &mut UseItemOnEvent<'_>,
     ) -> Option<InteractionResult> {
+        let HostSide::Server(host) = host else {
+            return None;
+        };
         let click = event.click;
         let player = host.player(click.player)?;
         if let Some(stack) = click.stack {
