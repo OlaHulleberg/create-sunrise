@@ -20,7 +20,8 @@
 Sunrise. No Java at build time or play time, and no mixins.
 
 - **[Sunrise](https://playsunrise.net)** ([GitHub](https://github.com/sunrise-org/sunrise)): works now.
-- **Horizon**: its mod API has shipped. The port is built and tested on Sunrise and not yet tried on Horizon.
+- **Horizon**: [Create for Horizon](https://github.com/atlas-jedi/create-for-horizon), a fork maintained by
+  [André Pestana Silva](https://github.com/atlas-jedi).
 
 Create is the mod by the Create Team: shafts and cogs, belts and presses, contraptions and trains. This port
 brings it to Minecraft 26.3 in Rust. It is built on the game's mod SDK (`mod_api`) and nothing else.
