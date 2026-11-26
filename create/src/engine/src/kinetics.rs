@@ -2084,7 +2084,11 @@ mod tests {
         assert_eq!(saved.speed, 16.0, "its own speed and source stay");
         k.advance();
         solve(&mut k);
-        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0), "what it drove is detached");
+        assert_eq!(
+            k.speed([1, 0, 0], 0),
+            Some(0.0),
+            "what it drove is detached"
+        );
         assert!(!k.saved_state(gearshift, 0).unwrap().needs_speed_update);
     }
 
