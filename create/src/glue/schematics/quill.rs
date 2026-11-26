@@ -683,8 +683,7 @@ pub(super) fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data:
             let Some(mut lv) = super::ServerLevel::new(host, &dimension) else {
                 return;
             };
-            let who = player.name(&*lv.host).unwrap_or_default().to_owned();
-            let lines = super::save(&mut lv, Some(player), &who, a, b, &file, convert);
+            let lines = super::save_quill(&mut lv, player, a, b, &file, convert);
             // `schematicAndQuill.saved` (or `failed`), as the status Create shows.
             let line = match lines.first() {
                 Some(l) if l.starts_with("Saved as ") => Text::translate(

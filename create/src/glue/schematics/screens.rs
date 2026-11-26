@@ -473,7 +473,7 @@ pub(super) fn draw_table(
         [x, y, 214.0, 85.0],
         None,
     );
-    let files = super::body::local_files(host);
+    let files = super::body::client_table_files(host);
     let finished = output_filled(host);
     let title = if finished {
         tr("create.gui.schematicTable.finished", "Upload Finished!")
@@ -496,7 +496,7 @@ pub(super) fn draw_table(
     } else {
         let i = CHOSEN.get().min(files.len() - 1);
         let colour = if finished { 0xFFCC_DDFF } else { 0xFFFF_FFFF };
-        draw.text(&files[i], [x + 51.0, y + 2.0 + 26.0], colour, true);
+        draw.text(&files[i].label(), [x + 51.0, y + 2.0 + 26.0], colour, true);
     }
     if finished {
         draw.sprite(
@@ -545,7 +545,7 @@ pub(super) fn click_table(host: &dyn ClientHost, at: [f32; 2]) -> Option<i32> {
     if !inside(at, [44.0, 58.0, 18.0, 18.0]) || output_filled(host) {
         return None;
     }
-    let files = super::body::local_files(host);
+    let files = super::body::client_table_files(host);
     if files.is_empty() {
         return None;
     }
@@ -555,7 +555,7 @@ pub(super) fn click_table(host: &dyn ClientHost, at: [f32; 2]) -> Option<i32> {
 
 /// The wheel over the list chooses the schematic (`SelectionScrollInput`).
 pub(super) fn scroll_table(host: &dyn ClientHost, up: bool) {
-    let n = super::body::local_files(host).len();
+    let n = super::body::client_table_files(host).len();
     if n == 0 {
         return;
     }
@@ -568,7 +568,7 @@ pub(super) fn tooltip_table(host: &dyn ClientHost, at: [f32; 2], lines: &mut Vec
     if !inside(at, [45.0, 21.0, 139.0, 18.0]) {
         return;
     }
-    let files = super::body::local_files(host);
+    let files = super::body::client_table_files(host);
     if files.is_empty() {
         return;
     }
@@ -579,9 +579,9 @@ pub(super) fn tooltip_table(host: &dyn ClientHost, at: [f32; 2], lines: &mut Vec
     let chosen = CHOSEN.get().min(files.len() - 1);
     for (i, f) in files.iter().enumerate() {
         lines.push(if i == chosen {
-            (Text::literal(format!("-> {f}")), 0xFFFF_FFFF)
+            (Text::literal(format!("-> {}", f.label())), 0xFFFF_FFFF)
         } else {
-            (Text::literal(format!("> {f}")), 0xFFAA_AAAA)
+            (Text::literal(format!("> {}", f.label())), 0xFFAA_AAAA)
         });
     }
     let mut italic = TextStyle::default();

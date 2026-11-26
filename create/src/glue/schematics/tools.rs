@@ -155,6 +155,7 @@ impl Selection {
 /// `SchematicHandler`.
 struct Handler {
     displayed: Option<String>,
+    displayed_owner: Option<String>,
     active: bool,
     deployed: bool,
     size: Option<[i32; 3]>,
@@ -174,6 +175,7 @@ impl Handler {
     fn new() -> Handler {
         let mut h = Handler {
             displayed: None,
+            displayed_owner: None,
             active: false,
             deployed: false,
             size: None,
@@ -219,6 +221,7 @@ impl Handler {
                 .init(anchor, data.rotation, data.mirror, size);
         }
         self.displayed = data.file.clone();
+        self.displayed_owner = data.owner.clone();
         self.preview = None;
         self.active = true;
         if self.deployed {
@@ -235,14 +238,19 @@ impl Handler {
 
     /// `setupRenderer`: build the three mirrored block-model previews for the displayed file.
     fn setup_preview(&mut self, host: &dyn ClientHost) {
-        let Some(file) = self.displayed.as_deref() else {
+        let Some((_, _, data)) = held(host) else {
             self.preview = None;
             return;
         };
-        if self.preview.as_ref().is_some_and(|p| p.matches(file)) {
+        if data.file != self.displayed || data.owner != self.displayed_owner {
+            self.preview = None;
             return;
         }
-        self.preview = Preview::load(host, file);
+        if self.preview.is_none()
+            && let Some(file) = data.file.as_deref()
+        {
+            self.preview = Preview::load(host, data.owner.as_deref(), file);
+        }
     }
 
     /// `deploy`.
@@ -354,7 +362,7 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
     let creative = creative(host);
     let sync = HANDLER.with_borrow_mut(|h| {
         h.slot = slot;
-        if !h.active || data.file != h.displayed {
+        if !h.active || data.file != h.displayed || data.owner != h.displayed_owner {
             h.init(&data, creative);
             if h.deployed {
                 h.setup_preview(host);
