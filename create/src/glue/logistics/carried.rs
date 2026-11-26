@@ -73,13 +73,7 @@ pub(super) fn carry_out(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, out: 
     }
 }
 
-pub(super) fn carry_in(
-    lv: &ServerLevel<'_>,
-    pos: [i32; 3],
-    block: Block,
-    data: &Compound,
-    _turn: create_engine::contraption::Transform,
-) {
+pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: &Compound) {
     let dim = lv.dim;
     let host = &*lv.host;
     let filter = data
