@@ -1224,24 +1224,12 @@ fn shaft_axis(slope: cn::BeltSlope, facing: [i32; 3]) -> &'static str {
     }
 }
 
-/// `owner/file` under `schematics/uploaded/`, when both are names a player may give.
-fn uploaded(owner: &str, file: &str) -> Option<String> {
-    let owner_ok = !owner.is_empty() && !owner.contains(['/', '\\']) && !owner.starts_with('.');
-    (owner_ok && sch::valid_file(file)).then(|| format!("uploaded/{owner}/{file}"))
-}
-
-/// A structure file read (an unreadable one is empty, as `loadSchematic`'s fresh template).
-fn read(host: &dyn Host, rel: &str) -> Structure {
-    body::read_structure(host, rel)
-        .and_then(|t| Structure::from_nbt(&t))
-        .unwrap_or_default()
-}
-
 /// `SchematicPrinter.loadSchematic` from the server's uploaded copy.
 fn load(lv: &ServerLevel<'_>, data: &SchematicData) -> Loaded {
     let structure = match (&data.owner, &data.file) {
-        (Some(o), Some(f)) => uploaded(o, f)
-            .map(|r| read(&*lv.host, &r))
+        (Some(o), Some(f)) => body::Uploaded::new(o, f)
+            .ok()
+            .and_then(|target| body::read_uploaded(&*lv.host, target))
             .unwrap_or_default(),
         _ => Structure::default(),
     };
@@ -2068,13 +2056,16 @@ fn save(
     instant: bool,
 ) -> Vec<String> {
     let structure = export(lv, a, b);
-    let host: &dyn Host = &*lv.host;
-    let file = sch::export_name(file, false, |f| body::exists(host, f));
-    let tag = structure.to_nbt();
-    if let Err(e) = body::write_structure(host, &file, &tag) {
-        crate::create_log!("[create] An error occurred while saving schematic [{file}]: {e}");
-        return vec!["Failed to save schematic, check logs for details".into()];
-    }
+    let Some(bytes) = body::encode_structure(&structure) else {
+        return vec!["Failed to encode schematic".into()];
+    };
+    let file = match body::write_export(&*lv.host, file, &bytes) {
+        Ok(file) => file,
+        Err(e) => {
+            crate::create_log!("[create] An error occurred while saving schematic [{file}]: {e}");
+            return vec!["Failed to save schematic, check logs for details".into()];
+        }
+    };
     let mut lines = vec![format!("Saved as {file}")];
     if !instant {
         return lines;
@@ -2082,11 +2073,11 @@ fn save(
     let holding = player
         .and_then(|p| held(lv, p))
         .filter(|(_, s)| item_is(&*lv.host, s, QUILL));
-    let size = body::size(&*lv.host, &file).unwrap_or(0);
-    match (uploaded(name, &file), holding) {
-        (Some(target), Some((slot, _))) if sch::size_allowed(size) => {
+    let size = bytes.len() as u64;
+    match (body::Uploaded::new(name, &file), holding) {
+        (Ok(target), Some((slot, _))) if sch::size_allowed(size) => {
             // `handleInstantSchematic` counts the old copy before replacing it.
-            match body::upload(&*lv.host, &file, &target, sch::SchematicUpload::Instant) {
+            match body::store_upload(&*lv.host, target, sch::SchematicUpload::Instant, &bytes) {
                 Ok(()) => {
                     let Some(mut stack) = packages::body::new_stack(&*lv.host, SCHEMATIC, 1) else {
                         return lines;
@@ -2141,28 +2132,36 @@ fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> 
     if !writable || items[1].is_some() {
         return vec!["the table needs a blank schematic in and nothing out".into()];
     }
-    let Some(target) = uploaded(player, file) else {
+    let Ok(target) = body::Uploaded::new(player, file) else {
         crate::create_log!(
             "[create] Attempted Schematic Upload with non-supported Format: {player}/{file}"
         );
         return vec![format!("not a schematic file: {file}")];
     };
-    let Some(size) = body::size(host, file) else {
-        return vec![format!("no schematic {file} in schematics/")];
+    let bytes = match body::read_for_upload(host, file) {
+        Ok(bytes) => bytes,
+        Err(body::UploadReadError::TooLarge(size)) => return vec![too_large(size)],
+        Err(body::UploadReadError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return vec![format!("no schematic {file} in schematics/")];
+        }
+        Err(body::UploadReadError::Io(e)) => {
+            crate::create_log!("[create] Failed to open schematic: {file}: {e}");
+            return vec![format!("upload of {file} failed")];
+        }
     };
-    if !sch::size_allowed(size) {
-        return vec![too_large(size)];
-    }
+    let Some(structure) = body::decode_structure(file, &bytes) else {
+        return vec![format!("upload of {file} failed")];
+    };
+    let Some(mut stack) = packages::body::new_stack(host, SCHEMATIC, 1) else {
+        return vec![format!("upload of {file} failed")];
+    };
+    let bounds = structure.size;
     // `handleNewUpload` excludes a same-name copy before counting.
-    if let Err(e) = body::upload(host, file, &target, sch::SchematicUpload::Table) {
+    if let Err(e) = body::store_upload(host, target, sch::SchematicUpload::Table, &bytes) {
         crate::create_log!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
         return vec![format!("upload of {file} failed")];
     }
     crate::create_log!("[create] New Schematic Uploaded: {player}/{file}");
-    let bounds = read(host, &target).size;
-    let Some(mut stack) = packages::body::new_stack(host, SCHEMATIC, 1) else {
-        return vec![format!("upload of {file} failed")];
-    };
     body::set_schematic_data(&mut stack, &SchematicData::written(file, player, bounds));
     set_slots(lv, pos, &[(0, None), (1, Some(stack))]);
     vec![format!(

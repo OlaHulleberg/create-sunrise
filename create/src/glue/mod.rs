@@ -5,6 +5,7 @@ pub(crate) mod advancements;
 pub mod blocks;
 pub mod contraptions;
 pub mod copycat;
+mod data_dir;
 pub mod decor;
 pub mod display;
 pub(crate) mod drawn;
@@ -38,6 +39,10 @@ pub mod subsystem;
 pub mod trains;
 pub mod transmission;
 pub mod world;
+
+#[cfg(test)]
+#[path = "../test_support/temp_dir.rs"]
+mod temp_dir;
 
 use create_engine::world::StateTable;
 use mod_api::text::TextContent;

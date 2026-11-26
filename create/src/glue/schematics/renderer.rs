@@ -119,11 +119,7 @@ pub(super) struct Preview {
 impl Preview {
     /// Load `file` from the client's `schematics/` folder and build all three mirror variants.
     pub(super) fn load(host: &dyn ClientHost, file: &str) -> Option<Self> {
-        if !sch::valid_file(file) {
-            return None;
-        }
-        let structure =
-            super::body::read_structure(host, file).and_then(|tag| Structure::from_nbt(&tag))?;
+        let structure = super::body::read_local(host, file)?;
         if structure.size == [0; 3] {
             return None;
         }
