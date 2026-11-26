@@ -155,19 +155,17 @@ pub(super) fn decode_structure(file: &str, bytes: &[u8]) -> Option<Structure> {
     structure
 }
 
-/// An independently supplied file in the root, with the NBT accounter but not the upload cap.
-fn read_local(host: &dyn Host, file: &str) -> Option<Structure> {
-    let dir = folder(&host.instance_dir(), false).ok()?;
-    let (mut handle, _) = dir.read_file(file_leaf(file).ok()?).ok()?;
+/// Like `SchematicItem.loadSchematic`, reading an existing template uses the decoded NBT
+/// budget, not the compressed upload cap.
+fn read_structure(dir: &DataDir, file: Leaf<'_>) -> Option<Structure> {
+    let (mut handle, _) = dir.read_file(file).ok()?;
     let mut bytes = Vec::new();
     handle.read_to_end(&mut bytes).ok()?;
-    decode_structure(file, &bytes)
+    decode_structure(file.name(), &bytes)
 }
 
-pub(super) fn read_uploaded(host: &dyn Host, target: Uploaded<'_>) -> Option<Structure> {
-    let dir = target.folder(&host.instance_dir(), false).ok()?;
-    let bytes = read_bounded(&dir, target.file).ok()?;
-    decode_structure(target.file.name(), &bytes)
+pub(super) fn read_uploaded(instance: &Path, target: Uploaded<'_>) -> Option<Structure> {
+    read_structure(&target.folder(instance, false).ok()?, target.file)
 }
 
 pub(super) fn encode_structure(structure: &Structure) -> Option<Vec<u8>> {
@@ -283,14 +281,15 @@ pub(super) fn preview_structure(
     owner: Option<&str>,
     file: &str,
 ) -> Option<Structure> {
+    let instance = host.instance_dir();
     if let Some(owner) = owner
         && integrated_owner(host).as_deref() == Some(owner)
         && let Ok(target) = Uploaded::new(owner, file)
-        && let Some(structure) = read_uploaded(host, target)
+        && let Some(structure) = read_uploaded(&instance, target)
     {
         return Some(structure);
     }
-    read_local(host, file)
+    read_structure(&folder(&instance, false).ok()?, file_leaf(file).ok()?)
 }
 
 #[derive(Debug)]
@@ -321,14 +320,13 @@ fn read_bounded(dir: &DataDir, file: Leaf<'_>) -> Result<Vec<u8>, UploadError> {
 }
 
 pub(super) fn read_for_table(
-    host: &dyn Host,
+    instance: &Path,
     target: Uploaded<'_>,
     source: &TableFile,
 ) -> Result<Vec<u8>, UploadError> {
-    let instance = host.instance_dir();
     let dir = match source {
-        TableFile::Local(_) => folder(&instance, false)?,
-        TableFile::Saved(_) => target.folder(&instance, false)?,
+        TableFile::Local(_) => folder(instance, false)?,
+        TableFile::Saved(_) => target.folder(instance, false)?,
     };
     read_bounded(&dir, target.file)
 }
@@ -530,6 +528,63 @@ mod tests {
             read_bounded(&source, target.file),
             Err(UploadError::TooLarge(_))
         ));
+    }
+
+    #[test]
+    fn stored_schematic_over_upload_cap_loads_but_table_refuses_it() {
+        let instance = TempDir::new("create-stored-schematic");
+        let target = Uploaded::new("Alex", "stone.nbt").unwrap();
+        let root = folder(instance.path(), true).unwrap();
+        let saved = target.folder(instance.path(), true).unwrap();
+        let coords = |pos: [i32; 3]| Tag::List(pos.into_iter().map(Tag::Int).collect());
+        let tag = Tag::compound([
+            ("size", coords([1; 3])),
+            (
+                "palette",
+                Tag::List(vec![Tag::compound([(
+                    "Name",
+                    Tag::String("minecraft:stone".into()),
+                )])]),
+            ),
+            (
+                "blocks",
+                Tag::List(vec![Tag::compound([
+                    ("pos", coords([0; 3])),
+                    ("state", Tag::Int(0)),
+                ])]),
+            ),
+            ("entities", Tag::List(Vec::new())),
+            // Gzip uses stored blocks, so inert padding in the root counts toward file size.
+            (
+                "fixture_padding",
+                Tag::ByteArray(vec![0; UPLOAD_BYTES as usize]),
+            ),
+        ]);
+        let raw = write_named(&tag).unwrap();
+        assert!(raw.len() < MAX_BYTES);
+        let bytes = gzip::encode(&raw);
+        let size = bytes.len() as u64;
+        assert!(size > UPLOAD_BYTES);
+        root.write_new(target.file, &bytes).unwrap();
+        saved.write_new(target.file, &bytes).unwrap();
+
+        let loaded = read_uploaded(instance.path(), target).unwrap();
+        assert_eq!(loaded.size, [1; 3]);
+        assert_eq!(loaded.blocks.len(), 1);
+        assert_eq!(
+            loaded.palette[loaded.blocks[0].state].name,
+            "minecraft:stone"
+        );
+        assert_eq!(read_structure(&root, target.file), Some(loaded));
+        for source in [
+            TableFile::Local(target.file.name().into()),
+            TableFile::Saved(target.file.name().into()),
+        ] {
+            assert!(matches!(
+                read_for_table(instance.path(), target, &source),
+                Err(UploadError::TooLarge(n)) if n == size
+            ));
+        }
     }
 
     #[test]

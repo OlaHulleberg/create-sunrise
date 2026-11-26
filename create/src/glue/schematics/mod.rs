@@ -1219,7 +1219,7 @@ fn load(lv: &ServerLevel<'_>, data: &SchematicData, access: Access) -> Loaded {
     let mut structure = match (&data.owner, &data.file) {
         (Some(o), Some(f)) => body::Uploaded::new(o, f)
             .ok()
-            .and_then(|target| body::read_uploaded(&*lv.host, target))
+            .and_then(|target| body::read_uploaded(&lv.host.instance_dir(), target))
             .unwrap_or_default(),
         _ => Structure::default(),
     };
@@ -2205,7 +2205,7 @@ fn upload(
         );
         return vec![format!("not a schematic file: {file}")];
     };
-    let bytes = match body::read_for_table(host, target, &source) {
+    let bytes = match body::read_for_table(&host.instance_dir(), target, &source) {
         Ok(bytes) => bytes,
         Err(body::UploadError::TooLarge(size)) => return vec![too_large(size)],
         Err(body::UploadError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
