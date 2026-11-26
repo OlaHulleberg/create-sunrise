@@ -1,7 +1,7 @@
 //! What a broken block drops: its loot table (`create/data/create/loot_table/blocks/<name>.json`,
 //! Create's generated data), as the host rolls it for `destroyBlock(pos, true)`. Only the
 //! tables of Create's blocks, and only what they use: one roll of plain item entries under
-//! `survives_explosion`, `match_block` and `inverted` conditions.
+//! `survives_explosion`, `match_block`, `inverted` and `all_of` pool conditions.
 use serde_json::Value;
 
 /// Whether a player's empty hand breaks the block in `state` without its drops
@@ -43,24 +43,42 @@ pub fn drops(state: &str) -> Option<Vec<(String, u8)>> {
         return Some(Vec::new());
     };
     let table: Value = serde_json::from_str(&text).ok()?;
-    let holds = |c: &Value| condition(c, &block, &props);
+    table_drops(&table, &block, &props)
+}
+
+fn table_drops(
+    table: &Value,
+    block: &str,
+    props: &[(String, String)],
+) -> Option<Vec<(String, u8)>> {
+    let has_modifier =
+        |node: &Value| node.get("modifier").is_some() || node.get("functions").is_some();
+    if has_modifier(table) {
+        return None;
+    }
     let mut out = Vec::new();
     for pool in table["pools"].as_array().into_iter().flatten() {
-        if pool["rolls"].as_f64() != Some(1.0) || pool.get("functions").is_some() {
+        if pool["rolls"].as_f64() != Some(1.0)
+            || has_modifier(pool)
+            || pool.get("conditions").is_some()
+        {
             return None;
-        }
-        if !all(&pool["conditions"], &holds)? {
-            continue;
         }
         let entries = pool["entries"].as_array()?;
         let [entry] = entries.as_slice() else {
             return None;
         };
         if entry["type"] != "minecraft:item"
-            || entry.get("functions").is_some()
+            || has_modifier(entry)
+            || entry.get("condition").is_some()
             || entry.get("conditions").is_some()
         {
             return None;
+        }
+        if let Some(c) = pool.get("condition")
+            && !condition(c, block, props)?
+        {
+            continue;
         }
         let item = entry["name"].as_str()?;
         if item != "minecraft:air" {
@@ -70,19 +88,18 @@ pub fn drops(state: &str) -> Option<Vec<(String, u8)>> {
     Some(out)
 }
 
-/// Every condition in `list` holds; None for one outside the subset.
-fn all(list: &Value, holds: &impl Fn(&Value) -> Option<bool>) -> Option<bool> {
-    let mut ok = true;
-    for c in list.as_array().into_iter().flatten() {
-        ok &= holds(c)?;
-    }
-    Some(ok)
-}
-
 fn condition(c: &Value, block: &str, props: &[(String, String)]) -> Option<bool> {
     match c["type"].as_str()? {
         "minecraft:survives_explosion" => Some(true),
         "minecraft:inverted" => condition(&c["term"], block, props).map(|b| !b),
+        "minecraft:all_of" => {
+            for term in c["terms"].as_array()? {
+                if !condition(term, block, props)? {
+                    return Some(false);
+                }
+            }
+            Some(true)
+        }
         "minecraft:match_block" => {
             if c["blocks"].as_str()? != block {
                 return Some(false);
@@ -99,6 +116,50 @@ fn condition(c: &Value, block: &str, props: &[(String, String)]) -> Option<bool>
 
 #[cfg(test)]
 mod tests {
+    use serde_json::json;
+
+    #[test]
+    fn conjunction_short_circuits_in_term_order() {
+        let fails =
+            json!({"type": "minecraft:inverted", "term": {"type": "minecraft:survives_explosion"}});
+        let unsupported = json!("create:unknown_predicate");
+        let predicate = json!({"type": "minecraft:all_of", "terms": [fails, unsupported]});
+        assert_eq!(
+            super::condition(&predicate, "create:shaft", &[]),
+            Some(false)
+        );
+        let predicate = json!({"type": "minecraft:all_of", "terms": [unsupported, fails]});
+        assert_eq!(super::condition(&predicate, "create:shaft", &[]), None);
+    }
+
+    #[test]
+    fn refuses_modifiers_and_entry_conditions() {
+        let entry = json!({"type": "minecraft:item", "name": "create:shaft"});
+        let pool = json!({"rolls": 1.0, "entries": [entry]});
+        let table = json!({"pools": [pool]});
+        let modifier = json!([{"type": "minecraft:set_count", "count": 2}]);
+        let mut table_modifier = table.clone();
+        table_modifier["modifier"] = modifier.clone();
+        let mut pool_modifier = table.clone();
+        pool_modifier["pools"][0]["modifier"] = modifier.clone();
+        let mut entry_modifier = table.clone();
+        entry_modifier["pools"][0]["entries"][0]["modifier"] = modifier;
+        let mut entry_condition = table;
+        entry_condition["pools"][0]["entries"][0]["condition"] =
+            json!({"type": "minecraft:survives_explosion"});
+        for unsupported in [
+            table_modifier,
+            pool_modifier,
+            entry_modifier,
+            entry_condition,
+        ] {
+            assert!(
+                super::table_drops(&unsupported, "create:shaft", &[]).is_none(),
+                "{unsupported}"
+            );
+        }
+    }
+
     #[test]
     fn tables_give_the_block_its_item() {
         let one = |s: &str| super::drops(s).unwrap();
