@@ -56,8 +56,12 @@ fn table_drops(
     if has_modifier(table) {
         return None;
     }
+    let pools = match table.as_object()?.get("pools") {
+        None | Some(Value::Null) => &[],
+        Some(pools) => pools.as_array()?.as_slice(),
+    };
     let mut out = Vec::new();
-    for pool in table["pools"].as_array().into_iter().flatten() {
+    for pool in pools {
         if pool["rolls"].as_f64() != Some(1.0)
             || has_modifier(pool)
             || pool.get("conditions").is_some()
@@ -156,6 +160,24 @@ mod tests {
             assert!(
                 super::table_drops(&unsupported, "create:shaft", &[]).is_none(),
                 "{unsupported}"
+            );
+        }
+    }
+
+    #[test]
+    fn distinguishes_empty_tables_from_wrong_shapes() {
+        for (table, expected) in [
+            (json!({}), Some(Vec::new())),
+            (json!({"pools": []}), Some(Vec::new())),
+            (json!({"pools": null}), Some(Vec::new())),
+            (json!({"pools": false}), None),
+            (json!(null), None),
+            (json!([]), None),
+        ] {
+            assert_eq!(
+                super::table_drops(&table, "create:shaft", &[]),
+                expected,
+                "{table}"
             );
         }
     }
