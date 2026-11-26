@@ -1,388 +1,157 @@
-//! Gzip as `NbtIo.readCompressed` and `writeCompressed` read and write it (RFC 1952 around
-//! RFC 1951), for the schematic files Create keeps in `schematics/`: the mod API reads and
-//! writes a file's bytes but has no compression of its own.
-//!
-//! `decode` inflates any stream Java's `GZIPOutputStream` (or any other gzip writer) makes:
-//! stored, fixed and dynamic Huffman blocks, several members' worth of header flags, and the
-//! trailer's CRC-32 and length checked. `encode` writes stored blocks, which every inflater
-//! reads; the files are as large as their NBT, well within `maxTotalSchematicSize`'s bounds
-//! for what Create's own export makes.
+//! Gzip for Create's schematic files, as read and written by `NbtIo`.
+
+use flate2::{Compression, Crc, Decompress, FlushDecompress, Status, write::DeflateEncoder};
+use std::io::{self, Write};
+
+const MAGIC: [u8; 2] = [0x1f, 0x8b];
 
 /// Why a gzip stream could not be read.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum GzipError {
-    /// Not a gzip stream (its magic or method), or cut short.
+    /// Invalid or incomplete member framing, including an invalid header CRC.
     Header,
-    /// A malformed deflate block.
+    /// An invalid or incomplete DEFLATE stream.
     Data,
-    /// More bytes than the caller allows.
+    /// More decoded bytes than the caller allows.
     TooLarge,
     /// The trailer's CRC-32 or length does not match what was read.
     Check,
 }
 
-/// CRC-32 (IEEE, reflected) of `bytes`, as the gzip trailer carries it.
-pub fn crc32(bytes: &[u8]) -> u32 {
-    let mut crc = !0u32;
-    for &b in bytes {
-        crc ^= u32::from(b);
-        for _ in 0..8 {
-            crc = if crc & 1 != 0 {
-                (crc >> 1) ^ 0xEDB8_8320
-            } else {
-                crc >> 1
-            };
-        }
-    }
-    !crc
-}
-
-/// `bytes` as one gzip member of stored deflate blocks.
-pub fn encode(bytes: &[u8]) -> Vec<u8> {
-    let blocks = bytes.len() / 0xFFFF + 1;
-    let mut out = Vec::with_capacity(bytes.len() + blocks * 5 + 18);
+/// `bytes` as one gzip member at level 6, the OpenJDK `GZIPOutputStream` default.
+pub fn encode(bytes: &[u8]) -> io::Result<Vec<u8>> {
     // Magic, deflate, no flags, no time, no extra flags, an unknown system.
-    out.extend_from_slice(&[0x1F, 0x8B, 8, 0, 0, 0, 0, 0, 0, 0xFF]);
-    let mut chunks = bytes.chunks(0xFFFF).peekable();
-    if chunks.peek().is_none() {
-        out.extend_from_slice(&[1, 0, 0, 0xFF, 0xFF]);
-    }
-    while let Some(chunk) = chunks.next() {
-        let last = chunks.peek().is_none();
-        let len = chunk.len() as u16;
-        out.push(u8::from(last));
-        out.extend_from_slice(&len.to_le_bytes());
-        out.extend_from_slice(&(!len).to_le_bytes());
-        out.extend_from_slice(chunk);
-    }
-    out.extend_from_slice(&crc32(bytes).to_le_bytes());
-    out.extend_from_slice(&(bytes.len() as u32).to_le_bytes());
-    out
+    let header = vec![MAGIC[0], MAGIC[1], 8, 0, 0, 0, 0, 0, 0, 0xff];
+    let mut encoder = DeflateEncoder::new(header, Compression::new(6));
+    encoder.write_all(bytes)?;
+    let mut out = encoder.finish()?;
+    let mut crc = Crc::new();
+    crc.update(bytes);
+    out.extend_from_slice(&crc.sum().to_le_bytes());
+    out.extend_from_slice(&crc.amount().to_le_bytes());
+    Ok(out)
 }
 
-/// The bytes of a gzip stream, at most `max` of them; concatenated members are read in turn,
-/// as `GZIPInputStream` does.
-pub fn decode(data: &[u8], max: usize) -> Result<Vec<u8>, GzipError> {
+/// Decode at most `max` bytes total across all members. Ignore nonmember bytes after a valid
+/// member, but require any suffix beginning with the full gzip magic to be a valid member.
+pub fn decode(mut data: &[u8], max: usize) -> Result<Vec<u8>, GzipError> {
     let mut out = Vec::new();
-    let mut at = 0;
     loop {
-        at = member(data, at, max, &mut out)?;
-        if data.len() - at < 2 || data[at] != 0x1F || data[at + 1] != 0x8B {
+        data = member(data, max, &mut out)?;
+        if !data.starts_with(&MAGIC) {
             return Ok(out);
         }
     }
 }
 
-/// One member from `at`, appended to `out`: where the next begins.
-fn member(data: &[u8], at: usize, max: usize, out: &mut Vec<u8>) -> Result<usize, GzipError> {
-    let head = data.get(at..at + 10).ok_or(GzipError::Header)?;
-    if head[0] != 0x1F || head[1] != 0x8B || head[2] != 8 {
+/// Append one member to `out` and return the bytes after its trailer.
+fn member<'a>(data: &'a [u8], max: usize, out: &mut Vec<u8>) -> Result<&'a [u8], GzipError> {
+    let (head, mut body) = data.split_first_chunk::<10>().ok_or(GzipError::Header)?;
+    if !head.starts_with(&MAGIC) || head[2] != 8 {
         return Err(GzipError::Header);
     }
     let flags = head[3];
-    let mut p = at + 10;
-    // FEXTRA, FNAME, FCOMMENT, FHCRC.
+    // Like GZIPInputStream.readHeader, skip FEXTRA, FNAME and FCOMMENT without a
+    // separate name or comment length limit, and validate FHCRC if present.
     if flags & 4 != 0 {
-        let len = data.get(p..p + 2).ok_or(GzipError::Header)?;
-        p += 2 + usize::from(u16::from_le_bytes([len[0], len[1]]));
+        let (len, rest) = body.split_first_chunk::<2>().ok_or(GzipError::Header)?;
+        body = rest
+            .get(usize::from(u16::from_le_bytes(*len))..)
+            .ok_or(GzipError::Header)?;
     }
     for bit in [8, 16] {
         if flags & bit != 0 {
-            let end = data
-                .get(p..)
-                .and_then(|rest| rest.iter().position(|&b| b == 0))
-                .ok_or(GzipError::Header)?;
-            p += end + 1;
+            let end = body.iter().position(|&b| b == 0).ok_or(GzipError::Header)?;
+            body = &body[end + 1..];
         }
     }
     if flags & 2 != 0 {
-        p += 2;
+        let (expected, rest) = body.split_first_chunk::<2>().ok_or(GzipError::Header)?;
+        let mut crc = Crc::new();
+        crc.update(&data[..data.len() - body.len()]);
+        if crc.sum() as u16 != u16::from_le_bytes(*expected) {
+            return Err(GzipError::Header);
+        }
+        body = rest;
     }
+
     let start = out.len();
-    let mut bits = Bits {
-        data,
-        pos: p,
-        bit: 0,
-        hold: 0,
-    };
-    inflate(&mut bits, out, max)?;
-    let p = bits.pos;
-    let trailer = data.get(p..p + 8).ok_or(GzipError::Header)?;
-    let crc = u32::from_le_bytes([trailer[0], trailer[1], trailer[2], trailer[3]]);
-    let len = u32::from_le_bytes([trailer[4], trailer[5], trailer[6], trailer[7]]);
-    let read = &out[start..];
-    if crc32(read) != crc || read.len() as u32 != len {
-        return Err(GzipError::Check);
-    }
-    Ok(p + 8)
-}
-
-/// A deflate stream's bits, least significant first.
-struct Bits<'a> {
-    data: &'a [u8],
-    /// The next byte not yet in `hold`.
-    pos: usize,
-    /// How many bits `hold` has.
-    bit: u32,
-    hold: u32,
-}
-
-impl Bits<'_> {
-    fn need(&mut self, n: u32) -> Result<(), GzipError> {
-        while self.bit < n {
-            let b = *self.data.get(self.pos).ok_or(GzipError::Data)?;
-            self.pos += 1;
-            self.hold |= u32::from(b) << self.bit;
-            self.bit += 8;
+    let mut decoder = Decompress::new(false);
+    let mut scratch = [0; 8192];
+    let mut offset = 0;
+    let trailer = loop {
+        let before = decoder.total_out();
+        let remaining = max - out.len();
+        // One extra scratch byte distinguishes a stream that ends exactly at the cap.
+        let len = scratch.len().min(remaining.saturating_add(1));
+        let status = decoder
+            .decompress(&body[offset..], &mut scratch[..len], FlushDecompress::None)
+            .map_err(|_| GzipError::Data)?;
+        let consumed = decoder.total_in() as usize;
+        let written = (decoder.total_out() - before) as usize;
+        if written > remaining {
+            return Err(GzipError::TooLarge);
         }
-        Ok(())
-    }
-
-    fn take(&mut self, n: u32) -> Result<u32, GzipError> {
-        if n == 0 {
-            return Ok(0);
+        out.extend_from_slice(&scratch[..written]);
+        if status == Status::StreamEnd {
+            break &body[consumed..];
         }
-        self.need(n)?;
-        let v = self.hold & ((1u32 << n) - 1);
-        self.hold >>= n;
-        self.bit -= n;
-        Ok(v)
-    }
-
-    /// Drops the bits left of the current byte (a stored block starts on a byte).
-    fn align(&mut self) {
-        self.hold = 0;
-        self.bit = 0;
-    }
-}
-
-/// A canonical Huffman code: how many codes of each length, and the symbols in code order.
-struct Huffman {
-    counts: [u16; 16],
-    symbols: Vec<u16>,
-}
-
-impl Huffman {
-    fn new(lengths: &[u8]) -> Result<Huffman, GzipError> {
-        let mut counts = [0u16; 16];
-        for &l in lengths {
-            counts[usize::from(l)] += 1;
-        }
-        counts[0] = 0;
-        // An over-subscribed code is malformed; an incomplete one is allowed (a single code).
-        let mut left: i32 = 1;
-        for &c in &counts[1..] {
-            left = (left << 1) - i32::from(c);
-            if left < 0 {
-                return Err(GzipError::Data);
-            }
-        }
-        let mut offsets = [0u16; 16];
-        for len in 1..15 {
-            offsets[len + 1] = offsets[len] + counts[len];
-        }
-        let mut symbols = vec![0u16; lengths.len()];
-        for (s, &l) in lengths.iter().enumerate() {
-            if l != 0 {
-                symbols[usize::from(offsets[usize::from(l)])] = s as u16;
-                offsets[usize::from(l)] += 1;
-            }
-        }
-        Ok(Huffman { counts, symbols })
-    }
-
-    fn decode(&self, bits: &mut Bits<'_>) -> Result<u16, GzipError> {
-        let (mut code, mut first, mut index) = (0i32, 0i32, 0i32);
-        for len in 1..16 {
-            code |= bits.take(1)? as i32;
-            let count = i32::from(self.counts[len]);
-            if code - count < first {
-                return self
-                    .symbols
-                    .get((index + (code - first)) as usize)
-                    .copied()
-                    .ok_or(GzipError::Data);
-            }
-            index += count;
-            first += count;
-            first <<= 1;
-            code <<= 1;
-        }
-        Err(GzipError::Data)
-    }
-}
-
-const LENGTH_BASE: [u16; 29] = [
-    3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17, 19, 23, 27, 31, 35, 43, 51, 59, 67, 83, 99, 115, 131,
-    163, 195, 227, 258,
-];
-const LENGTH_EXTRA: [u8; 29] = [
-    0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1, 2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4, 5, 5, 5, 5, 0,
-];
-const DIST_BASE: [u16; 30] = [
-    1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97, 129, 193, 257, 385, 513, 769, 1025, 1537,
-    2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577,
-];
-const DIST_EXTRA: [u8; 30] = [
-    0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4, 5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10, 11, 11, 12, 12, 13,
-    13,
-];
-
-fn inflate(bits: &mut Bits<'_>, out: &mut Vec<u8>, max: usize) -> Result<(), GzipError> {
-    loop {
-        let last = bits.take(1)? == 1;
-        match bits.take(2)? {
-            0 => {
-                bits.align();
-                let head = bits
-                    .data
-                    .get(bits.pos..bits.pos + 4)
-                    .ok_or(GzipError::Data)?;
-                let len = u16::from_le_bytes([head[0], head[1]]);
-                let nlen = u16::from_le_bytes([head[2], head[3]]);
-                if len != !nlen {
-                    return Err(GzipError::Data);
-                }
-                let from = bits.pos + 4;
-                let block = bits
-                    .data
-                    .get(from..from + usize::from(len))
-                    .ok_or(GzipError::Data)?;
-                if out.len() + block.len() > max {
-                    return Err(GzipError::TooLarge);
-                }
-                out.extend_from_slice(block);
-                bits.pos = from + usize::from(len);
-            }
-            1 => {
-                let mut lengths = [0u8; 288];
-                lengths[..144].fill(8);
-                lengths[144..256].fill(9);
-                lengths[256..280].fill(7);
-                lengths[280..].fill(8);
-                let lit = Huffman::new(&lengths)?;
-                let dist = Huffman::new(&[5u8; 30])?;
-                codes(bits, out, &lit, &dist, max)?;
-            }
-            2 => {
-                let (lit, dist) = dynamic(bits)?;
-                codes(bits, out, &lit, &dist, max)?;
-            }
-            _ => return Err(GzipError::Data),
-        }
-        if last {
-            // The trailer starts on the next byte.
-            bits.align();
-            return Ok(());
-        }
-    }
-}
-
-fn dynamic(bits: &mut Bits<'_>) -> Result<(Huffman, Huffman), GzipError> {
-    const ORDER: [usize; 19] = [
-        16, 17, 18, 0, 8, 7, 9, 6, 10, 5, 11, 4, 12, 3, 13, 2, 14, 1, 15,
-    ];
-    let nlen = bits.take(5)? as usize + 257;
-    let ndist = bits.take(5)? as usize + 1;
-    let ncode = bits.take(4)? as usize + 4;
-    if nlen > 286 || ndist > 30 {
-        return Err(GzipError::Data);
-    }
-    let mut code_lengths = [0u8; 19];
-    for &i in &ORDER[..ncode] {
-        code_lengths[i] = bits.take(3)? as u8;
-    }
-    let code = Huffman::new(&code_lengths)?;
-    let mut lengths = vec![0u8; nlen + ndist];
-    let mut i = 0;
-    while i < nlen + ndist {
-        let sym = code.decode(bits)?;
-        let (value, repeat) = match sym {
-            0..=15 => (sym as u8, 1),
-            16 => {
-                let prev = *lengths.get(i.wrapping_sub(1)).ok_or(GzipError::Data)?;
-                (prev, 3 + bits.take(2)? as usize)
-            }
-            17 => (0, 3 + bits.take(3)? as usize),
-            18 => (0, 11 + bits.take(7)? as usize),
-            _ => return Err(GzipError::Data),
-        };
-        if i + repeat > lengths.len() {
+        if consumed == offset && written == 0 {
             return Err(GzipError::Data);
         }
-        lengths[i..i + repeat].fill(value);
-        i += repeat;
-    }
-    if lengths[256] == 0 {
-        return Err(GzipError::Data);
-    }
-    Ok((
-        Huffman::new(&lengths[..nlen])?,
-        Huffman::new(&lengths[nlen..])?,
-    ))
-}
+        offset = consumed;
+    };
 
-fn codes(
-    bits: &mut Bits<'_>,
-    out: &mut Vec<u8>,
-    lit: &Huffman,
-    dist: &Huffman,
-    max: usize,
-) -> Result<(), GzipError> {
-    loop {
-        let sym = lit.decode(bits)?;
-        match sym {
-            0..=255 => {
-                if out.len() >= max {
-                    return Err(GzipError::TooLarge);
-                }
-                out.push(sym as u8);
-            }
-            256 => return Ok(()),
-            257..=285 => {
-                let i = usize::from(sym - 257);
-                let len =
-                    usize::from(LENGTH_BASE[i]) + bits.take(u32::from(LENGTH_EXTRA[i]))? as usize;
-                let d = usize::from(dist.decode(bits)?);
-                if d >= 30 {
-                    return Err(GzipError::Data);
-                }
-                let back =
-                    usize::from(DIST_BASE[d]) + bits.take(u32::from(DIST_EXTRA[d]))? as usize;
-                if back > out.len() {
-                    return Err(GzipError::Data);
-                }
-                if out.len() + len > max {
-                    return Err(GzipError::TooLarge);
-                }
-                let from = out.len() - back;
-                for k in 0..len {
-                    let b = out[from + k];
-                    out.push(b);
-                }
-            }
-            _ => return Err(GzipError::Data),
-        }
+    let (sum, trailer) = trailer.split_first_chunk::<4>().ok_or(GzipError::Header)?;
+    let (size, rest) = trailer.split_first_chunk::<4>().ok_or(GzipError::Header)?;
+    let mut crc = Crc::new();
+    crc.update(&out[start..]);
+    if crc.sum() != u32::from_le_bytes(*sum) || crc.amount() != u32::from_le_bytes(*size) {
+        return Err(GzipError::Check);
     }
+    Ok(rest)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    // The port's former encoder: one stored block and CRC-32 0xcbf43926.
+    const STORED_MEMBER: &[u8] = b"\x1f\x8b\x08\x00\x00\x00\x00\x00\x00\xff\
+                                  \x01\x09\x00\xf6\xff123456789\x26\x39\xf4\xcb\x09\x00\x00\x00";
+
     #[test]
-    fn crc_matches_the_check_value() {
-        assert_eq!(crc32(b"123456789"), 0xCBF4_3926);
-        assert_eq!(crc32(b""), 0);
+    fn encodes_and_decodes_a_member() {
+        for len in [0usize, 1, 100, 0xFFFF, 0x1_0000, 200_000] {
+            let data: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
+            let gz = encode(&data).expect("gzip encoding");
+            assert_eq!(decode(&gz, len).unwrap(), data);
+        }
     }
 
     #[test]
-    fn stored_streams_round_trip() {
-        for len in [0usize, 1, 100, 0xFFFF, 0x1_0000, 200_000] {
-            let data: Vec<u8> = (0..len).map(|i| (i * 31 % 251) as u8).collect();
-            let gz = encode(&data);
-            assert_eq!(decode(&gz, usize::MAX), Ok(data));
-        }
+    fn reads_a_prior_stored_stream() {
+        assert_eq!(decode(STORED_MEMBER, 9).unwrap(), b"123456789");
+    }
+
+    #[test]
+    fn reads_long_optional_fields_and_checks_the_header_crc() {
+        let mut gz = STORED_MEMBER[..10].to_vec();
+        gz[3] = 4 | 8 | 16 | 2; // FEXTRA, FNAME, FCOMMENT, FHCRC
+        gz.extend_from_slice(&[7, 0, b'X', b'Y', 3, 0, b'a', b'b', 0]);
+        gz.extend(std::iter::repeat_n(b'n', 65_536));
+        gz.push(0);
+        gz.extend(std::iter::repeat_n(b'c', 65_537));
+        gz.push(0);
+        let mut crc = Crc::new();
+        crc.update(&gz);
+        let crc_offset = gz.len();
+        gz.extend_from_slice(&(crc.sum() as u16).to_le_bytes());
+        gz.extend_from_slice(&STORED_MEMBER[10..]);
+        assert_eq!(decode(&gz, 9).unwrap(), b"123456789");
+
+        gz[crc_offset] ^= 1;
+        assert_eq!(decode(&gz, 9), Err(GzipError::Header));
     }
 
     #[test]
@@ -393,10 +162,7 @@ mod tests {
             0x1f, 0x8b, 0x08, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02, 0xff, 0xcb, 0x48, 0xcd, 0xc9,
             0xc9, 0x57, 0xc8, 0x40, 0x27, 0x01, 0xe3, 0x51, 0x3d, 0x8d, 0x17, 0x00, 0x00, 0x00,
         ];
-        assert_eq!(
-            decode(&gz, usize::MAX).as_deref(),
-            Ok(&b"hello hello hello hello"[..])
-        );
+        assert_eq!(decode(&gz, usize::MAX).unwrap(), b"hello hello hello hello");
     }
 
     #[test]
@@ -419,17 +185,65 @@ mod tests {
             0xea, 0x18, 0xc8, 0x9b, 0x70, 0x26, 0x5d, 0xfb, 0x01, 0xfe, 0x6d, 0x69, 0x0a, 0x2c,
             0x01, 0x00, 0x00,
         ];
-        assert_eq!(decode(&gz, usize::MAX).as_deref(), Ok(text.as_bytes()));
+        assert_eq!(decode(&gz, usize::MAX).unwrap(), text.as_bytes());
     }
 
     #[test]
-    fn refuses_what_is_not_gzip_or_too_large() {
-        assert_eq!(decode(b"plain", usize::MAX), Err(GzipError::Header));
-        let gz = encode(&[7; 100]);
-        assert_eq!(decode(&gz, 50), Err(GzipError::TooLarge));
-        let mut bad = gz.clone();
-        let n = bad.len();
-        bad[n - 5] ^= 1;
-        assert_eq!(decode(&bad, usize::MAX), Err(GzipError::Check));
+    fn concatenated_members_share_one_decoded_budget() {
+        let mut gz = encode(b"one").expect("gzip first member");
+        gz.extend(encode(b"two").expect("gzip second member"));
+        assert_eq!(decode(&gz, 3), Err(GzipError::TooLarge));
+        assert_eq!(decode(&gz, 5), Err(GzipError::TooLarge));
+        assert_eq!(decode(&gz, 6).unwrap(), b"onetwo");
+
+        // A member with no output is still valid once the budget is exhausted.
+        gz.extend(encode(b"").expect("gzip empty member"));
+        assert_eq!(decode(&gz, 6).unwrap(), b"onetwo");
+    }
+
+    #[test]
+    fn refuses_distance_before_start_of_member() {
+        let mut incomplete_member = STORED_MEMBER[..10].to_vec();
+        // RFC 1951 §3.2.3 forbids a distance before the start of the output.
+        // Leave off the trailer: the raw decoder must reject the match first.
+        incomplete_member.extend_from_slice(&[0x03, 0x02, 0x00]);
+        assert_eq!(decode(&incomplete_member, usize::MAX), Err(GzipError::Data));
+
+        let mut gz = encode(b"one").expect("gzip first member");
+        gz.extend_from_slice(&incomplete_member);
+        assert_eq!(decode(&gz, usize::MAX), Err(GzipError::Data));
+    }
+
+    #[test]
+    fn ignores_nonmember_suffix_only_after_a_valid_member() {
+        assert_eq!(decode(b"plain", 10), Err(GzipError::Header));
+        let mut gz = encode(b"one").expect("gzip encoding");
+        let end = gz.len();
+        gz.extend_from_slice(b"plain");
+        assert_eq!(decode(&gz, 10).unwrap(), b"one");
+
+        gz.truncate(end);
+        gz.push(MAGIC[0]);
+        assert_eq!(decode(&gz, 10).unwrap(), b"one");
+        gz.push(MAGIC[1]);
+        assert_eq!(decode(&gz, 10), Err(GzipError::Header));
+    }
+
+    #[test]
+    fn refuses_truncation_in_the_header_body_or_trailer() {
+        for end in [9, 10, 16, STORED_MEMBER.len() - 1] {
+            assert!(decode(&STORED_MEMBER[..end], 9).is_err());
+        }
+    }
+
+    #[test]
+    fn refuses_invalid_crc_or_length_even_at_the_decoded_limit() {
+        let data = [7; 100];
+        let gz = encode(&data).expect("gzip encoding");
+        for offset in [8, 4] {
+            let mut bad = gz.clone();
+            bad[gz.len() - offset] ^= 1;
+            assert_eq!(decode(&bad, data.len()), Err(GzipError::Check));
+        }
     }
 }

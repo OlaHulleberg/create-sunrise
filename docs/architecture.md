@@ -77,7 +77,8 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
 
 ## Rules
 
-- Only `mod_api` and `create_engine`: no game internals, no `[[native.mixin]]`, no registry dependencies.
+- Glue uses only `mod_api` and `create_engine`; no game internals or `[[native.mixin]]`. The engine uses
+  pinned `flate2` for schematic DEFLATE and CRC.
 - Hot paths (block changes, ticks, per-block parts) return early for anything not Create's and allocate nothing
   when nothing changed.
 - Per-object helpers go on the handle they act on, in the subsystem's own module.
