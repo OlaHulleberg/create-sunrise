@@ -1,5 +1,5 @@
 //! `GhostItemMenu`, `HeldItemGhostItemMenu`, `AbstractFilterMenu`, `FilterMenu` and
-//! `AttributeFilterMenu`'s clicks, over `AbstractContainerMenu.doClick` for the player's slots.
+//! `AttributeFilterMenu`'s and `LinkedControllerMenu`'s clicks, over `AbstractContainerMenu.doClick` for the player's slots.
 //!
 //! Slots are numbered as Create's menus number them: the player's 36 first (`addPlayerSlots`:
 //! the three rows, then the hotbar), then the ghost slots.
@@ -26,6 +26,8 @@ pub const OFFHAND: i32 = 40;
 pub enum Kind {
     Filter,
     AttributeFilter,
+    /// `LinkedControllerMenu`.
+    LinkedController,
 }
 
 impl Kind {
@@ -34,7 +36,13 @@ impl Kind {
         match self {
             Kind::Filter => crate::filter::LIST_SLOTS,
             Kind::AttributeFilter => 2,
+            Kind::LinkedController => crate::controller::SLOTS,
         }
+    }
+
+    /// `allowRepeats`: the same item may fill several ghost slots.
+    fn repeats(self) -> bool {
+        self == Kind::LinkedController
     }
 
     /// `AttributeFilterMenu`'s selected attributes' slot (index 37), which nothing changes.
@@ -338,11 +346,12 @@ impl<S: Stack> Menu<S> {
         let insert = self.get(Self::at(index)).cloned();
         match self.kind {
             Kind::AttributeFilter => self.ghost[0] = insert.map(|s| s.with_count(1)),
-            Kind::Filter => {
+            Kind::Filter | Kind::LinkedController => {
                 let Some(insert) = insert else { return };
+                let repeats = self.kind.repeats();
                 for g in self.ghost.iter_mut() {
                     match g {
-                        Some(there) if there.same(&insert) => break,
+                        Some(there) if !repeats && there.same(&insert) => break,
                         Some(_) => {}
                         None => {
                             *g = Some(insert.with_count(1));
@@ -448,7 +457,8 @@ impl<S: Stack> Menu<S> {
         }
     }
 
-    /// `GhostItemMenu.canDragTo` (no repeats in a filter): the player's slots only.
+    /// `GhostItemMenu.canDragTo`: the player's slots only (a click on a ghost slot never
+    /// reaches a drag, `GhostItemMenu.clicked`).
     fn can_drag_to(index: usize) -> bool {
         index < PLAYER_SLOTS
     }
@@ -560,9 +570,9 @@ impl<S: Stack> Menu<S> {
         self.carried = Some(carried);
     }
 
-    /// `IClearableMenu.clearContents` of a list filter: its ghost slots emptied.
+    /// `IClearableMenu.clearContents` of a list filter or a controller: its ghost slots emptied.
     pub fn clear(&mut self) {
-        if self.kind == Kind::Filter {
+        if self.kind != Kind::AttributeFilter {
             self.ghost.iter_mut().for_each(|g| *g = None);
         }
     }
@@ -720,6 +730,42 @@ mod tests {
         assert_eq!(m.inventory[11], None);
         assert_eq!(m.inventory[10], Some(dirt(8)));
         assert_eq!(m.inventory[0], Some(filter()));
+    }
+
+    /// A linked controller held in hotbar slot 0, with dirt in inventory slot 9 (menu slot 0).
+    fn controller_menu() -> Menu<S> {
+        let mut inventory = vec![None; 36];
+        inventory[0] = Some(S("controller", 1, 1));
+        inventory[9] = Some(dirt(10));
+        Menu::new(Kind::LinkedController, Vec::new(), inventory, 0)
+    }
+
+    #[test]
+    fn a_controllers_twelve_slots_take_repeats_and_clear() {
+        let mut m = controller_menu();
+        assert_eq!(m.ghost.len(), 12);
+        m.click(0, 0, Click::QuickMove);
+        m.click(0, 0, Click::QuickMove);
+        assert_eq!(m.ghost[0], Some(dirt(1)));
+        assert_eq!(m.ghost[1], Some(dirt(1)));
+        m.click(0, 0, Click::Pickup);
+        m.click(36 + 11, 0, Click::Pickup);
+        assert_eq!(m.ghost[11], Some(dirt(1)));
+        assert_eq!(m.carried, Some(dirt(10)));
+        m.clear();
+        assert!(m.ghost.iter().all(Option::is_none));
+    }
+
+    #[test]
+    fn the_held_controller_takes_no_pickup_but_can_be_thrown() {
+        let mut m = controller_menu();
+        m.click(27, 0, Click::Pickup);
+        assert_eq!(m.carried, None);
+        assert_eq!(m.inventory[0], Some(S("controller", 1, 1)));
+        m.click(27, 0, Click::QuickMove);
+        assert_eq!(m.ghost[0], None);
+        assert_eq!(m.click(27, 0, Click::Throw).len(), 1);
+        assert!(!m.still_valid());
     }
 
     #[test]

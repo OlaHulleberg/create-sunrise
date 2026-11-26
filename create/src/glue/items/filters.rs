@@ -4,9 +4,10 @@
 //! (`FilteringBehaviour.destroy`), and the list and attribute filters' menus opened from the
 //! hand (`FilterItem.use`; `FilterMenu`, `AttributeFilterMenu`, clicked as `ghost_menu` rules,
 //! drawn by `filter_screen`) with their settings (`FilterScreenPacket`) written back as they
-//! close (`saveData`). A filter's settings are kept in the stack's
-//! custom data under Create's component names, its list as `ItemContainerContents` (`Slot` and
-//! the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
+//! close (`saveData`). The linked controller's menu (`LinkedControllerMenu`, drawn by
+//! `controller_screen`) is kept here too, its twelve frequencies written back as it closes. A
+//! filter's settings are kept in the stack's custom data under Create's component names, its
+//! list as `ItemContainerContents` (`Slot` and the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
 //! sets a package filter's address too (its screen is the stock glue's, `stock::package_filter`).
 //!
 //! The attributes that read a recipe book (`washable`, `hauntable`, `crushable`, `smeltable`,
@@ -925,22 +926,6 @@ struct Session {
 thread_local! {
     static SESSIONS: std::cell::RefCell<std::collections::HashMap<u128, Session>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    static MENU_KEYS: std::cell::RefCell<Option<[mod_api::MenuKey; 2]>> =
-        const { std::cell::RefCell::new(None) };
-}
-
-/// The menu types `create:filter` and `create:attribute_filter`.
-fn menu_key(host: &dyn Host, kind: ghost_menu::Kind) -> Option<mod_api::MenuKey> {
-    let keys = MENU_KEYS.with_borrow_mut(|k| {
-        if k.is_none() {
-            let find = |id: &str| host.menu_keys().into_iter().find(|m| m.name(host) == id);
-            *k = find(filter_screen::FILTER_MENU)
-                .zip(find(filter_screen::ATTRIBUTE_MENU))
-                .map(|(a, b)| [a, b]);
-        }
-        *k
-    })?;
-    Some(keys[usize::from(kind == ghost_menu::Kind::AttributeFilter)])
 }
 
 /// `AttributeFilterMenu.init`: the selected attributes' slot shows a name tag.
@@ -960,23 +945,27 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
     let Some(stack) = held(&*host, player, Hand::Main) else {
         return;
     };
-    let kind = match filter::FilterItem::of(&stack.item().name(&*host)) {
-        Some(filter::FilterItem::List) => ghost_menu::Kind::Filter,
-        Some(filter::FilterItem::Attribute) => ghost_menu::Kind::AttributeFilter,
-        _ => return,
-    };
-    let Some(key) = menu_key(&*host, kind) else {
-        return;
-    };
     let h: &dyn Host = &*host;
     let c = custom(&stack);
-    let ghost: Vec<Option<Held>> = match kind {
-        ghost_menu::Kind::Filter => decode_items(h, c.get(&ITEMS_KEY.into()), LIST_SLOTS),
-        ghost_menu::Kind::AttributeFilter => vec![None, selected_tags(h)],
-    }
-    .into_iter()
-    .map(|s| s.map(|s| Held::of(h, s)))
-    .collect();
+    let (kind, menu, title, ghost) = match filter::FilterItem::of(&stack.item().name(h)) {
+        Some(filter::FilterItem::List) => (
+            ghost_menu::Kind::Filter,
+            filter_screen::FILTER_MENU,
+            "item.create.filter",
+            decode_items(h, c.get(&ITEMS_KEY.into()), LIST_SLOTS),
+        ),
+        Some(filter::FilterItem::Attribute) => (
+            ghost_menu::Kind::AttributeFilter,
+            filter_screen::ATTRIBUTE_MENU,
+            "item.create.attribute_filter",
+            vec![None, selected_tags(h)],
+        ),
+        _ => return,
+    };
+    let ghost: Vec<Option<Held>> = ghost
+        .into_iter()
+        .map(|s| s.map(|s| Held::of(h, s)))
+        .collect();
     let s = spec(h, &stack);
     let mode = s
         .mode
@@ -994,32 +983,86 @@ fn open_menu(host: &mut dyn ServerHost, player: PlayerRef) {
             .collect(),
     };
     let selected = player.selected_slot(h).unwrap_or(0);
-    let title = match kind {
-        ghost_menu::Kind::Filter => "item.create.filter",
-        ghost_menu::Kind::AttributeFilter => "item.create.attribute_filter",
-    };
-    let title = Text::translate(title, Vec::new());
-    let mut request = mod_api::ModMenuOpen::new(key, title);
-    request.extra = opened.encode();
-    request.opening_hand = Some(Hand::Main);
-    request.replace = mod_api::MenuReplace::CloseFirst;
-    let Ok(Some(menu)) = player.open_mod_menu(host, request) else {
-        return;
-    };
-    let Some(window) = menu.container_id(&*host) else {
-        return;
-    };
-    let menu = ghost_menu::Menu::new(kind, ghost, Vec::new(), selected);
     let session = Session {
-        window,
+        window: 0,
         stack,
-        menu,
+        menu: ghost_menu::Menu::new(kind, ghost, Vec::new(), selected),
         deny: s.blacklist,
         respect: s.respect_nbt,
         mode,
         chosen,
         options: Vec::new(),
     };
+    open_session(host, player, menu, title, opened.encode(), session);
+}
+
+/// `player.openMenu(controller)`: the linked controller in the main hand, with `ghost` as its
+/// twelve frequency slots (`LinkedControllerMenu`).
+pub(super) fn open_controller(
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    ghost: Vec<Option<ItemStack>>,
+) {
+    let Some(stack) = held(&*host, player, Hand::Main) else {
+        return;
+    };
+    let h: &dyn Host = &*host;
+    let ghost: Vec<Option<Held>> = ghost
+        .into_iter()
+        .map(|s| s.map(|s| Held::of(h, s)))
+        .collect();
+    let selected = player.selected_slot(h).unwrap_or(0);
+    let session = Session {
+        window: 0,
+        stack,
+        menu: ghost_menu::Menu::new(
+            ghost_menu::Kind::LinkedController,
+            ghost,
+            Vec::new(),
+            selected,
+        ),
+        deny: false,
+        respect: false,
+        mode: Mode::WhitelistDisj,
+        chosen: Vec::new(),
+        options: Vec::new(),
+    };
+    let title = "item.create.linked_controller";
+    open_session(
+        host,
+        player,
+        super::controller_screen::CONTROLLER_MENU,
+        title,
+        Vec::new(),
+        session,
+    );
+}
+
+/// Opens the mod menu `menu` over the held stack and keeps `session` for its clicks and its
+/// close.
+fn open_session(
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    menu: &str,
+    title: &str,
+    extra: Vec<u8>,
+    mut session: Session,
+) {
+    let h: &dyn Host = &*host;
+    let Some(key) = h.menu_keys().into_iter().find(|m| m.name(h) == menu) else {
+        return;
+    };
+    let mut request = mod_api::ModMenuOpen::new(key, Text::translate(title, Vec::new()));
+    request.extra = extra;
+    request.opening_hand = Some(Hand::Main);
+    request.replace = mod_api::MenuReplace::CloseFirst;
+    let Ok(Some(opened)) = player.open_mod_menu(host, request) else {
+        return;
+    };
+    let Some(window) = opened.container_id(&*host) else {
+        return;
+    };
+    session.window = window;
     show_ghosts(host, player.uuid(), &session, None);
     SESSIONS.with_borrow_mut(|m| m.insert(player.uuid(), session));
 }
@@ -1626,6 +1669,18 @@ pub(super) fn menu_removed(host: &mut dyn ServerHost, event: &mod_api::MenuRemov
     match session.menu.kind {
         ghost_menu::Kind::AttributeFilter => {
             write_attributes(&mut stack, session.mode, &session.chosen);
+        }
+        ghost_menu::Kind::LinkedController => {
+            let items: Vec<String> = session
+                .menu
+                .ghost
+                .iter()
+                .map(|g| {
+                    g.as_ref()
+                        .map_or_else(String::new, |g| g.stack.item().name(h))
+                })
+                .collect();
+            super::super::contraptions::controller::set_controller_items(&mut stack, &items);
         }
         ghost_menu::Kind::Filter => {
             let slots: Vec<Option<ItemStack>> = session

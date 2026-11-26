@@ -10,7 +10,7 @@
 //!
 //! The controller's frequencies are kept on the stack's custom data
 //! (`create:linked_controller_items`), and set in its frequency
-//! screen (`items::controller_screen`), opened by a sneaking use.
+//! screen (`items::controller_screen`, a blockless menu), opened by a sneaking use.
 
 use super::super::net;
 use super::super::persist::mark_pos_unsaved;
@@ -419,7 +419,7 @@ fn controller_items(stack: &ItemStack) -> Vec<String> {
 }
 
 /// `set(LINKED_CONTROLLER_ITEMS)`: none when every slot is empty.
-fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
+pub(crate) fn set_controller_items(stack: &mut ItemStack, items: &[String]) {
     let mut c = custom(stack).cloned().unwrap_or_default();
     if items.iter().any(|i| !i.is_empty()) {
         let list = items
@@ -718,25 +718,6 @@ fn run_command(host: &mut dyn ServerHost, event: &mut CommandCall<'_>) -> Flow {
     };
     let _ = host.commands().feedback(Text::literal(line), false);
     Flow::Cancel
-}
-
-/// The frequency screen closed (`HeldItemGhostItemMenu.removed`, `saveData`): its twelve
-/// frequencies go on the controller still in the player's main hand.
-pub(crate) fn chosen(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
-    let Some(items) = crate::glue::items::controller_screen::chosen(data) else {
-        return;
-    };
-    let Some(living) = host.living(player.entity()) else {
-        return;
-    };
-    let Some(mut stack) = living.hand_item(&*host, Hand::Main) else {
-        return;
-    };
-    if !is_controller(&*host, Some(&stack)) {
-        return;
-    }
-    set_controller_items(&mut stack, &items);
-    let _ = living.set_hand_item(host, Hand::Main, Some(stack));
 }
 
 /// A player's packet (`LinkedControllerPacketBase.handle`): a lectern's at once, the hand's in
