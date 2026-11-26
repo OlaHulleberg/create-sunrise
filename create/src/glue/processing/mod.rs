@@ -318,7 +318,7 @@ impl Subsystem for Processing {
     }
 
     /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, the basins'
-    /// backup checks. Mixers and presses over basins work at their own turns in logistics'
+    /// lazy ticks (spout and backup check). Mixers and presses over basins work at their own turns in logistics'
     /// transport walk.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
@@ -333,7 +333,6 @@ impl Subsystem for Processing {
         fan::tick_fans(lv);
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
-        basin::backup_check(lv);
         spoutput::tick(lv);
         basin::show_basins(lv);
     }

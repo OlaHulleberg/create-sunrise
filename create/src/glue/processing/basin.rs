@@ -35,6 +35,7 @@ pub fn clear() {
     PRESS_CRAFTED.with_borrow_mut(HashMap::clear);
     COMPRESSED.with_borrow_mut(HashMap::clear);
     MIXER_SHOWN.with_borrow_mut(HashMap::clear);
+    BACKUP.with_borrow_mut(HashMap::clear);
 }
 
 /// The recipes were read again: what was worked out from them goes.
@@ -81,8 +82,6 @@ pub const ITEMS_KEY: &str = "BasinItems";
 /// The key of a mixer's block entity data its clients run its head from: `T`, its running ticks
 /// when told, and `S`, the game time it was told at; none when it rests.
 pub const MIXER_KEY: &str = "Mixer";
-/// Ticks between a basin's `recipeBackupCheck`s (a lazy tick of 10, counted down from 20).
-const BACKUP_CHECK: i64 = 200;
 /// A blaze burner's blaze wears goggles (`BlazeBurnerBlockEntity.goggles`).
 pub const GOGGLES_KEY: &str = "Goggles";
 
@@ -92,6 +91,9 @@ type Told = (i32, i64);
 thread_local! {
     /// What each running mixer's clients were last told, by dimension and mixer.
     static MIXER_SHOWN: RefCell<HashMap<(usize, [i32; 3]), Told>> = RefCell::new(HashMap::new());
+    /// Each loaded basin's `recipeBackupCheck`, by dimension and basin.
+    static BACKUP: RefCell<HashMap<(usize, [i32; 3]), basin::BackupCheck>> =
+        RefCell::new(HashMap::new());
 }
 
 /// Puts each value under its key in the data of the block entity at `pos` (none: takes it
@@ -393,17 +395,25 @@ pub fn use_basin(
         || recipes::with(|r| create_engine::spout::fillable(&held, &r.filling)).unwrap_or(false)
 }
 
-/// `BasinBlockEntity.lazyTick`'s `recipeBackupCheck`: every 200 ticks a basin that holds
-/// something is told its contents changed, so its mixer or press looks for a recipe again at its
-/// next turn: a burner lit (or a recipe reloaded) after the items went in still gets them going.
-pub fn backup_check(lv: &mut ServerLevel<'_>) {
-    if lv.game_time() % BACKUP_CHECK != 0 {
-        return;
-    }
+/// `BasinBlockEntity.lazyTick`'s `recipeBackupCheck` for the basins whose lazy tick came
+/// (`due`): each counts its own lazy ticks down, and on the 21st a basin that holds something is
+/// told its contents changed, so its mixer or press looks for a recipe again at its next turn: a
+/// burner lit (or a recipe reloaded) after the items went in still gets them going. A basin
+/// that is no longer loaded forgets its count (a new block entity starts at 20).
+pub fn backup_check(lv: &mut ServerLevel<'_>, due: &[[i32; 3]]) {
     let dim = lv.dim;
-    let basins: Vec<[i32; 3]> =
-        with_world(|w| w.dims[dim].basins.keys().copied().collect()).unwrap_or_default();
-    for pos in basins {
+    with_world(|w| {
+        let basins = &w.dims[dim].basins;
+        BACKUP.with_borrow_mut(|b| b.retain(|(d, p), _| *d != dim || basins.contains_key(p)));
+    });
+    for &pos in due {
+        if !lv.is_loaded(pos) || !basin_at(lv, pos) {
+            continue;
+        }
+        let fires = BACKUP.with_borrow_mut(|b| b.entry((dim, pos)).or_default().lazy_tick());
+        if !fires {
+            continue;
+        }
         let tanks = basin_tanks(dim, pos);
         let filled = basin_slots(lv, pos).is_some_and(|s| s.iter().any(Option::is_some))
             || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
@@ -437,15 +447,10 @@ pub(crate) fn mixer_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     })
     .unwrap_or_default();
     if removed {
-        // `onBasinRemoved`: the head goes back up, and `BasinOperatingBlockEntity.tick` returns
-        // without ticking the mixer on this turn; the next turn resets `running_ticks` to 0.
-        if m.running {
-            m.running = false;
-            m.running_ticks = 40;
-        }
-        with_world(|w| w.dims[dim].mixers.insert(pos, m));
-        show_mixer(lv, pos, &m);
-        return;
+        // `onBasinRemoved`: the head goes back up. `BasinOperatingBlockEntity.tick` returns, but
+        // `MechanicalMixerBlockEntity.tick` goes on in the same turn: `runningTicks >= 40` rests
+        // the head below.
+        m.basin_removed();
     }
     if look {
         update_mixer_basin(lv, pos, &mut m);

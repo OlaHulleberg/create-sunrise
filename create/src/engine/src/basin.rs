@@ -472,6 +472,30 @@ pub struct Mixer {
     pub recipe: Option<usize>,
 }
 
+/// `BasinBlockEntity.recipeBackupCheck`: counted down by each of the basin's lazy ticks
+/// (`lazyTick`), which fires when it has run out (`recipeBackupCheck-- > 0` returns until it
+/// reads 0) and starts over at 20: the 21st lazy tick, then every 21 lazy ticks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct BackupCheck(i32);
+
+impl Default for BackupCheck {
+    fn default() -> Self {
+        Self(20)
+    }
+}
+
+impl BackupCheck {
+    /// One lazy tick of the basin: whether the backup check is due.
+    pub fn lazy_tick(&mut self) -> bool {
+        let due = self.0 <= 0;
+        self.0 -= 1;
+        if due {
+            self.0 = 20;
+        }
+        due
+    }
+}
+
 /// What a tick of the mixer asks of the glue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MixStep {
@@ -512,8 +536,18 @@ impl Mixer {
         true
     }
 
+    /// `onBasinRemoved`: a running mixer's head goes back up (`runningTicks = 40`,
+    /// `running = false`). Java's `BasinOperatingBlockEntity.tick` returns after this, but
+    /// `MechanicalMixerBlockEntity.tick` goes on to its own checks in the same turn, so the next
+    /// [`Mixer::tick`] finds `running_ticks >= 40` and rests the head.
+    pub fn basin_removed(&mut self) {
+        if self.running {
+            self.running = false;
+            self.running_ticks = 40;
+        }
+    }
+
     /// One server tick at `speed` (rpm, signed); `time` the recipe's processing duration.
-    pub fn tick(&mut self, speed: f32, time: i32) -> MixStep {
         // `isSpeedRequirementFulfilled` (`MechanicalMixerBlock`'s medium speed): too slow, the
         // head goes back up as when still.
         let fulfilled = speed.abs() >= MIXER_MIN_SPEED;
@@ -1143,5 +1177,48 @@ mod admits_tests {
             .map(|i| list[i].id.as_str())
             .collect();
         assert_eq!(found, ["create:two_items", "minecraft:wet_dirt"]);
+    }
+
+    #[test]
+    fn a_removed_basin_rests_a_running_mixer_in_the_same_turn() {
+        // `onBasinRemoved` sets `runningTicks = 40`; `MechanicalMixerBlockEntity.tick` goes on in
+        // the same turn and rests the head (`running = false`, `runningTicks = 0`).
+        let mut m = Mixer::default();
+        m.start(0);
+        for _ in 0..10 {
+            m.tick(64.0, 0);
+        }
+        assert!(m.running && m.running_ticks == 10);
+        m.basin_removed();
+        assert_eq!(m.tick(64.0, 0), MixStep::Done);
+        assert!(!m.running);
+        assert_eq!(m.running_ticks, 0);
+    }
+
+    #[test]
+    fn a_removed_basin_leaves_a_resting_mixer_alone() {
+        let mut m = Mixer::default();
+        m.basin_removed();
+        assert_eq!(m, Mixer::default());
+        assert_eq!(m.tick(64.0, 0), MixStep::None);
+    }
+
+    #[test]
+    fn the_backup_check_is_due_on_the_21st_lazy_tick_then_every_21st() {
+        let mut check = BackupCheck::default();
+        let due: Vec<u32> = (1..=63).filter(|_| check.lazy_tick()).collect();
+        assert_eq!(due, [21, 42, 63]);
+    }
+
+    #[test]
+    fn the_backup_check_counts_a_basin_s_own_lazy_ticks_not_game_ticks() {
+        // A basin's lazy ticks: at its first tick, then every 11 (`SmartBlockEntity`, rate 10).
+        let mut lazy = crate::block_entity::SmartBlockEntity::default();
+        let mut check = BackupCheck::default();
+        let due: Vec<u32> = (1..=460)
+            .filter(|_| lazy.tick() && check.lazy_tick())
+            .collect();
+        // The first lazy tick is tick 1, then every 11th: the 21st is tick 220, then 231 apart.
+        assert_eq!(due, [220, 451]);
     }
 }

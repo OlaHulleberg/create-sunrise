@@ -39,6 +39,24 @@ const PRESS_RUNNING: &str = "Running";
 const PRESS_MODE: &str = "Mode";
 const PRESS_FINISHED: &str = "Finished";
 const PRESS_TICKS: &str = "Ticks";
+const MIXER_RUNNING: &str = "Running";
+const MIXER_TICKS: &str = "Ticks";
+
+/// `MechanicalMixerBlockEntity.write`: `Running` (a boolean) and `Ticks` (`runningTicks`).
+fn write_mixer(m: &basin::Mixer, out: &mut Compound) {
+    out.insert(MIXER_RUNNING.into(), Tag::Byte(i8::from(m.running)));
+    out.insert(MIXER_TICKS.into(), Tag::Int(m.running_ticks));
+}
+
+/// `MechanicalMixerBlockEntity.read`: what it saves, the rest of a new block entity's (no
+/// recipe, no processing time worked out).
+fn read_mixer(tag: &Compound) -> basin::Mixer {
+    basin::Mixer {
+        running: matches!(tag.get(&MIXER_RUNNING.into()), Some(Tag::Byte(b)) if *b != 0),
+        running_ticks: int(tag, MIXER_TICKS),
+        ..basin::Mixer::default()
+    }
+}
 
 pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
     match block {
@@ -50,6 +68,7 @@ pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
         Block::MechanicalSaw => &[super::saw::INVENTORY, super::saw::RECIPE_INDEX],
         Block::Millstone => &[TIMER],
         Block::MechanicalPress => &[PRESS_RUNNING, PRESS_MODE, PRESS_FINISHED, PRESS_TICKS],
+        Block::MechanicalMixer => &[MIXER_RUNNING, MIXER_TICKS],
         _ => &[],
     }
 }
@@ -129,6 +148,11 @@ pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compoun
                     fields.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
                     fields.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
                     fields.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
+                }
+            }
+            Block::MechanicalMixer => {
+                if let Some(m) = d.mixers.get(&pos) {
+                    write_mixer(m, fields);
                 }
             }
             _ => {}
@@ -222,6 +246,9 @@ pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
             e.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
             e.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
             e.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
+        }
+        for (p, m) in d.mixers.iter().filter(|(p, _)| mine(p)) {
+            write_mixer(m, out.entry(*p).or_default());
         }
     });
 }
@@ -344,6 +371,9 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
             if pr.running {
                 d.press_changes.push(pos);
             }
+        }
+        Block::MechanicalMixer => {
+            w.dims[dim].mixers.insert(pos, read_mixer(tag));
         }
         _ => {}
     });
@@ -591,6 +621,34 @@ fn covers_from_nbt(data: &Compound) -> Vec<[i32; 3]> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_mixer_mid_cycle_reads_back_running_and_ticks_as_saved() {
+        let mixer = basin::Mixer {
+            running: true,
+            running_ticks: 27,
+            // Not saved: a reloaded mixer works its processing time out again.
+            processing_ticks: 9,
+            recipe: Some(4),
+        };
+        let mut saved = Compound::new();
+        write_mixer(&mixer, &mut saved);
+        assert_eq!(saved.get(&"Running".into()), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get(&"Ticks".into()), Some(&Tag::Int(27)));
+        assert_eq!(
+            read_mixer(&saved),
+            basin::Mixer {
+                running: true,
+                running_ticks: 27,
+                ..basin::Mixer::default()
+            }
+        );
+        // A mixer at rest, and a tag that saves nothing for it, read as a new one.
+        let mut rest = Compound::new();
+        write_mixer(&basin::Mixer::default(), &mut rest);
+        assert_eq!(read_mixer(&rest), basin::Mixer::default());
+        assert_eq!(read_mixer(&Compound::new()), basin::Mixer::default());
+    }
 
     #[test]
     fn deployers_and_crafter_inputs_read_back_as_saved() {

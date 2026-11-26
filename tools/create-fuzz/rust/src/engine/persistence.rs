@@ -236,6 +236,7 @@ impl Run {
         at.extend(self.w.dims[0].funnels.keys().copied());
         at.extend(self.w.dims[0].millstones.keys().copied());
         at.extend(self.w.dims[0].presses.keys().copied());
+        at.extend(self.w.dims[0].mixers.keys().copied());
         at.sort();
         at.dedup();
         for p in at {

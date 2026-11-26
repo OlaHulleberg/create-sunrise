@@ -48,6 +48,13 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
                 fields.insert("Ticks".into(), Tag::Int(pr.ticks));
             }
         }
+        // glue/processing/persist.rs `live_fields`: the mixer's `Running` and `Ticks`.
+        Some(Block::MechanicalMixer) => {
+            if let Some(m) = w.dims[0].mixers.get(&p) {
+                fields.insert("Running".into(), Tag::Byte(i8::from(m.running)));
+                fields.insert("Ticks".into(), Tag::Int(m.running_ticks));
+            }
+        }
         _ => {}
     }
 }
@@ -198,6 +205,14 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
             e.insert("Ticks".into(), Tag::Int(pr.ticks));
         }
     }
+    // glue/processing/persist.rs `save_entities`: the mixer's `Running` and `Ticks`.
+    for (p, m) in w.dims[0].mixers.iter() {
+        if (p[0] >> 4, p[2] >> 4) == column {
+            let e = out.entry(*p).or_default();
+            e.insert("Running".into(), Tag::Byte(i8::from(m.running)));
+            e.insert("Ticks".into(), Tag::Int(m.running_ticks));
+        }
+    }
     super::fluids::save_entities(w, column, &mut out);
     out
 }
@@ -262,6 +277,22 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
             if pr.running {
                 d.press_changes.push(p);
             }
+        }
+        // glue/processing/persist.rs `load_entity`: the mixer's `Running` and `Ticks`.
+        Block::MechanicalMixer => {
+            let running = matches!(tag.get("Running"), Some(Tag::Byte(b)) if *b != 0);
+            let running_ticks = match tag.get("Ticks") {
+                Some(Tag::Int(v)) => *v,
+                _ => 0,
+            };
+            w.dims[0].mixers.insert(
+                p,
+                create_engine::basin::Mixer {
+                    running,
+                    running_ticks,
+                    ..Default::default()
+                },
+            );
         }
         _ => {}
     }
