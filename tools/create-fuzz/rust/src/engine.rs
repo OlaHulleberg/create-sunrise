@@ -7,6 +7,7 @@
 
 mod belts;
 mod brass;
+mod breaking;
 mod chutes;
 mod conveyors;
 mod ejectors;
@@ -29,6 +30,7 @@ mod pumps;
 mod sources;
 mod transport;
 mod tunnels;
+mod vanilla;
 
 use crate::scenario::{
     BlockSnap, Kinetic, Placed, Pos, Scenario, Snapshot, key, parse_state, with_prop,
@@ -170,6 +172,10 @@ fn create_states(sc: &Scenario) -> Vec<String> {
             || e.id.ends_with("_encased_cogwheel")
             || e.id.ends_with("_encased_large_cogwheel")
             || e.id.ends_with("_valve_handle")
+            || matches!(
+                e.id.as_str(),
+                "create:mechanical_drill" | "create:mechanical_saw"
+            )
     }) {
         for spec in entry.specifications() {
             push(spec.state);
@@ -268,6 +274,10 @@ pub struct Run {
     saw_duration: HashMap<Pos, f32>,
     /// The side the current item handler access asks from.
     capability_side: Option<create_engine::kinetics::Dir>,
+    vanilla: vanilla::Vanilla,
+    /// Each breaker's cracks (`set_break_progress`): where, and the stage.
+    cracks: HashMap<Pos, (Pos, i32)>,
+    rules: breaking::Rules,
     _guard: std::sync::MutexGuard<'static, ()>,
 }
 
@@ -343,6 +353,9 @@ impl Run {
             saw_index: HashMap::new(),
             saw_duration: HashMap::new(),
             capability_side: None,
+            vanilla: Default::default(),
+            cracks: HashMap::new(),
+            rules: Default::default(),
             _guard: guard,
         }
     }
@@ -418,6 +431,8 @@ impl Run {
 
     fn commit_with(&mut self, p: Pos, new: u32, notify: bool, skip_shape_updates: bool) {
         let old = self.at(p);
+        // Whatever is written here replaces a catalogue block (`set_state` keeps its own).
+        self.vanilla.states.remove(&p);
         if self.w.table.get(old).map(|(b, _)| b) != self.w.table.get(new).map(|(b, _)| b) {
             self.persisted.kinetics.remove(&(p, 0));
             self.persisted.kinetics.remove(&(p, 1));
@@ -574,9 +589,15 @@ impl Run {
         }
         self.conveyor_changed(p, old, new);
         self.fluid_world_changed(p);
-        if !notify {
-            return;
+        if notify {
+            self.neighbours_changed(p, new);
         }
+    }
+
+    /// The end of a committed change: each neighbour's `updateShape` (the vanilla blocks), then
+    /// its `neighborChanged`, and what loses its support.
+    fn neighbours_changed(&mut self, p: Pos, new: u32) {
+        self.tell_neighbours(p);
         let mut fallen = Vec::new();
         for d in DIRS {
             let q = add(p, d);
@@ -623,7 +644,7 @@ impl Run {
         if id == OTHER && b.state.starts_with("create:") {
             self.notes.push(format!("unknown state {}", b.state));
         }
-        self.set(b.pos, id);
+        self.set_state(b.pos, &b.state);
         // `SteamEngineBlock.onPlace` turns the shaft in front of it now, not on the next tick.
         if self.w.block_at(0, b.pos) == Some(create_engine::Block::SteamEngine) {
             self.apply_shaft_changes();

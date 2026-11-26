@@ -22,6 +22,7 @@ import java.util.UUID;
 /** A case owns the entire empty test level; no two cases simulate concurrently. */
 final class CaseIsolation {
     static CompoundTag rules;
+    static boolean doTileDrops;
     static Path directory;
     static final String BOOT = UUID.randomUUID().toString();
     static long generation;
@@ -31,6 +32,7 @@ final class CaseIsolation {
     static void initialize(ServerLevel level, Path dir) throws Exception {
         directory = dir;
         rules = level.getGameRules().createTag().copy();
+        doTileDrops = level.getGameRules().getBoolean(net.minecraft.world.level.GameRules.RULE_DOBLOCKDROPS);
         var options = ManagementFactory.getPlatformMXBean(com.sun.management.HotSpotDiagnosticMXBean.class);
         if (!options.getVMOption("EnableDynamicAgentLoading").getValue().equals("false"))
             throw new IllegalStateException("harness requires -XX:-EnableDynamicAgentLoading; runtime redefinition invalidates comparisons");
@@ -51,7 +53,13 @@ final class CaseIsolation {
             throw new IllegalStateException("case isolation: connected players share the test level");
     }
 
-    static long unobservedDrops;
+    /** The server's `doTileDrops` again: a case's `game_rule` action ends with the case. */
+    static void restoreRules(ServerLevel level) {
+        var rule = level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOBLOCKDROPS);
+        if (rule.get() != doTileDrops) rule.set(doTileDrops, level.getServer());
+    }
+
+    static long unobservedDrops, unobservedExperience;
     private static final Map<BlockPos,JsonArray> drops=new java.util.HashMap<>();
     static JsonArray drops(BlockPos origin) {return drops.getOrDefault(origin,new JsonArray()).deepCopy();}
     /** Item flight after the controlled landing boundary is outside the driver contract. */
@@ -63,8 +71,12 @@ final class CaseIsolation {
         assertEntityBounds(level,origin);
         var found=new ArrayList<net.minecraft.world.entity.item.ItemEntity>();
         for(var entity:level.getAllEntities()) if(entity instanceof net.minecraft.world.entity.item.ItemEntity item) found.add(item);
+        // A breaker pops an ore's experience (BlockHelper.destroyBlockAs); the port's experience is not observed.
+        for(var entity:level.getAllEntities()) if(entity instanceof net.minecraft.world.entity.ExperienceOrb orb) {unobservedExperience++;orb.discard();}
         for(var entity:found) {
             if(tick!=null) {
+                // A loot entry that rolled nothing still spawns an item entity; it is no drop.
+                if(entity.getItem().isEmpty()) {unobservedDrops++;entity.discard();continue;}
                 var d=new JsonObject();
                 d.addProperty("tick",tick);
                 d.add("stack",ItemInputs.stack(entity.getItem()));
@@ -81,7 +93,7 @@ final class CaseIsolation {
     static void assertEntityBounds(ServerLevel level, BlockPos origin) {
         for (var entity : level.getAllEntities())
             if (!(entity instanceof Player) && (entity.getY() < -1.5 || Math.abs(entity.getX()-origin.getX())>26 || Math.abs(entity.getZ()-origin.getZ())>26))
-                throw new IllegalStateException("case isolation: leaked entity outside owned region at "+entity.blockPosition());
+                throw new IllegalStateException("case isolation: leaked entity outside owned region: "+entity.getType()+" age "+entity.tickCount+" motion "+entity.getDeltaMovement()+" at "+entity.blockPosition());
     }
     static void assertContained(ServerLevel level, BlockPos origin) {
         assertEntityBounds(level,origin);
@@ -170,6 +182,7 @@ final class CaseIsolation {
         health.addProperty("entities", 0);
         health.addProperty("discarded_entities", discardedEntities);
         health.addProperty("unobserved_owned_drops", unobservedDrops);
+        health.addProperty("unobserved_experience_orbs", unobservedExperience);
         health.addProperty("escaped_entities_discarded", escapedEntities);
         health.addProperty("block_entities", 0);
         health.addProperty("scheduled_ticks", 0);

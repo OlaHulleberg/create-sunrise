@@ -17,6 +17,7 @@ import net.minecraft.world.level.block.state.BlockState;
 
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
 
 /** Normalized semantic observations; saved NBT is diagnostic only. */
 final class Observations {
@@ -35,7 +36,7 @@ final class Observations {
                 lo[a] = Math.min(lo[a], v);
                 hi[a] = Math.max(hi[a], v);
             }
-        boolean transportVersion=c.has("version") && c.get("version").getAsInt()>=3;
+        boolean transportVersion=c.has("version")&&c.get("version").getAsInt()>=3;
         int padding=FluidBounds.enabled(c)?2:1;
         for (int a = 0; a < 3; a++) {
             lo[a]-=padding;
@@ -48,6 +49,7 @@ final class Observations {
                         || hi[0] > 24
                         || hi[2] > 24
                         || hi[1] > 24)) throw new IllegalArgumentException("region exceeds slot");
+        Map<BlockPos,List<Integer>> cracks=new java.util.HashMap<>();
         for (int x = lo[0]; x <= hi[0]; x++)
             for (int y = lo[1]; y <= hi[1]; y++)
                 for (int z = lo[2]; z <= hi[2]; z++) {
@@ -93,6 +95,11 @@ final class Observations {
                         // kinetic cases use ejectors as stress loads only.
                         var ejector=transportVersion?TransportObservations.ejector(be):null;if(ejector!=null) snap.add("ejector",ejector);
                         var processing=transportVersion?ProcessingObservations.observe(be):null;if(processing!=null) snap.add("processing",processing);
+                        if (transportVersion && be instanceof com.simibubi.create.content.kinetics.base.BlockBreakingKineticBlockEntity breaker) {
+                            snap.add("breaking", BreakingObservations.breaker(breaker));
+                            BlockPos shown = BreakingObservations.cracksAt(breaker);
+                            if (shown != null) cracks.computeIfAbsent(shown.subtract(origin), k -> new ArrayList<>()).add(BreakingObservations.progress(breaker));
+                        }
                     }
                     if (be instanceof com.simibubi.create.content.kinetics.belt.BeltBlockEntity belt) {
                         JsonObject b = new JsonObject();
@@ -137,6 +144,10 @@ final class Observations {
                     if(be!=null) {var payload=Persistence.payload(be,origin);if(payload!=null) snap.add("payload",payload);}
                     blocks.add(key, snap);
                 }
+        cracks.forEach((p, stages) -> {
+            stages.sort(null);
+            blocks.getAsJsonObject(p.getX() + "," + p.getY() + "," + p.getZ()).add("cracks", BreakingObservations.cracks(stages));
+        });
         JsonObject out = new JsonObject();
         out.addProperty("side", "java");
         out.add("origin", CreateFuzz.GSON.toJsonTree(new int[]{origin.getX(), origin.getY(), origin.getZ()}));

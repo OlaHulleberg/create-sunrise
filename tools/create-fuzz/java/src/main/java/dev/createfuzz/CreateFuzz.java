@@ -72,6 +72,7 @@ public class CreateFuzz {
             ItemInputs.audit();
             FluidRecipeAudit.check(e.getServer().overworld());
             ProcessingRecipeAudit.check(e.getServer().overworld());
+            BreakingAudit.check(e.getServer().overworld(), e.getServer());
             Files.createDirectories(dir);
             Files.writeString(
                     dir.resolve("actor-probe.json"),
@@ -226,6 +227,7 @@ public class CreateFuzz {
         if (failed != null) {
             try {
                 for (BlockPos origin : failed.origins) CaseIsolation.clearRejected(level, origin);
+                CaseIsolation.restoreRules(level);
                 CaseIsolation.empty(level);
             } catch (Exception cleanup) { ex.addSuppressed(cleanup); }
             finally {
@@ -331,6 +333,7 @@ public class CreateFuzz {
                     CaseIsolation.assertContained(level, origins.get(i));
                     CaseIsolation.clear(level, origins.get(i));
                     PlayerActor.release(level, actors.set(i, null));
+                    CaseIsolation.restoreRules(level);
                     activeCase++;
                     yielded = false;
                     tick = 0;

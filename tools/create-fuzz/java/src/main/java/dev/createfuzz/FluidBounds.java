@@ -8,12 +8,13 @@ import net.minecraft.core.Direction;
 final class FluidBounds {
  static boolean fluidItem(String item) { return item.endsWith("bucket") || item.equals("minecraft:honey_bottle") || item.equals("create:builders_tea"); }
  static final String OUTSIDE="fluid-world-outside-region";
+ /** A fluid world for the harness's fluids; the breaking catalogue's blocks are the driver's own. */
  static boolean enabled(JsonObject scenario) {
   var all=new java.util.ArrayList<JsonObject>();
   for(var b:scenario.getAsJsonArray("blocks"))all.add(b.getAsJsonObject());
   if(scenario.has("events"))for(var b:scenario.getAsJsonArray("events"))all.add(b.getAsJsonObject());
   for(var b:all) {
-   if(b.has("state")){String s=b.get("state").getAsString();String id=s.split("\\[",2)[0];if((!id.startsWith("create:")&&!java.util.Set.of("minecraft:air","minecraft:stone","minecraft:redstone_block").contains(id))||java.util.Set.of("create:honey","create:chocolate","create:limestone","create:scoria").contains(id)||s.contains("waterlogged=true"))return true;}
+   if(b.has("state")){String s=b.get("state").getAsString();String id=s.split("\\[",2)[0];if((!id.startsWith("create:")&&!java.util.Set.of("minecraft:air","minecraft:stone","minecraft:redstone_block").contains(id)&&!BreakingAudit.dry(id))||java.util.Set.of("create:honey","create:chocolate","create:limestone","create:scoria").contains(id)||s.contains("waterlogged=true"))return true;}
    if(b.has("action")) {
     var a=b.getAsJsonObject("action");
     if(a.has("item")&&fluidItem(a.get("item").getAsString()))return true;

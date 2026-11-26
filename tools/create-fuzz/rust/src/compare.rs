@@ -15,7 +15,8 @@ pub fn diff(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
     diff_exact(&java, &rust)
 }
 
-/// Both snapshots with what chance decides taken out.
+/// Both snapshots with what chance decides taken out: recipe rolls, and the loot of blocks
+/// whose drops chance decides.
 fn normalized<'a>(
     java: &'a Snapshot,
     rust: &'a Snapshot,
@@ -24,13 +25,18 @@ fn normalized<'a>(
     std::borrow::Cow<'a, Snapshot>,
 ) {
     use std::borrow::Cow;
-    match crate::processing::Rolls::of(java, rust) {
-        Some(rolls) => {
-            let (java, rust) = rolls.normalize(java, rust);
-            (Cow::Owned(java), Cow::Owned(rust))
-        }
-        None => (Cow::Borrowed(java), Cow::Borrowed(rust)),
+    let rolls = crate::processing::Rolls::of(java, rust);
+    let chance = crate::breaking::chance_in(java, rust);
+    if rolls.is_none() && chance.is_empty() {
+        return (Cow::Borrowed(java), Cow::Borrowed(rust));
     }
+    let (mut java, mut rust) = match rolls {
+        Some(rolls) => rolls.normalize(java, rust),
+        None => (java.clone(), rust.clone()),
+    };
+    crate::breaking::without_drops(&mut java, &chance);
+    crate::breaking::without_drops(&mut rust, &chance);
+    (Cow::Owned(java), Cow::Owned(rust))
 }
 
 pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
@@ -170,6 +176,18 @@ pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
                         j.processing, r.processing
                     ));
                 }
+                if !crate::breaking::equal(j.breaking.as_ref(), r.breaking.as_ref()) {
+                    out.push(format!(
+                        "{k}: breaking: java {:?} rust {:?}",
+                        j.breaking, r.breaking
+                    ));
+                }
+                if j.cracks != r.cracks {
+                    out.push(format!(
+                        "{k}: cracks: java {:?} rust {:?}",
+                        j.cracks, r.cracks
+                    ));
+                }
                 if j.bracket != r.bracket {
                     out.push(format!(
                         "{k}: bracket: java {:?} rust {:?}",
@@ -260,16 +278,17 @@ fn drops_match(a: &[DroppedItem], b: &[DroppedItem]) -> bool {
 
 /// Where a drop can be from where its origin put it: the least and most per axis, or anywhere.
 fn reach(placed: Option<Placed>) -> Option<[[f64; 2]; 3]> {
-    use crate::transport::{FIRST_FLIGHT, SPREAD_MIDDLE};
+    use crate::transport::FIRST_FLIGHT;
     match placed? {
         Placed::Exact => Some([[0.0; 2]; 3]),
         Placed::Flown => None,
         Placed::Spread(by) => {
             let range = by.range();
+            let middle = by.middle();
             Some(std::array::from_fn(|i| {
                 [
-                    range[i][0] - SPREAD_MIDDLE[i] + FIRST_FLIGHT[i][0],
-                    range[i][1] - SPREAD_MIDDLE[i] + FIRST_FLIGHT[i][1],
+                    range[i][0] - middle[i] + FIRST_FLIGHT[i][0],
+                    range[i][1] - middle[i] + FIRST_FLIGHT[i][1],
                 ]
             }))
         }

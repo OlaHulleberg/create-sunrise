@@ -10,10 +10,14 @@ impl Run {
         self.dispose_item_entities();
     }
 
-    /// One level tick: inputs, then the solve and what it breaks.
+    /// One level tick: the game's block ticks and entities, then inputs, the solve and what it
+    /// breaks.
     fn level_tick(&mut self) {
         self.now += 1;
         self.persisted.clock += 1;
+        // The scheduled block ticks run before the entities, those before the block entities.
+        self.vanilla_ticks();
+        self.vanilla_entities();
         // Shape notifications from committed inputs precede the level tick.
         self.tick_pipe_shapes();
         self.tick_structures();
@@ -87,7 +91,8 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: the deployers the depots asked for.
+        // `processing::Tools`: the drills and saws, then the presses and the deployers.
+        self.tick_drills();
         self.tick_presses();
         self.ejectors_ticked();
         self.save_fluid_entities();

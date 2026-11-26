@@ -63,6 +63,12 @@ pub struct BlockSnap {
     pub ejector: Option<crate::logistics::Ejector>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub processing: Option<crate::processing::Observation>,
+    /// A drill's or a sideways saw's breaking (`Progress`, `NextTick`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub breaking: Option<crate::breaking::Breaking>,
+    /// The crack stages the level shows at this block (`destroyBlockProgress`), sorted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cracks: Option<Vec<i32>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub measured_trig: Option<crate::allow::MeasuredTrigState>,
     #[serde(default)]

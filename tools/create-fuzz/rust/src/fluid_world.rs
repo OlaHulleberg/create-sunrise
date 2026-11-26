@@ -127,17 +127,30 @@ pub fn observe(state: &str) -> Option<Observation> {
     })
 }
 
+/// The server's rule (`FluidBounds.enabled`): any block but air, stone and a redstone block
+/// makes a fluid world, unless it is the breaking catalogue's (`BreakingAudit.dry`, whose rules
+/// the driver keeps); so do Create's fluids and a waterlogged state.
+fn fluid_world_state(state: &str) -> bool {
+    let (id, _) = parse_state(state);
+    (!id.starts_with("create:")
+        && !matches!(
+            id.as_str(),
+            "minecraft:air" | "minecraft:stone" | "minecraft:redstone_block"
+        )
+        && !crate::breaking::block(&id).is_some_and(|_| !state.contains("waterlogged=true")))
+        || matches!(
+            id.as_str(),
+            "create:honey" | "create:chocolate" | "create:limestone" | "create:scoria"
+        )
+        || state.contains("waterlogged=true")
+}
+
 pub fn enabled(sc: &crate::scenario::Scenario) -> bool {
     sc.blocks
         .iter()
         .map(|b| b.state.as_str())
         .chain(sc.events.iter().filter_map(|e| e.state.as_deref()))
-        .any(|state| {
-            id(state).is_some()
-                || fluid(state).is_some()
-                || state.contains("cauldron")
-                || state.contains("honey_level")
-        })
+        .any(fluid_world_state)
         || sc.events.iter().any(|e| match &e.action {
             Some(crate::actions::Action::Use { item, .. }) => {
                 item.ends_with("bucket") || crate::fluid_recipes::contents(item).is_some()

@@ -7,7 +7,7 @@ impl Run {
         let mut sizes = BTreeMap::new();
         for p in sc.region() {
             let id = self.at(p);
-            let state = self.name(id);
+            let state = self.state_at(p);
             let kinetic = self.kinetic(p, id);
             if kinetic.is_some()
                 && let Some((network, size)) = self.w.dims[0].kinetics.network_membership(p, 0)
@@ -55,6 +55,10 @@ impl Run {
                     processing: (sc.version >= 3)
                         .then(|| self.processing_observation(p))
                         .flatten(),
+                    breaking: (sc.version >= 3)
+                        .then(|| self.breaking_observation(p))
+                        .flatten(),
+                    cracks: (sc.version >= 3).then(|| self.cracks_at(p)).flatten(),
                     measured_trig: self.measured_trig.get(&p).map(|property| {
                         crate::allow::MeasuredTrigState {
                             tie: Some(crate::allow::NearestTie::Yaw45Pitch0),
