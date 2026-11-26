@@ -96,6 +96,12 @@ impl DataDir {
         self.open_file(leaf, OpenOptions::new().read(true))
     }
 
+    pub(super) fn new_log(&self, leaf: Leaf<'_>) -> io::Result<File> {
+        // Exclusive creation also refuses hard links on filesystems for which std cannot
+        // inspect link counts. Never append diagnostics to an existing inode.
+        self.create_file(leaf, OpenOptions::new().append(true))
+    }
+
     fn open_file(&self, leaf: Leaf<'_>, options: &OpenOptions) -> io::Result<(File, Metadata)> {
         let path = self.0.join(leaf.0);
         // Don't open links or special files (in particular, opening a FIFO can block).
@@ -153,19 +159,23 @@ impl DataDir {
         Ok(Some(name.to_owned()))
     }
 
-    pub(super) fn write_new(&self, leaf: Leaf<'_>, bytes: &[u8]) -> io::Result<()> {
+    fn create_file(&self, leaf: Leaf<'_>, options: &mut OpenOptions) -> io::Result<File> {
         let path = self.0.join(leaf.0);
-        let mut file = OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .open(&path)?;
-        let written = file
-            .metadata()
-            .and_then(|meta| check_file(&meta))
-            .and_then(|()| file.write_all(bytes));
+        let file = options.create_new(true).open(&path)?;
+        if let Err(e) = file.metadata().and_then(|meta| check_file(&meta)) {
+            drop(file);
+            let _ = fs::remove_file(path);
+            return Err(e);
+        }
+        Ok(file)
+    }
+
+    pub(super) fn write_new(&self, leaf: Leaf<'_>, bytes: &[u8]) -> io::Result<()> {
+        let mut file = self.create_file(leaf, OpenOptions::new().write(true))?;
+        let written = file.write_all(bytes);
         drop(file);
         if written.is_err() {
-            let _ = fs::remove_file(path);
+            let _ = self.remove(leaf);
         }
         written
     }

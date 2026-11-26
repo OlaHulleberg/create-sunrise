@@ -29,6 +29,7 @@ struct Create;
 #[mod_api::sunrise_mod]
 impl Hooks for Create {
     fn register(&self, r: &mut dyn Registrar, cx: &RegistrationContext) {
+        glue::log::register(cx);
         states::register(r);
         persist::register(r);
 
