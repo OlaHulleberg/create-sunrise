@@ -51,6 +51,39 @@ unreachable 8 / 8. Every group of the basin, burner, mixer and press classes has
 open which edge is missed, the row says so. The mixer and press classes count as kinetics in the
 table above, whose campaign never drove them, so their rows keep the category they had there.
 
+## Block breaking
+
+[Drills and sideways saws](../processing-scope.md#block-breaking) (`breaking/drill`, 93 mod 256
+where it was measured and 64 since the basin families took its residue, and `breaking/saw`, 192),
+measured like processing, twice, on `cover 0` over a fixed corpus at `2dd98580` on
+`fuzz/breakers-deployers` with the families' final histories (the commit after it): the replay corpus and the
+processing campaign's 168 scenarios (392) without them, and with every drill history of the first
+index cycle (432), every saw history (384) and the seven breaking cases (1215). `./run.sh fuzz
+gaps processing` on the second finds no unexplained branch. The reporter's JVM needs more address
+space than the driver's 5 GB limit leaves it, so `cover` ran without the limit. Java and the port
+differ on 801 of the 1215 scenarios by [the open differences](../processing-scope.md); coverage
+does not depend on their agreeing.
+
+| Class | Branches | Reached without | Reached with |
+| --- | ---: | ---: | ---: |
+| `BlockBreakingKineticBlockEntity` | 42 | 22 | 35 |
+| `DrillBlock` | 20 | 3 | 6 |
+| `DrillBlockEntity` | 38 | 0 | 4 |
+| `SawBlock` | 68 | 8 | 15 |
+| `SawBlockEntity` | 190 | 109 | 119 |
+| `TreeCutter` | 128 | 3 | 92 |
+| The breaker base with `drill/*`, `SawBlock*` and `TreeCutter*` | 546 | 145 | 271 |
+
+Missed in those classes: harness-gap 109 groups / 202 branches, from 162 / 350; client 15 / 31;
+unreachable 7 / 7 (the breaker's `-1` progress sentinel, two guards `BlockHelper.destroyBlockAs`
+already keeps, a null reader, a block both log and root, a leaf with another integer property);
+out-of-scope: contraptions 4 / 10, schematics and contraptions 6 / 20, Dynamic Trees 3 / 3,
+`bulkCutting` config 1 / 1, Tinkers' slime logs 1 / 1. What stays `harness-gap` there is not block
+breaking: the drill and saw items' placement (the harness mirrors no item use for them), entities in
+a breaker, a waterlogged drill, a cobble generator, the upward saw's item work, and targets the
+families don't grow (chorus, cactus, sugar cane, kelp, weeping vines, scaffolding, wider root and
+leaf arrangements, a block whose loot can roll nothing).
+
 ## Why the rest is never reached
 
 Groups / missed branches by category.

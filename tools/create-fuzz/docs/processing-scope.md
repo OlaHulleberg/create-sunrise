@@ -251,11 +251,12 @@ six speeds: the target from the start, swapped, taken away and put back, the dri
 removed while it cracks, the world saved and reloaded, a block arriving in front of an idle drill,
 a sand column refilling what it breaks, `doTileDrops` off, two drills on one block, nine target
 kinds (bedrock, TNT, glass, coal ore, gravel, cobblestone, clay, a log, water), and the drill
-wrenched while it cracks. `breaking/saw` puts a sideways saw against fifteen: a log, trees it
+wrenched while it cracks. `breaking/saw` puts a sideways saw against sixteen: a log, trees it
 fells (centre out or rim in), a cut a second trunk holds up, a branch, mangrove roots, a mushroom
 stem among caps and a shroomlight, bamboo, a pumpkin or melon, what a saw cannot cut, a crimson
 stem among wart blocks, a tree with bee nests and moss carpet on it, leaves alone, the saw or its
-motor removed, and `doTileDrops` off. Neither family reloads by seed bit.
+motor removed, `doTileDrops` off, and the saw wrenched while it cuts. Neither family reloads by
+seed bit.
 
 Not compared: experience (the harness discards the orbs, as it does the drops it never observes);
 the items chance decides (a leaf's sticks, saplings and apples, gravel's flint, a melon's seeds, a
@@ -352,7 +353,7 @@ lane; `breaking/drill` unless said):
 | --- | --- | --- | --- | --- |
 | First look late (64: every seed that breaks) | A breaker looks on its first tick: with nothing to break `NextTick` goes to −1 at tick 2, and stone is cracked from tick 4 | Starts at −1 and is set to 1 by its first lazy tick: tick 2 shows 0 and the cracks come at tick 3, one tick early; two ticks late into a network that did not change in the tick the breaker was placed | `BlockBreakingKineticBlockEntity.java:26`, `:98-101` | `engine/src/drill.rs:16`, `:36-41`; `glue/processing/saw.rs:73-76` |
 | No neighbour arming (1600) | A drill beside any block change looks two ticks later: a stone arriving at 42 is cracked from 44 | Waits for its next lazy tick (46) | `DrillBlock.java:80-84` | `engine/src/world.rs:3081`; `glue/processing/saw.rs:41` |
-| Saw re-arm (7872 of `breaking/saw`) | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival: at the case's last tick, 73, its `NextTick` is 0 | Every lazy tick: `NextTick` stays −1 | `SawBlockEntity.java:170-173` | `glue/processing/saw.rs:73-76` |
+| Saw re-arm (8384 of `breaking/saw`) | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival: at the case's last tick, 73, its `NextTick` is 0 | Every lazy tick: `NextTick` stays −1 | `SawBlockEntity.java:170-173` | `glue/processing/saw.rs:73-76` |
 | Speed 0 on the first tick (3136; of the 16 rpm seeds whose target never changes later, the only difference) | A breaker placed into a turning network has its speed on its first tick: `NextTick` −1 at tick 2 | `tick_drills` runs before the kinetic solve and reads speed 0: its lazy tick arms it to 1 instead. A generator that changes in the same tick re-places the network and hides this, which is why only the motor's default speed shows it | `KineticBlockEntity.java:99-100`, `:102` | `glue/processing/saw.rs:70`; `engine/src/world.rs:2839` |
 | Cracks left (832) | A drill removed at 21 while it cracks takes its cracks along | They stay to the end of the case | `BlockBreakingKineticBlockEntity.java:78-83` | `engine/src/world.rs:2060`; `glue/processing/saw.rs:46` |
 | Reload forgets progress (1344) | A reload at 21 keeps `Progress` and `NextTick` | Starts over (tick 22: 0 and 0 where Java holds 1 and 607) | `BlockBreakingKineticBlockEntity.java:59-76` | `engine/src/world.rs:470`, `:2377` |
