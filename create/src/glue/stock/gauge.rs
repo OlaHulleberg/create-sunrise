@@ -313,7 +313,7 @@ pub(super) fn look(lv: &mut ServerLevel<'_>, dim: usize, pp: PanelPos, now: u64)
             let Some(inv) = super::packages::available(lv, dim, p).1 else {
                 return;
             };
-            let available: i32 = sources(lv, dim, net, Some(inv))
+            let available: i32 = sources(lv, dim, net, Some(inv.clone()))
                 .iter()
                 .filter(|s| s.packager.is_some())
                 .map(|s| s.stock.count_of(&item))
