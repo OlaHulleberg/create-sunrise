@@ -144,8 +144,16 @@ pub(super) fn rotate_y(v: Vec3, deg: f64) -> Vec3 {
     [v[0] * cos + v[2] * sin, v[1], v[2] * cos - v[0] * sin]
 }
 
-fn floor(v: Vec3) -> [i32; 3] {
-    v.map(|c| c.floor() as i32)
+pub(super) fn block_pos(v: Vec3) -> Option<[i32; 3]> {
+    let [x, y, z] = v.map(|c| {
+        let c = c.floor();
+        if (f64::from(i32::MIN)..=f64::from(i32::MAX)).contains(&c) {
+            Some(c as i32)
+        } else {
+            None
+        }
+    });
+    Some([x?, y?, z?])
 }
 
 /// `SchematicTransformation`.
@@ -153,7 +161,8 @@ fn floor(v: Vec3) -> [i32; 3] {
 pub(super) struct Placing {
     chasing: Vec3,
     prev_chasing: Vec3,
-    target: [i32; 3],
+    // The preview translation is not a world block position.
+    target: Vec3,
     scale_fb: Lerped,
     scale_lr: Lerped,
     rotation: Lerped,
@@ -166,7 +175,7 @@ impl Default for Placing {
         Placing {
             chasing: [0.0; 3],
             prev_chasing: [0.0; 3],
-            target: [0; 3],
+            target: [0.0; 3],
             scale_fb: Lerped::linear(),
             scale_lr: Lerped::linear(),
             rotation: Lerped::angular(),
@@ -200,13 +209,13 @@ impl Placing {
         self.scale_fb.start_with(fb);
         self.scale_lr.chase(0.0, 0.45);
         self.scale_lr.start_with(lr);
-        self.x_origin = f64::from(size[0] as f32 / 2.0);
-        self.z_origin = f64::from(size[2] as f32 / 2.0);
+        self.x_origin = f64::from(size[0]) / 2.0;
+        self.z_origin = f64::from(size[2]) / 2.0;
         let r = -(rotation as i32 * 90);
         self.rotation.chase(0.0, 0.45);
         self.rotation.start_with(r as f32);
         self.target = self.target_of(anchor);
-        self.chasing = self.target.map(f64::from);
+        self.chasing = self.target;
         self.prev_chasing = self.chasing;
     }
 
@@ -339,14 +348,17 @@ impl Placing {
     }
 
     /// `getAnchor`.
-    pub(super) fn anchor(&self) -> [i32; 3] {
-        floor(add(self.anchor_offset(), self.target.map(f64::from)))
+    pub(super) fn anchor(&self) -> Option<[i32; 3]> {
+        self.anchor_at(self.target)
+    }
+
+    fn anchor_at(&self, target: Vec3) -> Option<[i32; 3]> {
+        block_pos(add(self.anchor_offset(), target))
     }
 
     /// `fromAnchor`: the target an anchor puts it at.
-    fn target_of(&self, pos: [i32; 3]) -> [i32; 3] {
-        let o = floor(self.anchor_offset());
-        [0, 1, 2].map(|i| pos[i] - o[i])
+    fn target_of(&self, pos: [i32; 3]) -> Vec3 {
+        sub(pos.map(f64::from), self.anchor_offset().map(f64::floor))
     }
 
     /// `getRotationTarget`.
@@ -377,7 +389,7 @@ impl Placing {
     /// `tick`.
     pub(super) fn tick(&mut self) {
         self.prev_chasing = self.chasing;
-        self.chasing = lerp(0.45, self.chasing, self.target.map(f64::from));
+        self.chasing = lerp(0.45, self.chasing, self.target);
         self.scale_lr.tick();
         self.scale_fb.tick();
         self.rotation.tick();
@@ -402,19 +414,18 @@ impl Placing {
 
     /// `move`.
     pub(super) fn shift(&mut self, by: [i32; 3]) {
-        self.target = [0, 1, 2].map(|i| self.target[i] + by[i]);
+        self.target = add(self.target, by.map(f64::from));
     }
 
-    /// `startAt`: there at once.
-    pub(super) fn start_at(&mut self, pos: [i32; 3]) {
-        self.chasing = pos.map(f64::from);
-        self.prev_chasing = self.chasing;
-        self.target = pos;
-    }
-
-    /// `moveTo`.
-    pub(super) fn move_to(&mut self, pos: [i32; 3]) {
-        self.target = pos;
+    /// `startAt`: settle at the deploy target if it has a representable world anchor.
+    pub(super) fn start_at(&mut self, target: Vec3) -> bool {
+        if self.anchor_at(target).is_none() {
+            return false;
+        }
+        self.chasing = target;
+        self.prev_chasing = target;
+        self.target = target;
+        true
     }
 }
 
@@ -559,7 +570,7 @@ mod tests {
                     let mut t = Placing::default();
                     t.init([10, 64, -20], r, m, size);
                     settle(&mut t);
-                    assert_eq!(t.anchor(), [10, 64, -20], "{size:?} {r:?} {m:?}");
+                    assert_eq!(t.anchor(), Some([10, 64, -20]), "{size:?} {r:?} {m:?}");
                     assert_eq!(t.to_settings(), (r, m), "{size:?} {r:?} {m:?}");
                     assert_eq!(
                         drawn(&t, size),
@@ -586,7 +597,7 @@ mod tests {
                 let (r, m) = t.to_settings();
                 assert_eq!(
                     drawn(&t, size),
-                    printed(t.anchor(), size, r, m),
+                    printed(t.anchor().unwrap(), size, r, m),
                     "{size:?} step {step}"
                 );
             }
@@ -605,7 +616,34 @@ mod tests {
             Mirror::None,
             [2, 2, 7],
         );
-        assert_eq!(t.anchor(), [11, 64, -20]);
+        assert_eq!(t.anchor(), Some([11, 64, -20]));
+
+        t.init(
+            [i32::MAX, 64, -20],
+            Rotation::Clockwise180,
+            Mirror::None,
+            [2, 2, 7],
+        );
+        assert_eq!(t.anchor(), None);
+    }
+
+    #[test]
+    fn a_large_rotated_and_mirrored_preview_can_translate_past_i32() {
+        let size = [300_000_002, 2, 2_000_000_002];
+        let anchor = [10, 64, -1_100_000_000];
+        let (r, m) = (Rotation::Clockwise90, Mirror::FrontBack);
+        let mut t = Placing::default();
+        t.init(anchor, r, m, size);
+        assert!(t.target[2] < f64::from(i32::MIN));
+        assert_eq!(t.anchor(), Some(anchor));
+        assert_eq!(t.to_settings(), (r, m));
+        assert_eq!(drawn(&t, size), printed(anchor, size, r, m));
+
+        t.shift([0, 0, -1]);
+        settle(&mut t);
+        let moved = [anchor[0], anchor[1], anchor[2] - 1];
+        assert_eq!(t.anchor(), Some(moved));
+        assert_eq!(drawn(&t, size), printed(moved, size, r, m));
     }
 
     #[test]

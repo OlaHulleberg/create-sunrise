@@ -1094,15 +1094,15 @@ fn resolve_state(
 /// A palette entry turned and resolved once per load: what it prints, places and costs.
 fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mirror) -> Entry {
     let host: &dyn Host = &*lv.host;
-    let (mut name, mut props) = (p.name.clone(), p.properties.clone());
-    if host.block_state_id(&name).is_none() {
-        name = sch::AIR.into();
-        props.clear();
-    }
-    sch::transform_state(&name, &mut props, mirror, rotation);
+    let p = if host.block_state_id(p.name()).is_some() {
+        p.transformed(mirror, rotation)
+    } else {
+        PaletteState::air()
+    };
+    let need = p.need();
+    let (mut name, mut props) = p.into_parts();
     sch::printed_state(&mut name, &mut props);
     let state = resolve_state(host, &name, &props);
-    let need = sch::need(&name, &props);
     let requirement = match &need {
         Need::Nothing => Requirement::Empty,
         // `BeltBlock.getRequiredItems`: a shaft at each end, and the connector at the start.
@@ -1763,13 +1763,14 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3], access: Access) ->
                 };
                 cells.push((
                     [x - min[0], y - min[1], z - min[2]],
-                    PaletteState {
-                        name: name.to_owned(),
-                        properties: props
+                    PaletteState::new(
+                        name.to_owned(),
+                        props
                             .into_iter()
                             .map(|(k, v)| (k.to_owned(), v.to_owned()))
                             .collect(),
-                    },
+                    )
+                    .expect("serialized registered block state has valid numeric properties"),
                     class,
                 ));
             }
@@ -2358,14 +2359,13 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         entities,
         air,
     } = load(&lv, &data, access);
-    let include_air = false;
     let mut w = World {
         access,
         lv: &mut lv,
         pos: [0; 3],
         found: None,
     };
-    while printer.advance(|i| entries[i as usize].defer) {
+    while printer.advance_placed(|i| entries[i as usize].defer) {
         let target = printer.target();
         if printer.stage == cn::Stage::Entities {
             if let Some((_, e)) = entities.get(printer.entity_index as usize) {
@@ -2377,18 +2377,22 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         if !w.loaded(target) {
             continue;
         }
-        let rel = [0, 1, 2].map(|i| target[i] - printer.anchor[i]);
+        let rel = printer.current;
         let entry = printer.at(rel).map_or(&air, |i| &entries[i as usize]);
         let here = w.spot(target);
         if here.state == entry.state || here.unbreakable {
             continue;
         }
-        if let Some(o) = entry.other
-            && w.spot([0, 1, 2].map(|i| target[i] + o[i])).unbreakable
-        {
-            continue;
+        if let Some(delta) = entry.other {
+            let [Some(x), Some(y), Some(z)] = [0, 1, 2].map(|i| target[i].checked_add(delta[i]))
+            else {
+                continue;
+            };
+            if w.spot([x, y, z]).unbreakable {
+                continue;
+            }
         }
-        if entry.air && !include_air {
+        if entry.air {
             continue;
         }
         // What the port's cannon leaves to a block placed with another: a door's upper half, a

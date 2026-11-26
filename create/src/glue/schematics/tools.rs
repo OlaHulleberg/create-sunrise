@@ -21,7 +21,7 @@ use super::super::pipelines::Textured;
 use super::body;
 use super::quill::CHANNEL;
 use super::renderer::Preview;
-use super::transform::{Placing, trace_until};
+use super::transform::{Placing, block_pos, trace_until};
 use crate::glue::names::Named as _;
 use crate::glue::owned::OwnedEquipment as _;
 use create_engine::kinetics::Dir;
@@ -107,7 +107,7 @@ impl Tool {
 /// equipping one starts them over, `init`).
 #[derive(Clone, Debug, Default)]
 struct Aim {
-    selected: Option<[i32; 3]>,
+    selected: Option<[f64; 3]>,
     chasing: [f64; 3],
     last_chasing: [f64; 3],
     ignore_blocks: bool,
@@ -269,6 +269,11 @@ impl Handler {
     fn center(&self) -> [f64; 3] {
         self.size.unwrap_or([0; 3]).map(|v| f64::from(v) / 2.0)
     }
+
+    fn deploy_target(&self, at: [f64; 3]) -> [f64; 3] {
+        let c = self.center();
+        [at[0] - c[0].trunc(), at[1], at[2] - c[2].trunc()]
+    }
 }
 
 thread_local! {
@@ -381,7 +386,10 @@ pub(super) fn tick(host: &mut dyn ClientHost) {
 }
 
 /// `SchematicSyncPacket`: `Y`, the slot, deployed, rotation, mirror and anchor.
-fn sync_message(h: &Handler) {
+fn sync_message(h: &Handler) -> bool {
+    let Some(anchor) = h.transformation.anchor() else {
+        return false;
+    };
     let (rotation, mirror) = h.transformation.to_settings();
     let mut m = vec![
         b'Y',
@@ -390,10 +398,11 @@ fn sync_message(h: &Handler) {
         rotation as u8,
         mirror as u8,
     ];
-    for v in h.transformation.anchor() {
+    for v in anchor {
         m.extend_from_slice(&v.to_le_bytes());
     }
     OUT.with_borrow_mut(|o| o.push(m));
+    true
 }
 
 /// The tool's `updateSelection`.
@@ -404,15 +413,14 @@ fn update_selection(host: &dyn ClientHost) {
         let at = [hit.x, hit.y, hit.z];
         // `BlockPos.containing(trace.getLocation())`, then a step out through a top or bottom
         // face unless the block there is replaceable.
-        let mut pos = at.map(|v| v.floor() as i32);
+        let mut pos = at.map(f64::floor);
         let face = super::quill::face_of([hit.block_x, hit.block_y, hit.block_z], at);
-        let replaceable = host
-            .level(host.dimension())
-            .and_then(|l| l.block_state(host, pos))
+        let replaceable = block_pos(at)
+            .and_then(|p| host.level(host.dimension())?.block_state(host, p))
             .and_then(|s| mod_api::HostBlockStates::block_states(host).replaceable(s))
             .unwrap_or(false);
         if matches!(face, Dir::Up | Dir::Down) && !replaceable {
-            let o = face.offset();
+            let o = face.offset().map(f64::from);
             pos = [0, 1, 2].map(|i| pos[i] + o[i]);
         }
         pos
@@ -430,11 +438,10 @@ fn update_selection(host: &dyn ClientHost) {
             h.aim.ignore_blocks = ctrl;
         }
         update_target(h, view, hit);
-        let Some(selected) = h.aim.selected else {
+        let Some(target) = h.aim.selected else {
             return;
         };
         h.aim.last_chasing = h.aim.chasing;
-        let target = selected.map(f64::from);
         let d = [0, 1, 2].map(|i| target[i] - h.aim.chasing[i]);
         if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() < 1.0 / 512.0 {
             h.aim.chasing = target;
@@ -446,7 +453,7 @@ fn update_selection(host: &dyn ClientHost) {
 
 /// `updateTargetPos`: the face of the deployed schematic looked at, and the block a click would
 /// pick (or, holding Ctrl with Position, the point `range` blocks ahead).
-fn update_target(h: &mut Handler, view: Option<([f64; 3], [f64; 3])>, hit: Option<[i32; 3]>) {
+fn update_target(h: &mut Handler, view: Option<([f64; 3], [f64; 3])>, hit: Option<[f64; 3]>) {
     let Some((eye, look)) = view else {
         h.aim.selected = None;
         return;
@@ -469,17 +476,17 @@ fn update_target(h: &mut Handler, view: Option<([f64; 3], [f64; 3])>, hit: Optio
     let snap = h.aim.selected.is_none();
     if h.aim.ignore_blocks {
         let range = f64::from(h.aim.range);
-        let at = [0, 1, 2].map(|i| (eye[i] + look[i] * range).floor() as i32);
+        let at = [0, 1, 2].map(|i| (eye[i] + look[i] * range).floor());
         h.aim.selected = Some(at);
         if snap {
-            h.aim.chasing = at.map(f64::from);
+            h.aim.chasing = at;
             h.aim.last_chasing = h.aim.chasing;
         }
         return;
     }
     h.aim.selected = hit;
     if snap && let Some(at) = hit {
-        h.aim.chasing = at.map(f64::from);
+        h.aim.chasing = at;
         h.aim.last_chasing = h.aim.chasing;
     }
 }
@@ -609,14 +616,10 @@ fn right_click(h: &mut Handler, creative: bool) -> bool {
             let Some(selected) = h.aim.selected else {
                 return false;
             };
-            let c = h.center();
-            let target = [
-                selected[0] - c[0] as i32,
-                selected[1],
-                selected[2] - c[2] as i32,
-            ];
-            h.transformation.start_at(target);
-            h.transformation.move_to(target);
+            let target = h.deploy_target(selected);
+            if !h.transformation.start_at(target) {
+                return false;
+            }
             h.mark_dirty();
             h.deploy(creative);
             true
@@ -625,22 +628,22 @@ fn right_click(h: &mut Handler, creative: bool) -> bool {
             mirror(h);
             true
         }
-        Tool::Print => {
-            print_instantly(h);
-            true
-        }
+        Tool::Print => print_instantly(h),
         Tool::Move | Tool::MoveY | Tool::Rotate => false,
     }
 }
 
 /// `printInstantly`: the server places it (with the place it has now, sent first), and the
 /// schematic is no longer deployed.
-fn print_instantly(h: &mut Handler) {
-    sync_message(h);
+fn print_instantly(h: &mut Handler) -> bool {
+    if !sync_message(h) {
+        return false;
+    }
     OUT.with_borrow_mut(|o| o.push(vec![b'P', h.slot]));
     h.deployed = false;
     h.select_from(vec![Tool::Deploy]);
     h.mark_dirty();
+    true
 }
 
 /// `onMouseInput` for the right button: the tool's click, unless sneaking (the edit screen) or
@@ -711,7 +714,11 @@ pub(super) fn edit_start() -> Option<(String, Option<[i32; 3]>, Rotation, Mirror
             return None;
         }
         let (r, m) = h.transformation.to_settings();
-        let anchor = h.deployed.then(|| h.transformation.anchor());
+        let anchor = if h.deployed {
+            Some(h.transformation.anchor()?)
+        } else {
+            None
+        };
         Some((
             h.displayed.clone().unwrap_or_else(|| "-".into()),
             anchor,
@@ -730,9 +737,14 @@ pub(super) fn current_name() -> String {
 pub(super) fn edited(host: &dyn ClientHost, anchor: [i32; 3], rotation: Rotation, mirror: Mirror) {
     let creative = creative(host);
     HANDLER.with_borrow_mut(|h| {
+        let mut transformation = h.transformation.clone();
         if let Some(size) = h.size {
-            h.transformation.init(anchor, rotation, mirror, size);
+            transformation.init(anchor, rotation, mirror, size);
         }
+        if transformation.anchor().is_none() {
+            return;
+        }
+        h.transformation = transformation;
         h.mark_dirty();
         h.deploy(creative);
         h.setup_preview(host);
@@ -923,15 +935,10 @@ fn geometry(view: &WorldRenderView<'_>) -> Option<Geometry> {
             let a = &h.aim;
             let at = [0, 1, 2]
                 .map(|i| a.last_chasing[i] + (a.chasing[i] - a.last_chasing[i]) * f64::from(pt));
-            let c = h.center();
             let origin = [bounds.1[0] / 2.0, 0.0, bounds.1[2] / 2.0];
             let ro = t.rotation_offset(true);
             let rot = f64::from(t.current_rotation(pt));
-            let shift = [
-                at[0] - f64::from(c[0] as i32),
-                at[1],
-                at[2] - f64::from(c[2] as i32),
-            ];
+            let shift = h.deploy_target(at);
             let place = move |p: [f64; 3]| {
                 let q = [0, 1, 2].map(|i| p[i] - origin[i] - ro[i]);
                 let q = super::transform::rotate_y(q, rot);
@@ -1213,16 +1220,69 @@ mod tests {
         let mut data = SchematicData::written("a.nbt", "me", [3, 2, 5]);
         h.init(&data, true);
         assert_eq!(h.screen.tools, vec![Tool::Deploy]);
-        h.aim.selected = Some([10, 64, 10]);
+        h.aim.selected = Some([10.0, 64.0, 10.0]);
         assert!(right_click(&mut h, true));
         assert_eq!(h.tool, Tool::Move);
         assert_eq!(h.screen.tools.len(), 6);
-        assert_eq!(h.transformation.anchor(), [9, 64, 8]);
+        assert_eq!(h.transformation.anchor(), Some([9, 64, 8]));
         h.equip(Tool::Rotate);
         data.deployed = Some(true);
         h.init(&data, false);
         assert_eq!(h.tool, Tool::Rotate);
         assert_eq!(h.screen.tools[h.screen.selection], Tool::Rotate);
+    }
+
+    #[test]
+    fn deploy_checks_the_world_anchor_not_the_preview_target() {
+        let mut h = Handler::new();
+        let mut data = SchematicData::written("a.nbt", "me", [8, 2, 2]);
+        data.rotation = Rotation::Clockwise90;
+        data.mirror = Mirror::FrontBack;
+        h.init(&data, true);
+
+        let before = h.transformation.clone();
+        h.aim.selected = Some([f64::from(i32::MIN) - 1.0, 64.0, 10.0]);
+        assert!(!right_click(&mut h, true));
+        assert_eq!(h.transformation, before);
+        assert!(!h.deployed);
+        assert_eq!(h.sync_cooldown, 0);
+
+        h.aim.selected = Some([f64::from(i32::MIN) + 1.0, 64.0, 10.0]);
+        assert!(right_click(&mut h, true));
+        assert!(h.deployed);
+        assert_eq!(h.transformation.anchor(), Some([i32::MIN + 1, 64, 13]));
+    }
+
+    #[test]
+    fn an_unrepresentable_anchor_cannot_sync_print_or_prefill_an_edit() {
+        HANDLER.with_borrow_mut(|h| {
+            let mut data = SchematicData::written("a.nbt", "me", [3, 2, 5]);
+            data.anchor = Some([10, i32::MAX, 10]);
+            data.deployed = Some(true);
+            h.init(&data, true);
+            h.equip(Tool::Print);
+            h.transformation.shift([0, 1, 0]);
+            assert!(!sync_message(h));
+            assert!(!right_click(h, true));
+            assert!(h.deployed);
+            assert_eq!(h.tool, Tool::Print);
+            assert_eq!(h.sync_cooldown, 0);
+        });
+        assert_eq!(edit_start(), None);
+        assert!(OUT.with_borrow(Vec::is_empty));
+
+        HANDLER.with_borrow_mut(|h| {
+            h.transformation.shift([0, -1, 0]);
+            assert!(right_click(h, true));
+            assert!(!h.deployed);
+        });
+        OUT.with_borrow(|o| {
+            assert_eq!(o.len(), 2);
+            assert_eq!(&o[0][..5], &[b'Y', 0, 1, 0, 0]);
+            assert_eq!(&o[0][9..13], &i32::MAX.to_le_bytes());
+            assert_eq!(o[1], [b'P', 0]);
+        });
+        reset();
     }
 
     #[test]

@@ -572,7 +572,7 @@ mod tests {
         assert_eq!(loaded.size, [1; 3]);
         assert_eq!(loaded.blocks.len(), 1);
         assert_eq!(
-            loaded.palette[loaded.blocks[0].state].name,
+            loaded.palette[loaded.blocks[0].state].name(),
             "minecraft:stone"
         );
         assert_eq!(read_structure(&root, target.file), Some(loaded));
