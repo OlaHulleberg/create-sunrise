@@ -311,8 +311,8 @@ const KINDS: [&str; 9] = [
 /// `breaking/drill`: a drill on a motor against the block in front of it. By its index one of
 /// twelve histories on six facings at six speeds. The target stands there from the start; or it
 /// is swapped for another breakable block, an unbreakable one and back; or taken away while it
-/// cracks and put back; or the drill is removed while it cracks; or its motor is removed while
-/// it cracks and replaced; or the world is saved and reloaded while it cracks and after a break;
+/// cracks and put back; or the drill is removed while it cracks, or on the tick it is placed; or
+/// its motor is removed while it cracks and replaced; or the world is saved and reloaded while it cracks and after a break;
 /// or a block arrives in front of an idle drill; or a sand column refills the block it breaks;
 /// or `doTileDrops` is turned off; or a second drill works the same block; or the target is of
 /// another kind; or the drill is wrenched while it cracks.
@@ -402,6 +402,7 @@ pub fn drill(seed: u64, index: u64) -> Scenario {
             event(&mut sc, set(at, t, "minecraft:air"));
             event(&mut sc, set(placed + 60, t, target));
         }
+        3 if n % 2 == 1 => event(&mut sc, set(1, d, "minecraft:air")),
         3 => event(&mut sc, set(at, d, "minecraft:air")),
         4 => {
             event(&mut sc, set(at, m, "minecraft:air"));
@@ -494,14 +495,14 @@ fn column(sc: &mut Scenario, t: Pos, ys: impl Iterator<Item = i32>, state: &str)
 }
 
 /// `breaking/saw`: a sideways saw on a motor against what stands in front of it. By its index
-/// one of fifteen histories on the four horizontal facings at six speeds: a log alone; a tree
+/// one of sixteen histories on the four horizontal facings at six speeds: a log alone; a tree
 /// whose trunk it cuts through; a cut a second trunk holds up; a trunk with a branch; mangrove
 /// roots; a mushroom stem among mushroom blocks and a shroomlight; a bamboo stalk; a pumpkin or
 /// a melon; what a saw cannot cut; a crimson stem among wart blocks; a tree with a bee nest and
 /// moss carpet on it; leaves alone; the saw removed while it cuts; its motor removed while it
-/// cuts and replaced; `doTileDrops` turned off.
+/// cuts and replaced; `doTileDrops` turned off; the saw wrenched while it cuts.
 pub fn saw(seed: u64, index: u64) -> Scenario {
-    const VARIANTS: u64 = 15;
+    const VARIANTS: u64 = 16;
     let variant = index % VARIANTS;
     let n = index / VARIANTS;
     let rpm = SPEEDS[(n % 6) as usize];
@@ -577,7 +578,7 @@ pub fn saw(seed: u64, index: u64) -> Scenario {
         6 => column(
             &mut sc,
             t,
-            0..2 + (n % 3) as i32,
+            0..1 + (n % 3) as i32,
             "minecraft:bamboo[age=1,leaves=none,stage=0]",
         ),
         7 => {
@@ -625,9 +626,6 @@ pub fn saw(seed: u64, index: u64) -> Scenario {
             for dy in 0..2 {
                 for dx in -1i32..=1 {
                     for dz in -1i32..=1 {
-                        if dx == 0 && dz == 0 && dy == 0 {
-                            continue;
-                        }
                         let at = [t[0] + dx, t[1] + dy, t[2] + dz];
                         if at == s || at == m {
                             continue;
@@ -638,7 +636,7 @@ pub fn saw(seed: u64, index: u64) -> Scenario {
                 }
             }
         }
-        // The saw removed, its motor removed, the rule off: against a log.
+        // The saw removed, its motor removed, the rule off, the saw wrenched: against a log.
         _ => put(&mut sc, t, &log),
     }
     let placed = sc.blocks.len() as u32;
@@ -661,6 +659,21 @@ pub fn saw(seed: u64, index: u64) -> Scenario {
                 s,
                 Action::GameRule {
                     do_tile_drops: false,
+                },
+            ),
+        ),
+        15 => event(
+            &mut sc,
+            act(
+                at,
+                s,
+                Action::Use {
+                    item: "create:wrench".into(),
+                    face: Face::Up,
+                    hit: [0.5, 1.0, 0.5],
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    sneaking: false,
                 },
             ),
         ),
@@ -882,7 +895,7 @@ mod tests {
             }
         }
         let mut seen = BTreeSet::new();
-        for index in 0..360 {
+        for index in 0..384 {
             let sc = saw(7, index);
             let rpm = sc.blocks.iter().find_map(|b| b.motor).unwrap();
             assert!(
@@ -890,9 +903,9 @@ mod tests {
                     .iter()
                     .any(|e| matches!(&e.action, Some(Action::Reload)))
             );
-            seen.insert((index % 15, rpm, facing_of(&sc, "create:mechanical_saw")));
+            seen.insert((index % 16, rpm, facing_of(&sc, "create:mechanical_saw")));
         }
-        for history in 0..15 {
+        for history in 0..16 {
             for rpm in SPEEDS {
                 for facing in HORIZONTAL {
                     assert!(
