@@ -316,7 +316,7 @@ From seed 1152 up, the tank family also places a tank on top of the formed tank 
 Shrinking evaluates one candidate at a time. Check/fuzz batches are bounded by observed checkpoint cells and JSON records stream through buffered readers/writers. On the shared VM, run runtime sweeps and shrinks one at a time under `prlimit --as=3000000000`, after checking at least 4 GiB is available.
 
 Found records are written as compact `.json.gz` files (with fluid lanes a raw record can exceed 100 MB); set `FUZZ_RECORD_GZIP=0` for plain JSON.
-The default remains plain JSON for existing coverage tools. `rust`, `java`, `check`,
+`rust`, `java`, `check`,
 `shrink`, `repeat-java`, `compare-records` and `diff-files` accept gzip inputs by suffix.
 Compression preserves both complete snapshots and every difference for triage.
 
