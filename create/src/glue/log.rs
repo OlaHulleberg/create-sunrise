@@ -1,6 +1,7 @@
-//! Diagnostics go to standard error. Set `CREATE_DEBUG_LOG` to an unused plain name such as
-//! `create.log` to also keep a file under the instance's `sunrise-mod-data/create/`. Existing
-//! files are left alone. Each line includes elapsed time and the thread name.
+//! Diagnostics are off by default. Set `CREATE_DEBUG_LOG` to an unused plain UTF-8 filename
+//! such as `create.log` to write only to a new file under the instance's `sunrise-mod-data/create/`.
+//! If the file cannot be created, nothing is logged. Each line includes time since the log opened
+//! and the thread name.
 
 use super::data_dir::{DataDir, Leaf};
 use mod_api::{InstanceDirectory, RegistrationContext};
@@ -11,7 +12,7 @@ use std::path::Path;
 use std::sync::{Mutex, OnceLock};
 use std::time::Instant;
 
-static LOG: OnceLock<(Instant, Option<Mutex<File>>)> = OnceLock::new();
+static LOG: OnceLock<Option<(Mutex<File>, Instant)>> = OnceLock::new();
 
 fn open_log(instance: &Path, name: &OsStr) -> io::Result<File> {
     let name = name
@@ -24,37 +25,26 @@ fn open_log(instance: &Path, name: &OsStr) -> io::Result<File> {
 /// The registration snapshot supplies the same instance path as the running host, losslessly.
 pub(crate) fn register(cx: &RegistrationContext) {
     LOG.get_or_init(|| {
-        let file = (|| {
-            let name = std::env::var_os("CREATE_DEBUG_LOG")?;
-            let instance = cx.instance_dir().and_then(InstanceDirectory::to_path_buf)?;
-            match open_log(&instance, &name) {
-                Ok(file) => Some(Mutex::new(file)),
-                Err(e) => {
-                    let _ = writeln!(io::stderr().lock(), "[create] Diagnostic log disabled: {e}");
-                    None
-                }
-            }
-        })();
-        (Instant::now(), file)
+        let name = std::env::var_os("CREATE_DEBUG_LOG")?;
+        let instance = cx.instance_dir().and_then(InstanceDirectory::to_path_buf)?;
+        let file = open_log(&instance, &name).ok()?;
+        Some((Mutex::new(file), Instant::now()))
     });
 }
 
-/// Writes one line. Use `create_log!`.
+/// Writes one line if the log is enabled. Use `create_log!`.
 pub fn line(args: std::fmt::Arguments<'_>) {
-    let elapsed = LOG
-        .get()
-        .map_or(0.0, |(start, _)| start.elapsed().as_secs_f64());
-    let thread = std::thread::current();
-    let name = thread.name().unwrap_or("?");
-    let _ = writeln!(io::stderr().lock(), "[{elapsed:9.3}] [{name}] {args}");
-    if let Some((_, Some(file))) = LOG.get()
+    if let Some(Some((file, start))) = LOG.get()
         && let Ok(mut file) = file.lock()
     {
+        let elapsed = start.elapsed().as_secs_f64();
+        let thread = std::thread::current();
+        let name = thread.name().unwrap_or("?");
         let _ = writeln!(file, "[{elapsed:9.3}] [{name}] {args}");
     }
 }
 
-/// `create_log!("[create] {n} states")`: a diagnostic line, with an optional copy in a file.
+/// `create_log!("[create] {n} states")`: a line in the mod's log, when it has one.
 #[macro_export]
 macro_rules! create_log {
     ($($arg:tt)*) => {

@@ -1769,8 +1769,7 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3], access: Access) ->
                             .into_iter()
                             .map(|(k, v)| (k.to_owned(), v.to_owned()))
                             .collect(),
-                    )
-                    .expect("serialized registered block state has valid numeric properties"),
+                    )?,
                     class,
                 ));
             }
