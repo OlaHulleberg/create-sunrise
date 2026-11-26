@@ -12,14 +12,10 @@
 //! `worldshaper_screen`, drawn with `gadget_gui`'s widgets) are the client's own screens, opened
 //! by a sneaking use; their settings come back on their packets' channels.
 //!
-//! Left out (no API for it):
-//! - The wand of symmetry's mirrored placements take the placed state turned, not
-//!   `Block.updateFromNeighbourShapes` of it: no host call asks a state's shape
-//!   against its neighbours.
-//! - Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
-//!   makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
-//!   `sticky_sides`, `create_glue`). The train schedule and its screen are the trains'
-//!   (`trains::schedule_screen`, `trains::conductor`).
+//! Super glue's selection (`SuperGlueSelectionHandler`) is the contraptions' to port: what it
+//! makes (`SuperGlueEntity` areas) is found and saved with contraptions (`contraption_found`,
+//! `sticky_sides`, `create_glue`). The train schedule and its screen are the trains'
+//! (`trains::schedule_screen`, `trains::conductor`).
 
 mod belt_connector;
 pub(crate) use belt_connector::create_belts;
