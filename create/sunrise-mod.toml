@@ -1,6 +1,6 @@
 id = "create"
 name = "Create"
-version = "6.0.11"
+version = "6.0.11-0.1.0"
 description = "Create 6.0.11 for Sunrise: kinetics, processing, logistics and contraptions as a native mod"
 authors = ["The Create Team / The Creators of Create", "OlaHulleberg", "arismoko"]
 license = "MIT"
