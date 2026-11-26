@@ -981,12 +981,11 @@ fn prepare_punch_player(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     facing: Dir,
-    stack: impl FnOnce(&ServerLevel<'_>) -> Option<ItemStack>,
+    stack: Option<ItemStack>,
 ) -> Option<PlayerRef> {
     let fake = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME)?;
     let (eye, yaw, pitch) = fake_pose(pos, facing, false);
     let feet = [eye[0], eye[1] - 1.62, eye[2]];
-    let stack = stack(lv);
     let host = &mut *lv.host;
     let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
     crate::glue::items::set_held(host, fake, Hand::Main, stack);
@@ -1007,7 +1006,8 @@ fn attack(
     d: &mut Deployer,
     target: mod_api::EntityRef,
 ) {
-    let Some(fake) = prepare_punch_player(lv, pos, facing, |lv| held_of(lv, d)) else {
+    let stack = held_of(lv, d);
+    let Some(fake) = prepare_punch_player(lv, pos, facing, stack) else {
         return;
     };
     let host = &mut *lv.host;
@@ -1089,7 +1089,7 @@ fn punch(
     };
     // `DeployerHandler.activateInner`: `getDestroyProgress(player, ..)` of the fake player
     // holding the whole stack, its components and wear included.
-    let Some(fake) = prepare_punch_player(lv, pos, facing, |_| Some(stack)) else {
+    let Some(fake) = prepare_punch_player(lv, pos, facing, Some(stack)) else {
         return Vec::new();
     };
     let host = &mut *lv.host;
