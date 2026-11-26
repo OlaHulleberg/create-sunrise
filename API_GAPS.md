@@ -6,6 +6,10 @@ API, and remove it once the API has it and the port uses it.
 
 ## Entities and movement
 
+- **An entity type's custom-data permission** (`EntityType.onlyOpCanSetNbt`): schematics apply vanilla's built-in
+  policy to each entity and passenger. Unprivileged printing and capture omit modded entity data until the SDK
+  exposes its type's permission. Game-master actions may use registered modded types. sunrise-org/sunrise#6234
+
 - **A raw position write for the local player** (`Entity.setPos` on the client): no raw lift past the top of an upward
   belt slope. Create uses: calls vanilla `Entity.setPos` ([`BeltMovementHandler.java:196`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/belt/transport/BeltMovementHandler.java#L196)). sunrise-org/sunrise#5072
 - **`entity_inside` for the local player's own block sweep**: the local belt carry can't see a predicted swept entry.

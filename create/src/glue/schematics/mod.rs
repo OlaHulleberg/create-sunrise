@@ -39,6 +39,7 @@ mod deploy;
 mod quill;
 pub(crate) use quill::face_of;
 mod renderer;
+mod saved_data;
 mod screens;
 mod tools;
 mod transform;
@@ -74,6 +75,7 @@ use mod_api::{
     MenuScreen, ModContainer, OnBlockPlacedByEvent, PlayerRef, Registrar, RegistrationContext,
     ServerHost, SoundSource, Tag,
 };
+use saved_data::Access;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
@@ -607,6 +609,7 @@ type Items = mod_api::Capability<dyn mod_api::ResourceHandler<ItemResource>>;
 
 /// What a cannon reaches of the game while it ticks.
 struct World<'a, 'l> {
+    access: Access,
     lv: &'a mut ServerLevel<'l>,
     pos: [i32; 3],
     found: Option<(Vec<Items>, bool)>,
@@ -786,7 +789,7 @@ impl CannonWorld for World<'_, '_> {
         self.found().1
     }
     fn load(&mut self, data: &SchematicData) -> Loaded {
-        load(self.lv, data)
+        load(self.lv, data, Access::Ordinary)
     }
     fn loaded(&mut self, pos: [i32; 3]) -> bool {
         self.lv.level.in_world_bounds(&*self.lv.host, pos) == Some(true) && self.lv.is_loaded(pos)
@@ -920,7 +923,10 @@ impl CannonWorld for World<'_, '_> {
         let Tag::Compound(mut nbt) = body::to_game(&e.nbt) else {
             return;
         };
-        let kind = text(nbt.get(&"id".into()));
+        // Flights loaded from disk also cross this boundary, always as an ordinary cannon.
+        let Some(kind) = self.access.entities(&*self.lv.host, &mut nbt) else {
+            return;
+        };
         nbt.remove(&"id".into());
         nbt.remove(&"UUID".into());
         nbt.insert(
@@ -958,7 +964,10 @@ impl CannonWorld for World<'_, '_> {
                 nbt.insert((*key).into(), Tag::Int(e.block_pos[i]));
             }
         }
-        let _ = self.lv.level.summon(&mut *self.lv.host, &kind, e.pos, nbt);
+        let _ = self
+            .lv
+            .level
+            .summon(&mut *self.lv.host, kind.as_str(), e.pos, nbt);
     }
 
     fn place(&mut self, pos: [i32; 3], state: u32) {
@@ -1024,47 +1033,27 @@ impl CannonWorld for World<'_, '_> {
 
 /// `placeSchematicBlock`'s data: the block entity placed at `pos` (`state`) loads the
 /// schematic's data (`loadWithComponents`, its `x`, `y`, `z` set to where it is), after
-/// `NBTProcessors.process`: a sign whose text runs a click command keeps none.
+/// `BlockHelper.prepareBlockEntityData` and `NBTProcessors.process`.
 fn merge_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState, data: &sch::Nbt) {
-    let Tag::Compound(mut data) = body::to_game(data) else {
+    let Tag::Compound(data) = body::to_game(data) else {
+        return;
+    };
+    let Some(be) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let host: &dyn Host = &*lv.host;
+    let Some(kind) = be.kind(host).and_then(|k| k.id(host)) else {
+        return;
+    };
+    let Some(mut data) = saved_data::prepare_block(host, state.block(), kind, data) else {
         return;
     };
     for k in ["id", "x", "y", "z"] {
         data.remove(&k.into());
     }
-    if crate::glue::block_in_tag(lv.host.tags(), state.block(), "minecraft:all_signs") == Some(true)
-        && sign_has_click(&data)
-    {
-        return;
-    }
-    let Some(be) = lv.host.block_entity(lv.level, pos) else {
-        return;
-    };
     if let Err(e) = be.merge_data(&mut *lv.host, data) {
         crate::create_log!("[create] a printed block's data was refused at {pos:?}: {e:?}");
     }
-}
-
-/// `NBTProcessors.signProcessor`: a line of either side's text with a click event.
-fn sign_has_click(data: &Compound) -> bool {
-    fn clicks(t: &Tag) -> bool {
-        match t {
-            Tag::Compound(c) => {
-                c.contains_key(&"click_event".into())
-                    || c.contains_key(&"clickEvent".into())
-                    || c.values().any(clicks)
-            }
-            Tag::List(l) => l.iter().any(clicks),
-            Tag::String(s) => {
-                let s = s.to_string_lossy();
-                s.contains("click_event") || s.contains("clickEvent")
-            }
-            _ => false,
-        }
-    }
-    ["front_text", "back_text"]
-        .iter()
-        .any(|k| data.get(&(*k).into()).is_some_and(clicks))
 }
 
 /// Whether `state`'s collision shape at `pos` is a whole block (`isCollisionShapeFullBlock`).
@@ -1225,8 +1214,8 @@ fn shaft_axis(slope: cn::BeltSlope, facing: [i32; 3]) -> &'static str {
 }
 
 /// `SchematicPrinter.loadSchematic` from the server's uploaded copy.
-fn load(lv: &ServerLevel<'_>, data: &SchematicData) -> Loaded {
-    let structure = match (&data.owner, &data.file) {
+fn load(lv: &ServerLevel<'_>, data: &SchematicData, access: Access) -> Loaded {
+    let mut structure = match (&data.owner, &data.file) {
         (Some(o), Some(f)) => body::Uploaded::new(o, f)
             .ok()
             .and_then(|target| body::read_uploaded(&*lv.host, target))
@@ -1234,30 +1223,39 @@ fn load(lv: &ServerLevel<'_>, data: &SchematicData) -> Loaded {
         _ => Structure::default(),
     };
     let anchor = data.anchor.unwrap_or_default();
-    let printer = Printer::load(&structure, anchor, data.rotation, data.mirror);
     let entries = structure
         .palette
         .iter()
         .map(|p| entry(lv, p, data.rotation, data.mirror))
         .collect();
-    let entities = structure
-        .entities
-        .iter()
-        .map(|e| {
-            let pos = sch::transform_vec(e.pos, data.mirror, data.rotation, [0; 3]);
-            let block = sch::transform(e.block_pos, data.mirror, data.rotation, [0; 3]);
-            (
-                entity_requirement(e),
-                cn::PlacedEntity {
-                    nbt: e.nbt.clone(),
-                    pos: [0, 1, 2].map(|i| pos[i] + f64::from(anchor[i])),
-                    block_pos: [0, 1, 2].map(|i| block[i] + anchor[i]),
-                    rotation: data.rotation,
-                    mirror: data.mirror,
-                },
-            )
-        })
-        .collect();
+    let mut entities = Vec::new();
+    // The printer and placed records have the same entity indexes, even after filtering.
+    structure.entities.retain(|e| {
+        let Tag::Compound(mut nbt) = body::to_game(&e.nbt) else {
+            return false;
+        };
+        if access.entities(&*lv.host, &mut nbt).is_none() || !e.pos.iter().all(|p| p.is_finite()) {
+            return false;
+        }
+        let pos = sch::transform_vec(e.pos, data.mirror, data.rotation, [0; 3]);
+        let block = sch::transform(e.block_pos, data.mirror, data.rotation, [0; 3]);
+        let [Some(x), Some(y), Some(z)] = [0, 1, 2].map(|i| block[i].checked_add(anchor[i])) else {
+            return false;
+        };
+        let requirement = entity_requirement(&nbt);
+        entities.push((
+            requirement,
+            cn::PlacedEntity {
+                nbt: body::to_engine(&Tag::Compound(nbt)),
+                pos: [0, 1, 2].map(|i| pos[i] + f64::from(anchor[i])),
+                block_pos: [x, y, z],
+                rotation: data.rotation,
+                mirror: data.mirror,
+            },
+        ));
+        true
+    });
+    let printer = Printer::load(&structure, anchor, data.rotation, data.mirror);
     Loaded {
         printer,
         entries,
@@ -1456,6 +1454,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         };
         {
             let mut w = World {
+                access: Access::Ordinary,
                 lv: &mut *lv,
                 pos,
                 found: None,
@@ -1998,10 +1997,7 @@ fn checklist_clipboard(host: &dyn Host, c: &cn::Checklist) -> Option<ItemStack> 
 
 /// `ItemRequirement.of(Entity)`: an item frame its frame and the item in it, an armor stand
 /// itself and what it wears and holds; any other entity can't be printed.
-fn entity_requirement(e: &sch::EntityInfo) -> Requirement {
-    let Tag::Compound(nbt) = body::to_game(&e.nbt) else {
-        return Requirement::Invalid;
-    };
+fn entity_requirement(nbt: &Compound) -> Requirement {
     let kind = text(nbt.get(&"id".into()));
     let item_of = |t: &Tag| match t {
         Tag::Compound(c) => {
@@ -2267,6 +2263,7 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
     if player.game_mode(&*host) != Some(mod_api::GameMode::Creative) {
         return;
     }
+    let access = Access::for_player(player.can_use_game_master_blocks(&*host));
     let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
         return;
     };
@@ -2285,9 +2282,10 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         entries,
         entities,
         air,
-    } = load(&lv, &data);
+    } = load(&lv, &data, access);
     let include_air = false;
     let mut w = World {
+        access,
         lv: &mut lv,
         pos: [0; 3],
         found: None,

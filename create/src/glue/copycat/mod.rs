@@ -137,6 +137,20 @@ pub struct Copycats;
 const CARRIED_MATERIAL: &str = "CopycatMaterial";
 const CARRIED_ITEM: &str = "CopycatItem";
 
+/// `CopycatBlockEntity.writeSafe`: the material and consumed item without its component patch.
+/// Use the same field names that `save_entities` and `load_entity` own.
+pub(crate) fn schematic_safe_data(
+    block: mod_api::BlockKey,
+    mut data: Compound,
+) -> Option<Compound> {
+    copycat_block(block)?;
+    data.retain(|key, _| key == &CARRIED_MATERIAL.into() || key == &CARRIED_ITEM.into());
+    if let Some(Tag::Compound(item)) = data.get_mut(&CARRIED_ITEM.into()) {
+        item.remove(&"components".into());
+    }
+    Some(data)
+}
+
 impl Subsystem for Copycats {
     fn draw_carried(
         &self,
