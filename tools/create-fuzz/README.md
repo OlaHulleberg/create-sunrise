@@ -24,8 +24,8 @@ The driver builds the engine from this checkout. Run the commands below from `to
 
 ```sh
 ./run.sh server                          # start the Java side; waits until it is ready
-./run.sh fuzz fuzz 0 1000                # seeds 0-999; differences go to found/<seed>.json
-./run.sh fuzz shrink found/123.json      # the smallest case that still differs: found/123.min.json
+./run.sh fuzz fuzz 0 1000                # seeds 0-999; differences go to found/<seed>.json.gz
+./run.sh fuzz shrink found/123.json.gz   # the smallest case that still differs: found/123.min.json
 ./run.sh fuzz check cases/*.json         # hand-written cases
 ./run.sh stop
 ```
@@ -316,7 +316,7 @@ From seed 1152 up, the tank family also places a tank on top of the formed tank 
 Shrinking evaluates one candidate at a time. Check/fuzz batches are bounded by observed checkpoint cells and JSON records stream through buffered readers/writers. On the shared VM, run runtime sweeps and shrinks one at a time under `prlimit --as=3000000000`, after checking at least 4 GiB is available.
 
 Found records are written as compact `.json.gz` files (with fluid lanes a raw record can exceed 100 MB); set `FUZZ_RECORD_GZIP=0` for plain JSON.
-The default remains plain JSON for existing coverage tools. `rust`, `java`, `check`,
+`rust`, `java`, `check`,
 `shrink`, `repeat-java`, `compare-records` and `diff-files` accept gzip inputs by suffix.
 Compression preserves both complete snapshots and every difference for triage.
 
