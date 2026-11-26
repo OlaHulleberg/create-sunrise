@@ -1,0 +1,82 @@
+{
+  "seed": 0,
+  "ticks": 14,
+  "checkpoints": [
+    14
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        1,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 16
+    },
+    {
+      "pos": [
+        1,
+        1,
+        0
+      ],
+      "state": "create:gearbox[axis=y]"
+    },
+    {
+      "pos": [
+        2,
+        1,
+        0
+      ],
+      "state": "create:sequenced_gearshift[axis=x,vertical=false,state=0]"
+    },
+    {
+      "pos": [
+        3,
+        1,
+        0
+      ],
+      "state": "create:gearbox[axis=y]"
+    },
+    {
+      "pos": [
+        1,
+        1,
+        1
+      ],
+      "state": "create:shaft[axis=z]"
+    },
+    {
+      "pos": [
+        1,
+        1,
+        2
+      ],
+      "state": "create:gearbox[axis=y]"
+    },
+    {
+      "pos": [
+        2,
+        1,
+        2
+      ],
+      "state": "create:shaft[axis=x]"
+    },
+    {
+      "pos": [
+        3,
+        1,
+        2
+      ],
+      "state": "create:gearbox[axis=y]"
+    },
+    {
+      "pos": [
+        3,
+        1,
+        1
+      ],
+      "state": "create:shaft[axis=z]"
+    }
+  ]
+}

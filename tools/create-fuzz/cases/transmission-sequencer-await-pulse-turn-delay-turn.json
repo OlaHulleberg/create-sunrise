@@ -1,0 +1,130 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 60,
+  "checkpoints": [
+    8,
+    9,
+    10,
+    12,
+    13,
+    14,
+    15,
+    16,
+    26,
+    27,
+    28,
+    29,
+    38,
+    39,
+    40,
+    51,
+    52,
+    53,
+    59,
+    60
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 16
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:sequenced_gearshift[axis=x,vertical=false,state=0]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 3,
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "program",
+        "instructions": [
+          {
+            "instruction": "AWAIT",
+            "modifier": "FORWARD",
+            "value": -1
+          },
+          {
+            "instruction": "TURN_ANGLE",
+            "modifier": "FORWARD",
+            "value": 45
+          },
+          {
+            "instruction": "DELAY",
+            "modifier": "FORWARD",
+            "value": 10
+          },
+          {
+            "instruction": "TURN_ANGLE",
+            "modifier": "BACK",
+            "value": 45
+          },
+          {
+            "instruction": "END",
+            "modifier": "FORWARD",
+            "value": 1
+          }
+        ]
+      }
+    },
+    {
+      "tick": 8,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    },
+    {
+      "tick": 12,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 0
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    }
+  ]
+}
