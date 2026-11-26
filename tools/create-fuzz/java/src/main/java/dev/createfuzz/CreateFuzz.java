@@ -74,6 +74,7 @@ public class CreateFuzz {
             ProcessingRecipeAudit.check(e.getServer().overworld());
             BasinRecipeAudit.check(e.getServer().overworld());
             BreakingAudit.check(e.getServer().overworld(), e.getServer());
+            DeployerAudit.check(e.getServer().overworld());
             Files.createDirectories(dir);
             Files.writeString(
                     dir.resolve("actor-probe.json"),

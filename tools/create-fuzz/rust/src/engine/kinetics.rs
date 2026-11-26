@@ -92,9 +92,11 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: the drills and saws, then the presses and the deployers.
+        // `processing::Tools`: the drills and saws, then the depots the deployers hold
+        // (`tick_presses`), then the deployers' strokes.
         self.tick_drills();
         self.tick_presses();
+        self.tick_deployers();
         self.ejectors_ticked();
         self.save_fluid_entities();
         // CreateWorld::tick: the solve, then the states its sequencers set.

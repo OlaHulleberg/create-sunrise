@@ -523,7 +523,9 @@ pub fn validate_scenario(sc: &crate::scenario::Scenario) {
                 || crate::fluids::contract()
                     .blocks
                     .iter()
-                    .any(|block| block.id == id),
+                    .any(|block| block.id == id)
+                // The deployers' blocks (`deployers.json`).
+                || crate::deployers::known_block(&id),
             "transport adapter does not model collision/processing for {id}"
         );
     }
@@ -553,7 +555,9 @@ pub fn validate_scenario(sc: &crate::scenario::Scenario) {
                     || crate::fluid_recipes::contents(item).is_some()
                     || item == "minecraft:bucket"
                     // Fuel for a blaze burner (`BlazeBurnerBlock.useItemOn`).
-                    || ["create:blaze_cake", "create:creative_blaze_cake"].contains(&item.as_str()),
+                    || ["create:blaze_cake", "create:creative_blaze_cake"].contains(&item.as_str())
+                    // What a deployer may hold (`deployers.json`).
+                    || crate::deployers::item(item).is_some(),
                 "item override requires a separate transport adapter"
             );
         }

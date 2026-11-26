@@ -63,8 +63,67 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
                 fields.insert("Ticks".into(), Tag::Int(m.running_ticks));
             }
         }
+        // glue/processing/persist.rs `live_fields`: the deployer's `Timer`.
+        Some(Block::Deployer) => {
+            if let Some(d) = w.dims[0].deployers.get(&p)
+                && let Some(Tag::Compound(c)) = fields.get_mut(DEPLOYER_STATE)
+                && let Some(Tag::IntArray(v)) = c.get_mut(&"Values".to_owned())
+                && v.len() > 1
+            {
+                v[1] = d.timer;
+            }
+        }
         _ => {}
     }
+}
+
+const DEPLOYER_STATE: &str = "DeployerState";
+
+/// glue/processing/persist.rs `deployer_to_tag` of `deployers_to_nbt`: `State`, `Timer`,
+/// `Reach`, the held stack's count, `Mode`, `Powered` and its wear, by position; the held
+/// stack's item.
+pub fn deployer_to_tag(d: &create_engine::deployer::Deployer) -> Compound {
+    let (item, n) = d.held.clone().unwrap_or_default();
+    Compound::from([
+        (
+            "Values".into(),
+            Tag::IntArray(vec![
+                i32::from(d.state.index()),
+                d.timer,
+                d.reach.to_bits() as i32,
+                i32::from(n),
+                i32::from(d.mode.index()),
+                i32::from(d.locked),
+                d.held_damage as i32,
+            ]),
+        ),
+        ("HeldItem".into(), Tag::String(item)),
+    ])
+}
+
+/// `deployer_of`: the deployer a `DeployerState` saved. What is not saved (its breaking, a
+/// fist bump) is a new deployer's.
+pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
+    let Some(Tag::IntArray(v)) = c.get("Values") else {
+        return None;
+    };
+    let at = |i: usize| v.get(i).copied().unwrap_or(0);
+    let item = match c.get("HeldItem") {
+        Some(Tag::String(s)) => s.clone(),
+        _ => String::new(),
+    };
+    let n = at(3).clamp(0, 64) as u8;
+    Some(create_engine::deployer::Deployer {
+        state: create_engine::deployer::State::from_index(at(0) as u8),
+        timer: at(1),
+        reach: f32::from_bits(at(2) as u32),
+        held: (!item.is_empty() && n > 0).then_some((item, n)),
+        mode: create_engine::deployer::Mode::from_index(at(4) as u8),
+        breaking: None,
+        locked: at(5) != 0,
+        held_damage: at(6).max(0) as u32,
+        held_components: Vec::new(),
+    })
 }
 
 const SAW_INVENTORY: &str = "Inventory";
@@ -243,6 +302,12 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
         if (p[0] >> 4, p[2] >> 4) == column {
             breaker_tag(b, out.entry(*p).or_default());
         }
+    }
+    // glue/processing/persist.rs `save_entities`: each deployer's `DeployerState`.
+    for (p, d) in w.column_deployers(0, cx, cz) {
+        out.entry(p)
+            .or_default()
+            .insert(DEPLOYER_STATE.into(), Tag::Compound(deployer_to_tag(&d)));
     }
     super::fluids::save_entities(w, column, &mut out);
     out

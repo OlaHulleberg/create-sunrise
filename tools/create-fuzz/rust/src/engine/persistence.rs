@@ -239,6 +239,7 @@ impl Run {
         at.extend(self.w.dims[0].presses.keys().copied());
         at.extend(self.w.dims[0].mixers.keys().copied());
         at.extend(self.w.dims[0].drills.keys().copied());
+        at.extend(self.w.dims[0].deployers.keys().copied());
         at.sort();
         at.dedup();
         for p in at {
@@ -403,6 +404,13 @@ impl Run {
         for &(p, s) in &blocks {
             if let (Some(tag), Some((block, _))) = (records.get(&p), self.w.table.get(s)) {
                 crate::persistence::entities::load(&mut self.w, p, block, tag, u64::from(self.now));
+                // glue/processing/persist.rs `load_entity`: a deployer's `DeployerState`.
+                if block == create_engine::Block::Deployer
+                    && let Some(Tag::Compound(c)) = tag.get("DeployerState")
+                    && let Some(d) = crate::persistence::entities::deployer_of(c)
+                {
+                    self.w.read_deployer(0, p, d);
+                }
                 // glue/processing/saw.rs `load_saw`.
                 if block == create_engine::Block::MechanicalSaw {
                     let (saw, index, duration) = crate::persistence::entities::saw_of(tag);
