@@ -58,37 +58,56 @@ pub fn content(stack: &ItemStack) -> Content {
         _ => 0,
     };
     let flag = |t: Option<&Tag>| matches!(t, Some(Tag::Byte(b)) if *b != 0);
-    let mut pages = Vec::new();
-    if let Some(Tag::List(list)) = c.get(&"pages".into()) {
-        for page in list {
-            let Tag::List(entries) = page else { continue };
-            pages.push(
-                entries
-                    .iter()
-                    .filter_map(|e| match e {
-                        Tag::Compound(e) => Some(Entry {
-                            checked: flag(e.get(&"checked".into())),
-                            text: text(e.get(&"text".into())),
-                            icon: match e.get(&"icon".into()) {
-                                Some(Tag::String(item)) => Some((
-                                    item.to_string_lossy(),
-                                    int(e.get(&"item_amount".into())),
-                                )),
-                                _ => None,
-                            },
-                        }),
-                        _ => None,
-                    })
-                    .collect(),
-            );
-        }
-    }
+    let pages = page_entries(c)
+        .map(|page| {
+            page.map(|e| Entry {
+                checked: flag(e.get(&"checked".into())),
+                text: text(e.get(&"text".into())),
+                icon: match e.get(&"icon".into()) {
+                    Some(Tag::String(item)) => {
+                        Some((item.to_string_lossy(), int(e.get(&"item_amount".into()))))
+                    }
+                    _ => None,
+                },
+            })
+            .collect()
+        })
+        .collect();
     Content {
         kind: Kind::from_name(&text(c.get(&"type".into()))),
         pages,
         read_only: flag(c.get(&"read_only".into())),
         previously_opened_page: int(c.get(&"previously_opened_page".into())),
     }
+}
+
+fn page_entries(content: &Compound) -> impl Iterator<Item = impl Iterator<Item = &Compound>> {
+    let list = match content.get(&"pages".into()) {
+        Some(Tag::List(list)) => list.as_slice(),
+        _ => &[],
+    };
+    list.iter().filter_map(|page| match page {
+        Tag::List(entries) => Some(entries.iter().filter_map(|entry| match entry {
+            Tag::Compound(entry) => Some(entry),
+            _ => None,
+        })),
+        _ => None,
+    })
+}
+
+/// Java stores the clipboard content directly among the block entity's components. The port's
+/// `ClipboardItem` only displays literal strings through `content`, which have no click style.
+pub(crate) fn schematic_text_has(data: &Compound, predicate: impl Fn(&Tag) -> bool) -> bool {
+    let Some(Tag::Compound(components)) = data.get(&"components".into()) else {
+        return false;
+    };
+    let Some(Tag::Compound(content)) = components.get(&CONTENT_KEY.into()) else {
+        return false;
+    };
+    page_entries(content)
+        .flatten()
+        .filter_map(|entry| entry.get(&"text".into()))
+        .any(predicate)
 }
 
 /// `ClipboardContent.copiedValues`: the block settings the clipboard copied.
