@@ -690,7 +690,6 @@ mod tests {
 
     #[test]
     fn inactive_value_boxes_pass_centred_clicks() {
-        create_engine::states::set_range(10, 2);
         let table = StateTable::new(
             10,
             [
@@ -727,6 +726,5 @@ mod tests {
             true,
             [0.5; 3]
         ));
-        create_engine::states::clear_range();
     }
 }

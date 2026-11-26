@@ -654,15 +654,12 @@ mod tests {
 
     #[test]
     fn the_world_forms_vaults_on_block_changes_and_tracks_smart_chutes() {
-        use crate::states;
         use crate::world::{CreateWorld, StateTable};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:item_vault", vec![("axis", "z"), ("large", "false")]),
             ("create:smart_chute", vec![("powered", "false")]),
             ("create:smart_chute", vec![("powered", "true")]),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -696,7 +693,6 @@ mod tests {
         // Broken: its filter goes.
         w.block_changed(0, chute, 11, 0);
         assert!(w.dims[0].chute_filters.is_empty());
-        states::clear_range();
     }
 
     #[test]
