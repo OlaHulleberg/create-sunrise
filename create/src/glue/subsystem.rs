@@ -739,12 +739,12 @@ mod tests {
             projection: [0.0; 16],
             dimension: "minecraft:overworld".into(),
         };
-        let classic = mod_api::WorldRenderView::new(&camera, 0.0, 0, false, &[]);
+        let classic = mod_api::WorldRenderView::new(&camera, None, 0.0, 0, 0.0, false, &[]);
         assert_eq!(
             overlay_stages(&classic),
             &[RenderLevelStage::AfterTranslucentBlocks]
         );
-        let oit = mod_api::WorldRenderView::new(&camera, 0.0, 0, true, &[]);
+        let oit = mod_api::WorldRenderView::new(&camera, None, 0.0, 0, 0.0, true, &[]);
         assert_eq!(
             overlay_stages(&oit),
             &[

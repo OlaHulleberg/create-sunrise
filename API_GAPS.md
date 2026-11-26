@@ -50,10 +50,6 @@ API, and remove it once the API has it and the port uses it.
 
 ## Rendering
 
-- **The camera's eye position and the entity's interpolated position in `EntityRenderer::submit`, and a reusable item
-  draw**: a potato cannon shot can't face the camera in every view. Create uses: calls vanilla
-  `Minecraft.getCameraEntity().getEyePosition(pt)` ([`AllPotatoProjectileRenderModes.java:48`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/AllPotatoProjectileRenderModes.java#L48)) and `ItemRenderer.renderStatic` ([`PotatoProjectileRenderer.java:34`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/PotatoProjectileRenderer.java#L34)).
-  sunrise-org/sunrise#5077
 - **A block's face-skip rule against other blocks, for model faces only** (`skipRendering`): faces between different
   glass kinds are drawn, and copycats aren't culled by their material. Create uses: overrides vanilla
   `Block.skipRendering` ([`ConnectedGlassBlock.java:20`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/palettes/ConnectedGlassBlock.java#L20)) and `hidesNeighborFace` ([`CopycatPanelBlock.java:176`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatPanelBlock.java#L176)). sunrise-org/sunrise#5080

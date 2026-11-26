@@ -11,6 +11,17 @@ pub const SIZE: f32 = 0.25;
 /// `getDefaultProjectileRange`.
 pub const RANGE: i32 = 15;
 
+/// How a shot is turned when drawn (`PotatoProjectileRenderMode`).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum Render {
+    /// `Billboard`: faces the camera.
+    Billboard,
+    /// `Tumble`: faces the camera, spinning about its own axes with the shot's age.
+    Tumble,
+    /// `TowardMotion`: points along its motion, spinning about that axis.
+    TowardMotion { sprite_angle_offset: i32, spin: f32 },
+}
+
 /// A projectile type (`PotatoCannonProjectileType`) with Create's defaults filled in.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct Type {
@@ -30,6 +41,8 @@ pub struct Type {
     /// What its `pre_entity_hit` / `on_entity_hit` / `on_block_hit` does, as Create's data
     /// names it (none: nothing more).
     pub action: Option<&'static str>,
+    /// `render_mode`.
+    pub render: Render,
 }
 
 const DEFAULT: Type = Type {
@@ -46,6 +59,7 @@ const DEFAULT: Type = Type {
     sticky: false,
     drop: None,
     action: None,
+    render: Render::Billboard,
 };
 
 macro_rules! t {
@@ -56,57 +70,81 @@ macro_rules! t {
 
 /// Create's types in the registry's order (by id).
 pub const TYPES: &[Type] = &[
-    t!("apple", ["minecraft:apple"], damage: 5, knockback: 0.5, sound_pitch: 1.1, velocity: 1.45),
+    t!("apple", ["minecraft:apple"], damage: 5, knockback: 0.5, sound_pitch: 1.1, velocity: 1.45,
+        render: Render::Tumble),
     t!("baked_potato", ["minecraft:baked_potato"], damage: 5, knockback: 0.5, reload_ticks: 15,
-        velocity: 1.25, action: Some("set_on_fire 60")),
+        velocity: 1.25, action: Some("set_on_fire 60"),
+        render: Render::Tumble),
     t!("beetroot", ["minecraft:beetroot"], damage: 2, knockback: 0.1, reload_ticks: 5,
-        sound_pitch: 1.6, velocity: 1.6),
+        sound_pitch: 1.6, velocity: 1.6,
+        render: Render::TowardMotion { sprite_angle_offset: 140, spin: 2.0 }),
     t!("blaze_cake", ["create:blaze_cake"], damage: 15, knockback: 0.3, reload_ticks: 20,
-        sticky: true, velocity: 1.1, action: Some("set_on_fire 240")),
+        sticky: true, velocity: 1.1, action: Some("set_on_fire 240"),
+        render: Render::Tumble),
     t!("cake", ["minecraft:cake"], damage: 8, knockback: 0.1, reload_ticks: 15, sticky: true,
-        velocity: 1.1),
+        velocity: 1.1,
+        render: Render::Tumble),
     t!("carrot", ["minecraft:carrot"], damage: 4, knockback: 0.3, reload_ticks: 12,
-        sound_pitch: 1.5, velocity: 1.45, action: Some("plant_crop minecraft:carrots")),
+        sound_pitch: 1.5, velocity: 1.45, action: Some("plant_crop minecraft:carrots"),
+        render: Render::TowardMotion { sprite_angle_offset: 140, spin: 1.0 }),
     t!("chocolate_berry", ["create:chocolate_glazed_berries"], damage: 4, knockback: 0.2,
-        sound_pitch: 1.25, split: 3, velocity: 1.05),
+        sound_pitch: 1.25, split: 3, velocity: 1.05,
+        render: Render::Tumble),
     t!("chorus_fruit", ["minecraft:chorus_fruit"], damage: 3, knockback: 0.05, reload_ticks: 15,
-        velocity: 1.2, action: Some("chorus_teleport 20")),
+        velocity: 1.2, action: Some("chorus_teleport 20"),
+        render: Render::Tumble),
     t!("enchanted_golden_apple", ["minecraft:enchanted_golden_apple"], knockback: 0.05,
-        reload_ticks: 100, sound_pitch: 1.1, velocity: 1.45, action: Some("food_effects")),
+        reload_ticks: 100, sound_pitch: 1.1, velocity: 1.45, action: Some("food_effects"),
+        render: Render::Tumble),
     t!("fallback", [], damage: 0),
     t!("fish", ["minecraft:cod", "minecraft:cooked_cod", "minecraft:salmon",
         "minecraft:cooked_salmon", "minecraft:tropical_fish"], damage: 4, knockback: 0.6,
-        sound_pitch: 1.3, sticky: true, velocity: 1.3),
+        sound_pitch: 1.3, sticky: true, velocity: 1.3,
+        render: Render::TowardMotion { sprite_angle_offset: 140, spin: 1.0 }),
     t!("glistering_melon", ["minecraft:glistering_melon_slice"], damage: 5, knockback: 0.1,
         reload_ticks: 8, sound_pitch: 1.5, velocity: 1.45,
-        action: Some("potion_effect minecraft:glowing 1 100")),
+        action: Some("potion_effect minecraft:glowing 1 100"),
+        render: Render::Tumble),
     t!("glow_berry", ["minecraft:glow_berries"], damage: 2, knockback: 0.05, sound_pitch: 1.2,
-        split: 2, velocity: 1.05, action: Some("potion_effect minecraft:glowing 1 200")),
+        split: 2, velocity: 1.05, action: Some("potion_effect minecraft:glowing 1 200"),
+        render: Render::Tumble),
     t!("golden_apple", ["minecraft:golden_apple"], knockback: 0.05, reload_ticks: 100,
-        sound_pitch: 1.1, velocity: 1.45, action: Some("cure_zombie_villager")),
+        sound_pitch: 1.1, velocity: 1.45, action: Some("cure_zombie_villager"),
+        render: Render::Tumble),
     t!("golden_carrot", ["minecraft:golden_carrot"], damage: 12, knockback: 0.5,
-        reload_ticks: 15, sound_pitch: 1.5, velocity: 1.45),
+        reload_ticks: 15, sound_pitch: 1.5, velocity: 1.45,
+        render: Render::TowardMotion { sprite_angle_offset: 140, spin: 2.0 }),
     t!("honeyed_apple", ["create:honeyed_apple"], damage: 6, knockback: 0.1, reload_ticks: 15,
-        sound_pitch: 1.1, velocity: 1.35, action: Some("potion_effect minecraft:slowness 2 160")),
+        sound_pitch: 1.1, velocity: 1.35, action: Some("potion_effect minecraft:slowness 2 160"),
+        render: Render::Tumble),
     t!("melon_block", ["minecraft:melon"], damage: 8, knockback: 2.0, reload_ticks: 20,
-        sound_pitch: 0.9, velocity: 0.95, action: Some("place_block_on_ground minecraft:melon")),
+        sound_pitch: 0.9, velocity: 0.95, action: Some("place_block_on_ground minecraft:melon"),
+        render: Render::Tumble),
     t!("melon_slice", ["minecraft:melon_slice"], damage: 3, knockback: 0.1, reload_ticks: 8,
-        sound_pitch: 1.5, velocity: 1.45),
+        sound_pitch: 1.5, velocity: 1.45,
+        render: Render::Tumble),
     t!("poison_potato", ["minecraft:poisonous_potato"], damage: 5, knockback: 0.05,
-        reload_ticks: 15, velocity: 1.25, action: Some("potion_effect minecraft:poison 1 160")),
+        reload_ticks: 15, velocity: 1.25, action: Some("potion_effect minecraft:poison 1 160"),
+        render: Render::Tumble),
     t!("potato", ["minecraft:potato"], damage: 5, knockback: 1.5, reload_ticks: 15,
-        velocity: 1.25, action: Some("plant_crop minecraft:potatoes")),
+        velocity: 1.25, action: Some("plant_crop minecraft:potatoes"),
+        render: Render::Tumble),
     t!("pufferfish", ["minecraft:pufferfish"], damage: 4, knockback: 0.4, sound_pitch: 1.1,
-        sticky: true, velocity: 1.1, action: Some("food_effects")),
+        sticky: true, velocity: 1.1, action: Some("food_effects"),
+        render: Render::TowardMotion { sprite_angle_offset: 140, spin: 1.0 }),
     t!("pumpkin_block", ["minecraft:pumpkin"], damage: 6, knockback: 2.0, reload_ticks: 15,
-        sound_pitch: 0.9, velocity: 0.95, action: Some("place_block_on_ground minecraft:pumpkin")),
+        sound_pitch: 0.9, velocity: 0.95, action: Some("place_block_on_ground minecraft:pumpkin"),
+        render: Render::Tumble),
     t!("pumpkin_pie", ["minecraft:pumpkin_pie"], damage: 7, knockback: 0.05, reload_ticks: 15,
-        sound_pitch: 1.1, sticky: true, velocity: 1.1),
+        sound_pitch: 1.1, sticky: true, velocity: 1.1,
+        render: Render::Tumble),
     t!("suspicious_stew", ["minecraft:suspicious_stew"], damage: 3, knockback: 0.2,
-        reload_ticks: 40, velocity: 0.8, drop: Some("minecraft:bowl"),
+        reload_ticks: 40, velocity: 0.8, drop: Some("minecraft:bowl",
+        render: Render::TowardMotion { sprite_angle_offset: 140, spin: 1.0 }),
         action: Some("suspicious_stew")),
     t!("sweet_berry", ["minecraft:sweet_berries"], damage: 3, knockback: 0.1, sound_pitch: 1.25,
-        split: 3, velocity: 1.05),
+        split: 3, velocity: 1.05,
+        render: Render::Tumble),
 ];
 
 /// `getTypeForItem`: the first type listing the item (none: not ammunition).
