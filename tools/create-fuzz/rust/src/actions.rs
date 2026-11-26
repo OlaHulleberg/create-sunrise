@@ -61,6 +61,10 @@ pub enum Action {
         target: crate::scenario::Pos,
         connect: bool,
     },
+    /// The level's `doTileDrops` rule (`GameRules.RULE_DOBLOCKDROPS`) from here to the case's end.
+    GameRule {
+        do_tile_drops: bool,
+    },
     Remove,
     Signal {
         strength: u8,
@@ -251,7 +255,7 @@ impl Action {
                     target[0].abs() <= 23 && target[2].abs() <= 23 && (1..=23).contains(&target[1])
                 );
             }
-            Self::Remove | Self::Reload | Self::GameMode { .. } => {}
+            Self::Remove | Self::Reload | Self::GameMode { .. } | Self::GameRule { .. } => {}
         }
     }
 }

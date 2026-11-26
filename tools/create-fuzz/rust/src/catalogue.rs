@@ -24,17 +24,18 @@ pub fn validate(state: &str) -> Result<(), String> {
         return Ok(());
     }
     if !id.starts_with("create:") {
-        return if [
+        if [
             "minecraft:air",
             "minecraft:stone",
             "minecraft:redstone_block",
         ]
         .contains(&state)
         {
-            Ok(())
-        } else {
-            Err(format!("unrepresented external state {state}"))
-        };
+            return Ok(());
+        }
+        // A block of the breaking catalogue (`breaking.json`), otherwise.
+        return crate::breaking::validate_state(&id, &props)
+            .unwrap_or_else(|| Err(format!("unrepresented external state {state}")));
     }
     if state.contains('[') && !state.ends_with(']') {
         return Err(format!("malformed state {state}"));

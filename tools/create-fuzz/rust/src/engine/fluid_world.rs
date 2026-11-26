@@ -8,17 +8,17 @@ pub(super) struct Front<'a> {
 }
 impl Run {
     pub(super) fn world_fluid(&self, p: Pos) -> Option<(Fluid, u8)> {
-        crate::fluid_world::fluid(&self.name(self.at(p)))
+        crate::fluid_world::fluid(&self.state_at(p))
     }
     pub(super) fn waterloggable(&self, p: Pos) -> bool {
-        parse_state(&self.name(self.at(p)))
+        parse_state(&self.state_at(p))
             .1
             .iter()
             .any(|(k, _)| k == "waterlogged")
     }
     fn facts(&self, p: Pos) -> Option<&crate::fluid_host::Facts> {
         let (state, facts) = self.fluid_facts.get(&p)?;
-        let current = self.name(self.at(p));
+        let current = self.state_at(p);
         let (old, mut op) = parse_state(state);
         let (new, mut np) = parse_state(&current);
         op.retain(|(k, _)| k != "waterlogged");
@@ -31,12 +31,13 @@ impl Run {
         &self,
         p: Pos,
     ) -> Option<crate::fluid_world::Observation> {
+        let current = self.state_at(p);
         if let Some((state, facts)) = self.fluid_facts.get(&p)
-            && *state == self.name(self.at(p))
+            && *state == current
         {
             return facts.fluid.clone();
         }
-        crate::fluid_world::observe(&self.name(self.at(p)))
+        crate::fluid_world::observe(&current)
     }
     pub(super) fn sturdy(&self, p: Pos, face: Dir) -> bool {
         self.facts(p).map_or_else(
@@ -59,6 +60,10 @@ impl Run {
             .map_or_else(|| !self.replaceable(p), |f| f.collision)
     }
     fn set_world_state(&mut self, p: Pos, state: &str) {
+        if crate::breaking::full_state(state).is_some() {
+            self.set_state(p, state);
+            return;
+        }
         let id = self.id(state);
         assert!(
             id != OTHER || state == "minecraft:stone",
@@ -70,7 +75,7 @@ impl Run {
         if self.fluid_host_enabled {
             self.fluid_host_changes.push(crate::fluid_host::State {
                 pos: p,
-                state: self.name(self.at(p)),
+                state: self.state_at(p),
             });
         }
     }
@@ -208,7 +213,7 @@ impl Run {
 }
 impl Space for Front<'_> {
     fn drain_block(&mut self, simulate: bool) -> Option<(Fluid, u32)> {
-        let state = self.run.name(self.run.at(self.pos));
+        let state = self.run.state_at(self.pos);
         let (name, props) = parse_state(&state);
         let honey = props
             .iter()
@@ -251,7 +256,7 @@ impl Space for Front<'_> {
     }
     fn set_waterlogged(&mut self, on: bool) {
         let next = with_prop(
-            &self.run.name(self.run.at(self.pos)),
+            &self.run.state_at(self.pos),
             "waterlogged",
             if on { "true" } else { "false" },
         );

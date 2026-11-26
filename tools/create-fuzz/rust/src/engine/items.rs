@@ -5,7 +5,7 @@
 //! level's entity pass and is observed where and how it was put; one an input put before the
 //! level tick flew a tick first, which the driver does not follow.
 use super::*;
-use crate::transport::{DroppedItem, Placed, SPREAD_MIDDLE, Spreader, Stack};
+use crate::transport::{DroppedItem, Placed, Spreader, Stack};
 use create_engine::{Block, belt};
 
 pub(super) struct ItemEntity {
@@ -42,11 +42,18 @@ impl Run {
     }
 
     fn spread(&mut self, p: Pos, by: Spreader, item: &str, count: u8) {
-        let at = std::array::from_fn(|i| f64::from(p[i]) + SPREAD_MIDDLE[i]);
+        let at = std::array::from_fn(|i| f64::from(p[i]) + by.middle()[i]);
         self.join(at, [0.0; 3], item, count, Placed::Spread(by));
     }
 
-    fn join(&mut self, at: [f64; 3], motion: [f64; 3], item: &str, count: u8, placed: Placed) {
+    pub(super) fn join(
+        &mut self,
+        at: [f64; 3],
+        motion: [f64; 3],
+        item: &str,
+        count: u8,
+        placed: Placed,
+    ) {
         if count == 0 || item == "minecraft:air" {
             return;
         }
@@ -112,15 +119,30 @@ impl Run {
         if state == AIR {
             return;
         }
-        let name = self.name(state);
+        let name = self.state_at(p);
         let kept = by_player && (self.creative || crate::loot::requires_tool(&name) == Some(true));
-        if !kept
-            && self.pop_block_loot(p, &name)
-            && let Some((Block::Belt, i)) = self.w.table.get(state)
-            && i.belt.is_some_and(|s| s.part != belt::Part::Middle)
-        {
-            // `BeltBlock.getDrops`.
-            self.pop_block_loot(p, "create:shaft");
+        let loot = if kept {
+            Some(crate::breaking::Loot::Fixed(Vec::new()))
+        } else {
+            crate::breaking::loot(&name)
+        };
+        match loot {
+            Some(crate::breaking::Loot::Rolled(_)) => {}
+            Some(crate::breaking::Loot::Fixed(drops)) => {
+                for (item, count) in drops {
+                    self.pop_resource(p, &item, count);
+                }
+                // `BeltBlock.getDrops`: a pulley's shaft too.
+                if !kept
+                    && let Some((Block::Belt, i)) = self.w.table.get(state)
+                    && i.belt.is_some_and(|s| s.part != belt::Part::Middle)
+                {
+                    self.pop_block_loot(p, "create:shaft");
+                }
+            }
+            None => self
+                .notes
+                .push(format!("adapter gap: loot of {name} at {p:?}")),
         }
         self.set(p, AIR);
     }

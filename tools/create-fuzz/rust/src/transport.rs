@@ -114,6 +114,12 @@ pub enum Spreader {
     /// `Containers.dropItemStack`: anywhere an item's box fits inside the block, its feet in
     /// the lower three quarters.
     DropItemStack,
+    /// A breaker's drops (`BlockBreakingKineticBlockEntity.onBlockBroken`): the block's middle,
+    /// an eighth each way, still.
+    Centre,
+    /// A falling block that comes to rest where another one just landed turns into its item at
+    /// the cell's floor, rising.
+    BrokenFall,
 }
 
 impl Spreader {
@@ -122,11 +128,23 @@ impl Spreader {
         match self {
             Self::PopResource => [[0.25, 0.75], [0.125, 0.625], [0.25, 0.75]],
             Self::DropItemStack => [[0.125, 0.875], [0.0, 0.75], [0.125, 0.875]],
+            Self::Centre => [[0.375, 0.625]; 3],
+            Self::BrokenFall => [[0.5, 0.5], [0.0, 0.0], [0.5, 0.5]],
+        }
+    }
+
+    /// The middle of the range from the block's lower corner.
+    pub fn middle(self) -> [f64; 3] {
+        match self {
+            Self::PopResource | Self::DropItemStack => SPREAD_MIDDLE,
+            Self::Centre => [0.5; 3],
+            Self::BrokenFall => [0.5, 0.0, 0.5],
         }
     }
 }
 
-/// The middle of either spreader's range from the block's lower corner.
+/// The middle of `Block.popResource`'s and `Containers.dropItemStack`'s ranges from the block's
+/// lower corner.
 pub const SPREAD_MIDDLE: [f64; 3] = [0.5, 0.375, 0.5];
 
 /// How far a spread item entity can move in its first tick: never down, and no more than

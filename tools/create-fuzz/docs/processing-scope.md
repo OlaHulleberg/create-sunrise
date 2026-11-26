@@ -7,8 +7,8 @@ shafts and cogs stay in the kinetic catalogue.
 
 ## Driven
 
-Five families, one residue each modulo 256 (`rust/src/processing.rs`, the two basin ones in
-`rust/src/basin.rs`). None reloads.
+Seven families, one residue each modulo 256 (`rust/src/processing.rs`, `rust/src/breaking.rs`,
+the two basin ones in `rust/src/basin.rs`). None reloads.
 
 | Family | Residue | Machine |
 | --- | --- | --- |
@@ -17,10 +17,12 @@ Five families, one residue each modulo 256 (`rust/src/processing.rs`, the two ba
 | `processing/saw` | 128 | An upward saw on a motor, a depot beside it or nothing |
 | `processing/mixing` | 77 | A basin under a mechanical mixer on a motor, heat below the basin or nothing, a depot beside the heat or nothing |
 | `processing/compacting` | 93 | A basin under a mechanical press on a motor, a depot beside it or nothing |
+| `breaking/drill` | 64 | A drill on a creative motor against the block in front of it |
+| `breaking/saw` | 192 | A sideways saw on a motor against what stands in front of it |
 
 They took residues from `geometry/states` (205, 221, 77 and 93, which leaves it 109 and 125) and
-`geometry/stress_boundary` (128 and 192, which it keeps), so those two families keep reaching every
-state and load step over more seeds.
+`geometry/stress_boundary` (128, 64 and 192), so those two families keep reaching every state and
+load step over more seeds. The two breaking families are below.
 
 The press over a depot or belt is `belt/press_processing`, and a fan's current over a depot or a
 chute is `belt/depot_outputs` and `belt/chute_columns` ([item transport](item-transport.md)). The
@@ -197,6 +199,76 @@ Where the rolls would change what happens next, the family does not go on:
 - All a case's rolled inputs make less than a full slot of any one result, since a full one
   stops the millstone (`MillstoneBlockEntity.tick`, :92) when chance says.
 
+### Block breaking
+
+The drill and the sideways saw break the block in front of them through
+`BlockBreakingKineticBlockEntity` (`base/BlockBreakingKineticBlockEntity.java`), as
+`rust/src/breaking.rs` drives and `engine/breaking.rs` mirrors from the port's glue
+(`glue/processing/saw.rs`) and engine (`engine/src/drill.rs`, `tree.rs`):
+
+- `tick` (:86). With speed 0 nothing happens (:93). `ticksUntilNextProgress` counts down (:98);
+  when it is 0 the block along `facing` is looked at (`getBreakingPos`,
+  `DrillBlockEntity.java:36`, `SawBlockEntity.java:476`). `isBreakable` (:135) refuses a liquid,
+  air, hardness −1 and `create:non_breakable` (no block of Create's own is in it); a refused block
+  resets the progress (:106). Otherwise `destroyProgress += clamp((int)(breakSpeed / hardness), 1,
+  10 − destroyProgress)` with `breakSpeed = |speed| / 100` (:114, :157): 10 breaks the block and
+  rests the breaker at −1 (:119); short of 10 it waits `(int)(hardness / breakSpeed)` ticks
+  (:127). Stone (1.5) takes one step every 19 ticks at 8 rpm and one every 3 at 64; TNT (0) goes
+  on the first look.
+- Looking again. `ticksUntilNextProgress` starts at 0, so a breaker looks on its first tick. A
+  resting one (−1) is set to 1 by `lazyTick` (:43; every 11th tick of its block entity,
+  `SmartBlockEntity.java:74`), by `DrillBlock.neighborChanged` (`drill/DrillBlock.java:80`) when
+  any of its six neighbours changes, and by `SawBlockEntity.tick` (`saw/SawBlockEntity.java:170`)
+  itself every tick. The saw has no `neighborChanged`; an upward saw breaks nothing (`shouldRun`,
+  :468).
+- Drops. `onBlockBroken` (:139) gives the block's loot (`BlockHelper.destroyBlock`, :213, no tool)
+  at the block's middle within an eighth, standing still, and nothing with `doTileDrops` off. An
+  ore's experience is popped too (`foundation/utility/BlockHelper.java:237`). The saw then fells
+  what stood on the cut block (`SawBlockEntity.onBlockBroken`, :481): `TreeCutter.findTree`
+  (`saw/TreeCutter.java:71`) takes the logs it stands on, the leaves and attached blocks over
+  them within two blocks, and `Tree.destroyBlocks` (:337) drops attachments, logs, then leaves,
+  each at its block's middle flying on along the saw's facing by `distance / 20`
+  (`dropItemFromCutTree`, :495). `canBreak` (:505) also asks `isSawable` (:510): not saplings;
+  logs, leaves, roots, bamboo, the solid crops, cactus, sugar cane, kelp and chorus.
+- `write` and `read` (:59) save `Progress` and `NextTick`; `invalidate` (:78) clears the cracks of
+  a breaker that had progress.
+
+The comparison reads a breaker's `Progress` and `NextTick` (`breaking`) and the cracks it last
+asked the level to show at the block (`cracks`: 1.21.1 keeps no crack map on the server).
+
+Around the breakers the driver keeps the game's own rules, each as the server ran it on a fixture
+(`engine/vanilla.rs`): a leaf's `distance` (1 beside a log, else the least around it one further,
+else 7; nothing decays, the server runs no random ticks), a falling block (a scheduled tick two
+later, then 0.04 faster a tick, dragged by 0.98, landing in the cell it rests in; a second one
+resting where the first just landed turns into its item at the cell's floor), and a huge
+mushroom block's faces turning to their skin towards a block of their own kind that comes. Water
+and the rest is the native fluid host's ([fluid world](fluid-world.md)). `rust/src/breaking.json`
+is the vanilla contract (hardness, property domains, tags, fixed and rolled drops, `stands_on`,
+what falls); `BreakingAudit` checks it against the loaded game at startup.
+
+`breaking/drill` puts a drill on a motor against a block, in twelve histories on six facings at
+six speeds: the target from the start, swapped, taken away and put back, the drill or its motor
+removed while it cracks, the world saved and reloaded, a block arriving in front of an idle drill,
+a sand column refilling what it breaks, `doTileDrops` off, two drills on one block, nine target
+kinds (bedrock, TNT, glass, coal ore, gravel, cobblestone, clay, a log, water), and the drill
+wrenched while it cracks. `breaking/saw` puts a sideways saw against fifteen: a log, trees it
+fells (centre out or rim in), a cut a second trunk holds up, a branch, mangrove roots, a mushroom
+stem among caps and a shroomlight, bamboo, a pumpkin or melon, what a saw cannot cut, a crimson
+stem among wart blocks, a tree with bee nests and moss carpet on it, leaves alone, the saw or its
+motor removed, and `doTileDrops` off. Neither family reloads by seed bit.
+
+Not compared: experience (the harness discards the orbs, as it does the drops it never observes);
+the items chance decides (a leaf's sticks, saplings and apples, gravel's flint, a melon's seeds, a
+mushroom block's mushrooms), which both sides leave out wherever the block that rolls them shows;
+sounds and particles. A version 3 event `{"kind":"game_rule","do_tile_drops":false}` turns the
+rule off from its tick to the case's end; the server puts its own rule back after the case.
+
+Cases in `cases/`: `breaking-saw-upward`, `breaking-drill-unbreakable`, `breaking-drill-water`,
+`breaking-mushroom-skins`, `breaking-leaf-distances`, `breaking-sand-falls`,
+`breaking-sand-column-pull`. Every history where a breaker breaks a block differs from Java by the
+first two rows below, so those histories are in the two families and, shrunk, with the report of
+the differences; the cases that pin them go to `cases/` once the port is right.
+
 ## Port differences found
 
 Fixed, each with an engine test carrying Create's numbers and a case in `cases/`:
@@ -273,11 +345,29 @@ A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by
 `enableMerging`), so a basin spouting into one holds its second result at the spout until the
 first leaves it.
 
+Open, found with the breaking families (a seed reproduces each with `fuzz gen <seed>` and the
+lane; `breaking/drill` unless said):
+
+| Difference | Java | Port | Deciding Java | Port code |
+| --- | --- | --- | --- | --- |
+| First look late (64: every seed that breaks) | A breaker looks on its first tick: with nothing to break `NextTick` goes to −1 at tick 2, and stone is cracked from tick 4 | Starts at −1 and is set to 1 by its first lazy tick: tick 2 shows 0 and the cracks come at tick 3, one tick early; two ticks late into a network that did not change in the tick the breaker was placed | `BlockBreakingKineticBlockEntity.java:26`, `:98-101` | `engine/src/drill.rs:16`, `:36-41`; `glue/processing/saw.rs:73-76` |
+| No neighbour arming (1600) | A drill beside any block change looks two ticks later: a stone arriving at 42 is cracked from 44 | Waits for its next lazy tick (46) | `DrillBlock.java:80-84` | `engine/src/world.rs:3081`; `glue/processing/saw.rs:41` |
+| Saw re-arm (7872 of `breaking/saw`) | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival: at the case's last tick, 73, its `NextTick` is 0 | Every lazy tick: `NextTick` stays −1 | `SawBlockEntity.java:170-173` | `glue/processing/saw.rs:73-76` |
+| Speed 0 on the first tick (3136; of the 16 rpm seeds whose target never changes later, the only difference) | A breaker placed into a turning network has its speed on its first tick: `NextTick` −1 at tick 2 | `tick_drills` runs before the kinetic solve and reads speed 0: its lazy tick arms it to 1 instead. A generator that changes in the same tick re-places the network and hides this, which is why only the motor's default speed shows it | `KineticBlockEntity.java:99-100`, `:102` | `glue/processing/saw.rs:70`; `engine/src/world.rs:2839` |
+| Cracks left (832) | A drill removed at 21 while it cracks takes its cracks along | They stay to the end of the case | `BlockBreakingKineticBlockEntity.java:78-83` | `engine/src/world.rs:2060`; `glue/processing/saw.rs:46` |
+| Reload forgets progress (1344) | A reload at 21 keeps `Progress` and `NextTick` | Starts over (tick 22: 0 and 0 where Java holds 1 and 607) | `BlockBreakingKineticBlockEntity.java:59-76` | `engine/src/world.rs:470`, `:2377` |
+| Lazy tick stopped | A stopped breaker's lazy ticks stay on its block entity's clock (66, 77, 88 after its restart) | Its counter counts turning ticks only (70, 81, 92); no lane history runs long enough to show it | `SmartBlockEntity.java:74-86` | `glue/processing/saw.rs:41`, `:73`; `engine/src/world.rs:2690-2696` |
+
+With Java's arming, reload and crack clearing laid over the port's engine, a throwaway driver
+matched Java on 360 of the first 432 drill seeds and 284 of the first 360 saw seeds; the rest
+differed by the speed-0 row alone.
+
 ## Not driven yet
 
 | Machine | Java | Why not yet |
 | --- | --- | --- |
-| Drill and sideways saw | `kinetics/base/BlockBreakingKineticBlockEntity` (`tick` :86, `lazyTick` :43), `saw/TreeCutter` | Block breaking with hardness, drops and tree felling |
+| A drill in a cobble generator | `kinetics/drill/DrillBlockEntity.onBlockBroken` (:41), `CobbleGenOptimisation` | Lava and water sources around a drill with a belt, hopper or chute under it; lava is not among the fluids the harness places |
+| Dynamic Trees | `saw/TreeCutter.canDynamicTreeCutFrom` (:51), `findDynamicTree` | That mod is not installed |
 | Deployer | `kinetics/deployer/DeployerBlockEntity.tick` (:173), `DeployerHandler` | A fake player's item use |
 | Mechanical arm | `kinetics/mechanicalArm/ArmBlockEntity.tick` (:128), interaction points | Placement selection packets and points |
 | Mechanical crafter | `kinetics/crafter/MechanicalCrafterBlockEntity.tick` (:255) | Grids, connected inputs and crafting recipes |
