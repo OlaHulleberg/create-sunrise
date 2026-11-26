@@ -316,6 +316,7 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
             ]
         };
         super::cargo::expect(lv, t.id, c, place);
+        let mut placed = std::collections::HashSet::new();
         for (o, s) in car {
             // The block's centre from the pivot (the middle of the track under the
             // carriage's leading bogey), turned about it; its height from the track.
@@ -326,14 +327,16 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
             let state = turned_state(&*lv.host, state, quarter, Axis::Y);
             // Without shape updates (`Contraption.addBlocksToWorld` places them as they were
             // carried): a door's half put back before its other half stays.
-            lv.set_state(
+            if lv.set_state(
                 p,
                 state,
                 update_all() | mod_api::BlockUpdateFlags::KNOWN_SHAPE,
-            );
+            ) {
+                placed.insert(p);
+            }
         }
         // The carriage's storage blocks take their items back.
-        super::cargo::release(lv, t.id, c, place);
+        super::cargo::release(lv, t.id, c, place, |p| placed.contains(&p));
     }
     super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);
     super::super::persist::mark_pos_unsaved(dim, pos);

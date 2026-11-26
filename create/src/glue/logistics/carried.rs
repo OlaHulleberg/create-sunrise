@@ -78,21 +78,10 @@ pub(super) fn carry_in(
     pos: [i32; 3],
     block: Block,
     data: &Compound,
-    turn: create_engine::contraption::Transform,
+    _turn: create_engine::contraption::Transform,
 ) {
     let dim = lv.dim;
     let host = &*lv.host;
-    if block == Block::Belt
-        && let Some(Tag::List(list)) = data.get(&BELT_ITEMS.into())
-    {
-        // Its chain forms again from the segments' states once they are back, and its
-        // controller (where the turned offset points) takes the items.
-        let saved = Compound::from([("belts".into(), Tag::List(list.clone()))]);
-        for (offset, items) in super::belts_from_nbt(&saved) {
-            let controller = add(pos, turn.vec(offset));
-            with_world(|w| w.reform_belt(dim, controller, items));
-        }
-    }
     let filter = data
         .get(&FILTER.into())
         .and_then(|t| filters::filter_from_nbt(host, t));
@@ -133,6 +122,27 @@ pub(super) fn carry_in(
     });
 }
 
+/// The carried record may ride on any segment, but Java loads Inventory only on the controller.
+pub(crate) fn restore_belt_items(
+    world: &mut create_engine::world::CreateWorld,
+    dim: usize,
+    pos: [i32; 3],
+    data: &Compound,
+    turn: create_engine::contraption::Transform,
+    placed: impl Fn([i32; 3]) -> bool,
+) {
+    let Some(Tag::List(list)) = data.get(&BELT_ITEMS.into()) else {
+        return;
+    };
+    let saved = Compound::from([("belts".into(), Tag::List(list.clone()))]);
+    for (offset, items) in super::belts_from_nbt(&saved) {
+        let controller = add(pos, turn.vec(offset));
+        if placed(controller) && world.block_at(dim, controller) == Some(Block::Belt) {
+            world.read_belt_items(dim, controller, items);
+        }
+    }
+}
+
 fn add(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
     [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
@@ -168,5 +178,69 @@ fn carry_belt(dim: usize, pos: [i32; 3], out: &mut Compound) {
     };
     if let Some(bytes) = create_engine::belt::encode(&[shown]).into_iter().next() {
         out.insert(BELT_SHOWN.into(), Tag::ByteArray(bytes));
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use create_engine::belt::{Inventory, Item};
+    use create_engine::contraption::Transform;
+    use create_engine::world::{CreateWorld, StateTable};
+
+    const CONTROLLER: [i32; 3] = [0, 8, 0];
+    const END: [i32; 3] = [0, 8, 1];
+
+    fn belt_landing() -> (CreateWorld, Compound) {
+        let table = StateTable::new(
+            10,
+            ["start", "end"].into_iter().map(|part| {
+                (
+                    "create:belt",
+                    [("facing", "south"), ("slope", "horizontal"), ("part", part)].into_iter(),
+                )
+            }),
+        );
+        let mut world = CreateWorld::new(table);
+        world.block_loaded(0, CONTROLLER, 10);
+        let data = Compound::from([(
+            BELT_ITEMS.into(),
+            super::super::belts_to_nbt(&[(
+                [1, 0, 0],
+                Inventory::fresh(vec![Item::new("minecraft:iron_ingot", 3, 0, false)]),
+            )]),
+        )]);
+        (world, data)
+    }
+
+    fn finish_belt(world: &mut CreateWorld) -> Inventory {
+        world.block_loaded(0, END, 11);
+        let mut turns = world.transport_ticks(0, 0);
+        while turns.next(world).is_some() {}
+        let mut belts = world.column_belts(0, 0, 0);
+        assert_eq!(belts.len(), 1);
+        let (controller, inventory) = belts.pop().unwrap();
+        assert_eq!(controller, CONTROLLER);
+        inventory
+    }
+
+    #[test]
+    fn refused_belt_landing_does_not_seed_a_new_belt() {
+        let (mut world, data) = belt_landing();
+        let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
+        // The landing did not write the existing controller position.
+        restore_belt_items(&mut world, 0, END, &data, turn, |p| p == END);
+        assert!(finish_belt(&mut world).is_empty());
+    }
+
+    #[test]
+    fn landed_belt_controller_keeps_inventory_when_record_segment_is_refused() {
+        let (mut world, data) = belt_landing();
+        let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
+        restore_belt_items(&mut world, 0, END, &data, turn, |p| p == CONTROLLER);
+        let inventory = finish_belt(&mut world);
+        assert_eq!(inventory.items.len(), 1);
+        assert_eq!(inventory.items[0].item, "minecraft:iron_ingot");
+        assert_eq!(inventory.items[0].count, 3);
     }
 }

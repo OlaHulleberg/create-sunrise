@@ -760,7 +760,8 @@ fn put_back_blocks(
     lv: &mut ServerLevel<'_>,
     blocks: &[([i32; 3], u32)],
     free: impl Fn(&ServerLevel<'_>, [i32; 3]) -> bool,
-) {
+) -> std::collections::HashSet<[i32; 3]> {
+    let mut placed = std::collections::HashSet::new();
     let flags = super::server::update_all() | BlockUpdateFlags::MOVE_BY_PISTON;
     for brittles in [false, true] {
         for &(p, state) in blocks {
@@ -775,9 +776,12 @@ fn put_back_blocks(
                 }
                 lv.destroy_block(p, true);
             }
-            lv.set_num(p, state, flags);
+            if lv.set_num(p, state, flags) {
+                placed.insert(p);
+            }
         }
     }
+    placed
 }
 
 /// Takes `blocks` (offsets from `base`) out of the world (`removeBlocksFromWorld`).

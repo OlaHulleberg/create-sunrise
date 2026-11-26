@@ -119,8 +119,10 @@ fn lift_put_back(
     origin: [i32; 3],
     blocks: &[([i32; 3], u32)],
 ) {
-    actors::expect_back(lv, key, |o| add(origin, o));
-    super::put_back_blocks(lv, blocks, |lv, p| lv.passable(p));
+    let place = |o| add(origin, o);
+    actors::expect_back(lv, key, place);
+    let written = super::put_back_blocks(lv, blocks, |lv, p| lv.passable(p));
+    actors::restore_landed_belts(lv, key, place, |p| written.contains(&p));
     // A clock's hour and minute hands are two structures.
     let placed = Pose::translated(origin.map(f64::from));
     for n in 0..2 {
