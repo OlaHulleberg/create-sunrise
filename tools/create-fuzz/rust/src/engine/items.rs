@@ -114,31 +114,27 @@ impl Run {
         }
         let name = self.name(state);
         let kept = by_player && (self.creative || crate::loot::requires_tool(&name) == Some(true));
-        let loot = if kept {
-            Some(Vec::new())
-        } else {
-            crate::loot::drops(&name)
-        };
-        match loot {
-            Some(drops) => {
-                for (item, count) in drops {
-                    self.pop_resource(p, &item, count);
-                }
-                // `BeltBlock.getDrops`: a pulley's shaft too.
-                if !kept
-                    && let Some((Block::Belt, i)) = self.w.table.get(state)
-                    && i.belt.is_some_and(|s| s.part != belt::Part::Middle)
-                {
-                    for (item, count) in crate::loot::drops("create:shaft").unwrap_or_default() {
-                        self.pop_resource(p, &item, count);
-                    }
-                }
-            }
-            None => self
-                .notes
-                .push(format!("adapter gap: loot of {name} at {p:?}")),
+        if !kept
+            && self.pop_block_loot(p, &name)
+            && let Some((Block::Belt, i)) = self.w.table.get(state)
+            && i.belt.is_some_and(|s| s.part != belt::Part::Middle)
+        {
+            // `BeltBlock.getDrops`.
+            self.pop_block_loot(p, "create:shaft");
         }
         self.set(p, AIR);
+    }
+
+    fn pop_block_loot(&mut self, p: Pos, name: &str) -> bool {
+        let Some(drops) = crate::loot::drops(name) else {
+            self.notes
+                .push(format!("adapter gap: loot of {name} at {p:?}"));
+            return false;
+        };
+        for (item, count) in drops {
+            self.pop_resource(p, &item, count);
+        }
+        true
     }
 
     /// What block entities the engine removed drop (`destroy`): a belt's items thrown off it,

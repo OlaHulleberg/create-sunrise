@@ -29,8 +29,8 @@ pub fn requires_tool(state: &str) -> Option<bool> {
     )
 }
 
-/// The stacks the block in `state` drops, or None when its table is outside that subset. The
-/// harness's own blocks have none.
+/// The stacks the block in `state` drops. The harness's own blocks and absent tables drop
+/// nothing; unreadable, malformed or unsupported tables return `None`.
 pub fn drops(state: &str) -> Option<Vec<(String, u8)>> {
     let (block, props) = crate::scenario::parse_state(state);
     if block.starts_with("createfuzz:") {
@@ -39,8 +39,10 @@ pub fn drops(state: &str) -> Option<Vec<(String, u8)>> {
     let name = block.strip_prefix("create:")?;
     let path = crate::defaults::checkout()
         .join(format!("create/data/create/loot_table/blocks/{name}.json"));
-    let Ok(text) = std::fs::read_to_string(path) else {
-        return Some(Vec::new());
+    let text = match std::fs::read_to_string(path) {
+        Ok(text) => text,
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Some(Vec::new()),
+        Err(_) => return None,
     };
     let table: Value = serde_json::from_str(&text).ok()?;
     table_drops(&table, &block, &props)
