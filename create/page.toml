@@ -2,7 +2,8 @@ summary = "Create 6.0.11, the mod of shafts, cogs, belts, presses and trains, po
 description = """
 An unofficial port of [Create](https://github.com/Creators-of-Create/Create) by the Create Team, rewritten in Rust as a
 native mod on Sunrise's mod API. It is not made or endorsed by the Create Team. Create's code is MIT; this port is MIT
-too, and is maintained at [OlaHulleberg/create-sunrise](https://github.com/OlaHulleberg/create-sunrise).
+too. It is ported and maintained by [OlaHulleberg](https://github.com/OlaHulleberg) and
+[arismoko](https://github.com/arismoko) at [OlaHulleberg/create-sunrise](https://github.com/OlaHulleberg/create-sunrise).
 
 Kinetics, processing, logistics, contraptions and trains follow Create 6.0.11's source, and the engine is checked
 against Create's own Java by a differential fuzzer.
