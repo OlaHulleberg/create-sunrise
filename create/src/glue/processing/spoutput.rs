@@ -449,14 +449,14 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
 }
 
-/// Each tick: every lazy tick the loaded basins look where to put their results; those with
-/// results waiting put them out (`tryClearingSpoutputOverflow`), and the items seen leaving are
-/// let go after their moment.
+/// Each tick: every lazy tick the loaded basins look where to put their results and count their
+/// `recipeBackupCheck` down; those with results waiting put them out
+/// (`tryClearingSpoutputOverflow`), and the items seen leaving are let go after their moment.
 pub fn tick(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let now = lv.game_time();
     let due = with_world(|w| w.tick_basins(dim)).unwrap_or_default();
-    for pos in due {
+    for &pos in &due {
         if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
             continue;
         }
@@ -466,6 +466,7 @@ pub fn tick(lv: &mut ServerLevel<'_>) {
             BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
         }
     }
+    super::basin::backup_check(lv, &due);
     let busy: Vec<[i32; 3]> = BUSY.with_borrow(|b| {
         b.keys()
             .filter(|(d, _)| *d == dim)

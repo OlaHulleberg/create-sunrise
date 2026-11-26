@@ -276,6 +276,8 @@ pub struct Run {
     spouts: HashMap<Pos, basin::Spout>,
     /// Basins whose spout has results waiting (`spoutput`'s `BUSY`).
     spout_busy: BTreeSet<Pos>,
+    /// Each loaded basin's `recipeBackupCheck` (`basin`'s `BACKUP`).
+    backup_checks: HashMap<Pos, create_engine::basin::BackupCheck>,
     /// The square crafting recipe a press is compacting with (`PRESS_CRAFTED`), and
     /// `canCompress` by item (`COMPRESSED`).
     press_crafted: HashMap<Pos, create_engine::basin::Recipe>,
@@ -363,6 +365,7 @@ impl Run {
             basin_slots: HashMap::new(),
             spouts: HashMap::new(),
             spout_busy: BTreeSet::new(),
+            backup_checks: HashMap::new(),
             press_crafted: HashMap::new(),
             compressed: HashMap::new(),
             saw_index: HashMap::new(),

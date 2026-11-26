@@ -1,8 +1,7 @@
 //! Basins and the machines over them, mirroring glue/processing/basin.rs and spoutput.rs:
 //! the heat under a basin, what a landing item, a player or an item handler does to it, the
-//! 200-tick backup check (in the processing phase, after the burners), the mixers and the
-//! presses compacting at their own turns in the transport walk, and each basin's spout every
-//! 10 ticks.
+//! backup check (each basin's own lazy ticks, 21 of them apart), the mixers and the presses
+//! compacting at their own turns in the transport walk, and each basin's spout every 10 ticks.
 use super::*;
 use crate::transport::Stack;
 use create_engine::{
@@ -36,9 +35,6 @@ struct Applied {
     made: Option<Vec<(String, u8)>>,
 }
 
-/// Ticks between the port's `backup_check`s (`BasinBlockEntity.lazyTick`'s
-/// `recipeBackupCheck`, every 200 game ticks for every basin at once).
-const BACKUP_CHECK: i64 = 200;
 /// `Iterate.horizontalDirections`: south, west, north, east.
 const HORIZONTAL: [Dir; 4] = [Dir::South, Dir::West, Dir::North, Dir::East];
 
@@ -349,14 +345,19 @@ impl Run {
         true
     }
 
-    /// `backup_check`: every 200 game ticks a basin that holds something is told its contents
-    /// changed, so its mixer or press looks for a recipe again at its next turn.
-    pub(super) fn backup_check(&mut self) {
-        if i64::from(self.now) % BACKUP_CHECK != 0 {
-            return;
-        }
-        let basins: Vec<Pos> = self.w.dims[0].basins.keys().copied().collect();
-        for pos in basins {
+    /// `backup_check`: each basin whose lazy tick came (`due`) counts its `recipeBackupCheck`
+    /// down, and on the 21st a basin that holds something is told its contents changed, so its
+    /// mixer or press looks for a recipe again at its next turn.
+    fn backup_check(&mut self, due: &[Pos]) {
+        let basins = &self.w.dims[0].basins;
+        self.backup_checks.retain(|p, _| basins.contains_key(p));
+        for &pos in due {
+            if !self.basin_at(pos) {
+                continue;
+            }
+            if !self.backup_checks.entry(pos).or_default().lazy_tick() {
+                continue;
+            }
             let tanks = self.basin_tanks(pos);
             let filled = self
                 .basin_slots(pos)
@@ -385,13 +386,9 @@ impl Run {
             None => (false, false),
         };
         if removed {
-            // `onBasinRemoved`: the head goes back up; the next turn resets `running_ticks`.
-            if m.running {
-                m.running = false;
-                m.running_ticks = 40;
-            }
-            self.w.dims[0].mixers.insert(pos, m);
-            return;
+            // `onBasinRemoved`: the head goes back up, and the turn goes on: `running_ticks`
+            // is reset below.
+            m.basin_removed();
         }
         if look {
             self.update_mixer_basin(pos, &mut m);
@@ -965,7 +962,8 @@ impl Run {
     /// `spoutput::tick`: the basins whose `SmartBlockEntity` lazy tick came look where to put
     /// their results; those with results waiting put them out.
     pub(super) fn tick_spouts(&mut self) {
-        for pos in self.w.tick_basins(0) {
+        let due = self.w.tick_basins(0);
+        for &pos in &due {
             if !self.basin_at(pos) {
                 continue;
             }
@@ -974,6 +972,7 @@ impl Run {
                 self.spout_busy.insert(pos);
             }
         }
+        self.backup_check(&due);
         let busy: Vec<Pos> = self.spout_busy.iter().copied().collect();
         for pos in busy {
             if !self.basin_at(pos) {
