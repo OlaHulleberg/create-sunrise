@@ -3,40 +3,41 @@
   "pools": [
     {
       "bonus_rolls": 0.0,
-      "conditions": [
-        {
-          "type": "minecraft:survives_explosion"
-        },
-        {
-          "type": "minecraft:match_block",
-          "blocks": "create:gearbox",
-          "state": {
-            "axis": "y"
-          }
-        }
-      ],
       "entries": [
         {
           "type": "minecraft:item",
           "name": "create:gearbox"
         }
       ],
-      "rolls": 1.0
-    },
-    {
-      "bonus_rolls": 0.0,
-      "conditions": [
-        {
-          "type": "minecraft:inverted",
-          "term": {
+      "rolls": 1.0,
+      "condition": {
+        "type": "minecraft:all_of",
+        "terms": [
+          {
+            "type": "minecraft:survives_explosion"
+          },
+          {
             "type": "minecraft:match_block",
             "blocks": "create:gearbox",
             "state": {
               "axis": "y"
             }
           }
+        ]
+      }
+    },
+    {
+      "bonus_rolls": 0.0,
+      "condition": {
+        "type": "minecraft:inverted",
+        "term": {
+          "type": "minecraft:match_block",
+          "blocks": "create:gearbox",
+          "state": {
+            "axis": "y"
+          }
         }
-      ],
+      },
       "entries": [
         {
           "type": "minecraft:item",
