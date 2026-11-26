@@ -151,6 +151,10 @@ pub fn fetch(pin: &Pinned) -> Result<PathBuf, String> {
 }
 
 #[cfg(test)]
+#[path = "../../test-support/temp_dir.rs"]
+mod temp_dir;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -185,8 +189,8 @@ mod tests {
 
     #[test]
     fn caches_verifies_and_replaces() {
-        let dir = std::env::temp_dir().join(format!("create-data-jar-{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
+        let fixture = temp_dir::TempDir::new("create-data-jar");
+        let dir = fixture.path();
         let body = b"not really a jar".to_vec();
         let hash = sha512(&body);
         let pin = Pinned {
@@ -202,16 +206,16 @@ mod tests {
             }
         };
         // A download with the wrong bytes is refused and leaves nothing behind.
-        let err = cached(&dir, &pin, serve(b"tampered".to_vec())).unwrap_err();
+        let err = cached(dir, &pin, serve(b"tampered".to_vec())).unwrap_err();
         assert!(err.contains("SHA-512 mismatch"), "{err}");
         assert!(!dir.join("fake-1.jar").exists());
         assert!(!dir.join("fake-1.jar.part").exists());
         // The right bytes are kept under the file's name.
-        let path = cached(&dir, &pin, serve(body.clone())).unwrap();
+        let path = cached(dir, &pin, serve(body.clone())).unwrap();
         assert_eq!(fs::read(&path).unwrap(), body);
         // A cached copy is used without downloading.
         let again = cached(
-            &dir,
+            dir,
             &pin,
             |_: &str, _: &mut dyn Write| -> Result<(), String> {
                 panic!("downloaded a cached jar")
@@ -221,9 +225,8 @@ mod tests {
         assert_eq!(again, path);
         // A corrupted cache entry is downloaded again.
         fs::write(&path, b"corrupt").unwrap();
-        cached(&dir, &pin, serve(body.clone())).unwrap();
+        cached(dir, &pin, serve(body.clone())).unwrap();
         assert_eq!(fs::read(&path).unwrap(), body);
         assert_eq!(sha512_of(&path).unwrap(), pin.sha512);
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -1,11 +1,12 @@
-mod support;
+#[path = "../../../test-support/temp_dir.rs"]
+mod temp_dir;
 
 use serde_json::{Value, json};
 use std::{fs, path::Path, process::Command};
 
 #[test]
 fn belt_mining_keeps_its_connector_and_reports_bad_shaft_loot() {
-    let fixture = support::TempDir::new("loot");
+    let fixture = temp_dir::TempDir::new("create-fuzz-loot");
     let root = fixture.path();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     for file in [
