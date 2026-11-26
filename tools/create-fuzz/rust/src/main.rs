@@ -210,7 +210,7 @@ fn check(cases: &[Scenario], names: &[String]) -> usize {
 }
 
 /// Seeds `first..first + count`, in batches the Java side runs side by side. Each mismatch is
-/// saved as `found/<seed>.json`: the case, both snapshots and the differences.
+/// saved as `found/<seed>.json.gz` by default: the case, both snapshots and the differences.
 fn fuzz(first: u64, count: u64, batch: usize) {
     let seeds: Vec<u64> = (first..first + count).collect();
     fuzz_seeds(&seeds, batch);
