@@ -12029,9 +12029,7 @@ mod tests {
         let basin = [0, 8, 0];
         assert!(!w.tick_basin_lazy(0, basin));
         w.block_changed(0, basin, 0, BASIN[1]);
-        let lazy: Vec<usize> = (0..23)
-            .filter(|_| w.tick_basin_lazy(0, basin))
-            .collect();
+        let lazy: Vec<usize> = (0..23).filter(|_| w.tick_basin_lazy(0, basin)).collect();
         assert_eq!(lazy, [0, 10, 21]);
         states::clear_range();
     }
