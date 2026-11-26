@@ -1,0 +1,139 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 22,
+  "checkpoints": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 4
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 2,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 4
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "minecraft:iron_nugget",
+          "count": 4
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 16,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 3,
+        "insert": {
+          "item": "minecraft:diorite",
+          "count": 4
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 18,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 20,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 9,
+        "insert": null,
+        "extract": 64,
+        "simulate": false
+      }
+    }
+  ]
+}

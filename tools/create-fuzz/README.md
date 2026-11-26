@@ -299,9 +299,16 @@ The processing families (`rust/src/processing.rs`) run a millstone, crushing whe
 saw on their audited recipes (`processing.json`, checked by `ProcessingRecipeAudit` at startup):
 stacks landing on them and put into their item handlers, outputs taken by handler or an empty
 hand, speed changes, removal, and results handed to a depot or thrown out. Version 3 snapshots
-report each machine's slots and timers (`ProcessingObservations`), the press's head and, not yet
-driven, basins and mixers. Results that `level.random` rolls compare by structure. See the
-[processing scope](docs/processing-scope.md).
+report each machine's slots and timers (`ProcessingObservations`), the press's head, basins and
+mixers. Results that `level.random` rolls compare by structure.
+
+The basin families (`rust/src/basin.rs`, `basin.json`, checked by `BasinRecipeAudit` at startup)
+run a mechanical mixer and a mechanical press over a basin: Create's mixing, compacting, the
+shapeless crafting recipes a mixer runs and the square crafting ones a press compacts; items
+dropped on the basin or put through its item handler, buckets emptied into its tanks and filled
+from them, heat from a blaze burner or a passive heater below, outputs taken by handler or an
+empty hand, the motor stopped or slowed, the basin removed, the spout wrenched and a depot it
+spouts into. See the [processing scope](docs/processing-scope.md).
 
 Fluid histories use `fluids.json` state domains and version-3 player uses for pipe/pump/tank placement, wrench/glass/copper casing, creative actor bucket exchange (`game_mode`), smart filter slots, and redstone-controlled valve transmissions. `fluid_inputs.rs` drives creative tanks, drains, depot/belt spouts and a startup-audited component-free recipe subset. Observations include tank shapes/contents, six connection pressures and flights, world fluid state, machine storage/cycles/held items, filters and depot output slots. Rust reads the engine's stored per-side pressure, flow progress and open-end buffers directly, including sources retained by a live network. Component-bearing potions, arbitrary recipes, contraptions and item entity flight are outside the admitted contract.
 From seed 1152 up, the tank family also places a tank on top of the formed tank without sneaking (`FluidTankItem.tryMultiPlace`), with and without a stone in that layer. From seed 1792 up, the pump family meets water and lava in a pipe junction over a tank and pours water into a lava source and lava into a water source (`FluidReactions`).
@@ -351,9 +358,9 @@ table's comments say.
 | waterwheel | 74, 90, 106, 122 mod 128 | 1/32 | Back after the network campaign took its residues; its pre-campaign share |
 | steam_engine | 75, 91, 107, 123 mod 128 | 1/32 | As water wheels |
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
-| geometry/states | 77, 93 mod 256; 109, 125 mod 128 | 6/256 | Static kinetics: one catalogue state per seed by index, every block, face and order; each state is still reached, over more seeds |
+| geometry/states | 109, 125 mod 128 | 2/128 | Static kinetics: one catalogue state per seed by index, every block, face and order; always reloads |
 | geometry/stress_boundary | 0, 64, 192 mod 256 | 3/256 | Every eighth static kinetics seed but 128 mod 256; its load steps (seed / 8 mod 3) are all still reached |
-| processing/millstone, crushing, saw | 205, 221, 128 mod 256 | 3/256 | Machine work ([processing scope](docs/processing-scope.md)): geometry/states' 205 and 221 and stress_boundary's 128, none of which reloads |
+| processing/millstone, crushing, saw, mixing, compacting | 205, 221, 128, 77, 93 mod 256 | 5/256 | Machine work ([processing scope](docs/processing-scope.md)): geometry/states' 205, 221, 77 and 93 and stress_boundary's 128, none of which reloads |
 | geometry/network | 92 mod 256 | 1/256 | Random networks through compatible faces (unreached since the fluid families) |
 | network/face_placement, face_wrench, driven_placement | 220, 252, 124 mod 256 | 3/256 | Placement on and wrench turns from every face of the kinetic blocks a player builds with, and placement into a running shaft line; geometry/network's other residues. Variants by `index`; face_placement never reloads, the other two always ([kinetics scope](docs/kinetics-scope.md)) |
 | geometry/source_faces | 76, 108 mod 128 | 1/64 | Six input faces of gearboxes, clutches and gearshifts (unreached since fluid_pumps took 18 mod 32) |
@@ -365,7 +372,8 @@ geometry/network; crank's 77, 93, 109, 125, generate's 78, 94, 110, 126 and acti
 103, 119 to geometry/states.
 
 The processing families then took geometry/states' 205 and 221 and geometry/stress_boundary's
-128 (mod 256).
+128 (mod 256), and the basin families geometry/states' 77 and 93, which leaves it with two
+residues that both always reload.
 
 The belt logistics families (from `belts-cover`, whose lanes the network campaign had taken)
 then took: actions' 23, 35, 39, 55 (funnel_push, chute_columns, brass_funnels, depot_outputs);

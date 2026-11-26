@@ -1,0 +1,56 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 22,
+  "checkpoints": [
+    20
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_press[facing=north]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:snowball",
+          "count": 8
+        },
+        "extract": null,
+        "simulate": false
+      }
+    }
+  ]
+}

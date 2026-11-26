@@ -1,0 +1,151 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 103,
+  "checkpoints": [
+    100,
+    101
+  ],
+  "blocks": [
+    {
+      "pos": [
+        -1,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:cogwheel[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_mixer"
+    },
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    },
+    {
+      "pos": [
+        0,
+        5,
+        0
+      ],
+      "state": "create:blaze_burner[blaze=smouldering,facing=north]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "minecraft:iron_nugget",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 80,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:copper_ingot",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 82,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "create:zinc_ingot",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 90,
+      "pos": [
+        0,
+        5,
+        0
+      ],
+      "action": {
+        "kind": "use",
+        "item": "create:blaze_cake",
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "yaw": 0.0,
+        "pitch": 0.0,
+        "sneaking": false
+      }
+    }
+  ]
+}
