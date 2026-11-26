@@ -66,6 +66,7 @@ pub use press::transitional_of;
 pub(crate) use basin::mixer_turn;
 pub(crate) use press::{depot_turn as press_depot_turn, press_turn};
 pub(crate) use saw::saw_turn;
+pub(crate) use spoutput::turn as basin_turn;
 // What the other subsystems call: fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
 // stack's sequenced progress onto and off a belt).
@@ -317,9 +318,9 @@ impl Subsystem for Processing {
         persist::live_fields(dim, pos, block, fields);
     }
 
-    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, the basins'
-    /// lazy ticks (spout and backup check). Mixers and presses over basins work at their own turns in logistics'
-    /// transport walk.
+    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, and what the
+    /// basins kept for ones that are gone. Basins (lazy tick, spout, backup check), mixers and
+    /// presses over basins work at their own turns in logistics' transport walk.
     /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         // What a removal without side effects (`UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS`) left.
@@ -333,7 +334,7 @@ impl Subsystem for Processing {
         fan::tick_fans(lv);
         crusher::tick_crushers(lv);
         basin::tick_burners(lv);
-        spoutput::tick(lv);
+        spoutput::forget_gone(lv);
         basin::show_basins(lv);
     }
 

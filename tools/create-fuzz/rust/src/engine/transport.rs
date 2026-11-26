@@ -463,6 +463,12 @@ impl Run {
                     self.tick_saw(p);
                     continue;
                 }
+                // The glue's `basin_turn` (`BasinBlockEntity.tick`: lazy tick, the spout's
+                // hand-off, then the change of contents, at the basin's own turn).
+                create_engine::world::TransportTick::Basin(p) => {
+                    self.basin_turn(p);
+                    continue;
+                }
                 create_engine::world::TransportTick::Belt(c) => c,
             };
             let b = self.w.dims[0].belts.get_mut(&c).unwrap();

@@ -250,11 +250,10 @@ Three more differences show in the sweeps alone, none with a case here (against 
 `a2c1ae1d`: `fuzz-lane 0 327680 77 256`, 1170 matched and 110 differed; `fuzz-lane 0 327680 93 256`,
 1141 and 139; `fuzz 0 4000`, 3990 and 10):
 
-- A spout's results reach what takes them a tick later than in Java whenever the basin's turn
-  follows its operator's: 38 seeds of the first sweep, 135 of the second and 2 of the third. The
-  basin's own `tick` puts them out (`BasinBlockEntity.java:355`); the port puts them out in its
-  processing phase, before the walk that applies the recipe (`glue/processing/mod.rs`,
-  `spoutput::tick`).
+- A spout's results reached what takes them a tick later than in Java whenever the basin's turn
+  followed its operator's (fixed, #346): the basin's own `tick` puts them out
+  (`BasinBlockEntity.java:355`), and the port now does it at the basin's turn in the walk
+  (`TransportTick::Basin`, `spoutput::turn`).
 - The mixer's rest of `processing-basin-emptied` after its basin was taken away rather than
   emptied (`BasinBlockEntity.java:232`): 39 seeds of the first sweep, beside the 40 that empty it.
 - The backup check, in 4 seeds of the second sweep where an empty hand leaves a press's basin

@@ -449,39 +449,47 @@ fn update(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
 }
 
-/// Each tick: every lazy tick the loaded basins look where to put their results and count their
-/// `recipeBackupCheck` down; those with results waiting put them out
-/// (`tryClearingSpoutputOverflow`), and the items seen leaving are let go after their moment.
-pub fn tick(lv: &mut ServerLevel<'_>) {
+/// Each tick before the block-entity walk: what was kept for a basin that is gone or no longer
+/// loaded is forgotten (a new block entity starts afresh).
+pub fn forget_gone(lv: &ServerLevel<'_>) {
     let dim = lv.dim;
-    let now = lv.game_time();
-    let due = with_world(|w| w.tick_basins(dim)).unwrap_or_default();
-    for &pos in &due {
-        if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
-            continue;
-        }
-        update(lv, pos);
-        // A buffer read back from a save.
-        if !can_continue(lv, pos) {
-            BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
-        }
-    }
-    super::basin::backup_check(lv, &due);
-    let busy: Vec<[i32; 3]> = BUSY.with_borrow(|b| {
+    super::basin::forget_backups(dim);
+    let gone: Vec<[i32; 3]> = BUSY.with_borrow(|b| {
         b.keys()
             .filter(|(d, _)| *d == dim)
             .map(|(_, p)| *p)
             .collect()
     });
-    for pos in busy {
+    for pos in gone {
         if !lv.is_loaded(pos) || !super::basin::basin_at(lv, pos) {
-            BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
-            continue;
-        }
-        if !clear_overflow(lv, pos, now) {
             BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
         }
     }
+}
+
+/// `BasinBlockEntity.tick` at the basin's own turn in the block-entity walk: its lazy tick
+/// looks where to put its results and counts `recipeBackupCheck` down (`super.tick()`), results
+/// waiting go out (`tryClearingSpoutputOverflow`, and the items seen leaving are let go after
+/// their moment), then a change of contents is told on (`tick_basin`). What a block entity
+/// before it in the walk put in the basin goes out this tick; what one after it does, the next.
+pub fn turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let lazy = with_world(|w| w.tick_basin_lazy(dim, pos)).unwrap_or(false);
+    if lv.is_loaded(pos) && super::basin::basin_at(lv, pos) {
+        if lazy {
+            update(lv, pos);
+            // A buffer read back from a save.
+            if !can_continue(lv, pos) {
+                BUSY.with_borrow_mut(|b| b.insert((dim, pos), ()));
+            }
+            super::basin::backup_check(lv, pos);
+        }
+        let now = lv.game_time();
+        if BUSY.with_borrow(|b| b.contains_key(&(dim, pos))) && !clear_overflow(lv, pos, now) {
+            BUSY.with_borrow_mut(|b| b.remove(&(dim, pos)));
+        }
+    }
+    with_world(|w| w.tick_basin(dim, pos));
 }
 
 /// `tryClearingSpoutputOverflow`: each waiting stack into the target as far as it takes it
