@@ -11701,6 +11701,7 @@ mod tests {
             ("create:sequenced_gearshift", seq("2")),
             ("create:creative_motor", vec![("facing", "east")]),
             ("create:shaft", vec![("axis", "x")]),
+            ("create:sequenced_gearshift", seq("1")),
         ];
         states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
@@ -11708,7 +11709,7 @@ mod tests {
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
         ));
         w.block_changed(0, [-1, 0, 0], 0, 11);
-        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [0, 0, 0], 0, 13);
         w.block_changed(0, [1, 0, 0], 0, 12);
         let list = vec![
             Instruction::new(Kind::Await, -1),
@@ -11736,6 +11737,8 @@ mod tests {
             w.sequencer_redstone(0, [0, 0, 0], true, true),
             Some(Step::Run(2))
         );
+        // The host writes the step's state (1 to 2): that write's attach turns the output.
+        w.block_changed(0, [0, 0, 0], 13, 10);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
         states::clear_range();
