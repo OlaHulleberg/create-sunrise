@@ -12,8 +12,6 @@
 //! models drawn with the terrain's sprites (`standalone_models`, `terrain_model` with a UV shift).
 //!
 //! Left out, for want of an API or because another subsystem owns it:
-//! - `BakedModel.isGui3d` (how a stack lies on a belt or depot) is not in the mod API: an item
-//!   with a block stands in for it (`items::is_block_item`).
 //! - The machines above a belt or depot (presses, deployers, spouts: `Subsystem::belt_process`),
 //!   and items landing on basins, saws and item drains are the processing and fluids
 //!   subsystems'. A sequenced assembly's progress on a stack (processing's `stacks`) goes with

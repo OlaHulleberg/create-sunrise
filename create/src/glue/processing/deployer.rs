@@ -8,8 +8,9 @@
 //! the game's own path (`ServerPlayerGameMode.useItemOn`: the block's use, then the item's
 //! `useOn`, which places a block item, tills with a hoe...), then the item's use in the air
 //! (`item.use`: a bucket fills or empties, a bottle fills, a snowball is thrown); its punch the
-//! game's attack and block break. Sand paper polishes what lies under it. A player in front
-//! whose interaction passed is fed what it holds, if it is a food they can eat or a deployable
+//! game's `Player.attack` (`PlayerRef::attack`, run outside `perform_action_scoped`, which
+//! refuses it) and block break. Sand paper polishes what lies under it. A player in front whose
+//! interaction passed is fed what it holds, if it is a food they can eat or a deployable
 //! drink (`finishUsingItem` on them, `finish_using`). A punch digs a block whose drops need
 //! another tool slower (`getDestroyProgress`) by vanilla's rule for the held stack; a block's own
 //! `canHarvestBlock` (a copycat's material) is not asked of the deployer's player there.
@@ -948,6 +949,62 @@ fn random_index(lv: &mut ServerLevel<'_>, n: usize) -> usize {
     pick.min(n as usize - 1)
 }
 
+/// Where the fake player's eyes are and which way it looks (yaw, pitch) for the deployer at
+/// `pos` facing `facing`. Create's fake player stands at the ray's origin with no eye height and
+/// is not in the world; the game's has a standing body there (1.62 to its eyes), which would be
+/// in the way of the block it places. It stands in the deployer instead: its eyes in the middle,
+/// facing down above it, looking the way the deployer faces. For `use_item` the item's own ray
+/// (a bucket's, a bottle's) starts where Create's does (`activateInner`'s ray origin, `3/2 + 1/64`
+/// ahead, eyes on its feet), so it reaches the block two ahead and not the deployer's own pole.
+fn fake_pose(pos: [i32; 3], facing: Dir, use_item: bool) -> ([f64; 3], f32, f32) {
+    let mut eye = pos.map(|v| f64::from(v) + 0.5);
+    if use_item {
+        let o = facing.offset();
+        eye = std::array::from_fn(|i| eye[i] + f64::from(o[i]) * (1.5 + 1.0 / 64.0));
+    } else if facing == Dir::Down {
+        eye[1] = f64::from(pos[1]) + 1.63;
+    }
+    let (yaw, pitch) = match facing {
+        Dir::Down => (0.0, 90.0),
+        Dir::Up => (0.0, -90.0),
+        Dir::North => (180.0, 0.0),
+        Dir::South => (0.0, 0.0),
+        Dir::West => (90.0, 0.0),
+        Dir::East => (-90.0, 0.0),
+    };
+    (eye, yaw, pitch)
+}
+
+/// `Mode.PUNCH` on an entity (`DeployerHandler.activate`: `resetAttackStrengthTicker`, then
+/// `player.attack(entity)`): the fake player stands in the deployer holding what `d` holds and
+/// strikes `target` with `Player.attack`, so the attack hooks, the held weapon's damage,
+/// enchantments and wear, knockback and sweep all run. The ticker is set far past the charge
+/// time: `getCurrentItemAttackStrengthDelay` is 1/64 for Create's fake player, so its attacks
+/// are always full, while the game's reads the held item's own. The hand keeps what is left of
+/// the weapon.
+fn attack(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+    target: mod_api::EntityRef,
+) {
+    let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
+        return;
+    };
+    let (eye, yaw, pitch) = fake_pose(pos, facing, false);
+    let feet = [eye[0], eye[1] - 1.62, eye[2]];
+    let stack = held_of(lv, d);
+    let host = &mut *lv.host;
+    let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
+    crate::glue::items::set_held(host, fake, Hand::Main, stack);
+    let _ = fake.set_attack_strength_ticker(host, i32::MAX);
+    let _ = fake.attack(host, target);
+    let left = crate::glue::items::held(&*host, fake, Hand::Main);
+    crate::glue::items::set_held(host, fake, Hand::Main, None);
+    set_held_stack(&*host, d, left.as_ref());
+}
+
 /// The fake player at the deployer `pos` facing `facing` does `action` with what `d` holds;
 /// the deployer keeps what is left in the hand, and what else the fake ended with is returned.
 fn act(
@@ -972,32 +1029,8 @@ fn act_with(
         return (None, Vec::new());
     };
     let stack = held_of(lv, d);
-    // Create's fake player stands at the ray's origin with no eye height and is not in the
-    // world; the game's has a standing body there (1.62 to its eyes), which would be in the
-    // way of the block it places. It stands in the deployer instead: its eyes in the middle,
-    // facing down above it.
-    let mut eye = pos.map(|v| f64::from(v) + 0.5);
-    if matches!(action, PlayerAction::UseItem { .. }) {
-        // The item's own ray (a bucket's, a bottle's) starts where Create's does
-        // (`activateInner`'s ray origin, `3/2 + 1/64` ahead, eyes on its feet), so it reaches the
-        // block two ahead and not the deployer's own pole.
-        let o = facing.offset();
-        eye = std::array::from_fn(|i| eye[i] + f64::from(o[i]) * (1.5 + 1.0 / 64.0));
-    } else if facing == Dir::Down {
-        eye[1] = f64::from(pos[1]) + 1.63;
-    }
-    // The fake player looks the way the deployer faces.
-    let (yaw, pitch) = match facing {
-        Dir::Down => (0.0, 90.0),
-        Dir::Up => (0.0, -90.0),
-        Dir::North => (180.0, 0.0),
-        Dir::South => (0.0, 0.0),
-        Dir::West => (90.0, 0.0),
-        Dir::East => (-90.0, 0.0),
-    };
-    let mut setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
-    // DeployerFakePlayer.resetAttackStrengthTicker gives each punch a full charge.
-    setup.full_attack_charge = true;
+    let (eye, yaw, pitch) = fake_pose(pos, facing, matches!(action, PlayerAction::UseItem { .. }));
+    let setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
     let Ok(result) = fake.perform_action_scoped(&mut *lv.host, action, setup) else {
         return (None, Vec::new());
     };
@@ -1020,7 +1053,8 @@ fn punch(
     let targets = entities_at(lv, at);
     if !targets.is_empty() {
         let target = targets[random_index(lv, targets.len())];
-        return act(lv, pos, facing, d, PlayerAction::Attack { target });
+        attack(lv, pos, facing, d, target);
+        return Vec::new();
     }
     // `getShape(..).isEmpty()`: nothing to punch, and the breaking is forgotten.
     if lv.shape(at, mod_api::BlockShapeKind::Outline).is_empty() {

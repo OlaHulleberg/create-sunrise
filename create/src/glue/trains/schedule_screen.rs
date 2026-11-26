@@ -1,34 +1,36 @@
-//! The schedule (`ScheduleItem`, `ScheduleScreen`, `ScheduleEditPacket`): using it opens its
-//! screen, where entries (a station to travel to, a title, a top speed) and the conditions to
-//! wait on at a station are added, edited, moved and removed; closing it writes the schedule
-//! back onto the item in the hand it was opened from, under Create's component name in its
-//! custom data. While a part is edited, the player's inventory is shown under the editor and
-//! the part's ghost slots (an item threshold's item, a fluid threshold's bucket, a redstone
-//! link's two frequencies) take ghost copies of its stacks (`ScheduleMenu`).
+//! The schedule (`ScheduleItem`, `ScheduleScreen`, `ScheduleEditPacket`, `ScheduleMenu`): using it
+//! opens its menu (`create:schedule`, a blockless mod menu over the held schedule), where entries
+//! (a station to travel to, a title, a top speed) and the conditions to wait on at a station are
+//! added, edited, moved and removed; closing it writes the schedule back onto the item in the hand
+//! it was opened from, under Create's component name in its custom data. The menu's slots are the
+//! game's: the two ghost slots (an item threshold's item, a fluid threshold's bucket, a redstone
+//! link's two frequencies) and the player's inventory, clicked on the server as
+//! `create_engine::ghost_menu` rules (`items::filters`). As `ScheduleMenu.InactiveSlot.isActive`
+//! does, the screen hides every slot while no part is edited and shows the player's inventory, and
+//! as many ghost slots as the part offers, while one is (`set_screen_slot`, each frame).
 //!
-//! Left out (no API for it): a mod menu's screen always shows the player's inventory, and Create
-//! hides it while no part is edited (`ScheduleMenu.InactiveSlot.isActive`; `set_screen_slot`
-//! hides container slots only). So the screen is the mod's own and the inventory shown is a copy
-//! the server sent when it opened: clicking a slot carries a ghost copy of its stack, never the
-//! stack itself.
+//! The ghost slots start empty on the server: the screen sends the edited part's stacks when it
+//! starts editing it (`startEditing`) and reads them back from the open menu when the editor
+//! closes (`stopEditing`).
 
 use super::gui::{Reader, click_sound, icon_button, inside, millis, put_i32, tooltip, tr};
-use crate::glue::items::filter_screen::{click_inventory, stack_bytes, stack_of};
+use crate::glue::items::filter_screen::{stack_bytes, stack_of};
 use crate::glue::names::Named as _;
 use crate::glue::net;
 use crate::glue::owned::OwnedInventory as _;
 use create_engine::schedule::{Condition, Entry, Instruction, Op, Schedule, Stack, TimeUnit};
 use mod_api::{
     ClientHost, Compound, DrawContext, Flow, Host, HostSide, InteractionResult, ItemPart,
-    ItemStack, PlayerRef, Registrar, ScreenCharTypedPreEvent, ScreenClosingEvent,
+    ItemStack, MenuPart, PlayerRef, Registrar, ScreenCharTypedPreEvent, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseScrolledPreEvent,
     ScreenRenderPostEvent, ServerHost, Tag, Text, UseItemEvent,
 };
 use std::cell::RefCell;
 
-/// Server to client: open the screen; client to server: the schedule written.
+/// Client to server: the schedule written, and the edited part's ghost stacks.
 pub const CHANNEL: &str = "create:schedule_screen";
-const MOD: &str = "create";
+/// `AllMenuTypes.SCHEDULE`.
+pub(crate) const MENU: &str = "create:schedule";
 const CUSTOM_DATA: &str = "minecraft:custom_data";
 /// `AllDataComponents.TRAIN_SCHEDULE`.
 const SCHEDULE_KEY: &str = "create:train_schedule";
@@ -36,6 +38,10 @@ const SCHEDULE_KEY: &str = "create:train_schedule";
 pub fn register(r: &mut dyn Registrar) {
     let key = r.item_key("create:schedule");
     r.item_part(key, ScheduleItem);
+    r.menu_part(MENU, ScheduleMenu);
+    if let Err(e) = r.register_menu_screen(MENU, std::sync::Arc::new(open_screen)) {
+        crate::create_log!("[create] the {MENU} screen was refused: {e}");
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -122,31 +128,36 @@ fn decode(data: &[u8]) -> Option<(u8, Schedule)> {
     Some((slot, read_schedule(&mut r)?))
 }
 
-/// The screen opened: the schedule, and the player's inventory (slot 0..35, the stack's
-/// network NBT) for the ghost slots.
-fn encode_open(slot: u8, s: &Schedule, inventory: &[(u8, Vec<u8>)]) -> Vec<u8> {
-    let mut out = encode(slot, s);
-    out.push(inventory.len() as u8);
-    for (i, b) in inventory {
-        out.push(*i);
-        put_bytes(&mut out, b);
+/// The first byte of a message that carries the edited part's ghost stacks, where a schedule's
+/// message has its hotbar slot (0..9).
+const GHOSTS: u8 = 0xFF;
+
+/// The edited part's ghost stacks (`ScheduleScreen.startEditing`), each present or not.
+fn encode_ghosts(host: &dyn ClientHost, ghosts: &[Option<ItemStack>; 2]) -> Vec<u8> {
+    let mut out = vec![GHOSTS];
+    for g in ghosts {
+        match g.as_ref().and_then(|s| stack_bytes(host, s)) {
+            Some(b) => {
+                out.push(1);
+                put_bytes(&mut out, &b);
+            }
+            None => out.push(0),
+        }
     }
     out
 }
 
-type Opened = (u8, Schedule, Vec<(u8, Vec<u8>)>);
-
-fn decode_open(data: &[u8]) -> Option<Opened> {
+fn decode_ghosts(host: &dyn Host, data: &[u8]) -> Option<Vec<Option<ItemStack>>> {
     let mut r = Reader(data);
-    let slot = r.u8()?;
-    let s = read_schedule(&mut r)?;
-    let n = r.u8()?;
-    let mut inventory = Vec::new();
-    for _ in 0..n {
-        let i = r.u8()?;
-        inventory.push((i, read_bytes(&mut r)?));
+    (r.u8()? == GHOSTS).then_some(())?;
+    let mut out = Vec::new();
+    for _ in 0..2 {
+        out.push(match r.u8()? {
+            0 => None,
+            _ => stack_of(host, &read_bytes(&mut r)?),
+        });
     }
-    Some((slot, s, inventory))
+    Some(out)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -156,7 +167,7 @@ struct ScheduleItem;
 
 #[mod_api::sunrise_part]
 impl ItemPart for ScheduleItem {
-    /// `ScheduleItem.use`: not sneaking, the main hand's schedule opens its screen.
+    /// `ScheduleItem.use`: not sneaking, the main hand's schedule opens its menu.
     fn use_item(&self, host: HostSide, event: &mut UseItemEvent<'_>) -> Option<InteractionResult> {
         if event.hand != mod_api::Hand::Main {
             return None;
@@ -170,20 +181,7 @@ impl ItemPart for ScheduleItem {
         }
         let slot = player.selected_slot(&*host).unwrap_or(0) as u8;
         let schedule = schedule_of(event.stack).unwrap_or_default();
-        let h: &dyn Host = &*host;
-        let inventory: Vec<(u8, Vec<u8>)> = player
-            .inventory_slots(h)
-            .unwrap_or_default()
-            .into_iter()
-            .filter(|(i, _)| *i < 36)
-            .filter_map(|(i, s)| Some((i as u8, stack_bytes(h, &s)?)))
-            .collect();
-        net::send_to_player(
-            host,
-            player,
-            CHANNEL,
-            &encode_open(slot, &schedule, &inventory),
-        );
+        crate::glue::items::filters::open_schedule(host, player, MENU, encode(slot, &schedule));
         Some(InteractionResult::SuccessServer)
     }
 
@@ -216,8 +214,15 @@ impl ItemPart for ScheduleItem {
     }
 }
 
-/// `ScheduleEditPacket`: the schedule written onto the schedule in that hotbar slot.
+/// `ScheduleEditPacket`: the schedule written onto the schedule in that hotbar slot; or the
+/// edited part's stacks put in the open menu's ghost slots.
 pub fn client_message(host: &mut dyn ServerHost, player: PlayerRef, data: &[u8]) {
+    if data.first() == Some(&GHOSTS) {
+        if let Some(stacks) = decode_ghosts(&*host, data) {
+            crate::glue::items::filters::set_schedule_ghosts(host, player, stacks);
+        }
+        return;
+    }
     let Some((slot, schedule)) = decode(data) else {
         return;
     };
@@ -279,8 +284,6 @@ struct Editing {
     allow_delete: bool,
     /// The text box has the focus.
     typing: bool,
-    /// The ghost slots (`ScheduleMenu.ghostInventory`), given to the part when it closes.
-    ghosts: [Option<ItemStack>; 2],
 }
 
 struct Open {
@@ -292,18 +295,9 @@ struct Open {
     columns: Vec<[f32; 3]>,
     editing: Option<Editing>,
     size: [f32; 2],
-    /// The player's inventory as the server sent it, and the slot whose ghost is carried.
-    inventory: Vec<(u8, ItemStack)>,
-    cursor: Option<u8>,
-}
-
-impl Open {
-    fn stack(&self, slot: u8) -> Option<&ItemStack> {
-        self.inventory
-            .iter()
-            .find(|(i, _)| *i == slot)
-            .map(|(_, s)| s)
-    }
+    /// The tooltips the background pass found, drawn after the slots.
+    tips: Vec<String>,
+    editor_tips: Vec<Text>,
 }
 
 thread_local! {
@@ -316,15 +310,17 @@ pub fn reset() {
     LATER.with_borrow_mut(|l| *l = (Vec::new(), false));
 }
 
-pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
-    let Some((slot, schedule, inventory)) = decode_open(data) else {
-        return;
-    };
-    let h: &dyn Host = &*host;
-    let inventory = inventory
-        .iter()
-        .filter_map(|(i, b)| Some((*i, stack_of(h, b)?)))
-        .collect();
+/// `ScheduleScreen.init`: the window and its slots. The ghost slots are declared hidden, shown
+/// by `place_slots` while a part is edited; the player's inventory is where `addPlayerSlots(46,
+/// 140)` puts it.
+pub(crate) fn open_screen(
+    _host: &dyn ClientHost,
+    open: mod_api::MenuScreenOpen<'_>,
+) -> Option<mod_api::MenuScreen> {
+    if open.menu != MENU {
+        return None;
+    }
+    let (slot, schedule) = decode(open.extra)?;
     OPEN.with_borrow_mut(|o| {
         *o = Some(Open {
             schedule,
@@ -333,12 +329,67 @@ pub fn server_message(host: &mut dyn ClientHost, data: &[u8]) {
             columns: Vec::new(),
             editing: None,
             size: [0.0, 0.0],
-            inventory,
-            cursor: None,
+            tips: Vec::new(),
+            editor_tips: Vec::new(),
         })
     });
-    if !host.mod_screen_open(MOD) {
-        OPEN.with_borrow_mut(|o| *o = None);
+    let layout = mod_api::MenuScreenLayout {
+        width: W,
+        height: H,
+        slots: (0..GHOST_SLOTS).map(|_| None).collect(),
+        inventory_x: 46.0,
+        inventory_y: 140.0,
+        own_labels: true,
+        own_background: true,
+        ..Default::default()
+    };
+    Some(
+        mod_api::MenuScreen::new(layout)
+            .with_draw(screen_draw)
+            .with_tooltip(screen_tooltip),
+    )
+}
+
+/// The schedule menu's server rules: the ghost slots' clicks and the held schedule.
+struct ScheduleMenu;
+
+#[mod_api::sunrise_part]
+impl MenuPart for ScheduleMenu {
+    /// `HeldItemGhostItemMenu.stillValid`: the schedule it opened from is still in that hand
+    /// (the selected slot is checked each tick, `filters::player_tick`).
+    fn menu_still_valid(
+        &self,
+        _context: &dyn mod_api::LoopContext,
+        event: &mut mod_api::MenuStillValidEvent<'_>,
+    ) {
+        if let Some(opened) = &event.opening_item {
+            event.valid &= opened.stack_matches;
+        }
+    }
+
+    fn menu_clicked(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::MenuClickedEvent<'_>,
+    ) -> Flow {
+        crate::glue::items::filters::menu_clicked(host, event)
+    }
+
+    fn menu_removed(
+        &self,
+        host: &mut dyn mod_api::ServerHost,
+        event: &mut mod_api::MenuRemovedEvent<'_>,
+    ) {
+        crate::glue::items::filters::menu_removed(host, event);
+    }
+
+    /// The ghost slots take nothing from the cursor and give nothing up: the server's clicks
+    /// copy into them, and the client's own prediction leaves them alone.
+    fn menu_slot_rules(&self, _host: &dyn Host, event: &mut mod_api::MenuSlotRulesEvent<'_>) {
+        if event.menu == MENU && event.container == mod_api::MenuContainer::Main {
+            event.may_place = false;
+            event.may_pickup = false;
+        }
     }
 }
 
@@ -360,24 +411,50 @@ pub fn tick_client(host: &mut dyn ClientHost) {
     flush(host);
 }
 
-/// What the hooks left: closing and sending, and the schedule once the screen is gone.
+/// What the hooks left: the packets to send, then the close they asked for.
 pub fn flush(host: &mut dyn ClientHost) {
     let (send, close) = LATER.with_borrow_mut(std::mem::take);
-    if close {
-        host.mod_screen_close(MOD);
-    }
     for d in send {
         net::send_to_server(host, CHANNEL, &d);
     }
-    if host.mod_screen() != Some(MOD)
-        && let Some(open) = OPEN.with_borrow_mut(Option::take)
-    {
-        net::send_to_server(host, CHANNEL, &encode(open.slot, &open.schedule));
+    if close && let Some(menu) = host.local_player().and_then(|p| p.container_menu(&*host)) {
+        menu.close(host);
     }
 }
 
-fn ours(host: &dyn ClientHost) -> bool {
-    host.mod_screen() == Some(MOD) && OPEN.with_borrow(Option::is_some)
+/// Whether the schedule menu's screen is the one showing.
+fn ours(menu: Option<&str>) -> bool {
+    menu == Some(MENU) && OPEN.with_borrow(Option::is_some)
+}
+
+/// A menu slot of the open menu, as the client has it.
+fn menu_slot(host: &dyn ClientHost, slot: usize) -> Option<ItemStack> {
+    let menu = host.local_player()?.container_menu(host)?;
+    menu.slot(host, slot).flatten()
+}
+
+/// The ghost slots, the menu's own before the player's.
+const GHOST_SLOTS: usize = 2;
+
+/// `ScheduleMenu.InactiveSlot.isActive` and `InactiveItemHandlerSlot.isActive`: the player's
+/// inventory and as many ghost slots as the edited part offers are shown while a part is
+/// edited, none otherwise.
+fn place_slots(host: &dyn ClientHost, editing: Option<usize>) {
+    for i in 0..GHOST_SLOTS {
+        let at = editing.filter(|n| i < *n).map(|_| ghost_slot(0.0, 0.0, i));
+        let _ = host.set_screen_slot(MENU, i, at);
+    }
+    // The player's slots follow the menu's own, the three rows and then the hotbar.
+    for k in 0..create_engine::ghost_menu::PLAYER_SLOTS {
+        let at = editing.map(|_| {
+            inventory_slot(
+                0.0,
+                0.0,
+                create_engine::ghost_menu::inventory_index(k) as u8,
+            )
+        });
+        let _ = host.set_screen_slot(MENU, GHOST_SLOTS + k, at);
+    }
 }
 
 const W: f32 = 256.0;
@@ -669,29 +746,81 @@ impl Open {
     }
 }
 
-pub fn screen_render_post(host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
-    if !ours(host) {
+/// `renderBg`, `renderSchedule` and the editor over it, under the menu's slots; the slots follow
+/// where `place_slots` puts them.
+fn screen_draw(
+    host: &dyn ClientHost,
+    frame: mod_api::MenuScreenFrame<'_>,
+    draw: &mut dyn DrawContext,
+) {
+    let mouse = frame.pointer.map(|p| p as f32);
+    let size = draw.size();
+    OPEN.with_borrow_mut(|o| {
+        let Some(o) = o.as_mut() else {
+            return;
+        };
+        o.size = size;
+        place_slots(host, o.editing.as_ref().map(|e| slots_of(&e.field)));
+        let mut tips = Vec::new();
+        draw_schedule(host, draw, o, mouse, &mut tips);
+        let mut editor_tips = Vec::new();
+        if o.editing.is_some() {
+            draw_editor(host, draw, o, mouse, &mut editor_tips);
+        }
+        o.tips = tips;
+        o.editor_tips = editor_tips;
+    });
+}
+
+/// The tooltips of the background pass, over the slots. The editor's replace the schedule's.
+pub fn screen_render_post(_host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {
+    if !ours(event.screen.menu) {
         return;
     }
-    let size = event.draw.size();
     let mouse = event.screen.mouse;
     let draw = &mut *event.draw;
     OPEN.with_borrow_mut(|o| {
         let Some(o) = o.as_mut() else {
             return;
         };
-        o.size = size;
-        let mut tips = Vec::new();
-        draw_schedule(host, draw, o, mouse, &mut tips);
+        let editor_tips = std::mem::take(&mut o.editor_tips);
+        let tips = std::mem::take(&mut o.tips);
         if o.editing.is_some() {
-            let mut editor_tips = Vec::new();
-            draw_editor(host, draw, o, mouse, &mut editor_tips);
             if !editor_tips.is_empty() {
                 let _ = draw.gui_tooltip(&editor_tips, mouse);
             }
         } else if !tips.is_empty() {
             tooltip(draw, &tips, mouse);
         }
+    });
+}
+
+/// An empty ghost slot's hint (`ScheduleScreen.renderForeground`): what the part wants there.
+fn screen_tooltip(
+    host: &dyn ClientHost,
+    _frame: mod_api::MenuScreenFrame<'_>,
+    slot: Option<u32>,
+    out: &mut Vec<(Text, u32)>,
+) {
+    let Some(i) = slot.map(|s| s as usize).filter(|i| *i < GHOST_SLOTS) else {
+        return;
+    };
+    if !out.is_empty() || menu_slot(host, i).is_some() {
+        return;
+    }
+    OPEN.with_borrow(|o| {
+        let Some(Editing {
+            field: Field::Condition(c),
+            ..
+        }) = o.as_ref().and_then(|o| o.editing.as_ref())
+        else {
+            return;
+        };
+        out.extend(
+            slot_tip(host, c, i)
+                .into_iter()
+                .map(|l| (Text::literal(l), 0xFFFF_FFFF)),
+        );
     });
 }
 
@@ -1351,13 +1480,12 @@ fn apply(host: &dyn ClientHost, o: &mut Open, change: Change) {
                 Field::Condition(c) => [0, 1].map(|i| c.item(i).and_then(|b| ghost(host, b))),
                 Field::Instruction(_) => [None, None],
             };
-            o.cursor = None;
+            LATER.with_borrow_mut(|l| l.0.push(encode_ghosts(host, &ghosts)));
             o.editing = Some(Editing {
                 field,
                 target,
                 allow_delete,
                 typing: false,
-                ghosts,
             });
         }
     }
@@ -1375,10 +1503,9 @@ fn close_editor(host: &dyn ClientHost, o: &mut Open, confirmed: bool) {
     let Some(mut ed) = o.editing.take() else {
         return;
     };
-    o.cursor = None;
     if let Field::Condition(c) = &mut ed.field {
         for i in 0..c.slots() {
-            let b = ed.ghosts[i]
+            let b = menu_slot(host, i)
                 .as_ref()
                 .and_then(|s| stack_bytes(host, s))
                 .unwrap_or_default();
@@ -1717,16 +1844,9 @@ fn slots_of(f: &Field) -> usize {
     }
 }
 
-/// The inventory under the editor, the ghost slots and what is carried (`ScheduleMenu`'s
-/// slots, drawn while editing); the hovered slot's name or the empty ghost slot's tip.
-fn draw_slots(
-    host: &dyn ClientHost,
-    draw: &mut dyn DrawContext,
-    o: &Open,
-    ed: &Editing,
-    mouse: [f32; 2],
-    tips: &mut Vec<Text>,
-) {
+/// The inventory's panel and title under the editor (`renderPlayerInventory`); the slots
+/// themselves, their items, highlights and names are the menu's.
+fn draw_slots(host: &dyn ClientHost, draw: &mut dyn DrawContext, o: &Open) {
     let (left, top) = corner(o.size);
     sprite(
         draw,
@@ -1740,90 +1860,15 @@ fn draw_slots(
         0xFF50_5050,
         false,
     );
-    for slot in 0..36u8 {
-        let p = inventory_slot(left, top, slot);
-        if let Some(s) = o.stack(slot) {
-            // With its count and bar, as a slot draws it.
-            draw.gui_draw_item_with(s, p, None);
-        }
-        if over_slot(p, mouse) {
-            draw.fill([p[0], p[1], 16.0, 16.0], 0x80FF_FFFF);
-            if o.cursor.is_none()
-                && let Some(s) = o.stack(slot)
-            {
-                tips.extend(host.hover_name(s).ok());
-            }
-        }
-    }
-    let n = slots_of(&ed.field);
-    for i in 0..n {
-        let p = ghost_slot(left, top, i);
-        if let Some(s) = &ed.ghosts[i] {
-            draw.item_stack(s, p, 16.0);
-        }
-        if over_slot(p, mouse) {
-            draw.fill([p[0], p[1], 16.0, 16.0], 0x80FF_FFFF);
-            match (&ed.ghosts[i], &ed.field) {
-                (Some(s), _) if o.cursor.is_none() => tips.extend(host.hover_name(s).ok()),
-                (None, Field::Condition(c)) => {
-                    tips.extend(slot_tip(host, c, i).into_iter().map(Text::literal))
-                }
-                _ => {}
-            }
-        }
-    }
-    // The ghost on the cursor (`renderFloatingItem`).
-    if let Some(s) = o.cursor.and_then(|slot| o.stack(slot)) {
-        draw.item_stack(s, [mouse[0] - 8.0, mouse[1] - 8.0], 16.0);
-    }
 }
 
-/// A click on the inventory or a ghost slot while editing (`GhostItemMenu.clicked`,
-/// `quickMoveStack`); true when one took it.
-fn click_slots(o: &mut Open, mouse: [f32; 2], shift: bool) -> bool {
-    let (left, top) = corner(o.size);
-    let selected = o.slot;
-    for slot in 0..36u8 {
-        if !over_slot(inventory_slot(left, top, slot), mouse) {
-            continue;
-        }
-        let stack = o.stack(slot).cloned();
-        if shift {
-            // `quickMoveStack`: a copy into the first empty ghost slot.
-            if let (Some(s), Some(ed)) = (stack, o.editing.as_mut())
-                && slot != selected
-            {
-                let n = slots_of(&ed.field);
-                if let Some(g) = ed.ghosts[..n].iter_mut().find(|g| g.is_none()) {
-                    *g = Some(one_of(&s));
-                }
-            }
-        } else {
-            o.cursor = click_inventory(o.cursor, slot, stack.is_some(), selected);
-        }
-        return true;
-    }
-    let carried = o.cursor.and_then(|slot| o.stack(slot)).map(one_of);
-    let Some(ed) = o.editing.as_mut() else {
-        return false;
-    };
-    for i in 0..slots_of(&ed.field) {
-        if over_slot(ghost_slot(left, top, i), mouse) {
-            ed.ghosts[i] = if shift { None } else { carried };
-            return true;
-        }
-    }
-    if !inside([left, top, W, H], mouse) {
-        o.cursor = None;
-    }
-    false
-}
-
-/// A one-item copy (`GhostItemMenu`: `insert.setCount(1)`).
-fn one_of(s: &ItemStack) -> ItemStack {
-    let mut s = s.clone();
-    let _ = s.set_count(1);
-    s
+/// Whether `p` is over a slot the menu shows now.
+fn over_menu_slot(host: &dyn ClientHost, size: [f32; 2], p: [f32; 2]) -> bool {
+    let (left, top) = corner(size);
+    (0..GHOST_SLOTS + create_engine::ghost_menu::PLAYER_SLOTS).any(|i| {
+        host.screen_slot(MENU, i)
+            .is_some_and(|at| over_slot([left + at[0], top + at[1]], p))
+    })
 }
 
 /// The editor over the schedule (`renderBg` while editing, its widgets).
@@ -2052,7 +2097,7 @@ fn draw_editor(
         let d = at(EDITOR_DELETE, left, top);
         icon_button(draw, [d[0], d[1]], I_TRASH, true, inside(d, mouse));
     }
-    draw_slots(host, draw, o, ed, mouse, tips);
+    draw_slots(host, draw, o);
 }
 
 /// A step of the editor's input under `mouse`; true when one took it.
@@ -2101,7 +2146,7 @@ pub fn screen_mouse_scrolled(
     host: &dyn ClientHost,
     event: &mut ScreenMouseScrolledPreEvent<'_>,
 ) -> Flow {
-    if !ours(host) || event.scroll[1] == 0.0 {
+    if !ours(event.screen.menu) || event.scroll[1] == 0.0 {
         return Flow::Continue;
     }
     let up = event.scroll[1] > 0.0;
@@ -2170,11 +2215,19 @@ pub fn screen_mouse_pressed(
     host: &dyn ClientHost,
     event: &mut ScreenMouseButtonPressedPreEvent<'_>,
 ) -> Flow {
-    if !ours(host) {
+    if !ours(event.screen.menu) {
         return Flow::Continue;
     }
     let mouse = event.screen.mouse;
     let button = event.button as u8;
+    // The menu's own slots take their clicks: the player's inventory and the ghost slots.
+    let on_slot = OPEN.with_borrow(|o| {
+        o.as_ref()
+            .is_some_and(|o| o.editing.is_some() && over_menu_slot(host, o.size, mouse))
+    });
+    if on_slot && button <= 1 {
+        return Flow::Continue;
+    }
     let mut close = false;
     OPEN.with_borrow_mut(|o| {
         let Some(o) = o.as_mut() else {
@@ -2182,9 +2235,6 @@ pub fn screen_mouse_pressed(
         };
         let (left, top) = corner(o.size);
         if o.editing.is_some() {
-            if button <= 1 && click_slots(o, mouse, host.modifiers().shift()) {
-                return;
-            }
             let Some(ed) = o.editing.as_mut() else {
                 return;
             };
@@ -2252,7 +2302,7 @@ pub fn screen_mouse_pressed(
 }
 
 pub fn screen_key_pressed(host: &dyn ClientHost, event: &mut ScreenKeyPressedPreEvent<'_>) -> Flow {
-    if !ours(host) {
+    if !ours(event.screen.menu) {
         return Flow::Continue;
     }
     let editing = OPEN.with_borrow(|o| o.as_ref().map(|o| o.editing.as_ref().map(|e| e.typing)));
@@ -2288,8 +2338,8 @@ pub fn screen_key_pressed(host: &dyn ClientHost, event: &mut ScreenKeyPressedPre
     }
 }
 
-pub fn screen_char_typed(host: &dyn ClientHost, event: &mut ScreenCharTypedPreEvent<'_>) -> Flow {
-    if !ours(host) {
+pub fn screen_char_typed(_host: &dyn ClientHost, event: &mut ScreenCharTypedPreEvent<'_>) -> Flow {
+    if !ours(event.screen.menu) {
         return Flow::Continue;
     }
     let c = event.c;
@@ -2320,8 +2370,8 @@ pub fn screen_char_typed(host: &dyn ClientHost, event: &mut ScreenCharTypedPreEv
 }
 
 /// `removed`: the schedule goes to the server (`ScheduleEditPacket`), at the next tick.
-pub fn screen_closing(host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
-    if event.screen.id != "mod" || host.mod_screen().is_some_and(|m| m != MOD) {
+pub fn screen_closing(_host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
+    if event.screen.menu != Some(MENU) {
         return;
     }
     if let Some(open) = OPEN.with_borrow_mut(Option::take) {

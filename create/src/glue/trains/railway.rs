@@ -253,7 +253,6 @@ impl Subsystem for Trains {
             super::carriage_draw::CHANNEL => super::carriage_draw::server_message(data),
             STATES_CHANNEL => super::client::states_from_server(&*host, data),
             super::station_screen::CHANNEL => super::station_screen::server_message(host, data),
-            super::schedule_screen::CHANNEL => super::schedule_screen::server_message(host, data),
             super::relocate::CHANNEL => super::relocate::server_message(data),
             _ => return false,
         }

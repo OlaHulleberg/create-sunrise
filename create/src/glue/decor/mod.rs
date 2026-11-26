@@ -26,10 +26,6 @@
 //! Lightning clears Create's copper as vanilla's: the glue gives the server's data Create's
 //! chains as NeoForge's `neoforge:oxidizables` and `neoforge:waxables` block data maps
 //! (`data_pack_files`), which the game's own `clearCopperOnLightningStrike` reads.
-//!
-//! Left out, for want of API (each in `API_GAPS.md`):
-//! - A placard shows a 3D item at half size (`PlacardRenderer`: `isGui3d`): no API reads an
-//!   item model's `gui3d`, so an item that places a block stands for it.
 
 mod bell;
 mod bells;

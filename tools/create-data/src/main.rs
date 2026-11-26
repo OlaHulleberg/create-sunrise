@@ -181,6 +181,15 @@ fn compile(create: &Path, repo: &Path) {
         }
     }
 
+    // The block tags the face rules name (`blocks::CLASS_TAGS`).
+    for (name, classes) in blocks::CLASS_TAGS {
+        let values = blocks::class_tag_members(&all, classes);
+        write(
+            &out.join(format!("data/create/tags/block/{name}.json")),
+            &pretty(&json!({ "values": values })),
+        );
+    }
+
     // Partial models as hidden blocks, with their own blockstates.
     let states_dir = out.join("assets/create/blockstates");
     let _ = fs::remove_dir_all(&states_dir);
@@ -484,13 +493,14 @@ fn compile(create: &Path, repo: &Path) {
 
     // AllMenuTypes' menus: those opened with no block, as many slots as their ghost inventories
     // (`ListFilterItem.getFilterItemHandler`, `AttributeFilterMenu.createGhostInventory`,
-    // `LinkedControllerItem.getFrequencyItems`), and those of the blocks the port gives a
+    // `LinkedControllerItem.getFrequencyItems`, `ScheduleMenu.slots`), and those of the blocks the port gives a
     // container of its own (a hopper's five slots for the schematicannon and table, a 9x4
     // chest's for the toolbox).
     for (name, slots) in [
         ("filter", 18),
         ("attribute_filter", 2),
         ("linked_controller", 12),
+        ("schedule", 2),
         ("schematicannon", 5),
         ("schematic_table", 5),
         ("toolbox", 36),

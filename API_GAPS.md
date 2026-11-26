@@ -39,24 +39,17 @@ API, and remove it once the API has it and the port uses it.
   NeoForge `LevelTickEvent.Post` ([`CommonEvents.java:133`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/events/CommonEvents.java#L133)). sunrise-org/sunrise#4185
 - **Contact effects of collider boxes** (friction, bounce, climbing): no slime bounce, ice slide or ladder climb on a
   moving structure. Create uses: Create's own code in `collideEntities` ([`ContraptionCollider.java:207`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/ContraptionCollider.java#L207), [`ContraptionCollider.java:223`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/ContraptionCollider.java#L223)). sunrise-org/sunrise#1909
-- **A turning collider carrying the client's own player**: a player can't ride a turning structure. Create uses:
-  Create's own `collideEntities` on the client ([`ContraptionCollider.java:123`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/ContraptionCollider.java#L123)), run from NeoForge `ClientTickEvent.Post` ([`ClientEvents.java:129`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/events/ClientEvents.java#L129)).
-  sunrise-org/sunrise#5584
-- **A descending collider carrying the client's own player down**: a player is pushed off a descending structure.
-  Create uses: Create's own `saveClientPlayerFromClipping` ([`ContraptionCollider.java:336`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/ContraptionCollider.java#L336)). sunrise-org/sunrise#5585
 - **Attachment codecs with Host access, run when the holder is saved**: a cart's contraption isn't encoded when its
   holder is saved, as Create does. Create uses: overrides vanilla `Entity.addAdditionalSaveData` ([`AbstractContraptionEntity.java:612`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/AbstractContraptionEntity.java#L612)).
   sunrise-org/sunrise#5085
 
 ## Rendering
 
-- **The camera's eye position and the entity's interpolated position in `EntityRenderer::submit`, and a reusable item
-  draw**: a potato cannon shot can't face the camera in every view. Create uses: calls vanilla
-  `Minecraft.getCameraEntity().getEyePosition(pt)` ([`AllPotatoProjectileRenderModes.java:48`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/AllPotatoProjectileRenderModes.java#L48)) and `ItemRenderer.renderStatic` ([`PotatoProjectileRenderer.java:34`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/PotatoProjectileRenderer.java#L34)).
-  sunrise-org/sunrise#5077
-- **A block's face-skip rule against other blocks, for model faces only** (`skipRendering`): faces between different
-  glass kinds are drawn, and copycats aren't culled by their material. Create uses: overrides vanilla
-  `Block.skipRendering` ([`ConnectedGlassBlock.java:20`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/palettes/ConnectedGlassBlock.java#L20)) and `hidesNeighborFace` ([`CopycatPanelBlock.java:176`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatPanelBlock.java#L176)). sunrise-org/sunrise#5080
+- **A block's face-skip rule that reads a block entity or `blocksMotion`** (Dev 2's data rules, `skip_rendering` and
+  `hides_neighbor_face`, are static per block state): copycats aren't culled by their material, and the metal ladder
+  keeps its sides drawn beside blocks that don't block motion. Create uses: `hidesNeighborFace` reading the copycat's
+  material through its block entity ([`CopycatPanelBlock.java:176`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatPanelBlock.java#L176), `CopycatStepBlock`) and `skipRendering` testing `BlockState.blocksMotion`
+  ([`MetalLadderBlock.java:54`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/MetalLadderBlock.java#L54); the rules' facts have no such flag). The connected glass, panes, encased cogwheels and metal scaffolding are declared with the rules (sunrise-org/sunrise#5080)
 - **Connected-texture rules that read a neighbour's state per face, a neighbour's appearance (`getAppearance`), a rule
   that block-entity data turns off, and position-seeded random sheets**: casings join only their own block, a brass
   tunnel without distribution still connects, and the weathered iron window keeps its plain texture, as no rule
@@ -69,8 +62,6 @@ API, and remove it once the API has it and the port uses it.
 - **Editing a humanoid's final pose after vanilla's animation** (`HumanoidModel.setupAnim`): a skyhook rider can't hold
   its riding pose. Create uses: Create mixin `HumanoidModelMixin` at the return of `HumanoidModel.setupAnim`
   ([`HumanoidModelMixin.java:23`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/client/HumanoidModelMixin.java#L23)). sunrise-org/sunrise#5078
-- **Reading an item model's `gui3d`**: placards, belts and depots can't size and lay items as Create does. Create uses:
-  calls vanilla `BakedModel.isGui3d` ([`PlacardRenderer.java:38`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/placard/PlacardRenderer.java#L38)). Not filed.
 - **A `BlockEntityDataView` built from a `Compound`**: a carried block entity's data can't be lent to a draw as a view.
   Create uses: builds a block entity with vanilla `EntityBlock.newBlockEntity` and fills it with
   `BlockEntity.handleUpdateTag` ([`ClientContraption.java:151`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/render/ClientContraption.java#L151)). Not filed.
@@ -83,14 +74,6 @@ API, and remove it once the API has it and the port uses it.
 - **A rail block's velocity edit inside the minecart rail step, with the cart's speed cap**: a controller rail sets the
   cart's speed outside the rail step. Create uses: overrides `onMinecartPass`, reading
   `AbstractMinecart.getMaxSpeedWithRail` ([`ControllerRailBlock.java:144`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/rail/ControllerRailBlock.java#L144)). sunrise-org/sunrise#5075
-
-## Items and inventories
-
-- **The backing slots each face of a container reaches** (`WorldlyContainer.getSlotsForFace`): packagers on different
-  faces of a furnace, brewing stand or composter count as one inventory. Create uses: calls vanilla
-  `WorldlyContainer.getSlotsForFace` ([`AllInventoryIdentifiers.java:85`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/packager/AllInventoryIdentifiers.java#L85)). sunrise-org/sunrise#5086
-- **Hiding a mod menu screen's player inventory slots** (`Slot.isActive`): the train schedule screen can't hide the
-  inventory while no part is edited. Create uses: overrides vanilla `Slot.isActive` ([`ScheduleMenu.java:63`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/trains/schedule/ScheduleMenu.java#L63)). sunrise-org/sunrise#3968
 
 ## Client
 

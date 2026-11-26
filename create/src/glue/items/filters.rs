@@ -5,7 +5,9 @@
 //! hand (`FilterItem.use`; `FilterMenu`, `AttributeFilterMenu`, clicked as `ghost_menu` rules,
 //! drawn by `filter_screen`) with their settings (`FilterScreenPacket`) written back as they
 //! close (`saveData`). The linked controller's menu (`LinkedControllerMenu`, drawn by
-//! `controller_screen`) is kept here too, its twelve frequencies written back as it closes. A
+//! `controller_screen`) is kept here too, its twelve frequencies written back as it closes, and so
+//! is the train schedule's (`ScheduleMenu`, drawn by `trains::schedule_screen`), whose two ghost
+//! slots are clicked here and which writes nothing back itself. A
 //! filter's settings are kept in the stack's custom data under Create's component names, its
 //! list as `ItemContainerContents` (`Slot` and the stack's own NBT). `/create_debug filter` sets a filter in a slot or hand for tests, and
 //! sets a package filter's address too (its screen is the stock glue's, `stock::package_filter`).
@@ -1038,6 +1040,57 @@ pub(super) fn open_controller(
     );
 }
 
+/// `ScheduleItem.use`: the schedule menu over the held schedule, its two ghost slots empty
+/// (`ScheduleMenu`) as the menu `menu`. `extra` is what the screen opens with.
+pub(crate) fn open_schedule(
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    menu: &str,
+    extra: Vec<u8>,
+) {
+    let Some(stack) = held(&*host, player, Hand::Main) else {
+        return;
+    };
+    let selected = player.selected_slot(&*host).unwrap_or(0);
+    let session = Session {
+        window: 0,
+        stack,
+        menu: ghost_menu::Menu::new(ghost_menu::Kind::Schedule, Vec::new(), Vec::new(), selected),
+        deny: false,
+        respect: false,
+        mode: Mode::WhitelistDisj,
+        chosen: Vec::new(),
+        options: Vec::new(),
+    };
+    open_session(host, player, menu, "item.create.schedule", extra, session);
+}
+
+/// `ScheduleScreen.startEditing`: the edited part's stacks put in the open schedule menu's ghost
+/// slots, one of each.
+pub(crate) fn set_schedule_ghosts(
+    host: &mut dyn ServerHost,
+    player: PlayerRef,
+    stacks: Vec<Option<ItemStack>>,
+) {
+    let Some(mut session) = SESSIONS.with_borrow_mut(|m| {
+        m.remove(&player.uuid())
+            .filter(|s| s.menu.kind == ghost_menu::Kind::Schedule)
+    }) else {
+        return;
+    };
+    let h: &dyn Host = &*host;
+    session.menu.ghost = (0..session.menu.ghost.len())
+        .map(|i| {
+            stacks.get(i).cloned().flatten().map(|mut s| {
+                let _ = s.set_count(1);
+                Held::of(h, s)
+            })
+        })
+        .collect();
+    show_ghosts(host, player.uuid(), &session, None);
+    SESSIONS.with_borrow_mut(|m| m.insert(player.uuid(), session));
+}
+
 /// Opens the mod menu `menu` over the held stack and keeps `session` for its clicks and its
 /// close.
 fn open_session(
@@ -1145,7 +1198,7 @@ fn refresh(
 
 /// A click on an open filter menu (`GhostItemMenu.clicked`), done on the server's copy of the
 /// menu and written back in place of the default: the inventory, the cursor and the ghost slots.
-pub(super) fn menu_clicked(
+pub(crate) fn menu_clicked(
     host: &mut dyn ServerHost,
     event: &mod_api::MenuClickedEvent<'_>,
 ) -> mod_api::Flow {
@@ -1644,7 +1697,7 @@ fn clear_list(host: &mut dyn ServerHost, player: PlayerRef) {
 
 /// `MenuBase.removed` → `saveData`: the settings written into the filter, wherever the menu's
 /// clicks left it.
-pub(super) fn menu_removed(host: &mut dyn ServerHost, event: &mod_api::MenuRemovedEvent<'_>) {
+pub(crate) fn menu_removed(host: &mut dyn ServerHost, event: &mod_api::MenuRemovedEvent<'_>) {
     let Some(session) =
         SESSIONS.with_borrow_mut(|m| m.remove(&event.uuid).filter(|s| s.window == event.window))
     else {
@@ -1682,6 +1735,8 @@ pub(super) fn menu_removed(host: &mut dyn ServerHost, event: &mod_api::MenuRemov
                 .collect();
             super::super::contraptions::controller::set_controller_items(&mut stack, &items);
         }
+        // `ScheduleMenu.saveData` writes nothing: the schedule goes back with `ScheduleEditPacket`.
+        ghost_menu::Kind::Schedule => return,
         ghost_menu::Kind::Filter => {
             let slots: Vec<Option<ItemStack>> = session
                 .menu

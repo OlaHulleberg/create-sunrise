@@ -856,8 +856,7 @@ fn draw_item(
     stack: &ItemStack,
 ) {
     let c = fx::slot_center(face, facing, slot);
-    let id = super::body::item_id(host, stack);
-    let solid = crate::glue::logistics::items::is_block_item(host, &id);
+    let solid = host.item_uses_block_light(stack, ItemDisplayContext::Fixed);
     let scale = 0.5 * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
     draw.push();
     draw.translate([c[0] as f32, c[1] as f32, c[2] as f32]);
