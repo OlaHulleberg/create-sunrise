@@ -170,7 +170,7 @@ pub(super) fn read_uploaded(instance: &Path, target: Uploaded<'_>) -> Option<Str
 
 pub(super) fn encode_structure(structure: &Structure) -> Option<Vec<u8>> {
     let raw = write_named(&to_game(&structure.to_nbt()))?;
-    Some(gzip::encode(&raw))
+    gzip::encode(&raw).ok()
 }
 
 /// `SchematicExport`: choose a free filename and reserve it without opening an existing inode.
@@ -495,6 +495,19 @@ mod tests {
     use crate::glue::temp_dir::TempDir;
     use std::collections::BTreeMap;
 
+    fn incompressible_padding() -> Vec<u8> {
+        // Deterministic xorshift bytes with margin above the compressed upload cap.
+        let mut state = 0x8e9d_5aa5u32;
+        (0..UPLOAD_BYTES + 16 * 1024)
+            .map(|_| {
+                state ^= state << 13;
+                state ^= state >> 17;
+                state ^= state << 5;
+                state as u8
+            })
+            .collect()
+    }
+
     #[test]
     fn upload_reads_and_replaces_a_regular_file() {
         let instance = TempDir::new("create-schematics");
@@ -554,15 +567,11 @@ mod tests {
                 ])]),
             ),
             ("entities", Tag::List(Vec::new())),
-            // Gzip uses stored blocks, so inert padding in the root counts toward file size.
-            (
-                "fixture_padding",
-                Tag::ByteArray(vec![0; UPLOAD_BYTES as usize]),
-            ),
+            ("fixture_padding", Tag::ByteArray(incompressible_padding())),
         ]);
         let raw = write_named(&tag).unwrap();
         assert!(raw.len() < MAX_BYTES);
-        let bytes = gzip::encode(&raw);
+        let bytes = gzip::encode(&raw).expect("gzip encoding");
         let size = bytes.len() as u64;
         assert!(size > UPLOAD_BYTES);
         root.write_new(target.file, &bytes).unwrap();
@@ -646,7 +655,7 @@ mod tests {
                     ("id".into(), Nbt::String("minecraft:armor_stand".into())),
                     (
                         "size_fixture".into(),
-                        Nbt::ByteArray(vec![0; UPLOAD_BYTES as usize]),
+                        Nbt::ByteArray(incompressible_padding()),
                     ),
                 ])),
             }],
@@ -664,13 +673,21 @@ mod tests {
             },
         );
         assert!(matches!(too_big, Err(UploadError::TooLarge(n)) if n > UPLOAD_BYTES));
-        assert!(dir.occupied(oldest).unwrap());
+        assert_eq!(read_bounded(&dir, oldest).unwrap(), b"existing");
         assert!(!dir.occupied(file_leaf("build_1.nbt").unwrap()).unwrap());
         assert_eq!(
             dir.regular_files(sch::valid_file).unwrap().len(),
             sch::MAX_SCHEMATICS
         );
 
+        let stone = sch::PaletteState::new("minecraft:stone".into(), BTreeMap::new()).unwrap();
+        let coords =
+            (0..20).flat_map(|y| (0..20).flat_map(move |x| (0..20).map(move |z| [x, y, z])));
+        let cube = Structure::capture(
+            [20; 3],
+            coords.map(|pos| (pos, stone.clone(), sch::Class::Full)),
+        );
+        assert_eq!(cube.blocks.len(), 8_000);
         let receipt = capture_to_upload(
             instance.path(),
             "Alex",
@@ -679,17 +696,14 @@ mod tests {
             Access::for_player(Some(true)),
             |access| {
                 assert!(access == Access::GameMaster);
-                Some(Structure {
-                    size: [2, 1, 1],
-                    ..Structure::default()
-                })
+                Some(cube.clone())
             },
         )
         .unwrap()
         .unwrap();
         assert_eq!(
             (receipt.slot, receipt.file.as_str(), receipt.size),
-            (3, "build_1.nbt", [2, 1, 1])
+            (3, "build_1.nbt", [20; 3])
         );
         assert!(!dir.occupied(oldest).unwrap());
         assert_eq!(
@@ -697,10 +711,10 @@ mod tests {
             sch::MAX_SCHEMATICS
         );
         let saved = read_bounded(&dir, file_leaf(&receipt.file).unwrap()).unwrap();
-        assert_eq!(
-            decode_structure(&receipt.file, &saved).unwrap().size,
-            receipt.size
-        );
+        assert!((saved.len() as u64) < UPLOAD_BYTES);
+        let raw = gzip::decode(&saved, MAX_BYTES).expect("gzip decoding");
+        assert!((raw.len() as u64) > UPLOAD_BYTES);
+        assert_eq!(decode_structure(&receipt.file, &saved), Some(cube));
         assert_eq!(
             read_bounded(&root, file_leaf("build.nbt").unwrap()).unwrap(),
             b"independent"
@@ -745,7 +759,8 @@ mod tests {
         let raw = write_named(&root).expect("writable");
         // A named root: its type, an empty name, then the payload.
         assert_eq!(&raw[..3], &[10, 0, 0]);
-        let back = gzip::decode(&gzip::encode(&raw), usize::MAX).expect("gzip");
+        let gz = gzip::encode(&raw).expect("gzip encoding");
+        let back = gzip::decode(&gz, usize::MAX).expect("gzip decoding");
         assert_eq!(read_named(&back), Some(root.clone()));
         let engine = to_engine(&root);
         assert_eq!(engine.get("DataVersion"), Some(&Nbt::Int(3955)));

@@ -4,12 +4,12 @@
 //! .transform`, `BlockState.mirror`/`rotate`), the schematic item's data and the block facts the
 //! printer reads of each palette entry, resolved once per loaded schematic.
 //!
-//! The tree here is a plain copy of NBT: the game's binary reader and writer (gzip, `NbtIo`) are
-//! Horizon's; the glue converts between the two once per file.
+//! `crate::gzip` handles schematic file framing and compression. The glue converts this NBT
+//! tree to and from the Sunrise mod API's `Tag` for binary serialization.
 
 use std::collections::BTreeMap;
 
-/// An NBT tag (`net.minecraft.nbt.Tag`); floats keep their bit patterns, as Horizon's do.
+/// An NBT tag (`net.minecraft.nbt.Tag`); floats keep their bit patterns.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Nbt {
     Byte(i8),
