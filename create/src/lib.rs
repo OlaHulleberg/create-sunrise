@@ -159,6 +159,12 @@ impl Hooks for Create {
         }
     }
 
+    fn fluid_passage(&self, level: &dyn LevelHost, event: &mut mod_api::FluidPassageEvent<'_>) {
+        for s in SUBSYSTEMS {
+            s.fluid_passage(level, event);
+        }
+    }
+
     fn level_tick_pre(&self, host: HostSide, event: &mut mod_api::LevelTickPreEvent) {
         let HostSide::Server(host) = host else {
             return;
