@@ -259,13 +259,6 @@ pub(crate) fn stack_of(host: &dyn Host, bytes: &[u8]) -> Option<ItemStack> {
 // ---------------------------------------------------------------------------------------------
 // The ghost slots' rules
 
-/// `GhostItemMenu.clicked` on a ghost slot: a 1-count copy of what is carried, or empty.
-pub(crate) fn click_ghost<T: Clone>(slots: &mut [Option<T>], slot: usize, carried: Option<&T>) {
-    if let Some(s) = slots.get_mut(slot) {
-        *s = carried.cloned();
-    }
-}
-
 /// A click on an inventory slot (`clicked` below 36): its stack's ghost on the cursor, or the
 /// cursor put down on the slot it came from or on an empty one. The filter's own slot
 /// (`HeldItemGhostItemMenu.isInSlot`) is never picked.
@@ -366,6 +359,17 @@ fn ours(menu: Option<&str>) -> Option<bool> {
 
 fn later(message: ToServer) {
     LATER.with_borrow_mut(|l| l.0.push(message));
+}
+
+/// `ClearMenuPacket` at the next tick: the reset button of another ghost menu's screen
+/// (`controller_screen`), cleared where the server keeps the menu.
+pub(super) fn clear_later() {
+    later(ToServer::Clear);
+}
+
+/// `closeContainer` at the next tick, after the packets: another screen's confirm button.
+pub(super) fn close_later() {
+    LATER.with_borrow_mut(|l| l.1 = true);
 }
 
 fn main_hand(host: &dyn ClientHost) -> Option<ItemStack> {
@@ -762,7 +766,8 @@ pub(crate) fn screen_key_pressed(
     _host: &dyn ClientHost,
     event: &mut ScreenKeyPressedPreEvent<'_>,
 ) -> Flow {
-    if ours(event.screen.menu).is_none()
+    if (ours(event.screen.menu).is_none()
+        && event.screen.menu != Some(super::controller_screen::CONTROLLER_MENU))
         || !matches!(event.key, "key.keyboard.escape" | "key.keyboard.e")
     {
         return Flow::Continue;
@@ -1246,15 +1251,6 @@ mod tests {
         ]);
         assert_eq!(ToClient::decode(&lines.encode()), Some(lines));
         assert_eq!(ToClient::decode(&[1]), None);
-    }
-
-    #[test]
-    fn a_ghost_slot_takes_a_copy_or_empties() {
-        let mut slots = vec![Some('a'), None];
-        click_ghost(&mut slots, 1, Some(&'b'));
-        assert_eq!(slots, vec![Some('a'), Some('b')]);
-        click_ghost(&mut slots, 0, None);
-        assert_eq!(slots, vec![None, Some('b')]);
     }
 
     #[test]

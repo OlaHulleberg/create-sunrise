@@ -286,6 +286,19 @@ impl Subsystem for Items {
                 crate::create_log!("[create] the {menu} screen was refused: {e}");
             }
         }
+        r.menu_part(
+            controller_screen::CONTROLLER_MENU,
+            controller_screen::ControllerScreen,
+        );
+        if let Err(e) = r.register_menu_screen(
+            controller_screen::CONTROLLER_MENU,
+            std::sync::Arc::new(controller_screen::open_screen),
+        ) {
+            crate::create_log!(
+                "[create] the {} screen was refused: {e}",
+                controller_screen::CONTROLLER_MENU
+            );
+        }
         for id in sandpaper::IDS {
             let key = r.item_key(id);
             r.item_part(key, sandpaper::SandPaper);
@@ -367,9 +380,6 @@ impl Subsystem for Items {
             symmetry_screen::CHANNEL => symmetry::configure(host, player, data),
             worldshaper_screen::CHANNEL => worldshaper::configure(host, player, data),
             filter_screen::CHANNEL => filters::client_message(host, player, data),
-            controller_screen::CHANNEL => {
-                super::contraptions::controller::chosen(host, player, data)
-            }
             _ => return false,
         }
         true
@@ -378,7 +388,6 @@ impl Subsystem for Items {
     fn server_message(&self, host: &mut dyn ClientHost, channel: &str, data: &[u8]) -> bool {
         symmetry::server_message(channel, data)
             || filter_screen::server_message(host, channel, data)
-            || controller_screen::server_message(host, channel, data)
     }
 
     fn client_tick(&self, host: &mut dyn ClientHost) {
@@ -387,7 +396,6 @@ impl Subsystem for Items {
         worldshaper::tick(&*host);
         worldshaper_screen::tick(host);
         filter_screen::tick(host);
-        controller_screen::tick(host);
     }
 
     fn client_reset(&self) {
@@ -396,7 +404,6 @@ impl Subsystem for Items {
         worldshaper::reset();
         worldshaper_screen::reset();
         filter_screen::reset();
-        controller_screen::reset();
     }
 
     fn special_model_renderers(&self, renderers: &mut dyn mod_api::SpecialModelRenderers) {
@@ -434,7 +441,6 @@ impl Subsystem for Items {
         symmetry_screen::screen_render_post(host, event);
         worldshaper_screen::screen_render_post(host, event);
         filter_screen::screen_render_post(host, event);
-        controller_screen::screen_render_post(host, event);
     }
 
     fn screen_mouse_pressed(
@@ -502,17 +508,13 @@ impl Subsystem for Items {
         host: &dyn ClientHost,
         event: &mut ScreenKeyPressedPreEvent<'_>,
     ) -> Flow {
-        match filter_screen::screen_key_pressed(host, event) {
-            Flow::Continue => controller_screen::screen_key_pressed(host, event),
-            f => f,
-        }
+        filter_screen::screen_key_pressed(host, event)
     }
 
     fn screen_closing(&self, host: &dyn ClientHost, event: &mut ScreenClosingEvent<'_>) {
         symmetry_screen::screen_closing(host, event);
         worldshaper_screen::screen_closing(host, event);
         filter_screen::screen_closing(host, event);
-        controller_screen::screen_closing(host, event);
     }
 
     /// `SandPaperItem.finishUsingItem`.
