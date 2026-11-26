@@ -3,7 +3,30 @@
   "properties": {
     "hardness": 0.0,
     "explosion_resistance": 0.0,
-    "sounds": "minecraft:copper_block"
+    "sounds": "minecraft:copper_block",
+    "hides_neighbor_face": [
+      {
+        "neighbor": {
+          "tag": "create:metal_scaffolding",
+          "state": {
+            "bottom": "true"
+          }
+        },
+        "faces": "horizontal"
+      },
+      {
+        "neighbor": {
+          "tag": "create:metal_scaffolding",
+          "state": {
+            "bottom": "false"
+          }
+        },
+        "state": {
+          "bottom": "false"
+        },
+        "faces": "horizontal"
+      }
+    ]
   },
   "item": true,
   "shapes": {

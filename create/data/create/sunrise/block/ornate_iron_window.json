@@ -2,7 +2,16 @@
   "template": "minecraft:glass",
   "properties": {
     "hardness": 0.3,
-    "explosion_resistance": 0.3
+    "explosion_resistance": 0.3,
+    "skip_rendering": [
+      {
+        "neighbor": "self"
+      },
+      {
+        "neighbor": "#create:connected_glass",
+        "faces": "horizontal"
+      }
+    ]
   },
   "item": true
 }

@@ -181,6 +181,15 @@ fn compile(create: &Path, repo: &Path) {
         }
     }
 
+    // The block tags the face rules name (`blocks::CLASS_TAGS`).
+    for (name, classes) in blocks::CLASS_TAGS {
+        let values = blocks::class_tag_members(&all, classes);
+        write(
+            &out.join(format!("data/create/tags/block/{name}.json")),
+            &pretty(&json!({ "values": values })),
+        );
+    }
+
     // Partial models as hidden blocks, with their own blockstates.
     let states_dir = out.join("assets/create/blockstates");
     let _ = fs::remove_dir_all(&states_dir);

@@ -2,7 +2,76 @@
   "template": "minecraft:glass_pane",
   "properties": {
     "hardness": 0.3,
-    "explosion_resistance": 0.3
+    "explosion_resistance": 0.3,
+    "skip_rendering": [
+      {
+        "neighbor": {
+          "block": "self",
+          "state": {
+            "south": "true"
+          }
+        },
+        "state": {
+          "north": "true"
+        },
+        "faces": [
+          "north"
+        ]
+      },
+      {
+        "neighbor": {
+          "block": "self",
+          "state": {
+            "north": "true"
+          }
+        },
+        "state": {
+          "south": "true"
+        },
+        "faces": [
+          "south"
+        ]
+      },
+      {
+        "neighbor": {
+          "block": "self",
+          "state": {
+            "east": "true"
+          }
+        },
+        "state": {
+          "west": "true"
+        },
+        "faces": [
+          "west"
+        ]
+      },
+      {
+        "neighbor": {
+          "block": "self",
+          "state": {
+            "west": "true"
+          }
+        },
+        "state": {
+          "east": "true"
+        },
+        "faces": [
+          "east"
+        ]
+      },
+      {
+        "neighbor": "self",
+        "same": [
+          "east",
+          "north",
+          "south",
+          "waterlogged",
+          "west"
+        ],
+        "faces": "vertical"
+      }
+    ]
   },
   "item": true
 }

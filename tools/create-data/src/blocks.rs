@@ -3881,6 +3881,7 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
     if b.java.no_occlusion && shapes.is_none() {
         props.insert("occludes".into(), json!(false));
     }
+    insert_face_rules(b, &mut props);
     let mut doc = Map::new();
     doc.insert("template".into(), json!(template));
     doc.insert("properties".into(), Value::Object(props));
@@ -3982,6 +3983,108 @@ pub fn declaration(b: &CreateBlock, d: &Decision) -> Option<Value> {
         doc.insert("default_state".into(), Value::Object(default));
     }
     Some(Value::Object(doc))
+}
+
+/// The block tags `compile` writes (`data/create/tags/block/<name>.json`): the blocks of the Java
+/// classes a face rule names by `instanceof` (`ConnectedGlassBlock`, `MetalScaffoldingBlock`).
+pub const CLASS_TAGS: [(&str, &[&str]); 2] = [
+    ("connected_glass", &["ConnectedGlassBlock", "WindowBlock"]),
+    ("metal_scaffolding", &["MetalScaffoldingBlock"]),
+];
+
+/// The members of a [`CLASS_TAGS`] tag among `all`: the declared blocks of its classes.
+pub fn class_tag_members(all: &[CreateBlock], classes: &[&str]) -> Vec<String> {
+    let mut members: Vec<String> = all
+        .iter()
+        .filter(|b| {
+            b.java
+                .class
+                .as_deref()
+                .is_some_and(|c| classes.contains(&c))
+        })
+        .map(|b| format!("create:{}", b.name))
+        .collect();
+    members.sort();
+    members
+}
+
+/// Create's neighbour face rules as the declaration's data rules (`skip_rendering`,
+/// `hides_neighbor_face`): `skipRendering` of the connected glass family, the framed and window
+/// panes, the encased cogwheels, and `hidesNeighborFace` of the metal scaffolding. What reads a
+/// block entity (the copycats' material) or a fact the rules lack (the metal ladder's
+/// `blocksMotion`) isn't expressible and is left out (API_GAPS.md).
+fn insert_face_rules(b: &CreateBlock, props: &mut Map<String, Value>) {
+    let connected_glass = "#create:connected_glass";
+    match b.java.class.as_deref() {
+        // ConnectedGlassBlock.skipRendering: any connected glass beside it (which includes its own
+        // block, the template's rule).
+        Some("ConnectedGlassBlock") => {
+            props.insert(
+                "skip_rendering".into(),
+                json!([{ "neighbor": connected_glass }]),
+            );
+        }
+        // WindowBlock.skipRendering: its own block on every side; other connected glass on the
+        // horizontal sides unless the window is translucent (`translucent` in AllPaletteBlocks:
+        // the birch and weathered iron windows).
+        Some("WindowBlock") => {
+            let mut rules = vec![json!({ "neighbor": "self" })];
+            if !matches!(b.name.as_str(), "birch_window" | "weathered_iron_window") {
+                rules.push(json!({ "neighbor": connected_glass, "faces": "horizontal" }));
+            }
+            props.insert("skip_rendering".into(), Value::Array(rules));
+        }
+        // ConnectedGlassPaneBlock.skipRendering: above and below only against the identical
+        // state; sideways IronBarsBlock's rule, which replaces the template's: both panes
+        // connect toward each other.
+        Some("ConnectedGlassPaneBlock") => {
+            let mut rules = Vec::new();
+            for (side, opposite) in [
+                ("north", "south"),
+                ("south", "north"),
+                ("west", "east"),
+                ("east", "west"),
+            ] {
+                rules.push(json!({
+                    "neighbor": { "block": "self", "state": { (opposite): "true" } },
+                    "state": { (side): "true" },
+                    "faces": [side],
+                }));
+            }
+            rules.push(json!({
+                "neighbor": "self",
+                "same": ["east", "north", "south", "waterlogged", "west"],
+                "faces": "vertical",
+            }));
+            props.insert("skip_rendering".into(), Value::Array(rules));
+        }
+        // EncasedCogwheelBlock.skipRendering: its own block on the same axis.
+        Some("EncasedCogwheelBlock") => {
+            props.insert(
+                "skip_rendering".into(),
+                json!([{ "neighbor": "self", "same": ["axis"] }]),
+            );
+        }
+        // MetalScaffoldingBlock.hidesNeighborFace: metal scaffolding beside it, horizontally,
+        // except a bottomless one beside a bottom one.
+        Some("MetalScaffoldingBlock") => {
+            props.insert(
+                "hides_neighbor_face".into(),
+                json!([
+                    {
+                        "neighbor": { "tag": "create:metal_scaffolding", "state": { "bottom": "true" } },
+                        "faces": "horizontal",
+                    },
+                    {
+                        "neighbor": { "tag": "create:metal_scaffolding", "state": { "bottom": "false" } },
+                        "state": { "bottom": "false" },
+                        "faces": "horizontal",
+                    },
+                ]),
+            );
+        }
+        _ => {}
+    }
 }
 
 /// MetalScaffoldingBlock's shapes, declared: its outline is ScaffoldingBlock's `STABLE_SHAPE`
@@ -4743,6 +4846,82 @@ mod tests {
         assert_eq!(states["toolbox"], (16, 128));
         assert_eq!(states["postbox"], (16, 256));
         assert_eq!(states["nixie_tube"], (16, 512));
+    }
+
+    /// Create's face rules reach the declaration by Java class, and the tags they name hold the
+    /// blocks of those classes.
+    #[test]
+    fn face_rules_follow_the_java_class() {
+        let block = |name: &str, class: &str| CreateBlock {
+            name: name.into(),
+            props: Props::new(),
+            hardness: 0.3,
+            blast_resistance: 0.3,
+            stack: 64,
+            java: JavaFacts {
+                class: Some(class.into()),
+                ..JavaFacts::default()
+            },
+        };
+        let rules = |name: &str, class: &str, key: &str| {
+            let mut props = Map::new();
+            insert_face_rules(&block(name, class), &mut props);
+            props.get(key).cloned()
+        };
+        assert_eq!(
+            rules("framed_glass", "ConnectedGlassBlock", "skip_rendering"),
+            Some(json!([{ "neighbor": "#create:connected_glass" }]))
+        );
+        // Windows hide other connected glass sideways, unless translucent.
+        assert_eq!(
+            rules("oak_window", "WindowBlock", "skip_rendering")
+                .unwrap()
+                .as_array()
+                .unwrap()
+                .len(),
+            2
+        );
+        assert_eq!(
+            rules("birch_window", "WindowBlock", "skip_rendering"),
+            Some(json!([{ "neighbor": "self" }]))
+        );
+        assert_eq!(
+            rules(
+                "framed_glass_pane",
+                "ConnectedGlassPaneBlock",
+                "skip_rendering"
+            )
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+            5
+        );
+        assert_eq!(
+            rules("tiled_glass_pane", "GlassPaneBlock", "skip_rendering"),
+            None
+        );
+        assert_eq!(
+            rules(
+                "andesite_scaffolding",
+                "MetalScaffoldingBlock",
+                "hides_neighbor_face"
+            )
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+            2
+        );
+        let all = [
+            block("oak_window", "WindowBlock"),
+            block("framed_glass", "ConnectedGlassBlock"),
+            block("tiled_glass", "TransparentBlock"),
+        ];
+        assert_eq!(
+            class_tag_members(&all, CLASS_TAGS[0].1),
+            ["create:framed_glass", "create:oak_window"]
+        );
     }
 
     /// The decorative and kinetic blocks ported with their glue: Create's states and defaults.
