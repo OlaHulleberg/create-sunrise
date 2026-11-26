@@ -1,5 +1,5 @@
 //! `GhostItemMenu`, `HeldItemGhostItemMenu`, `AbstractFilterMenu`, `FilterMenu` and
-//! `AttributeFilterMenu`'s and `LinkedControllerMenu`'s clicks, over `AbstractContainerMenu.doClick` for the player's slots.
+//! `AttributeFilterMenu`'s, `LinkedControllerMenu`'s and `ScheduleMenu`'s clicks, over `AbstractContainerMenu.doClick` for the player's slots.
 //!
 //! Slots are numbered as Create's menus number them: the player's 36 first (`addPlayerSlots`:
 //! the three rows, then the hotbar), then the ghost slots.
@@ -28,6 +28,8 @@ pub enum Kind {
     AttributeFilter,
     /// `LinkedControllerMenu`.
     LinkedController,
+    /// `ScheduleMenu`.
+    Schedule,
 }
 
 impl Kind {
@@ -37,12 +39,13 @@ impl Kind {
             Kind::Filter => crate::filter::LIST_SLOTS,
             Kind::AttributeFilter => 2,
             Kind::LinkedController => crate::controller::SLOTS,
+            Kind::Schedule => 2,
         }
     }
 
     /// `allowRepeats`: the same item may fill several ghost slots.
     fn repeats(self) -> bool {
-        self == Kind::LinkedController
+        matches!(self, Kind::LinkedController | Kind::Schedule)
     }
 
     /// `AttributeFilterMenu`'s selected attributes' slot (index 37), which nothing changes.
@@ -346,7 +349,7 @@ impl<S: Stack> Menu<S> {
         let insert = self.get(Self::at(index)).cloned();
         match self.kind {
             Kind::AttributeFilter => self.ghost[0] = insert.map(|s| s.with_count(1)),
-            Kind::Filter | Kind::LinkedController => {
+            Kind::Filter | Kind::LinkedController | Kind::Schedule => {
                 let Some(insert) = insert else { return };
                 let repeats = self.kind.repeats();
                 for g in self.ghost.iter_mut() {
