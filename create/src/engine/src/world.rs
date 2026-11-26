@@ -2566,6 +2566,9 @@ impl CreateWorld {
     /// Re-solves what changed in a dimension: nothing at all when nothing did.
     #[inline]
     fn solve(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
+        // Speed changes of the block-tick phase (a re-attach, a crank's turn) already ran their
+        // `onSpeedChanged`: it comes before any block entity's base tick, not after them all.
+        self.flush_kinetic_callbacks(dim);
         let d = &mut self.dims[dim];
         d.kinetics.advance();
         let from = events.len();
@@ -2889,6 +2892,10 @@ impl CreateWorld {
         if old.crank != crank {
             self.set_settings(dim, pos, state, Settings { crank, ..old });
         }
+        // `updateGeneratedRotation` attached the network at once: what it turned has its speed
+        // (and `onSpeedChanged` has run) before this tick's block ticks, so a scheduled
+        // sequenced gearshift check sees it turning.
+        self.flush_kinetic_callbacks(dim);
         true
     }
 
@@ -3448,6 +3455,15 @@ impl CreateWorld {
             let o = d.offset();
             self.chain_drive(dim, [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]])
         })
+    }
+
+    /// What a speed change made the sequenced gearshifts do (`onSpeedChanged`: `run(-1)` when
+    /// the speed it showed is gone), delivered now. The host commits these steps' block states
+    /// at once, as Java's write is synchronous: after the block-tick phase's re-attaches, so a
+    /// `NeedsSpeedUpdate` the write sets is cleared by the same tick's attach.
+    pub fn take_sequencer_steps(&mut self, dim: usize) -> Vec<([i32; 3], crate::sequencer::Step)> {
+        self.flush_kinetic_callbacks(dim);
+        std::mem::take(&mut self.dims[dim].sequencer_steps)
     }
 
     /// The sequenced gearshifts whose scheduled tick is due, their block-tick phase
@@ -5870,8 +5886,17 @@ impl CreateWorld {
     /// entity data. Java invokes these synchronously during rotation propagation;
     /// pointer.chase changes the saved target without advancing the pointer.
     pub fn flush_kinetic_callbacks(&mut self, dim: usize) {
+        let notified = self.dims[dim].kinetics.take_speed_notifications();
+        // `SequencedGearshiftBlockEntity.onSpeedChanged`: a gearshift follows its speed as the
+        // propagation changes it, before the next block tick or base tick looks at it. Its step
+        // waits in `sequencer_steps` for the host (`take_sequencer_steps`, `tick`).
+        for &(pos, _) in &notified {
+            if self.dims[dim].sequencers.contains_key(&pos) {
+                self.sequencer_speed(dim, pos);
+            }
+        }
         let d = &mut self.dims[dim];
-        for (pos, speed) in d.kinetics.take_speed_notifications() {
+        for (pos, speed) in notified {
             if let Some(pointer) = d.plumbing.valves.get_mut(&pos) {
                 pointer.speed_changed(speed);
                 d.kinetics.mark_saved_changed(pos);
@@ -11487,6 +11512,109 @@ mod tests {
     }
 
     #[test]
+    fn a_turned_crank_turns_a_gearshift_before_its_scheduled_block_tick_runs() {
+        use crate::sequencer::{Instruction, Kind, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:hand_crank", vec![("facing", "west")]),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (crank, shaft, gearshift) = ([-2, 8, 0], [-1, 8, 0], [0, 8, 0]);
+        w.block_changed(0, shaft, 0, 10);
+        w.block_changed(0, gearshift, 0, 11);
+        w.block_changed(0, crank, 0, 12);
+        w.tick(0, &mut Vec::new());
+        w.set_sequencer_instructions(
+            0,
+            gearshift,
+            vec![
+                Instruction::new(Kind::TurnAngle, 90),
+                Instruction::new(Kind::End, 1),
+            ],
+            false,
+        );
+        // The gearshift's power changed in this tick's inputs: its block tick is scheduled.
+        w.neighbor_changed(0, gearshift, 11);
+        assert_eq!(w.speed(0, gearshift), Some(0.0));
+        // `HandCrankBlockEntity.turn` -> `updateGeneratedRotation` -> `attachKinetics`: the
+        // gearshift turns at once, before the level's block ticks.
+        assert!(w.turn_crank(0, crank, false));
+        assert_eq!(w.speed(0, gearshift), Some(-32.0));
+        assert_eq!(w.take_sequencer_checks(0), [(gearshift, false)]);
+        assert_eq!(
+            w.sequencer_redstone(0, gearshift, true, false),
+            Some(Step::Run(1)),
+            "`SequencedGearshiftBlock.tick` sees `getSpeed() != 0` and runs instruction 0"
+        );
+        states::clear_range();
+    }
+
+    #[test]
+    fn a_gearshifts_speed_loss_writes_its_state_before_the_base_tick_clears_the_flag() {
+        use crate::sequencer::{Instruction, Kind, Step};
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:clutch", vec![("axis", "x"), ("powered", "false")]),
+            ("create:clutch", vec![("axis", "x"), ("powered", "true")]),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:sequenced_gearshift", seq("0")),
+            ("create:sequenced_gearshift", seq("1")),
+        ];
+        states::set_range(10, names.len() as u32);
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (motor, clutch, gearshift) = ([-1, 0, 0], [0, 0, 0], [1, 0, 0]);
+        w.block_changed(0, motor, 0, 13);
+        w.block_changed(0, clutch, 0, 10);
+        w.block_changed(0, gearshift, 0, 14);
+        w.block_changed(0, [2, 0, 0], 0, 12);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, gearshift), Some(16.0));
+        w.set_sequencer_instructions(
+            0,
+            gearshift,
+            vec![
+                Instruction::new(Kind::TurnAngle, 360),
+                Instruction::new(Kind::End, 1),
+            ],
+            false,
+        );
+        assert_eq!(
+            w.sequencer_redstone(0, gearshift, true, false),
+            Some(Step::Run(1))
+        );
+        w.block_changed(0, gearshift, 14, 15);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.sequencer_run(0, gearshift).map(|r| r.current), Some(0));
+        // The clutch cuts the gearshift's source in the input phase: `onSpeedChanged` ends the
+        // sequence there and its state write (unpowered) follows before this tick's base ticks.
+        w.transmission_power_changing(0, clutch);
+        w.block_changed(0, clutch, 10, 11);
+        assert_eq!(w.speed(0, gearshift), Some(0.0));
+        assert_eq!(w.take_sequencer_steps(0), [(gearshift, Step::Ended)]);
+        w.block_changed(0, gearshift, 15, 14);
+        let (_, after) = w.tick(0, &mut Vec::new());
+        assert!(after.is_empty(), "the speed loss was delivered once");
+        let saved = w.dims[0].kinetics.saved_state(gearshift, 0).unwrap();
+        assert!(
+            !saved.needs_speed_update,
+            "the write's `updateSpeed` was cleared by the same tick's attach"
+        );
+        states::clear_range();
+    }
+
+    #[test]
     fn a_gearshifts_scheduled_reattach_runs_before_the_sequencers_check() {
         let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
@@ -11573,6 +11701,7 @@ mod tests {
             ("create:sequenced_gearshift", seq("2")),
             ("create:creative_motor", vec![("facing", "east")]),
             ("create:shaft", vec![("axis", "x")]),
+            ("create:sequenced_gearshift", seq("1")),
         ];
         states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
@@ -11580,7 +11709,7 @@ mod tests {
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
         ));
         w.block_changed(0, [-1, 0, 0], 0, 11);
-        w.block_changed(0, [0, 0, 0], 0, 10);
+        w.block_changed(0, [0, 0, 0], 0, 13);
         w.block_changed(0, [1, 0, 0], 0, 12);
         let list = vec![
             Instruction::new(Kind::Await, -1),
@@ -11608,6 +11737,8 @@ mod tests {
             w.sequencer_redstone(0, [0, 0, 0], true, true),
             Some(Step::Run(2))
         );
+        // The host writes the step's state (1 to 2): that write's attach turns the output.
+        w.block_changed(0, [0, 0, 0], 13, 10);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
         states::clear_range();
