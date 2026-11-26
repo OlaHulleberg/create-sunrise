@@ -6,6 +6,10 @@ API, and remove it once the API has it and the port uses it.
 
 ## Entities and movement
 
+- **An entity type's custom-data permission** (`EntityType.onlyOpCanSetNbt`): schematics apply vanilla's built-in
+  policy to each entity and passenger. Unprivileged printing and capture omit modded entity data until the SDK
+  exposes its type's permission. Game-master actions may use registered modded types. sunrise-org/sunrise#6234
+
 - **A raw position write for the local player** (`Entity.setPos` on the client): no raw lift past the top of an upward
   belt slope. Create uses: calls vanilla `Entity.setPos` ([`BeltMovementHandler.java:196`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/belt/transport/BeltMovementHandler.java#L196)). sunrise-org/sunrise#5072
 - **`entity_inside` for the local player's own block sweep**: the local belt carry can't see a predicted swept entry.
@@ -79,6 +83,11 @@ API, and remove it once the API has it and the port uses it.
   `AbstractMinecart.getMaxSpeedWithRail` ([`ControllerRailBlock.java:144`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/rail/ControllerRailBlock.java#L144)). sunrise-org/sunrise#5075
 
 ## Client
+
+- **Client-side structure capture with saved block and entity data**: Java Create saves the quill's ordinary
+  export in the client instance (`SchematicAndQuillHandler.saveSchematic` / `SchematicExport.saveSchematic`).
+  The client API sees synced block-entity data and cannot save entity NBT. For now both actions use one
+  scoped server save; local preview can see it only for the integrated world's owner. Create #378 / sunrise-org/sunrise#6232
 
 - **Setting the clipboard when a server reply to the player's own command arrives**: `/create debuginfo` can't copy
   its report. Create uses: a Catnip clientbound payload whose handler calls vanilla `KeyboardHandler.setClipboard`

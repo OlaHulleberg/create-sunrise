@@ -35,7 +35,7 @@ pub fn write(path: &Path, value: &impl serde::Serialize, compressed: bool) {
 }
 
 #[cfg(test)]
-#[path = "../../../test-support/temp_dir.rs"]
+#[path = "../../../../create/src/test_support/temp_dir.rs"]
 mod temp_dir;
 
 #[cfg(test)]

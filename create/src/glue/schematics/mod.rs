@@ -39,6 +39,7 @@ mod deploy;
 mod quill;
 pub(crate) use quill::face_of;
 mod renderer;
+mod saved_data;
 mod screens;
 mod tools;
 mod transform;
@@ -74,6 +75,7 @@ use mod_api::{
     MenuScreen, ModContainer, OnBlockPlacedByEvent, PlayerRef, Registrar, RegistrationContext,
     ServerHost, SoundSource, Tag,
 };
+use saved_data::Access;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::{Arc, OnceLock};
@@ -204,7 +206,7 @@ fn now(lv: &ServerLevel<'_>) -> u64 {
 }
 
 /// An upload asked for: level, player, table, file.
-type Upload = (usize, String, [i32; 3], String);
+type Upload = (usize, String, [i32; 3], body::TableFile);
 
 thread_local! {
     /// Uploads asked for by tables' buttons: level, player, table, file.
@@ -561,10 +563,9 @@ impl Subsystem for Schematics {
                 None => vec!["usage: create_debug schematicannon <x y z> [option]".into()],
             },
             (_, Some("save")) => match (pos("from"), pos("to"), word("name")) {
-                (Some(a), Some(b), Some(file)) => save(
+                (Some(a), Some(b), Some(file)) => debug_save(
                     &mut lv,
                     player,
-                    &name,
                     a,
                     b,
                     &file,
@@ -575,7 +576,9 @@ impl Subsystem for Schematics {
                 ],
             },
             (_, Some("upload")) => match (pos("pos"), word("name")) {
-                (Some(p), Some(file)) => upload(&mut lv, &name, p, &nbt_file(&file)),
+                (Some(p), Some(file)) => {
+                    upload(&mut lv, &name, p, body::TableFile::Local(nbt_file(&file)))
+                }
                 _ => vec!["usage: create_debug schematic upload <x y z> <name>".into()],
             },
             (_, Some("deploy")) => match (word("name"), pos("anchor")) {
@@ -607,6 +610,7 @@ type Items = mod_api::Capability<dyn mod_api::ResourceHandler<ItemResource>>;
 
 /// What a cannon reaches of the game while it ticks.
 struct World<'a, 'l> {
+    access: Access,
     lv: &'a mut ServerLevel<'l>,
     pos: [i32; 3],
     found: Option<(Vec<Items>, bool)>,
@@ -786,7 +790,7 @@ impl CannonWorld for World<'_, '_> {
         self.found().1
     }
     fn load(&mut self, data: &SchematicData) -> Loaded {
-        load(self.lv, data)
+        load(self.lv, data, Access::Ordinary)
     }
     fn loaded(&mut self, pos: [i32; 3]) -> bool {
         self.lv.level.in_world_bounds(&*self.lv.host, pos) == Some(true) && self.lv.is_loaded(pos)
@@ -920,7 +924,10 @@ impl CannonWorld for World<'_, '_> {
         let Tag::Compound(mut nbt) = body::to_game(&e.nbt) else {
             return;
         };
-        let kind = text(nbt.get(&"id".into()));
+        // Flights loaded from disk also cross this boundary, always as an ordinary cannon.
+        let Some(kind) = self.access.entities(&*self.lv.host, &mut nbt) else {
+            return;
+        };
         nbt.remove(&"id".into());
         nbt.remove(&"UUID".into());
         nbt.insert(
@@ -958,7 +965,10 @@ impl CannonWorld for World<'_, '_> {
                 nbt.insert((*key).into(), Tag::Int(e.block_pos[i]));
             }
         }
-        let _ = self.lv.level.summon(&mut *self.lv.host, &kind, e.pos, nbt);
+        let _ = self
+            .lv
+            .level
+            .summon(&mut *self.lv.host, kind.as_str(), e.pos, nbt);
     }
 
     fn place(&mut self, pos: [i32; 3], state: u32) {
@@ -1024,47 +1034,27 @@ impl CannonWorld for World<'_, '_> {
 
 /// `placeSchematicBlock`'s data: the block entity placed at `pos` (`state`) loads the
 /// schematic's data (`loadWithComponents`, its `x`, `y`, `z` set to where it is), after
-/// `NBTProcessors.process`: a sign whose text runs a click command keeps none.
+/// `BlockHelper.prepareBlockEntityData` and `NBTProcessors.process`.
 fn merge_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3], state: BlockState, data: &sch::Nbt) {
-    let Tag::Compound(mut data) = body::to_game(data) else {
+    let Tag::Compound(data) = body::to_game(data) else {
+        return;
+    };
+    let Some(be) = lv.host.block_entity(lv.level, pos) else {
+        return;
+    };
+    let host: &dyn Host = &*lv.host;
+    let Some(kind) = be.kind(host).and_then(|k| k.id(host)) else {
+        return;
+    };
+    let Some(mut data) = saved_data::prepare_block(host, state.block(), kind, data) else {
         return;
     };
     for k in ["id", "x", "y", "z"] {
         data.remove(&k.into());
     }
-    if crate::glue::block_in_tag(lv.host.tags(), state.block(), "minecraft:all_signs") == Some(true)
-        && sign_has_click(&data)
-    {
-        return;
-    }
-    let Some(be) = lv.host.block_entity(lv.level, pos) else {
-        return;
-    };
     if let Err(e) = be.merge_data(&mut *lv.host, data) {
         crate::create_log!("[create] a printed block's data was refused at {pos:?}: {e:?}");
     }
-}
-
-/// `NBTProcessors.signProcessor`: a line of either side's text with a click event.
-fn sign_has_click(data: &Compound) -> bool {
-    fn clicks(t: &Tag) -> bool {
-        match t {
-            Tag::Compound(c) => {
-                c.contains_key(&"click_event".into())
-                    || c.contains_key(&"clickEvent".into())
-                    || c.values().any(clicks)
-            }
-            Tag::List(l) => l.iter().any(clicks),
-            Tag::String(s) => {
-                let s = s.to_string_lossy();
-                s.contains("click_event") || s.contains("clickEvent")
-            }
-            _ => false,
-        }
-    }
-    ["front_text", "back_text"]
-        .iter()
-        .any(|k| data.get(&(*k).into()).is_some_and(clicks))
 }
 
 /// Whether `state`'s collision shape at `pos` is a whole block (`isCollisionShapeFullBlock`).
@@ -1104,15 +1094,15 @@ fn resolve_state(
 /// A palette entry turned and resolved once per load: what it prints, places and costs.
 fn entry(lv: &ServerLevel<'_>, p: &PaletteState, rotation: Rotation, mirror: Mirror) -> Entry {
     let host: &dyn Host = &*lv.host;
-    let (mut name, mut props) = (p.name.clone(), p.properties.clone());
-    if host.block_state_id(&name).is_none() {
-        name = sch::AIR.into();
-        props.clear();
-    }
-    sch::transform_state(&name, &mut props, mirror, rotation);
+    let p = if host.block_state_id(p.name()).is_some() {
+        p.transformed(mirror, rotation)
+    } else {
+        PaletteState::air()
+    };
+    let need = p.need();
+    let (mut name, mut props) = p.into_parts();
     sch::printed_state(&mut name, &mut props);
     let state = resolve_state(host, &name, &props);
-    let need = sch::need(&name, &props);
     let requirement = match &need {
         Need::Nothing => Requirement::Empty,
         // `BeltBlock.getRequiredItems`: a shaft at each end, and the connector at the start.
@@ -1224,52 +1214,49 @@ fn shaft_axis(slope: cn::BeltSlope, facing: [i32; 3]) -> &'static str {
     }
 }
 
-/// `owner/file` under `schematics/uploaded/`, when both are names a player may give.
-fn uploaded(owner: &str, file: &str) -> Option<String> {
-    let owner_ok = !owner.is_empty() && !owner.contains(['/', '\\']) && !owner.starts_with('.');
-    (owner_ok && sch::valid_file(file)).then(|| format!("uploaded/{owner}/{file}"))
-}
-
-/// A structure file read (an unreadable one is empty, as `loadSchematic`'s fresh template).
-fn read(host: &dyn Host, rel: &str) -> Structure {
-    body::read_structure(host, rel)
-        .and_then(|t| Structure::from_nbt(&t))
-        .unwrap_or_default()
-}
-
 /// `SchematicPrinter.loadSchematic` from the server's uploaded copy.
-fn load(lv: &ServerLevel<'_>, data: &SchematicData) -> Loaded {
-    let structure = match (&data.owner, &data.file) {
-        (Some(o), Some(f)) => uploaded(o, f)
-            .map(|r| read(&*lv.host, &r))
+fn load(lv: &ServerLevel<'_>, data: &SchematicData, access: Access) -> Loaded {
+    let mut structure = match (&data.owner, &data.file) {
+        (Some(o), Some(f)) => body::Uploaded::new(o, f)
+            .ok()
+            .and_then(|target| body::read_uploaded(&lv.host.instance_dir(), target))
             .unwrap_or_default(),
         _ => Structure::default(),
     };
     let anchor = data.anchor.unwrap_or_default();
-    let printer = Printer::load(&structure, anchor, data.rotation, data.mirror);
     let entries = structure
         .palette
         .iter()
         .map(|p| entry(lv, p, data.rotation, data.mirror))
         .collect();
-    let entities = structure
-        .entities
-        .iter()
-        .map(|e| {
-            let pos = sch::transform_vec(e.pos, data.mirror, data.rotation, [0; 3]);
-            let block = sch::transform(e.block_pos, data.mirror, data.rotation, [0; 3]);
-            (
-                entity_requirement(e),
-                cn::PlacedEntity {
-                    nbt: e.nbt.clone(),
-                    pos: [0, 1, 2].map(|i| pos[i] + f64::from(anchor[i])),
-                    block_pos: [0, 1, 2].map(|i| block[i] + anchor[i]),
-                    rotation: data.rotation,
-                    mirror: data.mirror,
-                },
-            )
-        })
-        .collect();
+    let mut entities = Vec::new();
+    // The printer and placed records have the same entity indexes, even after filtering.
+    structure.entities.retain(|e| {
+        let Tag::Compound(mut nbt) = body::to_game(&e.nbt) else {
+            return false;
+        };
+        if access.entities(&*lv.host, &mut nbt).is_none() || !e.pos.iter().all(|p| p.is_finite()) {
+            return false;
+        }
+        let pos = sch::transform_vec(e.pos, data.mirror, data.rotation, [0; 3]);
+        let block = sch::transform(e.block_pos, data.mirror, data.rotation, [0; 3]);
+        let [Some(x), Some(y), Some(z)] = [0, 1, 2].map(|i| block[i].checked_add(anchor[i])) else {
+            return false;
+        };
+        let requirement = entity_requirement(&nbt);
+        entities.push((
+            requirement,
+            cn::PlacedEntity {
+                nbt: body::to_engine(&Tag::Compound(nbt)),
+                pos: [0, 1, 2].map(|i| pos[i] + f64::from(anchor[i])),
+                block_pos: [x, y, z],
+                rotation: data.rotation,
+                mirror: data.mirror,
+            },
+        ));
+        true
+    });
+    let printer = Printer::load(&structure, anchor, data.rotation, data.mirror);
     Loaded {
         printer,
         entries,
@@ -1321,7 +1308,11 @@ fn send_screen_data(lv: &mut ServerLevel<'_>, c: &Cannon) {
 /// among the saved ones, uploaded at the level's next tick (the table's block entity is out of
 /// the world while its button is handled).
 fn table_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
-    let Some(index) = usize::try_from(context.id - screens::UPLOAD).ok() else {
+    let Some(index) = context
+        .id
+        .checked_sub(screens::UPLOAD)
+        .and_then(|id| usize::try_from(id).ok())
+    else {
         return;
     };
     let Some(player) = host.player(context.player) else {
@@ -1333,27 +1324,33 @@ fn table_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuBu
     let Some(dim) = level_index(&dimension) else {
         return;
     };
-    let Some(file) = body::local_files(&*host).into_iter().nth(index) else {
+    let Some(name) = player.name(&*host) else {
+        return;
+    };
+    let local_owner = player.is_singleplayer_owner(&*host).then_some(name);
+    let Some(file) = body::table_files(&*host, local_owner)
+        .into_iter()
+        .nth(index)
+    else {
         return;
     };
     let Some(pos) = context.pos else {
         return;
     };
-    let name = player.name(&*host).unwrap_or_default().to_owned();
-    UPLOADS.with_borrow_mut(|u| u.push((dim, name, pos, file)));
+    UPLOADS.with_borrow_mut(|u| u.push((dim, name.to_owned(), pos, file)));
 }
 
 /// The uploads asked for in `dim` since its last tick.
 fn run_uploads(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let mine: Vec<(String, [i32; 3], String)> = UPLOADS.with_borrow_mut(|u| {
+    let mine: Vec<_> = UPLOADS.with_borrow_mut(|u| {
         let (mine, rest): (Vec<_>, Vec<_>) =
             std::mem::take(u).into_iter().partition(|x| x.0 == dim);
         *u = rest;
         mine.into_iter().map(|(_, n, p, f)| (n, p, f)).collect()
     });
     for (name, pos, file) in mine {
-        upload(lv, &name, pos, &file);
+        upload(lv, &name, pos, file);
     }
 }
 
@@ -1468,6 +1465,7 @@ fn level_tick(lv: &mut ServerLevel<'_>) {
         };
         {
             let mut w = World {
+                access: Access::Ordinary,
                 lv: &mut *lv,
                 pos,
                 found: None,
@@ -1733,10 +1731,15 @@ fn nbt_file(name: &str) -> String {
 /// `SchematicExport.saveSchematic` of the box between two corners: the blocks and the entities
 /// in it (`fillFromWorld` with entities: each block entity's data with its `id`, as
 /// `saveWithId`, including item frames and paintings).
-fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
+fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3], access: Access) -> Option<Structure> {
     let min = [0, 1, 2].map(|i| a[i].min(b[i]));
     let max = [0, 1, 2].map(|i| a[i].max(b[i]));
-    let size = [0, 1, 2].map(|i| max[i] - min[i] + 1);
+    let [Some(x), Some(y), Some(z)] =
+        [0, 1, 2].map(|i| max[i].checked_sub(min[i]).and_then(|d| d.checked_add(1)))
+    else {
+        return None;
+    };
+    let size = [x, y, z];
     let host: &dyn Host = &*lv.host;
     let facts = host.block_states();
     let mut cells = Vec::new();
@@ -1760,13 +1763,13 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
                 };
                 cells.push((
                     [x - min[0], y - min[1], z - min[2]],
-                    PaletteState {
-                        name: name.to_owned(),
-                        properties: props
+                    PaletteState::new(
+                        name.to_owned(),
+                        props
                             .into_iter()
                             .map(|(k, v)| (k.to_owned(), v.to_owned()))
                             .collect(),
-                    },
+                    )?,
                     class,
                 ));
             }
@@ -1779,21 +1782,37 @@ fn export(lv: &mut ServerLevel<'_>, a: [i32; 3], b: [i32; 3]) -> Structure {
         let Some(be) = host.block_entity(lv.level, at) else {
             continue;
         };
-        let (Some(data), Some(kind)) = (be.data(host), be.kind(host)) else {
+        let (Some(data), Some(kind)) = (be.data(host), be.kind(host).and_then(|k| k.id(host)))
+        else {
             continue;
         };
-        let mut data = data;
-        data.insert("id".into(), Tag::String(kind.name(host).as_str().into()));
+        let mut data = if access == Access::GameMaster {
+            data
+        } else {
+            let Some(state) = lv.block_state(at) else {
+                continue;
+            };
+            let Some(data) = saved_data::prepare_block(host, state.block(), kind, data) else {
+                continue;
+            };
+            data
+        };
+        data.insert("id".into(), Tag::String(kind.into()));
         b.nbt = Some(body::to_engine(&Tag::Compound(data)));
     }
-    structure.entities = export_entities(lv, min, max);
-    structure
+    structure.entities = export_entities(lv, min, max, access);
+    Some(structure)
 }
 
 /// `StructureTemplate.fillEntityList`: the entities in the box but players and passengers
 /// (`Entity.save` writes none for a passenger), each at its offset from the box's corner, its
 /// block a painting's own (`getPos`) else the one it stands in, and its data with its `id`.
-fn export_entities(lv: &mut ServerLevel<'_>, min: [i32; 3], max: [i32; 3]) -> Vec<sch::EntityInfo> {
+fn export_entities(
+    lv: &mut ServerLevel<'_>,
+    min: [i32; 3],
+    max: [i32; 3],
+    access: Access,
+) -> Vec<sch::EntityInfo> {
     let lo = min.map(f64::from);
     let hi = max.map(|v| f64::from(v) + 1.0);
     let found = lv.level.entities_in(&*lv.host, lo, hi).unwrap_or_default();
@@ -1811,10 +1830,16 @@ fn export_entities(lv: &mut ServerLevel<'_>, min: [i32; 3], max: [i32; 3]) -> Ve
             continue;
         };
         nbt.insert("id".into(), Tag::String(kind.as_str().into()));
+        if access.entities(&*lv.host, &mut nbt).is_none() {
+            continue;
+        }
         let pos = [0, 1, 2].map(|i| at[i] - f64::from(min[i]));
         let tile = ints(nbt.get(&"block_pos".into()));
         let block_pos = if kind == "minecraft:painting" && tile.len() == 3 {
-            [0, 1, 2].map(|i| tile[i] - min[i])
+            let [Some(x), Some(y), Some(z)] = [0, 1, 2].map(|i| tile[i].checked_sub(min[i])) else {
+                continue;
+            };
+            [x, y, z]
         } else {
             pos.map(|v| v.floor() as i32)
         };
@@ -2010,10 +2035,7 @@ fn checklist_clipboard(host: &dyn Host, c: &cn::Checklist) -> Option<ItemStack> 
 
 /// `ItemRequirement.of(Entity)`: an item frame its frame and the item in it, an armor stand
 /// itself and what it wears and holds; any other entity can't be printed.
-fn entity_requirement(e: &sch::EntityInfo) -> Requirement {
-    let Tag::Compound(nbt) = body::to_game(&e.nbt) else {
-        return Requirement::Invalid;
-    };
+fn entity_requirement(nbt: &Compound) -> Requirement {
     let kind = text(nbt.get(&"id".into()));
     let item_of = |t: &Tag| match t {
         Tag::Compound(c) => {
@@ -2055,61 +2077,93 @@ fn held(lv: &ServerLevel<'_>, player: PlayerRef) -> Option<(u32, ItemStack)> {
     Some((slot, stack))
 }
 
-/// `SchematicAndQuillHandler.saveSchematic`: saved in `schematics/` under a free name; with
-/// `instant` (the convert button), `ServerSchematicLoader.handleInstantSchematic` too: saved
-/// again as the player's upload and the held schematic and quill turned into its schematic.
-fn save(
+/// The quill packet has an authenticated emitter. Both actions require its real selected quill;
+/// only Convert produces a receipt item, in that same slot and after publication.
+fn save_quill(
     lv: &mut ServerLevel<'_>,
-    player: Option<PlayerRef>,
-    name: &str,
+    player: PlayerRef,
     a: [i32; 3],
     b: [i32; 3],
     file: &str,
-    instant: bool,
+    convert: bool,
 ) -> Vec<String> {
-    let structure = export(lv, a, b);
     let host: &dyn Host = &*lv.host;
-    let file = sch::export_name(file, false, |f| body::exists(host, f));
-    let tag = structure.to_nbt();
-    if let Err(e) = body::write_structure(host, &file, &tag) {
-        crate::create_log!("[create] An error occurred while saving schematic [{file}]: {e}");
-        return vec!["Failed to save schematic, check logs for details".into()];
-    }
-    let mut lines = vec![format!("Saved as {file}")];
-    if !instant {
-        return lines;
-    }
-    let holding = player
-        .and_then(|p| held(lv, p))
-        .filter(|(_, s)| item_is(&*lv.host, s, QUILL));
-    let size = body::size(&*lv.host, &file).unwrap_or(0);
-    match (uploaded(name, &file), holding) {
-        (Some(target), Some((slot, _))) if sch::size_allowed(size) => {
-            // `handleInstantSchematic` counts the old copy before replacing it.
-            match body::upload(&*lv.host, &file, &target, sch::SchematicUpload::Instant) {
-                Ok(()) => {
-                    let Some(mut stack) = packages::body::new_stack(&*lv.host, SCHEMATIC, 1) else {
-                        return lines;
-                    };
-                    body::set_schematic_data(
-                        &mut stack,
-                        &SchematicData::written(&file, name, structure.size),
-                    );
-                    if let Some(p) = player {
-                        let _ = p.set_inventory_slot(&mut *lv.host, slot, Some(stack));
-                    }
-                    lines.push(format!("{file} written to the held schematic"));
-                }
-                Err(e) => {
-                    crate::create_log!("[create] Schematic instant-upload of {file}: {e}");
-                    lines.push("Schematic instant-upload failed, check logs for details".into());
-                }
+    let Some(owner) = player.name(host).map(str::to_owned) else {
+        return vec!["No schematic owner".into()];
+    };
+    let selected = held(lv, player)
+        .filter(|(_, stack)| item_is(host, stack, QUILL))
+        .map(|(slot, _)| slot);
+    let item = if convert {
+        let Some(item) = packages::body::new_stack(host, SCHEMATIC, 1) else {
+            return vec!["No schematic item".into()];
+        };
+        Some(item)
+    } else {
+        None
+    };
+    let instance = host.instance_dir();
+    let access = Access::for_player(player.can_use_game_master_blocks(host));
+    let receipt =
+        match body::capture_to_upload(&instance, &owner, file, selected, access, |access| {
+            export(lv, a, b, access)
+        }) {
+            Ok(Some(receipt)) => receipt,
+            Ok(None) => return vec!["Hold a schematic and quill in the main hand".into()],
+            Err(body::UploadError::TooLarge(size)) => return vec![too_large(size)],
+            Err(body::UploadError::Io(e)) => {
+                crate::create_log!(
+                    "[create] An error occurred while saving schematic [{file}]: {e}"
+                );
+                return vec!["Failed to save schematic, check logs for details".into()];
             }
+        };
+    let file = receipt.file;
+    let mut lines = vec![format!("Saved as {file}")];
+    if let Some(mut item) = item {
+        body::set_schematic_data(
+            &mut item,
+            &SchematicData::written(&file, &owner, receipt.size),
+        );
+        if player
+            .set_inventory_slot(&mut *lv.host, receipt.slot, Some(item))
+            .is_ok()
+        {
+            lines.push(format!("{file} written to the held schematic"));
         }
-        _ if !sch::size_allowed(size) => lines.push(too_large(size)),
-        _ => {}
     }
     lines
+}
+
+/// Operator export is independent of the quill packet. Keep the ordinary root export available
+/// to the command and to manually supplied files; an instant command uses the checked quill path.
+fn debug_save(
+    lv: &mut ServerLevel<'_>,
+    player: Option<PlayerRef>,
+    a: [i32; 3],
+    b: [i32; 3],
+    name: &str,
+    instant: bool,
+) -> Vec<String> {
+    if instant {
+        return match player {
+            Some(player) => save_quill(lv, player, a, b, name, true),
+            None => vec!["Instant conversion needs a player holding a schematic and quill".into()],
+        };
+    }
+    let access = Access::for_player(player.and_then(|p| p.can_use_game_master_blocks(&*lv.host)));
+    let Some(bytes) =
+        export(lv, a, b, access).and_then(|structure| body::encode_structure(&structure))
+    else {
+        return vec!["Failed to encode schematic".into()];
+    };
+    match body::write_export(&*lv.host, name, &bytes) {
+        Ok(file) => vec![format!("Saved as {file}")],
+        Err(e) => {
+            crate::create_log!("[create] An error occurred while saving schematic [{name}]: {e}");
+            vec!["Failed to save schematic, check logs for details".into()]
+        }
+    }
 }
 
 fn too_large(size: u64) -> String {
@@ -2120,11 +2174,15 @@ fn too_large(size: u64) -> String {
     )
 }
 
-/// The schematic table's upload (`SchematicTableScreen` → `ServerSchematicLoader`): the file
-/// from `schematics/` copied as the player's upload (one of the same name replaced), the input
-/// slot emptied (`startUpload`), and a written schematic in the output
-/// (`handleFinishedUpload`). The upload is local, so it finishes at once.
-fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> Vec<String> {
+/// The table copies a root file to the player's upload folder or reuses their checked scoped
+/// save, then empties the input and issues a written schematic (`handleFinishedUpload`).
+fn upload(
+    lv: &mut ServerLevel<'_>,
+    player: &str,
+    pos: [i32; 3],
+    source: body::TableFile,
+) -> Vec<String> {
+    let file = source.name();
     if block_of(lv.block(pos)) != Some(Block::SchematicTable) {
         return vec![format!(
             "no schematic table at {} {} {}",
@@ -2141,28 +2199,40 @@ fn upload(lv: &mut ServerLevel<'_>, player: &str, pos: [i32; 3], file: &str) -> 
     if !writable || items[1].is_some() {
         return vec!["the table needs a blank schematic in and nothing out".into()];
     }
-    let Some(target) = uploaded(player, file) else {
+    let Ok(target) = body::Uploaded::new(player, file) else {
         crate::create_log!(
             "[create] Attempted Schematic Upload with non-supported Format: {player}/{file}"
         );
         return vec![format!("not a schematic file: {file}")];
     };
-    let Some(size) = body::size(host, file) else {
-        return vec![format!("no schematic {file} in schematics/")];
+    let bytes = match body::read_for_table(&host.instance_dir(), target, &source) {
+        Ok(bytes) => bytes,
+        Err(body::UploadError::TooLarge(size)) => return vec![too_large(size)],
+        Err(body::UploadError::Io(e)) if e.kind() == std::io::ErrorKind::NotFound => {
+            return vec![format!("no schematic {file} in schematics/")];
+        }
+        Err(body::UploadError::Io(e)) => {
+            crate::create_log!("[create] Failed to open schematic: {file}: {e}");
+            return vec![format!("upload of {file} failed")];
+        }
     };
-    if !sch::size_allowed(size) {
-        return vec![too_large(size)];
-    }
-    // `handleNewUpload` excludes a same-name copy before counting.
-    if let Err(e) = body::upload(host, file, &target, sch::SchematicUpload::Table) {
-        crate::create_log!("[create] Exception Thrown when starting Upload: {player}/{file}: {e}");
+    let Some(structure) = body::decode_structure(file, &bytes) else {
         return vec![format!("upload of {file} failed")];
-    }
-    crate::create_log!("[create] New Schematic Uploaded: {player}/{file}");
-    let bounds = read(host, &target).size;
+    };
     let Some(mut stack) = packages::body::new_stack(host, SCHEMATIC, 1) else {
         return vec![format!("upload of {file} failed")];
     };
+    let bounds = structure.size;
+    // `handleNewUpload` excludes a same-name copy before counting.
+    if let body::TableFile::Local(_) = &source {
+        if let Err(e) = body::store_upload(host, target, sch::SchematicUpload::Table, &bytes) {
+            crate::create_log!(
+                "[create] Exception Thrown when starting Upload: {player}/{file}: {e}"
+            );
+            return vec![format!("upload of {file} failed")];
+        }
+        crate::create_log!("[create] New Schematic Uploaded: {player}/{file}");
+    }
     body::set_schematic_data(&mut stack, &SchematicData::written(file, player, bounds));
     set_slots(lv, pos, &[(0, None), (1, Some(stack))]);
     vec![format!(
@@ -2268,6 +2338,7 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
     if player.game_mode(&*host) != Some(mod_api::GameMode::Creative) {
         return;
     }
+    let access = Access::for_player(player.can_use_game_master_blocks(&*host));
     let Some(dimension) = player.dimension(&*host).map(|d| d.to_string()) else {
         return;
     };
@@ -2286,14 +2357,14 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         entries,
         entities,
         air,
-    } = load(&lv, &data);
-    let include_air = false;
+    } = load(&lv, &data, access);
     let mut w = World {
+        access,
         lv: &mut lv,
         pos: [0; 3],
         found: None,
     };
-    while printer.advance(|i| entries[i as usize].defer) {
+    while printer.advance_placed(|i| entries[i as usize].defer) {
         let target = printer.target();
         if printer.stage == cn::Stage::Entities {
             if let Some((_, e)) = entities.get(printer.entity_index as usize) {
@@ -2305,18 +2376,22 @@ pub(super) fn printed(host: &mut dyn ServerHost, player: PlayerRef, rest: &[u8])
         if !w.loaded(target) {
             continue;
         }
-        let rel = [0, 1, 2].map(|i| target[i] - printer.anchor[i]);
+        let rel = printer.current;
         let entry = printer.at(rel).map_or(&air, |i| &entries[i as usize]);
         let here = w.spot(target);
         if here.state == entry.state || here.unbreakable {
             continue;
         }
-        if let Some(o) = entry.other
-            && w.spot([0, 1, 2].map(|i| target[i] + o[i])).unbreakable
-        {
-            continue;
+        if let Some(delta) = entry.other {
+            let [Some(x), Some(y), Some(z)] = [0, 1, 2].map(|i| target[i].checked_add(delta[i]))
+            else {
+                continue;
+            };
+            if w.spot([x, y, z]).unbreakable {
+                continue;
+            }
         }
-        if entry.air && !include_air {
+        if entry.air {
             continue;
         }
         // What the port's cannon leaves to a block placed with another: a door's upper half, a

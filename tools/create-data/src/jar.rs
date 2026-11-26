@@ -151,7 +151,7 @@ pub fn fetch(pin: &Pinned) -> Result<PathBuf, String> {
 }
 
 #[cfg(test)]
-#[path = "../../test-support/temp_dir.rs"]
+#[path = "../../../create/src/test_support/temp_dir.rs"]
 mod temp_dir;
 
 #[cfg(test)]

@@ -37,9 +37,8 @@ impl Variant {
         let mut palette_states: Vec<Option<(BlockState, bool)>> =
             Vec::with_capacity(structure.palette.len());
         for entry in &structure.palette {
-            let mut props = entry.properties.clone();
-            sch::transform_state(&entry.name, &mut props, mirror, Rotation::None);
-            let resolved = resolve_client_state(host, &entry.name, &props).and_then(|s| {
+            let (name, props) = entry.transformed(mirror, Rotation::None).into_parts();
+            let resolved = resolve_client_state(host, &name, &props).and_then(|s| {
                 if is_air(host, s) {
                     None
                 } else {
@@ -111,19 +110,14 @@ impl Variant {
 
 /// The three prebuilt variants of the deployed schematic (`renderers[0..3]` in `SchematicHandler`).
 pub(super) struct Preview {
-    file: String,
     /// `[None, FrontBack, LeftRight]`.
     variants: [Variant; 3],
 }
 
 impl Preview {
-    /// Load `file` from the client's `schematics/` folder and build all three mirror variants.
-    pub(super) fn load(host: &dyn ClientHost, file: &str) -> Option<Self> {
-        if !sch::valid_file(file) {
-            return None;
-        }
-        let structure =
-            super::body::read_structure(host, file).and_then(|tag| Structure::from_nbt(&tag))?;
+    /// Load the held schematic's file and build all three mirror variants.
+    pub(super) fn load(host: &dyn ClientHost, owner: Option<&str>, file: &str) -> Option<Self> {
+        let structure = super::body::preview_structure(host, owner, file)?;
         if structure.size == [0; 3] {
             return None;
         }
@@ -132,14 +126,7 @@ impl Preview {
             Variant::build(host, &structure, Mirror::FrontBack),
             Variant::build(host, &structure, Mirror::LeftRight),
         ];
-        Some(Self {
-            file: file.to_owned(),
-            variants,
-        })
-    }
-
-    pub(super) fn matches(&self, file: &str) -> bool {
-        self.file == file
+        Some(Self { variants })
     }
 
     pub(super) fn clear_models(&mut self) {
