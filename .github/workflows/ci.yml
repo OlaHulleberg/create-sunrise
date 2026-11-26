@@ -54,3 +54,16 @@ jobs:
         run: cargo run --locked -- registry --out ../../create --check
       - working-directory: tools/create-data
         run: cargo test --locked
+  create-fuzz:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: tools/create-fuzz/rust
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust
+        run: rustup toolchain install 1.99.1 --profile minimal --component rustfmt --component clippy && rustup default 1.99.1
+      - run: cargo fmt --check
+      - run: cargo check --locked
+      - run: cargo clippy --locked --release --all-targets -- -D warnings
+      - run: cargo test --locked --release
