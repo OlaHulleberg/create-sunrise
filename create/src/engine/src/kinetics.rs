@@ -2038,6 +2038,39 @@ mod tests {
     }
 
     #[test]
+    fn overpowering_an_overstressed_member_reads_its_speed_before_it_leaves_the_network() {
+        // propagateNewSource reads `prevSpeed = getSpeed()` before setSource. An overstressed
+        // member shows 0, so leaving its network (updateFromNetwork adds 5 as it shows its
+        // speed again) and then taking the faster generator's speed adds 5 once more.
+        let (source, member, faster) = ([0, 0, 0], [1, 0, 0], [2, 0, 0]);
+        let mut k = Kinetics::new();
+        k.set(source, 0, motor(Dir::East, 16.0));
+        k.set(
+            member,
+            0,
+            Part {
+                impact: 80.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.theoretical(member, 0), Some((16.0, true)));
+        let flicker = k.flicker_score(member);
+        k.set(
+            faster,
+            0,
+            Part {
+                capacity: 16384.0 / 64.0,
+                ..motor(Dir::West, -64.0)
+            },
+        );
+        let e = solve(&mut k);
+        assert!(!e.iter().any(|e| matches!(e, Event::Break { .. })), "{e:?}");
+        assert_eq!(k.theoretical(member, 0), Some((64.0, false)));
+        assert_eq!(k.flicker_score(member), flicker + 10);
+    }
+
+    #[test]
     fn a_gearshift_power_change_detaches_without_owing_an_entity_attach() {
         // GearshiftBlock.neighborChanged: handleRemoved, a scheduled tick and an equivalent
         // state write. `updateSpeed` stays false; only GearshiftBlock.tick attaches again.

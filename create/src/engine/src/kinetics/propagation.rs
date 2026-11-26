@@ -107,6 +107,11 @@ impl Kinetics {
     /// `setSpeed` followed by `onSpeedChanged`, as the propagator calls them in a row.
     pub(super) fn change_speed(&mut self, id: u32, speed: f32) {
         let before = self.nodes[id as usize].state.speed;
+        self.change_speed_from(id, before, speed);
+    }
+
+    /// `change_speed` for a caller that read `getSpeed()` (`before`) earlier than this call.
+    pub(super) fn change_speed_from(&mut self, id: u32, before: f32, speed: f32) {
         let changed = self.set_speed(id, speed);
         self.speed_changed(id, before, changed);
     }
@@ -305,9 +310,12 @@ impl Kinetics {
                 continue;
             }
             if opposite.abs() > current.abs() {
+                // `prevSpeed = getSpeed()` is read before setSource, which may leave an
+                // overstressed network and so change the speed it shows.
+                let before = self.nodes[cur as usize].state.speed;
                 self.set_source(cur, m);
                 let conveyed = self.get_conveyed_speed(m, cur);
-                self.change_speed(cur, conveyed);
+                self.change_speed_from(cur, before, conveyed);
                 *stack.last_mut().unwrap() = (cur, self.get_connected_neighbours(cur), 0);
                 continue;
             }
@@ -333,9 +341,10 @@ impl Kinetics {
                 continue;
             }
             if new.abs() >= other.abs() {
+                let before = self.nodes[m as usize].state.speed;
                 self.set_source(m, cur);
                 let conveyed = self.get_conveyed_speed(cur, m);
-                self.change_speed(m, conveyed);
+                self.change_speed_from(m, before, conveyed);
             } else {
                 self.change_speed(m, new);
                 self.set_source(m, cur);
