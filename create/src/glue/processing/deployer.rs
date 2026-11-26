@@ -1030,7 +1030,7 @@ fn act_with(
     };
     let stack = held_of(lv, d);
     let (eye, yaw, pitch) = fake_pose(pos, facing, matches!(action, PlayerAction::UseItem { .. }));
-    let setup = PlayerActionSetup::new(stack, eye, yaw.into(), pitch.into(), false);
+    let setup = PlayerActionSetup::new(stack, eye, yaw, pitch, false);
     let Ok(result) = fake.perform_action_scoped(&mut *lv.host, action, setup) else {
         return (None, Vec::new());
     };
