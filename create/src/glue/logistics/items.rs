@@ -227,8 +227,9 @@ pub fn stack_limit(host: &dyn Host, id: &str) -> u8 {
         .clamp(1, 64) as u8
 }
 
-/// Whether `id` draws as a block (`BakedModel.isGui3d`). The mod API does not say; a block's
-/// item stands in for it.
+/// Whether `id` is a block's item (`instanceof BlockItem`). A client's drawing asks the item's
+/// model instead (`ClientHost::item_uses_block_light`); this is for the server's display
+/// recording, which has no resolved model, and the arm's `BlockItem` test.
 pub fn is_block_item(host: &dyn Host, id: &str) -> bool {
     Identifier::parse(base(id))
         .ok()
