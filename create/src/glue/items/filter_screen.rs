@@ -257,27 +257,6 @@ pub(crate) fn stack_of(host: &dyn Host, bytes: &[u8]) -> Option<ItemStack> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// The ghost slots' rules
-
-/// A click on an inventory slot (`clicked` below 36): its stack's ghost on the cursor, or the
-/// cursor put down on the slot it came from or on an empty one. The filter's own slot
-/// (`HeldItemGhostItemMenu.isInSlot`) is never picked.
-pub(crate) fn click_inventory(
-    cursor: Option<u8>,
-    slot: u8,
-    occupied: bool,
-    selected: u8,
-) -> Option<u8> {
-    if slot == selected {
-        return cursor;
-    }
-    if !occupied || cursor == Some(slot) {
-        return None;
-    }
-    Some(slot)
-}
-
-// ---------------------------------------------------------------------------------------------
 // The client
 
 /// The open screen's own state: the settings shown and the selector.
@@ -1251,17 +1230,6 @@ mod tests {
         ]);
         assert_eq!(ToClient::decode(&lines.encode()), Some(lines));
         assert_eq!(ToClient::decode(&[1]), None);
-    }
-
-    #[test]
-    fn the_cursor_picks_puts_down_and_never_takes_the_filter() {
-        assert_eq!(click_inventory(None, 5, true, 2), Some(5));
-        assert_eq!(click_inventory(None, 2, true, 2), None);
-        assert_eq!(click_inventory(Some(5), 2, true, 2), Some(5));
-        assert_eq!(click_inventory(Some(5), 5, true, 2), None);
-        assert_eq!(click_inventory(Some(5), 7, false, 2), None);
-        assert_eq!(click_inventory(Some(5), 7, true, 2), Some(7));
-        assert_eq!(click_inventory(None, 7, false, 2), None);
     }
 
     #[test]
