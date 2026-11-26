@@ -643,23 +643,90 @@ fn toolbox_draw(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ToolboxAction {
+    DepositAll,
+    Confirm,
+}
+
+impl ToolboxAction {
+    fn decode(menu: &str, block: Option<&str>, id: i32) -> Option<Self> {
+        if menu != create_engine::toolbox::MENU || block.and_then(toolbox_block).is_none() {
+            return None;
+        }
+        match id {
+            TOOLBOX_DEPOSIT_BUTTON => Some(Self::DepositAll),
+            TOOLBOX_CONFIRM_BUTTON => Some(Self::Confirm),
+            _ => None,
+        }
+    }
+}
+
 /// Server-side buttons for a toolbox's menu.
 struct ToolboxButtons;
 
 #[mod_api::sunrise_part]
 impl MenuPart for ToolboxButtons {
+    fn menu_button_valid(
+        &self,
+        _host: &dyn Host,
+        event: &mut mod_api::MenuButtonValidEvent<'_>,
+    ) -> mod_api::Flow {
+        if ToolboxAction::decode(event.menu, event.block, event.id).is_some() {
+            mod_api::Flow::Cancel
+        } else {
+            mod_api::Flow::Continue
+        }
+    }
+
     fn menu_button(&self, event: &mut mod_api::MenuButtonEvent<'_>) {
-        if event.block.and_then(toolbox_block).is_none()
-            || event.subject.with_view(|v| v.id() == TOOLBOX_TYPE) != Some(true)
-        {
+        let Some(action) = ToolboxAction::decode(event.menu, event.block, event.context.id) else {
+            return;
+        };
+        if event.subject.with_view(|v| v.id() == TOOLBOX_TYPE) != Some(true) {
             return;
         }
-        match event.context.id {
-            TOOLBOX_CONFIRM_BUTTON => {
+        match action {
+            ToolboxAction::Confirm => {
                 crate::glue::close_menu(event.subject.host(), event.context.player)
             }
-            TOOLBOX_DEPOSIT_BUTTON => deposit_all(event),
-            _ => {}
+            ToolboxAction::DepositAll => deposit_all(event),
+        }
+    }
+}
+
+#[cfg(test)]
+mod toolbox_button_tests {
+    use super::*;
+
+    #[test]
+    fn the_shared_toolbox_menu_only_decodes_deposit_and_confirm() {
+        let menu = create_engine::toolbox::MENU;
+        for block in Block::ALL
+            .iter()
+            .copied()
+            .filter(|block| dye::is_toolbox(*block))
+        {
+            let name = format!("create:{}", block.name());
+            let decode = |id| ToolboxAction::decode(menu, Some(&name), id);
+            assert_eq!(
+                decode(TOOLBOX_DEPOSIT_BUTTON),
+                Some(ToolboxAction::DepositAll)
+            );
+            assert_eq!(decode(TOOLBOX_CONFIRM_BUTTON), Some(ToolboxAction::Confirm));
+            for id in [i32::MIN, 2, 100, i32::MAX] {
+                assert_eq!(decode(id), None);
+            }
+        }
+        for (menu, block) in [
+            (menu, None),
+            (menu, Some("create:schematicannon")),
+            ("create:schematicannon", Some("create:red_toolbox")),
+        ] {
+            assert_eq!(
+                ToolboxAction::decode(menu, block, TOOLBOX_DEPOSIT_BUTTON),
+                None
+            );
         }
     }
 }

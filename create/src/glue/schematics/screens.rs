@@ -397,17 +397,47 @@ pub(super) fn tooltip_cannon(data: &[i32], at: [f32; 2], lines: &mut Vec<(Text, 
     }
 }
 
-/// `ConfigureSchematicannonPacket`: what a menu button asks of the cannon.
-pub(super) fn configure(id: i32, data: &[i32]) -> Option<Configure> {
-    Some(match id {
-        PLAY => Configure::Play,
-        PAUSE => Configure::Pause,
-        STOP => Configure::Stop,
-        m if (MODE..MODE + 4).contains(&m) => Configure::Mode((m - MODE) as u8),
-        SKIP_MISSING => Configure::SkipMissing(get(data, 2) == 0),
-        SKIP_BLOCK_ENTITIES => Configure::ReplaceBlockEntities(get(data, 3) == 0),
-        _ => return None,
-    })
+/// The cannon's server-side actions; Settings changes only the client screen.
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CannonAction {
+    Configure(CannonOption),
+    Confirm,
+}
+
+impl CannonAction {
+    pub(super) fn decode(id: i32) -> Option<Self> {
+        let option = match id {
+            PLAY => CannonOption::Set(Configure::Play),
+            PAUSE => CannonOption::Set(Configure::Pause),
+            STOP => CannonOption::Set(Configure::Stop),
+            m if (MODE..MODE + 4).contains(&m) => {
+                CannonOption::Set(Configure::Mode((m - MODE) as u8))
+            }
+            SKIP_MISSING => CannonOption::ToggleSkipMissing,
+            SKIP_BLOCK_ENTITIES => CannonOption::ToggleBlockEntities,
+            CONFIRM => return Some(Self::Confirm),
+            _ => return None,
+        };
+        Some(Self::Configure(option))
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum CannonOption {
+    Set(Configure),
+    ToggleSkipMissing,
+    ToggleBlockEntities,
+}
+
+impl CannonOption {
+    /// `ConfigureSchematicannonPacket`: resolve toggles using the server's menu data.
+    pub(super) fn configure(self, data: &[i32]) -> Configure {
+        match self {
+            Self::Set(option) => option,
+            Self::ToggleSkipMissing => Configure::SkipMissing(get(data, 2) == 0),
+            Self::ToggleBlockEntities => Configure::ReplaceBlockEntities(get(data, 3) == 0),
+        }
+    }
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -599,17 +629,51 @@ mod tests {
     #[test]
     fn buttons_send_create_s_options() {
         let running = [2, 2, 0, 1];
-        assert_eq!(configure(PAUSE, &running), Some(Configure::Pause));
-        assert_eq!(configure(MODE + 3, &running), Some(Configure::Mode(3)));
-        // Skip missing off: the button turns it on; replacing block entities on: off.
+        let configure = |id, data: &[i32]| match CannonAction::decode(id) {
+            Some(CannonAction::Configure(option)) => option.configure(data),
+            action => panic!("expected a configuration option, got {action:?}"),
+        };
+        for (id, option) in [
+            (PLAY, Configure::Play),
+            (PAUSE, Configure::Pause),
+            (STOP, Configure::Stop),
+        ] {
+            assert_eq!(configure(id, &running), option);
+        }
+        for mode in 0..4_u8 {
+            assert_eq!(
+                configure(MODE + i32::from(mode), &running),
+                Configure::Mode(mode)
+            );
+        }
         assert_eq!(
             configure(SKIP_MISSING, &running),
-            Some(Configure::SkipMissing(true))
+            Configure::SkipMissing(true)
+        );
+        assert_eq!(
+            configure(SKIP_MISSING, &[2, 2, 1, 0]),
+            Configure::SkipMissing(false)
         );
         assert_eq!(
             configure(SKIP_BLOCK_ENTITIES, &running),
-            Some(Configure::ReplaceBlockEntities(false))
+            Configure::ReplaceBlockEntities(false)
         );
+        assert_eq!(
+            configure(SKIP_BLOCK_ENTITIES, &[2, 2, 1, 0]),
+            Configure::ReplaceBlockEntities(true)
+        );
+        assert_eq!(CannonAction::decode(CONFIRM), Some(CannonAction::Confirm));
+        for id in [
+            SETTINGS_BUTTON,
+            i32::MIN,
+            i32::MAX,
+            MODE - 1,
+            MODE + 4,
+            CONFIRM + 1,
+            UPLOAD,
+        ] {
+            assert_eq!(CannonAction::decode(id), None);
+        }
         let b = |id| Button {
             id,
             at: [0.0; 2],
