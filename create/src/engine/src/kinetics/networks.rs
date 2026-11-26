@@ -14,6 +14,21 @@ struct Member {
     stress: f32,
 }
 
+/// Whether a port is still the world's block entity of `entity`: the test the Java maps prune by.
+fn live(nodes: &[Node], entity: &Entity, id: u32) -> bool {
+    let n = &nodes[id as usize];
+    n.live && n.entity == entity.0
+}
+
+/// An entry's ports its map's pruning would keep.
+fn live_ports<'a>(
+    entity: &'a Entity,
+    ports: &'a HashSet<u32>,
+    nodes: &'a [Node],
+) -> impl Iterator<Item = u32> + 'a {
+    ports.iter().copied().filter(|&id| live(nodes, entity, id))
+}
+
 /// KineticNetwork stores base stress/capacity; actual contributions use current entity speeds.
 #[derive(Default)]
 pub(super) struct KineticNetwork {
@@ -152,19 +167,19 @@ impl KineticNetwork {
     fn calculate_capacity(&mut self, nodes: &[Node]) -> f32 {
         // KineticNetwork.calculateCapacity prunes sources independently of members.
         self.sources.retain(|entity, source| {
-            source
-                .ports
-                .retain(|&id| nodes[id as usize].live && nodes[id as usize].entity == entity.0);
+            source.ports.retain(|&id| live(nodes, entity, id));
             !source.ports.is_empty()
         });
+        self.capacity_now(nodes)
+    }
+    /// KineticNetwork.calculateCapacity, summed over the sources still in the level.
+    fn capacity_now(&self, nodes: &[Node]) -> f32 {
         self.sources
-            .values()
-            .map(|source| {
+            .iter()
+            .map(|(entity, source)| {
                 source.stress
-                    * source
-                        .ports
-                        .iter()
-                        .map(|&id| nodes[id as usize].part.generated.abs())
+                    * live_ports(entity, &source.ports, nodes)
+                        .map(|id| nodes[id as usize].part.generated.abs())
                         .fold(0.0_f32, f32::max)
             })
             .sum::<f32>()
@@ -173,29 +188,26 @@ impl KineticNetwork {
     fn calculate_stress(&mut self, nodes: &[Node]) -> f32 {
         // Java compares the world block entity with the retained object reference.
         self.members.retain(|entity, member| {
-            member
-                .ports
-                .retain(|&id| nodes[id as usize].live && nodes[id as usize].entity == entity.0);
+            member.ports.retain(|&id| live(nodes, entity, id));
             !member.ports.is_empty()
         });
+        self.stress_now(nodes)
+    }
+    /// KineticNetwork.calculateStress, summed over the members still in the level.
+    fn stress_now(&self, nodes: &[Node]) -> f32 {
         self.members
-            .values()
-            .map(|member| {
+            .iter()
+            .filter_map(|(entity, member)| {
                 // A split shaft has one theoretical speed; face modifiers only affect
                 // conveyed rotation. Prefer its externally driven port to its relay.
-                let id = member
-                    .ports
-                    .iter()
-                    .copied()
-                    .min_by_key(|&id| {
-                        let n = &nodes[id as usize];
-                        (
-                            n.state.source.is_none_or(|source| source.pos == n.pos),
-                            n.sub,
-                        )
-                    })
-                    .unwrap();
-                member.stress * nodes[id as usize].state.theoretical.abs()
+                let id = live_ports(entity, &member.ports, nodes).min_by_key(|&id| {
+                    let n = &nodes[id as usize];
+                    (
+                        n.state.source.is_none_or(|source| source.pos == n.pos),
+                        n.sub,
+                    )
+                })?;
+                Some(member.stress * nodes[id as usize].state.theoretical.abs())
             })
             .sum::<f32>()
             + self.unloaded_stress
@@ -351,12 +363,70 @@ impl TorquePropagator {
             })
             .unwrap_or_default()
     }
+    /// A network's stress and capacity as its next recalculation sums them, read without pruning.
+    pub(super) fn totals(&self, id: Option<i64>, nodes: &[Node]) -> (f32, f32) {
+        id.and_then(|id| self.networks.get(&id))
+            .map(|n| (n.stress_now(nodes), n.capacity_now(nodes)))
+            .unwrap_or_default()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::kinetics::{Axis, Kinetics, Part};
+
+    #[test]
+    fn totals_sum_live_entries_without_pruning() {
+        let mut kinetics = Kinetics::new();
+        kinetics.set(
+            [1, 8, 0],
+            0,
+            Part {
+                generated: 16.0,
+                capacity: 16384.0,
+                impact: 8.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        kinetics.set(
+            [2, 8, 0],
+            0,
+            Part {
+                impact: 4.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        for n in &mut kinetics.nodes {
+            n.state.theoretical = 32.0;
+        }
+        let mut propagator = TorquePropagator::default();
+        let network = propagator.get_or_create_network_for(Some(7));
+        network.update_capacity_for(0, 16384.0, &kinetics.nodes);
+        network.update_stress_for(0, 8.0, &kinetics.nodes);
+        network.update_stress_for(1, 4.0, &kinetics.nodes);
+        assert_eq!(
+            propagator.totals(Some(7), &kinetics.nodes),
+            (384.0, 262144.0)
+        );
+        kinetics.nodes[1].live = false;
+        assert_eq!(
+            propagator.totals(Some(7), &kinetics.nodes),
+            (256.0, 262144.0)
+        );
+        assert_eq!(propagator.networks[&7].members.len(), 2);
+        let sync = propagator
+            .get_or_create_network_for(Some(7))
+            .update_network(&kinetics.nodes)
+            .unwrap();
+        assert_eq!((sync.stress, sync.capacity), (256.0, 262144.0));
+        assert_eq!(propagator.networks[&7].members.len(), 1);
+        assert_eq!(
+            propagator.totals(Some(7), &kinetics.nodes),
+            (256.0, 262144.0)
+        );
+        assert_eq!(propagator.totals(Some(8), &kinetics.nodes), (0.0, 0.0));
+    }
 
     #[test]
     fn init_from_te_includes_members_already_present() {

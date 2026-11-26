@@ -1,4 +1,5 @@
-//! Check Java repeatability both alone and at the seed's usual 128-case batch position.
+//! Check Java repeatability both alone and in the batches `fuzz` runs the seed in: those of its
+//! 128-seed chunk, bounded by checkpoint cells.
 use crate::{compare, generate, java};
 use std::collections::BTreeSet;
 
@@ -35,7 +36,16 @@ pub fn run(rounds: usize, probes: &[crate::Scenario], compact: bool) {
             .filter(|&&seed| (first..first + 128).contains(&seed))
             .map(|seed| (seed - first) as usize)
             .collect();
-        failures += repeat(&dir, rounds, "batch", &cases, &selected);
+        for range in java::batches(&cases, 128) {
+            let selected: Vec<_> = selected
+                .iter()
+                .filter(|i| range.contains(i))
+                .map(|i| i - range.start)
+                .collect();
+            if !selected.is_empty() {
+                failures += repeat(&dir, rounds, "batch", &cases[range.clone()], &selected);
+            }
+        }
     }
     println!("Java repeatability: {failures} differing snapshots");
     assert_eq!(

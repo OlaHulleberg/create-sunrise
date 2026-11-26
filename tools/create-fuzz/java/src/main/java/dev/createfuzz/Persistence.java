@@ -26,6 +26,8 @@ final class Persistence {
             if(be==null) continue;
             var tag=be.saveWithoutMetadata(level.registryAccess());
             tag.putString("id",net.minecraft.core.registries.BuiltInRegistries.BLOCK_ENTITY_TYPE.getKey(be.getType()).toString());
+            if (be instanceof KineticBlockEntity k && k.network != null)
+                Observations.markUnspecifiedSeed(k);
             tags.put(pos,tag);
         }
         // Replacing entities must not change the world's existing ticking order.

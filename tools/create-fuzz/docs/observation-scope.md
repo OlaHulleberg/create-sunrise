@@ -44,9 +44,25 @@ kinetic observations. Pointer entity records cross the reload boundary.
 
 Network counts read TorquePropagator.networks[level][entity.network].getSize().
 KineticNetwork.getSize adds unloadedMembers to members.size. Reflection is confined
-to the MIT registry field; a missing named network fails rather than constructing
+to Create's MIT registry field and its KineticNetwork unloaded remainders; a missing named network fails rather than constructing
 one. Partitions still use block-entity network ids. Split-shaft member-count
 differences remain findings: Java owns one KineticBlockEntity per split shaft.
+
+A block's `kinetic.stress` and `capacity` are what its last `updateFromNetwork`
+wrote, and `saved.network.stress` and `capacity` the same figures saved. Which
+members a change reaches depends on the `HashMap` order of
+`KineticNetwork.members` (`rust/src/allow.rs`, `cached_network_figures`), so
+neither is compared. `kinetic.network_stress` and `network_capacity` are: the
+network's `calculateStress` and `calculateCapacity` summed over the entries still
+in the level, read without pruning them, as the port's `Kinetics::network_totals`
+gives them.
+
+A reload seeds each network with its first entity's saved figures
+(`KineticBlockEntity.initialize`, `KineticNetwork.initFromTE`), so a stale
+saved figure lives on in the network's size and totals. When a saved figure
+differs from the recalculated one, the harness and the driver list that
+network's blocks in `networks.unspecified`; neither size nor totals are
+compared for them.
 
 Motor and controller kinetic-board selections now appear as `kinetic.speed_setting`
 in both snapshots and are compared with the ordinary numeric tolerance, including

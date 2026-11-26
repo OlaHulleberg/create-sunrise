@@ -203,11 +203,11 @@ mod tests {
             .kinetic
             .as_mut()
             .unwrap()
-            .capacity = 123.;
+            .network_capacity = 123.;
         assert!(
             crate::compare::diff(&j, &r)
                 .iter()
-                .any(|d| d.contains("capacity: java 123"))
+                .any(|d| d.contains("network capacity: java 123"))
         );
         j = crate::engine::run_trace(&sc, true);
         j.networks
