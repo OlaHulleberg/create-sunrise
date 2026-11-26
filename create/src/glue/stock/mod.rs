@@ -42,8 +42,8 @@ use create_engine::Block;
 use create_engine::kinetics::Dir;
 use create_engine::steam::Face;
 use create_engine::stock::{
-    self as st, LevelNetworks, Network, Order, OrderData, Ownership, Panel, PanelPos, Promises,
-    RequestType, Requester, SavedNetwork, Source, Summary, Trigger,
+    self as st, InventoryId, LevelNetworks, Network, Order, OrderData, Ownership, Panel, PanelPos,
+    Promises, RequestType, Requester, SavedNetwork, Source, Summary, Trigger,
 };
 use mod_api::{
     AnalogOutputEvent, AttachmentCodec, AttachmentDescriptor, AttachmentKey, BlockPart, Command,
@@ -1287,7 +1287,7 @@ fn packager_stock(
     lv: &mut ServerLevel<'_>,
     dim: usize,
     packager: [i32; 3],
-) -> (Summary<Key>, Option<[i32; 3]>) {
+) -> (Summary<Key>, Option<InventoryId>) {
     let (s, id) = packages::available(lv, dim, packager);
     let before = with(dim, |n| n.last.insert(packager, s.clone()));
     let Some(before) = before else {
@@ -1376,7 +1376,7 @@ fn network_stock(
         return s;
     }
     let mut out = Summary::default();
-    let mut seen: Vec<[i32; 3]> = Vec::new();
+    let mut seen: Vec<InventoryId> = Vec::new();
     for (pos, _) in links_of(dim, net) {
         let Some(packager) = link_packager(lv, dim, pos) else {
             continue;
@@ -1408,7 +1408,7 @@ fn sources(
     lv: &mut ServerLevel<'_>,
     dim: usize,
     net: Network,
-    ignored: Option<[i32; 3]>,
+    ignored: Option<InventoryId>,
 ) -> Vec<Source<Key>> {
     let mut links = links_of(dim, net);
     links.sort_by_key(|l| l.1.power);
@@ -1438,7 +1438,7 @@ fn broadcast(
     net: Network,
     kind: RequestType,
     order: &Order<Key>,
-    ignored: Option<[i32; 3]>,
+    ignored: Option<InventoryId>,
     address: &str,
 ) -> bool {
     if order.is_empty() {

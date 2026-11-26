@@ -84,9 +84,6 @@ API, and remove it once the API has it and the port uses it.
 
 ## Items and inventories
 
-- **The backing slots each face of a container reaches** (`WorldlyContainer.getSlotsForFace`): packagers on different
-  faces of a furnace, brewing stand or composter count as one inventory. Create uses: calls vanilla
-  `WorldlyContainer.getSlotsForFace` ([`AllInventoryIdentifiers.java:85`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/logistics/packager/AllInventoryIdentifiers.java#L85)). sunrise-org/sunrise#5086
 
 ## Client
 

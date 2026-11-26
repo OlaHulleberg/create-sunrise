@@ -247,13 +247,47 @@ pub struct Request<K> {
     pub context: Option<Order<K>>,
 }
 
+/// `InventoryIdentifier`: which inventory a packager reaches. Two packagers whose identifiers
+/// are equal reach the same one.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum InventoryId {
+    /// `Single` and `Bounds`: the block (a vault's first block).
+    Block([i32; 3]),
+    /// `Pair` and `MultiFace`: the backing slots (position and slot of the block entity that
+    /// owns each) that the face reaches, so faces of one block that reach the same slots
+    /// (`WorldlyContainer.getSlotsForFace`) are one inventory and faces that reach other slots
+    /// are another, and both halves of a double chest are one.
+    Slots(Vec<([i32; 3], usize)>),
+}
+
+impl InventoryId {
+    /// The inventory of the block at `at` whose face reaches `slots`, each as the backing slot it
+    /// is (None where it has none). A face with no slots, or one with a slot that has no
+    /// backing, is told apart by its block only (`Single`).
+    ///
+    /// The slots are sorted, so a double chest's halves, which list them in a different order,
+    /// still match; the order within one face is not what tells faces apart.
+    pub fn of_face(
+        at: [i32; 3],
+        slots: impl IntoIterator<Item = Option<([i32; 3], usize)>>,
+    ) -> Self {
+        match slots.into_iter().collect::<Option<Vec<_>>>() {
+            Some(mut slots) if !slots.is_empty() => {
+                slots.sort_unstable();
+                Self::Slots(slots)
+            }
+            _ => Self::Block(at),
+        }
+    }
+}
+
 /// A link of the network as an order sees it (`LogisticallyLinkedBehaviour`, by priority): its
 /// packager (None: none attached, it's a re-packager, or the link is at full power), the
 /// inventory that packager reaches (`InventoryIdentifier`) and its stock (`getAvailableItems`).
 #[derive(Clone, Debug)]
 pub struct Source<K> {
     pub packager: Option<[i32; 3]>,
-    pub inventory: Option<[i32; 3]>,
+    pub inventory: Option<InventoryId>,
     pub stock: Summary<K>,
 }
 
@@ -271,9 +305,9 @@ pub fn find_packagers<K: Clone + PartialEq>(
     let stacks: Vec<&(K, u32)> = order.stacks.iter().filter(|s| s.1 > 0).collect();
     // Links without an inventory first, then one of each inventory's.
     let mut available: Vec<usize> = Vec::new();
-    let mut groups: Vec<([i32; 3], Vec<usize>)> = Vec::new();
+    let mut groups: Vec<(&InventoryId, Vec<usize>)> = Vec::new();
     for (i, s) in sources.iter().enumerate() {
-        match s.inventory {
+        match &s.inventory {
             Some(id) => match groups.iter_mut().find(|g| g.0 == id) {
                 Some(g) => g.1.push(i),
                 None => groups.push((id, vec![i])),
@@ -1128,9 +1162,92 @@ mod tests {
     fn source(p: i32, inv: Option<i32>, stock: &[(&'static str, i32)]) -> Source<&'static str> {
         Source {
             packager: Some([p, 0, 0]),
-            inventory: inv.map(|i| [i, 0, 0]),
+            inventory: inv.map(|i| InventoryId::Block([i, 0, 0])),
             stock: summary(stock),
         }
+    }
+
+    /// A furnace's faces as `getSlotsForFace` reaches them: the sides slot 1, the top slot 0,
+    /// the bottom slots 2 then 1.
+    fn furnace(face: &str) -> InventoryId {
+        let at = [4, 64, 4];
+        let slots: &[usize] = match face {
+            "top" => &[0],
+            "bottom" => &[2, 1],
+            _ => &[1],
+        };
+        InventoryId::of_face(at, slots.iter().map(|s| Some((at, *s))))
+    }
+
+    #[test]
+    fn faces_reaching_the_same_slots_are_one_inventory() {
+        assert_eq!(furnace("north"), furnace("east"));
+    }
+
+    #[test]
+    fn faces_reaching_other_slots_are_other_inventories() {
+        assert_ne!(furnace("north"), furnace("top"));
+        assert_ne!(furnace("north"), furnace("bottom"));
+        assert_ne!(furnace("top"), furnace("bottom"));
+    }
+
+    #[test]
+    fn faces_sharing_only_some_slots_are_other_inventories() {
+        // A brewing stand's bottom reaches the three bottles; its sides those and the fuel.
+        let at = [0, 64, 0];
+        let bottom = InventoryId::of_face(at, (0..3).map(|s| Some((at, s))));
+        let side = InventoryId::of_face(at, [0, 1, 2, 4].map(|s| Some((at, s))));
+        assert_ne!(bottom, side);
+    }
+
+    #[test]
+    fn the_halves_of_a_double_chest_are_one_inventory() {
+        let (a, b) = ([0, 64, 0], [1, 64, 0]);
+        let from_a = InventoryId::of_face(
+            a,
+            (0..2)
+                .map(|s| Some((a, s)))
+                .chain((0..2).map(|s| Some((b, s)))),
+        );
+        let from_b = InventoryId::of_face(
+            b,
+            (0..2)
+                .map(|s| Some((b, s)))
+                .chain((0..2).map(|s| Some((a, s)))),
+        );
+        assert_eq!(from_a, from_b);
+        // Another chest's slots are another inventory.
+        let other = InventoryId::of_face([9, 64, 0], (0..2).map(|s| Some(([9, 64, 0], s))));
+        assert_ne!(from_a, other);
+    }
+
+    #[test]
+    fn a_face_without_backing_slots_is_told_apart_by_its_block() {
+        let at = [2, 64, 2];
+        // A composter's slots have no backing; a face reaching none is no slots either.
+        assert_eq!(InventoryId::of_face(at, [None]), InventoryId::Block(at));
+        assert_eq!(InventoryId::of_face(at, []), InventoryId::Block(at));
+        assert_eq!(
+            InventoryId::of_face(at, [Some((at, 0)), None]),
+            InventoryId::Block(at)
+        );
+        assert_ne!(InventoryId::Block(at), InventoryId::Block([3, 64, 2]));
+    }
+
+    #[test]
+    fn links_on_faces_of_one_furnace_pick_one_packager_only_when_they_share_slots() {
+        let on = |p: i32, face: &str| Source {
+            packager: Some([p, 0, 0]),
+            inventory: Some(furnace(face)),
+            stock: summary(&[("iron", 10)]),
+        };
+        let order = Order::simple(vec![("iron", 20)]);
+        // The two sides reach slot 1: one of them is used.
+        let r = find_packagers(&[on(1, "north"), on(2, "south")], &order, "x", 1, |_| 0);
+        assert_eq!(r.len(), 1);
+        // A side and the top reach other slots: both are used.
+        let r = find_packagers(&[on(1, "north"), on(2, "top")], &order, "x", 1, |_| 0);
+        assert_eq!(r.len(), 2);
     }
 
     #[test]

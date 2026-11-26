@@ -49,8 +49,8 @@ use mod_api::{
     AnalogOutputEvent, BlockEntityPart, BlockEntityRenderBoundingBoxEvent, BlockPart, ClientHost,
     Command, CommandArgumentValue, CommandSource, Compound, Direction, Flow, Hand,
     HasAnalogOutputEvent, InteractionResult, ItemDisplayContext, ItemKey, ItemStack, LevelHost,
-    NeighbourUpdate, PlayerRef, Registrar, RegistrationContext, ServerHost, SoundSource, Tag, Text,
-    UseItemOnEvent,
+    NeighbourUpdate, PlayerRef, Registrar, RegistrationContext, ResourceHandler as _, ServerHost,
+    SoundSource, Tag, Text, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -1469,23 +1469,39 @@ fn new_box(
 }
 
 /// The packager's inventory as `getAvailableItems` sums it, and which inventory it is
-/// (`InventoryIdentifier`: a vault's first block), or None when nothing is behind it. A
-/// packager behind it is an inventory of nothing.
+/// (`InventoryIdentifier`: a vault's first block, else the backing slots the face reaches, as
+/// `AllInventoryIdentifiers` tells the faces of a sided container apart), or None when nothing
+/// is behind it. A packager behind it is an inventory of nothing.
 pub fn available(
     lv: &mut ServerLevel<'_>,
     dim: usize,
     pos: [i32; 3],
-) -> (create_engine::stock::Summary<stock::Key>, Option<[i32; 3]>) {
+) -> (
+    create_engine::stock::Summary<stock::Key>,
+    Option<create_engine::stock::InventoryId>,
+) {
+    use create_engine::stock::InventoryId;
     let mut s = create_engine::stock::Summary::default();
     let Some((at, inv)) = behind_inv(lv, dim, pos) else {
         return (s, None);
     };
     let vault = block_of(lv.block(at)) == Some(Block::ItemVault);
-    let id = vault
+    let vault_start = vault
         .then(|| with_world(|w| w.dims[dim].vaults.inventory(at)).flatten())
         .flatten()
-        .and_then(|parts| parts.iter().min().copied())
-        .unwrap_or(at);
+        .and_then(|parts| parts.iter().min().copied());
+    let id = match (&inv, vault_start) {
+        (_, Some(start)) => InventoryId::Block(start),
+        (Inv::Cap(items), None) => {
+            let host = &mut *lv.host;
+            let size = items.size(host);
+            let slots: Vec<_> = (0..size)
+                .map(|i| items.backing(host, i).map(|b| (b.pos, b.slot)))
+                .collect();
+            InventoryId::of_face(at, slots)
+        }
+        _ => InventoryId::Block(at),
+    };
     if inv.is_packager() {
         return (s, Some(id));
     }
