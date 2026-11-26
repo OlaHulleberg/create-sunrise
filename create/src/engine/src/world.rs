@@ -6,7 +6,6 @@ use crate::Block;
 use crate::block_entity_order::{BlockEntityOrder, View, Walk};
 use crate::kinetics::{Event, Kinetics, SolveStats};
 use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, parts};
-use crate::states;
 use std::collections::{HashMap, HashSet};
 
 fn entity_view(block: Block) -> Option<View> {
@@ -134,10 +133,15 @@ impl StateTable {
         t
     }
 
+    #[inline]
+    fn offset(&self, state: u32) -> usize {
+        state.wrapping_sub(self.first) as usize
+    }
+
     /// The Create block of a state id, if it is one.
     #[inline]
     pub fn get(&self, state: u32) -> Option<(Block, &StateInfo)> {
-        let i = states::index(state)? as usize;
+        let i = self.offset(state);
         Some((*self.block.get(i)?, self.info.get(i)?))
     }
 
@@ -145,12 +149,18 @@ impl StateTable {
     /// depot): the bit test of the hot hooks.
     #[inline]
     pub fn is_kinetic(&self, state: u32) -> bool {
-        states::index(state).is_some_and(|i| self.kinetic.get(i as usize).copied().unwrap_or(false))
+        self.kinetic
+            .get(self.offset(state))
+            .copied()
+            .unwrap_or(false)
     }
 
     /// Whether this state creates an entity (TrackBlock.HAS_BE and lower door halves included).
     fn has_block_entity(&self, state: u32) -> bool {
-        states::index(state).is_some_and(|i| self.entity.get(i as usize).copied().unwrap_or(false))
+        self.entity
+            .get(self.offset(state))
+            .copied()
+            .unwrap_or(false)
     }
 
     pub fn first(&self) -> u32 {
@@ -6162,6 +6172,43 @@ impl CreateWorld {
 mod tests {
     use super::*;
 
+    #[test]
+    fn state_tables_use_their_own_ranges() {
+        use crate::kinetics::Axis;
+        let earlier = StateTable::new(
+            10,
+            [
+                ("create:andesite_casing", None),
+                ("create:shaft", Some(("axis", "z"))),
+            ]
+            .into_iter()
+            .map(|(name, property)| (name, property.into_iter())),
+        );
+        let later = StateTable::new(
+            11,
+            [("create:andesite_casing", std::iter::empty())].into_iter(),
+        );
+
+        assert_eq!(
+            earlier.get(11).map(|(block, info)| (block, info.axis)),
+            Some((Block::Shaft, Some(Axis::Z)))
+        );
+        assert_eq!(
+            later.get(11).map(|(block, _)| block),
+            Some(Block::AndesiteCasing)
+        );
+        assert!(earlier.is_kinetic(11));
+        assert!(!later.is_kinetic(11));
+        assert!(earlier.has_block_entity(11));
+        assert!(!later.has_block_entity(11));
+
+        for (table, id) in [(&earlier, 9), (&earlier, 12), (&later, 10), (&later, 12)] {
+            assert!(table.get(id).is_none());
+            assert!(!table.is_kinetic(id));
+            assert!(!table.has_block_entity(id));
+        }
+    }
+
     fn transport_walk(w: &mut CreateWorld) {
         let mut turns = w.transport_ticks(0, 0);
         while turns.next(w).is_some() {}
@@ -6178,7 +6225,6 @@ mod tests {
             ("create:creative_motor", vec![("facing", "west")]),
             ("create:andesite_casing", vec![]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         CreateWorld::new(table)
     }
@@ -6189,7 +6235,6 @@ mod tests {
         // registration order, so a stack a chute hands down during its own tick (`handleDownwardOutput`
         // sets the target chute's item at the top) moves on in the same level tick when the
         // target is registered after it, and waits a tick when it is registered before it.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:chute",
@@ -6197,7 +6242,6 @@ mod tests {
             ),
             ("create:smart_chute", vec![]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6223,7 +6267,6 @@ mod tests {
         assert_eq!(order(w.chute_ticks(0), &w), vec![[0, 9, 5], [0, 8, 6]]);
         let mut phase = w.transport_ticks(0, 0);
         assert!(phase.next(&mut w).is_none());
-        states::clear_range();
     }
 
     #[test]
@@ -6232,12 +6275,10 @@ mod tests {
         // stack there again (`ChuteBlockEntity.java:554`, `:565`). Observed in Java: a stack
         // that entered at the top, four ticks down (0.2) when the world reloads, is at
         // 2.9802322e-8 the tick after and leaves the next; the port started it again at 0.5.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:chute",
             vec![("facing", "down"), ("shape", "normal")],
         )];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6270,7 +6311,6 @@ mod tests {
             crate::chute::fall(2.9802322e-8, true),
             crate::chute::Fall::Out
         );
-        states::clear_range();
     }
 
     #[test]
@@ -6280,10 +6320,8 @@ mod tests {
         // change, keeps a state whose `hasWindow` fits (`BeltTunnelBlock.java:117-127`,
         // `:196-204`). A fresh shape is only `getStateForPlacement`'s, for a tunnel just
         // placed — not for a state change of its own, nor for one loaded with the world.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let shape = |s| ("create:andesite_tunnel", vec![("axis", "z"), ("shape", s)]);
         let names = [shape("straight"), shape("window"), shape("closed")];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6303,15 +6341,12 @@ mod tests {
         w.neighbor_changed(0, at, 12);
         assert!(w.dims[0].tunnel_fresh.is_empty());
         assert_eq!(w.dims[0].tunnel_checks, vec![at]);
-        states::clear_range();
     }
 
     #[test]
     fn a_tunnel_asks_can_survive_only_when_the_block_below_changes() {
         // `BeltTunnelBlock.neighborChanged` (`:95-107`) checks `canSurvive` only for
         // `fromPos.equals(pos.below())`; `onPlace` and `getStateForPlacement` never destroy.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let names = [(
             "create:andesite_tunnel",
             [("axis", "z"), ("shape", "straight")],
@@ -6328,7 +6363,6 @@ mod tests {
         // The block below it changes (a `/setblock` over the belt).
         w.apply_block_change(0, [0, 8, 5], 0, 10, false);
         assert_eq!(w.dims[0].tunnel_survive, vec![at]);
-        states::clear_range();
     }
 
     #[test]
@@ -6377,7 +6411,6 @@ mod tests {
             belt("middle"),
             belt("end"),
         ];
-        states::set_range(10, 4);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6420,7 +6453,6 @@ mod tests {
             belt("middle"),
             belt("end"),
         ];
-        states::set_range(10, 4);
         CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6455,7 +6487,6 @@ mod tests {
 
     #[test]
     fn registrations_include_only_create_block_entities() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             ("create:depot", vec![]),
             ("create:depot", vec![("waterlogged", "true")]),
@@ -6469,7 +6500,6 @@ mod tests {
             ("create:train_door", vec![("half", "upper")]),
             ("create:train_door", vec![("half", "lower")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names
@@ -6493,7 +6523,6 @@ mod tests {
         assert!(w.dims[0].block_entities.registration_order(a) > original);
         w.block_changed(0, [6, 0, 0], 16, 13);
         assert_eq!(w.dims[0].block_entities.registration_order([6, 0, 0]), None);
-        states::clear_range();
     }
 
     /// Java #130: `BeltSlicer` sets the clicked START to air, which runs
@@ -6502,7 +6531,6 @@ mod tests {
     /// 15 at 0.1625 is gone from the shortened 3-long belt the next tick).
     #[test]
     fn slicer_shorten_from_start_ejects_the_controller_inventory() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = long_belt_world(5, 32.0);
         let c = [0, 8, 0];
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 15, 0, false);
@@ -6521,7 +6549,6 @@ mod tests {
             (drops[0].3.item.as_str(), drops[0].3.count),
             ("minecraft:iron_ingot", 15)
         );
-        states::clear_range();
     }
 
     /// Java #131: the slicer detaches every segment before it changes states, and a segment whose
@@ -6534,7 +6561,6 @@ mod tests {
     /// adds the new controller: only the new segment saves the full size.
     #[test]
     fn lengthening_at_the_start_saves_the_size_before_the_new_segment_joins() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = belt_states_world();
         let end = [0, 8, 8];
         w.block_changed(0, [-1, 8, 0], 0, 10);
@@ -6573,12 +6599,10 @@ mod tests {
             assert_eq!(size(&w, [0, 8, z]), 10, "{z}");
         }
         assert_eq!(size(&w, next), 11);
-        states::clear_range();
     }
 
     #[test]
     fn slicer_split_leaves_the_cut_off_half_stopped() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = long_belt_world(8, 32.0);
         let middle = [0, 8, 3];
         let start_of_second = [0, 8, 4];
@@ -6601,7 +6625,6 @@ mod tests {
         let saved = w.dims[0].kinetics.saved_state(start_of_second, 0).unwrap();
         assert_eq!((saved.source, saved.network), (None, None));
         assert_eq!(w.belt_chain(0, start_of_second).unwrap().len(), 4);
-        states::clear_range();
     }
 
     /// Java #132: a controller the slicer makes anew gets a fresh `BeltInventory`
@@ -6609,7 +6632,6 @@ mod tests {
     /// even when empty (f3b: a belt lengthened at its END stays positive).
     #[test]
     fn slicer_new_controller_starts_with_an_empty_direction_but_keeps_an_old_one() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = long_belt_world(4, 0.0);
         let c = [0, 8, 0];
         w.dims[0].belts.get_mut(&c).unwrap().items =
@@ -6626,7 +6648,6 @@ mod tests {
         // A controller made anew: `Inventory::fresh` is `new BeltInventory`, flag false.
         let fresh = crate::belt::Inventory::fresh(Vec::new());
         assert!(!fresh.positive);
-        states::clear_range();
     }
 
     /// Java #133: the clicked belt keeps ticking with its old `beltLength` (the slicer only
@@ -6634,7 +6655,6 @@ mod tests {
     /// ejected (f4: 13.104 -> 8.000, still on the belt).
     #[test]
     fn joined_belt_keeps_the_clicked_controller_length_for_a_tick() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = long_belt_world(4, 32.0);
         let c = [0, 8, 0];
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 8, 0, false);
@@ -6649,12 +6669,10 @@ mod tests {
         assert!(out.ejected.is_empty());
         let item = &w.dims[0].belts[&c].items.items[0];
         assert!((item.position - 4.0).abs() < 1e-6);
-        states::clear_range();
     }
 
     #[test]
     fn first_empty_direction_follows_init_attachment() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
         let c = [0, 8, 0];
         // Remove only the belt nodes; the already ticking motor remains available.
@@ -6677,9 +6695,7 @@ mod tests {
     fn drain_tests_room_at_its_registration_turn() {
         // ItemDrainBlockEntity.continueProcessing keeps 20 while the tank cannot
         // accept a bucket; once a pump makes room an admitted turn advances to 19.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for pump_first in [false, true] {
-            states::set_range(10, 2);
             let mut w = CreateWorld::new(StateTable::new(
                 10,
                 [
@@ -6728,9 +6744,7 @@ mod tests {
     fn spout_timer_advances_after_an_earlier_depot_callback() {
         // Java #66: an earlier transported-item callback starts at 20, then the
         // later SpoutBlockEntity.tick decrements to 19 on that same level tick.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for spout_first in [true, false] {
-            states::set_range(10, 2);
             let mut w = CreateWorld::new(StateTable::new(
                 10,
                 [
@@ -6783,7 +6797,6 @@ mod tests {
 
     #[test]
     fn fluid_machines_share_transport_registration_order() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             "create:spout",
             "create:item_drain",
@@ -6792,7 +6805,6 @@ mod tests {
             "create:fluid_tank",
             "create:fluid_valve",
         ];
-        states::set_range(10, 6);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|n| (*n, std::iter::empty())),
@@ -6812,7 +6824,6 @@ mod tests {
 
     #[test]
     fn read_reaches_placed_chutes_funnels_burners_and_deployers_and_waits_for_the_rest() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:chute",
@@ -6832,7 +6843,6 @@ mod tests {
                 vec![("facing", "down"), ("axis_along_first", "true")],
             ),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6866,12 +6876,10 @@ mod tests {
         w.read_deployer(0, deployer, saved);
         assert_eq!(w.dims[0].deployers[&deployer].timer, 120);
         assert!(w.dims[0].deployers[&deployer].locked);
-        states::clear_range();
     }
 
     #[test]
     fn read_turns_a_running_bearing_and_takes_no_structure_for_an_idle_one() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = world();
         let saved = |angle: f32| Windmill {
             blocks: vec![([0, 1, 0], 2)],
@@ -6896,17 +6904,14 @@ mod tests {
         let unloaded = [8, 8, 0];
         w.read_windmill(0, unloaded, saved(45.0));
         assert!(w.dims[0].windmill_saved.contains_key(&unloaded));
-        states::clear_range();
     }
 
     #[test]
     fn a_reloaded_funnel_goes_on_counting_down_its_saved_cooldown() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:brass_belt_funnel",
             vec![("facing", "south"), ("shape", "pushing")],
         )];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -6936,12 +6941,10 @@ mod tests {
         w.column_unloaded(0, 0, 0);
         w.block_loaded(0, funnel, 10);
         assert_eq!(w.dims[0].funnels[&funnel], 0);
-        states::clear_range();
     }
 
     #[test]
     fn funnel_inventory_acquires_at_its_turn_and_invalidates_on_behind_change() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:depot", vec![]),
             (
@@ -6969,7 +6972,6 @@ mod tests {
                 ],
             ),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7032,7 +7034,6 @@ mod tests {
         assert_eq!(phase.next(&mut w), Some(TransportTick::Depot(depot)));
         assert!(w.funnel_inv_ready(0, funnel));
         assert_eq!(phase.next(&mut w), None);
-        states::clear_range();
     }
 
     #[test]
@@ -7045,7 +7046,6 @@ mod tests {
         // funnel pushes onto the belt placed before it is pending that tick. Only a tunnel with
         // something to do (a stack, synchronized, or `distributionProgress` counting down) and
         // a funnel whose cooldown has run out take a turn.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:depot", vec![]),
             (
@@ -7057,7 +7057,6 @@ mod tests {
                 vec![("facing", "north"), ("shape", "pushing")],
             ),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7103,12 +7102,10 @@ mod tests {
                 TransportTick::Depot(last)
             ]
         );
-        states::clear_range();
     }
 
     #[test]
     fn depot_slides_at_its_registration_turn() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for depot_first in [false, true] {
             let names = [
                 (
@@ -7129,7 +7126,6 @@ mod tests {
                 ),
                 ("create:depot", vec![]),
             ];
-            states::set_range(10, 3);
             let mut w = CreateWorld::new(StateTable::new(
                 10,
                 names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7174,7 +7170,6 @@ mod tests {
 
     #[test]
     fn ejectors_tick_as_the_depots_they_are_in_the_shared_walk() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // e3-ejector-depot-never-slides: an ejector's stacks are a depot's, and its
         // `DepotBehaviour` ticks with its block entity — the shared walk reaches it.
         let names = [
@@ -7184,7 +7179,6 @@ mod tests {
             ),
             ("create:depot", vec![("waterlogged", "false")]),
         ];
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7273,7 +7267,6 @@ mod tests {
 
     #[test]
     fn an_idle_ejector_winds_down_once_the_walk_turns_it() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // e2-ejector-idle-wind-up: a motor turns an ejector whose plate was left open; the
         // motor's speed is set the tick after it is placed, as a player scrolls it.
         let names = [
@@ -7283,7 +7276,6 @@ mod tests {
                 vec![("facing", "east"), ("waterlogged", "false")],
             ),
         ];
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7317,7 +7309,6 @@ mod tests {
 
     #[test]
     fn a_reloaded_ejector_attaches_after_the_entities_registered_before_it() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Fuzz seed 7804 (shrunk): a motor turns a shaft; an ejector is placed beside it and
         // the world reloads in that tick. `Level.blockEntityTickers` ticks the motor and the
         // shaft first: their `initialize` restores the network (`initFromTE`, `addSilently`),
@@ -7333,7 +7324,6 @@ mod tests {
                 vec![("facing", "east"), ("waterlogged", "false")],
             ),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7379,7 +7369,6 @@ mod tests {
             assert_eq!((network.size, network.stress), (3, 64.0), "{p:?}");
             assert_eq!(network.capacity, 524288.0, "{p:?}");
         }
-        states::clear_range();
     }
 
     struct ItemBeltSide;
@@ -7402,7 +7391,6 @@ mod tests {
 
     #[test]
     fn empty_belt_inventory_direction_is_saved() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
         assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         let saved = w.column_belts(0, 0, 0);
@@ -7413,7 +7401,6 @@ mod tests {
 
     #[test]
     fn empty_belt_direction_is_journaled_once() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
         for c in [[0, 8, 0], [0, 8, -4]] {
             w.dims[0].belts.get_mut(&c).unwrap().items.positive = false;
@@ -7427,7 +7414,6 @@ mod tests {
 
     #[test]
     fn moving_belt_journals_current_saved_positions() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(-32.0);
         let c = [0, 8, 0];
         w.take_belt_saved_changes(0);
@@ -7463,7 +7449,6 @@ mod tests {
 
     #[test]
     fn loaded_belt_moves_on_its_first_inventory_tick() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(-32.0);
         let c = [0, 8, 0];
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
@@ -7516,7 +7501,6 @@ mod tests {
 
     #[test]
     fn empty_belt_tick_sets_first_stack_order() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(32.0);
         assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
         let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
@@ -7533,12 +7517,10 @@ mod tests {
             &mut ItemBeltSide,
         );
         assert!((b.items.items[0].position - 1.5041667).abs() < 1e-6);
-        states::clear_range();
     }
 
     #[test]
     fn empty_belt_receives_before_its_turn_in_the_same_tick() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(-32.0);
         let sender = [0, 8, 0];
         let receiver = [0, 8, -4];
@@ -7570,12 +7552,10 @@ mod tests {
             &mut ItemBeltSide,
         );
         assert!((b.items.items[0].position - 4.126667).abs() < 1e-6);
-        states::clear_range();
     }
 
     #[test]
     fn belt_receiving_after_its_turn_waits_until_next_tick() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = item_belt_world(-32.0);
         let receiver = [0, 8, -4];
         let mut phase = w.transport_ticks(0, 0);
@@ -7591,14 +7571,12 @@ mod tests {
         let b = w.dims[0].belts.get_mut(&receiver).unwrap();
         b.items.tick(4, -32.0 / 480.0, true, &mut ItemBeltSide);
         assert!((b.items.items[0].position - 4.1933336).abs() < 1e-6);
-        states::clear_range();
     }
 
     #[test]
     fn pulley_switch_keeps_driven_network_capacity() {
         // BeltBlock.useItemOn -> KineticBlockEntity.switchToBlockState.
         // Issue #24 Java: middle -> pulley keeps 32 rpm and 524288 capacity.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let belt = |part| {
             (
                 "create:belt",
@@ -7612,7 +7590,6 @@ mod tests {
             belt("end"),
             belt("pulley"),
         ];
-        states::set_range(10, 5);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7643,16 +7620,13 @@ mod tests {
             assert_eq!(w.speed(0, middle), Some(32.0));
             assert_eq!(w.dims[0].kinetics.network(middle, 0).unwrap().2, 524288.0);
         }
-        states::clear_range();
     }
 
     #[test]
     fn motor_same_block_state_lifecycle() {
         // Java issue #13: north 32 -> south 32 keeps -32; changing axes clears
         // kinetic information without reinitializing the surviving motor entity.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = ["north", "south", "west"];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names
@@ -7674,13 +7648,11 @@ mod tests {
         w.tick(0, &mut events);
         assert_eq!(w.speed(0, p), Some(0.0));
         assert_eq!(w.dims[0].kinetics.network(p, 0).unwrap().2, 0.0);
-        states::clear_range();
     }
 
     #[test]
     fn wrenched_shaft_leaves_network_immediately() {
         // Issue #14's Java checkpoints: size 3 at 73, size 2 at 75/77/79.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             ("create:creative_motor", vec![("facing", "east")]),
             (
@@ -7690,7 +7662,6 @@ mod tests {
             ("create:shaft", vec![("axis", "x")]),
             ("create:shaft", vec![("axis", "z")]),
         ];
-        states::set_range(10, 4);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -7727,13 +7698,10 @@ mod tests {
                 );
             }
         }
-        states::clear_range();
     }
 
     #[test]
     fn wrench_reactivates_surviving_motor() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             ["north", "south"]
@@ -7752,17 +7720,14 @@ mod tests {
         w.tick(0, &mut events);
         assert_eq!(w.speed(0, p), Some(32.0));
         assert_eq!(w.motor_setting(0, p), Some(32.0));
-        states::clear_range();
     }
 
     #[test]
     fn a_drain_replaced_by_another_block_of_create_s_is_gone() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:item_drain", vec![]),
             ("create:andesite_funnel", vec![("facing", "up")]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let (drain, funnel) = (2, 3);
@@ -7771,7 +7736,6 @@ mod tests {
         assert!(w.dims[0].drains.contains_key(&pos));
         w.block_changed(0, pos, drain, funnel);
         assert!(!w.dims[0].drains.contains_key(&pos));
-        states::clear_range();
     }
 
     /// `p1-press-depot-start-tick`: gold ingots land on a depot under a press turned at 64 rpm
@@ -7783,13 +7747,11 @@ mod tests {
     #[test]
     fn a_press_moves_at_its_turn_in_the_block_entity_order() {
         use crate::press::{self, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_motor", vec![("facing", "south")]),
             ("create:mechanical_press", vec![("facing", "north")]),
             ("create:depot", vec![("waterlogged", "false")]),
         ];
-        states::set_range(2, names.len() as u32);
         let (motor, press_state, depot_state) = (2, 3, 4);
         let (depot, at, motor_at) = ([0, 8, 0], [0, 10, 0], [0, 10, -1]);
         let world = |depot_first: bool| {
@@ -7852,7 +7814,6 @@ mod tests {
             let pressed = (32..=50).find(|_| level_tick(&mut w));
             assert_eq!(pressed, Some(46), "depot first: {depot_first}");
         }
-        states::clear_range();
     }
 
     /// `p2-saw-depot-turn`: a stripped oak log cut by an upward saw at 48 rpm goes onto the
@@ -7861,7 +7822,6 @@ mod tests {
     /// level's block-entity order, before the depot's.
     #[test]
     fn a_saw_hands_its_results_on_at_its_turn_in_the_block_entity_order() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:mechanical_saw",
@@ -7873,7 +7833,6 @@ mod tests {
             ),
             ("create:depot", vec![("waterlogged", "false")]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let (saw, depot) = ([0, 8, 0], [1, 8, 0]);
@@ -7893,7 +7852,6 @@ mod tests {
             turns(&mut w),
             [TransportTick::Saw(saw), TransportTick::Depot(depot)]
         );
-        states::clear_range();
     }
 
     /// Create: a controller holding 8 cobblestone leaves its inventory for its removal to spill
@@ -7901,12 +7859,10 @@ mod tests {
     /// `ItemHelper.dropContents`).
     #[test]
     fn a_removed_crushing_wheel_controller_hands_its_inventory_to_its_removal() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:crushing_wheel_controller",
             vec![("facing", "down"), ("valid", "true")],
         )];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let at = [0, 8, 0];
@@ -7918,14 +7874,12 @@ mod tests {
         assert_eq!(removed.len(), crate::processing::INVENTORY_SLOTS);
         assert_eq!(removed[0], Some(("minecraft:cobblestone".to_owned(), 8)));
         assert!(removed[1..].iter().all(Option::is_none));
-        states::clear_range();
     }
 
     /// Create: an upward saw cutting an oak log leaves its inventory for its removal to spill
     /// when it is broken (`SawBlockEntity.destroy`, `ItemHelper.dropContents`).
     #[test]
     fn a_broken_saw_hands_its_inventory_to_its_removal() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:mechanical_saw",
             vec![
@@ -7934,7 +7888,6 @@ mod tests {
                 ("flipped", "false"),
             ],
         )];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let at = [0, 8, 0];
@@ -7946,12 +7899,10 @@ mod tests {
         let removed = &w.dims[0].removed_inventories[&at];
         assert_eq!(removed[0], Some(("minecraft:oak_log".to_owned(), 1)));
         assert!(removed[1..].iter().all(Option::is_none));
-        states::clear_range();
     }
 
     #[test]
     fn gauges_change_only_when_their_network_does() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_motor", vec![("facing", "east")]),
             (
@@ -7964,7 +7915,6 @@ mod tests {
             ),
             ("create:mechanical_press", vec![("facing", "east")]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let (motor, stress, speed, press) = (2, 3, 4, 5);
@@ -7991,7 +7941,6 @@ mod tests {
 
     #[test]
     fn gauges_reset_comparators_when_their_source_stops() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             ("create:creative_motor", vec![("facing", "east")]),
             (
@@ -8004,7 +7953,6 @@ mod tests {
             ),
             ("create:mechanical_press", vec![("facing", "east")]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         for (x, state) in [2, 3, 4, 5].into_iter().enumerate() {
@@ -8035,7 +7983,6 @@ mod tests {
 
     #[test]
     fn worlds_solve_on_change_and_pay_nothing_when_steady() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = world();
         let (shaft_x, motor_east, casing) = (2, 5, 7);
         assert!(!w.table.is_kinetic(0) && !w.table.is_kinetic(casing));
@@ -8068,12 +8015,10 @@ mod tests {
         w.block_changed(0, [0, 64, 0], motor_east, 0);
         w.tick(0, &mut e);
         assert_eq!(w.speed(0, [1, 64, 0]), Some(0.0));
-        states::clear_range();
     }
 
     #[test]
     fn scrolling_a_motor_skips_zero_and_saves_with_its_column() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = world();
         let motor_east = 5;
         w.block_changed(0, [1, 64, 1], 0, motor_east);
@@ -8106,17 +8051,14 @@ mod tests {
         w.block_changed(0, [2, 64, 1], 0, 2);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [2, 64, 1]), Some(256.0));
-        states::clear_range();
     }
 
     #[test]
     fn a_removed_deployer_clears_its_cracks() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:deployer",
             vec![("axis_along_first", "false"), ("facing", "down")],
         )];
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8133,19 +8075,16 @@ mod tests {
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
         assert!(w.dims[0].deployer_cracks.is_empty());
-        states::clear_range();
     }
 
     /// Create: a broken deployer leaves its held stack, with its damage and components, for its
     /// removal to spill (`DeployerBlockEntity.discardPlayer`).
     #[test]
     fn a_removed_deployer_preserves_its_held_stack_for_removal() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:deployer",
             vec![("axis_along_first", "false"), ("facing", "down")],
         )];
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8163,7 +8102,6 @@ mod tests {
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
         assert!(w.dims[0].removed_deployers.is_empty());
-        states::clear_range();
     }
 
     #[test]
@@ -8172,13 +8110,11 @@ mod tests {
         // it turns its own way, so it joins as a member (create-fuzz seed 1294). Scrolled to 156,
         // faster, it takes the network over (`applyNewSpeed`), which needs it to stay the block
         // entity it was, a member, not a block just placed: then the first turns at 156 too.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_motor", vec![("facing", "east")]),
             ("create:gearbox", vec![("axis", "y")]),
             ("create:creative_motor", vec![("facing", "west")]),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8198,12 +8134,10 @@ mod tests {
         w.tick(0, &mut e);
         assert!(!e.iter().any(|x| matches!(x, Event::Break { .. })), "{e:?}");
         assert_eq!(w.speed(0, [0, 0, 0]), Some(156.0));
-        states::clear_range();
     }
 
     #[test]
     fn split_shafts_keep_injected_power_until_their_neighbour_changes() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         // Java /setblock observes powered=true after tick 1, and false after
         // neighborChanged reads no signal. Player placement chooses power earlier.
         for name in ["create:clutch", "create:gearshift"] {
@@ -8211,7 +8145,6 @@ mod tests {
                 (name, vec![("axis", "x"), ("powered", "false")]),
                 (name, vec![("axis", "x"), ("powered", "true")]),
             ];
-            states::set_range(10, 2);
             let mut w = CreateWorld::new(StateTable::new(
                 10,
                 names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8229,13 +8162,11 @@ mod tests {
                 w.block_changed(0, [0, 0, 0], state, 0);
             }
         }
-        states::clear_range();
     }
 
     #[test]
     fn train_signals_follow_redstone_and_their_type() {
         use crate::network::SignalType;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:track_signal",
@@ -8250,7 +8181,6 @@ mod tests {
                 vec![("powered", "false"), ("type", "cross_signal")],
             ),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8272,13 +8202,10 @@ mod tests {
         );
         w.block_changed(0, [0, 0, 0], 12, 0);
         assert!(w.dims[0].railway.signals.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn depot_motion_survives_cold_load() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [("create:depot", std::iter::empty())].into_iter(),
@@ -8324,7 +8251,6 @@ mod tests {
             },
         );
         assert_eq!(w.saved_depot(0, pos).unwrap().held, None);
-        states::clear_range();
     }
 
     #[test]
@@ -8334,8 +8260,6 @@ mod tests {
         // Java keeps them in `incoming` and shows them at these positions on ticks 82 to 89;
         // at tick 90 they join the held stack, 17 at 0.5.
         use crate::depot::{Arrival, Held, Incoming};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [("create:depot", std::iter::empty())].into_iter(),
@@ -8429,14 +8353,11 @@ mod tests {
             [(pos, "minecraft:iron_ingot".to_string(), 4)]
         );
         assert!(w.dims[0].depot_incoming.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn a_depot_ticks_only_while_its_stack_slides() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![("create:depot", vec![])];
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8468,12 +8389,10 @@ mod tests {
         );
         w.column_unloaded(0, 0, 0);
         assert!(w.dims[0].depots.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn a_belt_turns_as_one_and_breaks_as_create_s_does() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let belt = |part: &'static str| {
             (
                 "create:belt",
@@ -8492,7 +8411,6 @@ mod tests {
             belt("end"),
             ("create:creative_motor", vec![("facing", "south")]),
         ];
-        states::set_range(10, 4);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8527,12 +8445,10 @@ mod tests {
                 .iter()
                 .all(|b| b.shaft == Some(crate::kinetics::Axis::Z))
         );
-        states::clear_range();
     }
 
     #[test]
     fn belt_break_cascade_reaches_far_pulley_before_returning() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = ["start", "middle", "end"].map(|part| {
             (
                 "create:belt",
@@ -8545,7 +8461,6 @@ mod tests {
                 ],
             )
         });
-        states::set_range(10, 4);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names
@@ -8578,12 +8493,10 @@ mod tests {
         assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 2]), Some(&13));
         assert!(w.dims[0].belt_breaks.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn belt_break_cascade_continues_through_an_intermediate_pulley() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = ["start", "pulley", "middle", "end"].map(|part| {
             (
                 "create:belt",
@@ -8596,7 +8509,6 @@ mod tests {
                 ],
             )
         });
-        states::set_range(10, 6);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names
@@ -8644,12 +8556,10 @@ mod tests {
         assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&14));
         assert!(w.dims[0].belt_breaks.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn a_sloped_belt_turns_as_one_across_its_diagonal_segments() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let belt = |part: &'static str| {
             (
                 "create:belt",
@@ -8668,7 +8578,6 @@ mod tests {
             belt("end"),
             ("create:creative_motor", vec![("facing", "south")]),
         ];
-        states::set_range(10, 4);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8685,7 +8594,6 @@ mod tests {
         assert!(start != 0.0);
         assert_eq!(w.speed(0, [1, 1, 0]), Some(start));
         assert_eq!(w.speed(0, [2, 2, 0]), Some(start));
-        states::clear_range();
     }
 
     #[test]
@@ -8699,8 +8607,6 @@ mod tests {
     }
 
     fn loaded_handle_cache(valve: bool) {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let name = if valve {
             "create:copper_valve_handle"
         } else {
@@ -8750,7 +8656,6 @@ mod tests {
             assert_eq!((net.capacity, net.size), (256.0, 2));
             assert_eq!(w.dims[0].kinetics.network_membership(pos, 0).unwrap().1, 1);
         }
-        states::clear_range();
     }
 
     #[test]
@@ -8764,8 +8669,6 @@ mod tests {
     }
 
     fn cold_handle_load(valve: bool) {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 2);
         let table = || {
             StateTable::new(
                 10,
@@ -8829,12 +8732,10 @@ mod tests {
                 }
             }
         }
-        states::clear_range();
     }
 
     #[test]
     fn a_turned_crank_drives_for_ten_ticks() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:hand_crank",
@@ -8842,7 +8743,6 @@ mod tests {
             ),
             ("create:shaft", vec![("axis", "x")]),
         ];
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -8869,13 +8769,10 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(0.0), "stopped after 10 ticks");
         assert!(!w.turn_crank(0, [1, 0, 0], false), "a shaft is no crank");
-        states::clear_range();
     }
 
     #[test]
     fn interaction_journals_include_immediate_handle_rotation() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -8917,18 +8814,15 @@ mod tests {
         assert!(w.take_handle_changes(0).contains(&handle));
         let changed = w.dims[0].kinetics.take_saved_changes();
         assert!(changed.contains(&handle) && changed.contains(&shaft));
-        states::clear_range();
     }
 
     #[test]
     fn recoloured_valve_retains_entity_and_driven_shaft() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             "create:copper_valve_handle",
             "create:red_valve_handle",
             "create:white_valve_handle",
         ];
-        states::set_range(10, 4);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names
@@ -8967,12 +8861,9 @@ mod tests {
             w.dims[0].kinetics.sequence_limit(shaft, 0, false),
             Some(41.0)
         );
-        states::clear_range();
     }
 
     fn assert_recoloured_valve_reload(backwards: bool) {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -9036,7 +8927,6 @@ mod tests {
                 .pos,
             positions[1]
         );
-        states::clear_range();
     }
 
     #[test]
@@ -9051,8 +8941,6 @@ mod tests {
 
     #[test]
     fn valve_same_tick_reload_keeps_owned_sequence() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [("create:copper_valve_handle", [("facing", "up")].into_iter())].into_iter(),
@@ -9080,13 +8968,10 @@ mod tests {
                 .value,
             180.0
         );
-        states::clear_range();
     }
 
     #[test]
     fn valve_load_uses_serialized_sequence_even_when_it_disagrees_with_angle() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -9143,12 +9028,10 @@ mod tests {
                 sequence
             );
         }
-        states::clear_range();
     }
 
     #[test]
     fn a_valve_handle_turns_by_its_angle_then_cools_down() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:red_valve_handle",
@@ -9157,7 +9040,6 @@ mod tests {
             ("create:shaft", vec![("axis", "x")]),
             ("create:creative_motor", vec![("facing", "west")]),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9228,12 +9110,10 @@ mod tests {
             "driven by another source"
         );
         assert!(!w.use_valve(0, [1, 0, 0], false, 45), "a shaft is no valve");
-        states::clear_range();
     }
 
     #[test]
     fn sliding_doors_that_open_or_close_are_noted() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let door = |open: &'static str| {
             (
                 "create:train_door",
@@ -9248,7 +9128,6 @@ mod tests {
             )
         };
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![door("false"), door("true")];
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9265,12 +9144,10 @@ mod tests {
              are not changes"
         );
         assert!(w.dims[0].kinetics.is_empty(), "a door is no kinetic block");
-        states::clear_range();
     }
 
     #[test]
     fn a_direct_shaft_write_does_not_run_placement_selection() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             (
                 "create:steam_engine",
@@ -9278,7 +9155,6 @@ mod tests {
             ),
             ("create:shaft", vec![("axis", "x")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9290,12 +9166,10 @@ mod tests {
         w.block_changed(0, shaft, 0, 11);
         assert!(w.shaft_changes(0).is_empty());
         assert_eq!(w.state_at(0, shaft), Some(11));
-        states::clear_range();
     }
 
     #[test]
     fn an_engine_on_a_boiler_powers_the_shaft_in_front() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:fluid_tank",
@@ -9313,7 +9187,6 @@ mod tests {
             ("create:powered_shaft", vec![("axis", "x")]),
             ("create:blaze_burner", vec![("blaze", "seething")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9382,12 +9255,10 @@ mod tests {
         assert!(w.dims[0].boilers.is_empty());
         assert_eq!(w.shaft_changes(0), vec![(shaft, false)]);
         assert!(w.dims[0].shaft_engine.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn a_whistle_makes_its_tank_a_boiler_and_sounds_while_it_is_heated() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:fluid_tank",
@@ -9407,7 +9278,6 @@ mod tests {
                 vec![("shape", "single"), ("size", "small")],
             ),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9438,13 +9308,10 @@ mod tests {
         assert!(w.dims[0].boilers.is_empty());
         assert!(w.dims[0].plumbing.whistles.is_empty());
         assert!(w.dims[0].plumbing.extension_checks.contains(&[0, 2, 0]));
-        states::clear_range();
     }
 
     #[test]
     fn valve_pointer_cold_load_and_saved_change_journal() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [(
@@ -9489,13 +9356,10 @@ mod tests {
         assert_eq!(w.dims[0].kinetics.take_saved_changes(), [pos].into());
         assert!(w.tick_fluid_entities(0, |_| Some(true)).is_empty());
         assert!(w.dims[0].kinetics.take_saved_changes().is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn ordinary_pipe_turn_runs_the_earlier_kinetic_base_prefix() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -9533,15 +9397,12 @@ mod tests {
         assert_eq!(w.speed(0, drive), Some(0.));
         w.kinetic_base_ticks_through(0, pipe);
         assert_eq!(w.speed(0, drive), Some(64.));
-        states::clear_range();
     }
 
     // Java's reload cases: chase speed at 32 rpm is 0.1, with targets 1/0.
     // Publication after an interaction must include onSpeedChanged's chase, even
     // though the next FluidValveBlockEntity.tick has not moved its value yet.
     fn valve_interaction_reload(rpm: f32, value: f32, target: f32) {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -9610,7 +9471,6 @@ mod tests {
             .abs()
                 < 1e-6
         );
-        states::clear_range();
     }
 
     #[test]
@@ -9625,8 +9485,6 @@ mod tests {
 
     #[test]
     fn valve_chases_on_its_first_kinetic_tick() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -9662,12 +9520,10 @@ mod tests {
             }
             w.tick(0, &mut Vec::new());
         }
-        states::clear_range();
     }
 
     #[test]
     fn valves_open_with_their_speed_and_pipes_look_again() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_motor", vec![("facing", "west")]),
             (
@@ -9681,7 +9537,6 @@ mod tests {
             ("create:hose_pulley", vec![("facing", "north")]),
             ("create:creative_fluid_tank", vec![]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9716,17 +9571,14 @@ mod tests {
         assert_eq!(w.dims[0].plumbing.creative.get(&tank), Some(&None));
         w.block_changed(0, tank, 13, 0);
         assert!(w.dims[0].plumbing.creative.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn creative_tanks_join_share_their_fluid_and_split() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_fluid_tank", vec![]),
             ("create:fluid_tank", vec![]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9764,12 +9616,10 @@ mod tests {
         assert!(w.dims[0].plumbing.creative.values().all(|f| *f == water));
         let shape = w.tank_shape(0, [1, 1, 1]).unwrap();
         assert!(shape.top);
-        states::clear_range();
     }
 
     #[test]
     fn a_two_by_two_boiler_over_kindled_burners_drives_its_engine() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:fluid_tank",
@@ -9787,7 +9637,6 @@ mod tests {
             ("create:powered_shaft", vec![("axis", "x")]),
             ("create:blaze_burner", vec![("blaze", "kindled")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9864,19 +9713,16 @@ mod tests {
                 .iter()
                 .all(|(_, m)| m.multi.is_some_and(|m| m.blocks() == 1 && !m.window))
         );
-        states::clear_range();
     }
 
     #[test]
     fn a_reloaded_fan_blows_from_its_first_tick() {
         // Seed 2487: a fan at -64 RPM blasting a honey bottle on a depot is saved with
         // `FanProcessingTime` 3; Java's reloaded fan processes it on each of the next three ticks.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_motor", vec![("facing", "north")]),
             ("create:encased_fan", vec![("facing", "north")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9899,7 +9745,6 @@ mod tests {
         assert_eq!(w.fans_to_tick(0), vec![fan]);
         assert_eq!(w.dims[0].fans[&fan].speed, speed);
         assert!(w.dims[0].fans[&fan].rebuild);
-        states::clear_range();
     }
 
     #[test]
@@ -9908,10 +9753,8 @@ mod tests {
         // network capacity 256 and size 1 comes back a one-block network at -8 RPM, its
         // capacity read out of the saved members (`KineticNetwork.addSilently`, which
         // subtracts `lastCapacityProvided * |getGeneratedSpeed()|` from the unloaded totals).
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> =
             vec![("create:water_wheel", vec![("facing", "east")])];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -9945,7 +9788,6 @@ mod tests {
             Some((256.0, 1)),
             "the saved member is not counted twice"
         );
-        states::clear_range();
     }
 
     #[test]
@@ -9960,12 +9802,10 @@ mod tests {
         // without `updateFromNetwork(0, 0, 0)` (`!members.containsKey(be)`), so the saved
         // capacity stays. A wrench turn is what clears it first: `switchToBlockState` →
         // `KineticNetwork.remove` zeroes the live figures and `read` restores 0.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:water_wheel", vec![("facing", "east")]),
             ("create:water_wheel", vec![("facing", "south")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10004,7 +9844,6 @@ mod tests {
         let cleared = w.dims[0].kinetics.saved_state(wheel, 0).unwrap();
         assert_eq!((cleared.speed, cleared.network), (0.0, None));
         assert_eq!(w.dims[0].kinetics.network(wheel, 0).map(|n| n.2), Some(0.0));
-        states::clear_range();
     }
 
     #[test]
@@ -10012,7 +9851,6 @@ mod tests {
         // Issue #90, Java tick 119 of create-fuzz seed 21: a running boiler keeps its water
         // supply in its tank's block entity (`BoilerData.write`/`read`), so the next engine
         // tick drives the powered shaft again instead of letting it stop.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:fluid_tank",
@@ -10030,7 +9868,6 @@ mod tests {
             ("create:powered_shaft", vec![("axis", "x")]),
             ("create:blaze_burner", vec![("blaze", "kindled")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10092,14 +9929,12 @@ mod tests {
         );
         let reloaded = w.dims[0].kinetics.saved_state(shaft, 0).unwrap();
         assert_eq!(reloaded.network.map(|n| n.size), Some(1));
-        states::clear_range();
     }
 
     #[test]
     fn a_boilers_changes_mark_its_column_unsaved() {
         // create-fuzz seed 619: `notifyUpdate` in `updateBoilerState`, `BoilerData.tick`'s
         // sample and its `updateTemperature`; a column saved later keeps what the boiler holds.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:fluid_tank",
@@ -10117,7 +9952,6 @@ mod tests {
             ("create:powered_shaft", vec![("axis", "x")]),
             ("create:blaze_burner", vec![("blaze", "kindled")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10167,15 +10001,12 @@ mod tests {
         w.evaluate_boilers(0);
         assert!(w.dims[0].boilers.is_empty());
         assert_eq!(w.take_unsaved(0), [(0, 0)]);
-        states::clear_range();
     }
 
     #[test]
     fn a_water_wheel_looks_at_its_flow_on_the_first_tick_and_the_sixty_first() {
         // `WaterWheelBlockEntity`: `setLazyTickRate(60)`; `lazyTick` runs on the first tick
         // (`initialize`), then after the counter of 60 ran down.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [(
@@ -10190,7 +10021,6 @@ mod tests {
             .filter(|_| !w.take_wheel_checks(0).is_empty())
             .collect();
         assert_eq!(fired, [1, 61]);
-        states::clear_range();
     }
 
     #[test]
@@ -10201,7 +10031,6 @@ mod tests {
         // at once: the four cells beside the wheel no longer hold it and schedule their own
         // tick; the corners are not told by the wheel at all, so they go on the tick after the
         // cells beside it do (`tick`: stillValid, then air).
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let facings = ["down", "up", "north", "south", "east", "west"];
         let mut names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:large_water_wheel",
@@ -10212,7 +10041,6 @@ mod tests {
                 .iter()
                 .map(|f| ("create:water_wheel_structure", vec![("facing", *f)])),
         );
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10284,7 +10112,6 @@ mod tests {
         let mut want = corners;
         want.sort();
         assert_eq!(due, want, "the corners go the tick after");
-        states::clear_range();
     }
 
     #[test]
@@ -10295,7 +10122,6 @@ mod tests {
         // `IWrenchable.onSneakWrenched` on the master). The wheel goes on the click; the four
         // cells beside it go on the next tick and the four corners on the one after, each
         // through `updateShape` scheduling its own `tick`.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let facings = ["down", "up", "north", "south", "east", "west"];
         let mut names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:large_water_wheel",
@@ -10306,7 +10132,6 @@ mod tests {
                 .iter()
                 .map(|f| ("create:water_wheel_structure", vec![("facing", *f)])),
         );
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10390,7 +10215,6 @@ mod tests {
         let mut want = corners;
         want.sort();
         assert_eq!(due, want, "the corners go the tick after");
-        states::clear_range();
     }
 
     #[test]
@@ -10398,7 +10222,6 @@ mod tests {
         // Create keeps a motor's speed, a wheel's flow score and a powered shaft's engine in
         // the block entity (`KineticBlockEntity.write`/`read`): none of them stays in the level
         // once the column unloads, and each comes back only from that saved data.
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:creative_motor", vec![("facing", "east")]),
             ("create:water_wheel", vec![("facing", "east")]),
@@ -10408,7 +10231,6 @@ mod tests {
                 vec![("axis", "x"), ("powered", "false")],
             ),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10452,12 +10274,10 @@ mod tests {
         assert_eq!(w.wheel_flow(0, wheel), Some(-1));
         assert_eq!(w.shaft_steam(0, shaft), engine);
         assert_eq!(w.saved_chain_signal(0, shift), signal);
-        states::clear_range();
     }
 
     #[test]
     fn loaded_sections_join_and_unloaded_columns_leave() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = world();
         let mut states = [0u32; 4096];
         // x 0..3 at y 0, z 0 of a section at (16, 64, 32): a motor then two shafts.
@@ -10470,17 +10290,14 @@ mod tests {
         w.column_unloaded(0, 1, 2);
         assert_eq!(w.speed(0, [18, 64, 32]), None);
         assert!(w.dims[0].kinetics.is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn a_bearing_loaded_with_its_speed_is_not_queued_to_assemble() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             ("create:creative_motor", vec![("facing", "up")]),
             ("create:mechanical_bearing", vec![("facing", "up")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10514,14 +10331,11 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, bearing), Some(0.0));
         assert_eq!(w.dims[0].bearing_checks, vec![bearing]);
-        states::clear_range();
     }
 
     #[test]
     fn a_windmills_angle_is_saved_with_its_column() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [("create:windmill_bearing", vec![("facing", "up")])];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10562,12 +10376,10 @@ mod tests {
         assert_eq!(m.turn.rpm, 2.0);
         assert!((m.turn.angle_at(125) - 15.0).abs() < 1e-3);
         assert!((m.turn.angle_at(150) - 30.0).abs() < 1e-3);
-        states::clear_range();
     }
 
     #[test]
     fn analog_chain_sweep_breaks_on_tick_118() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             ("create:creative_motor", vec![("facing", "east")]),
             (
@@ -10579,7 +10391,6 @@ mod tests {
                 vec![("axis", "x"), ("powered", "true")],
             ),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10630,12 +10441,10 @@ mod tests {
                 assert_eq!(w.speed(0, pos), Some(32.0));
             }
         }
-        states::clear_range();
     }
 
     #[test]
     fn chain_drives_shape_their_chain_and_follow_the_signal() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let drive = |part| vec![("axis", "x"), ("axis_along_first", "false"), ("part", part)];
         let gearshift = |part, powered| {
             vec![
@@ -10658,7 +10467,6 @@ mod tests {
             ),
             ("create:creative_motor", vec![("facing", "east")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10688,13 +10496,11 @@ mod tests {
         // A neighbour's `neighborChanged` shapes nothing (`updateShape` alone does).
         w.neighbor_changed(0, [0, 0, 1], 11);
         assert!(w.take_chain_shapes(0).is_empty());
-        states::clear_range();
     }
 
     #[test]
     fn committed_known_shape_change_keeps_the_written_state_without_reshaping_the_chain() {
         use crate::{chain::Part, kinetics::Axis};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (mut w, id) = chain_world();
         let state = id("create:encased_chain_drive", Axis::X, false, Part::None);
         let first = [0, 64, 0];
@@ -10711,7 +10517,6 @@ mod tests {
         let shapes = w.take_chain_shapes(0);
         assert!(shapes.iter().any(|(p, _)| *p == first));
         assert!(shapes.iter().any(|(p, _)| *p == second));
-        states::clear_range();
     }
 
     /// Every encased chain drive and adjustable chain gearshift state (unpowered), and the
@@ -10740,7 +10545,6 @@ mod tests {
                 }
             }
         }
-        states::set_range(10, names.len() as u32);
         let w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10773,7 +10577,6 @@ mod tests {
         // create-sunrise#94: Java at tick 30 and, after the gearshift north is removed, 32.
         use crate::chain::{Drive, Part};
         use crate::kinetics::Axis;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (mut w, id) = chain_world();
         let (gearshift, drive) = (
             "create:adjustable_chain_gearshift",
@@ -10798,7 +10601,6 @@ mod tests {
             shapes,
             [(here, along_y(Part::Start)), (above, along_y(Part::End))]
         );
-        states::clear_range();
     }
 
     #[test]
@@ -10806,7 +10608,6 @@ mod tests {
         // create-sunrise#97: Java at tick 46, then 48 after the wrench on the drive's top.
         use crate::chain::{Drive, Part};
         use crate::kinetics::Axis;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (mut w, id) = chain_world();
         let (gearshift, drive) = (
             "create:adjustable_chain_gearshift",
@@ -10835,7 +10636,6 @@ mod tests {
             ..end
         };
         assert_eq!(shapes, [(shift_at, start), (drive_at, end)]);
-        states::clear_range();
     }
 
     #[test]
@@ -10844,7 +10644,6 @@ mod tests {
         // reloads in the same tick, 7.
         use crate::chain::{Drive, Part};
         use crate::kinetics::Axis;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let (mut w, id) = chain_world();
         let (gearshift, drive) = (
             "create:adjustable_chain_gearshift",
@@ -10874,12 +10673,10 @@ mod tests {
                 (drive_at, along_z(Part::End))
             ]
         );
-        states::clear_range();
     }
 
     #[test]
     fn loaded_chain_signal_precedes_base_attachment() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = [
             ("create:creative_motor", vec![("facing", "south")]),
             (
@@ -10896,7 +10693,6 @@ mod tests {
                 vec![("axis", "z"), ("axis_along_first", "true"), ("part", "end")],
             ),
         ];
-        states::set_range(10, 3);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -10934,13 +10730,10 @@ mod tests {
         assert_eq!(w.speed(0, positions[1]), Some(32.0));
         assert_eq!(w.speed(0, positions[2]), Some(40.0));
         assert_eq!(w.dims[0].kinetics.flicker_score(positions[1]), 0);
-        states::clear_range();
     }
 
     #[test]
     fn initial_zero_chain_poll_does_not_detach() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 2);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [
@@ -10960,14 +10753,11 @@ mod tests {
             w.dims[0].kinetics.flicker_score([0, 8, 0]),
             (before - 1).max(0)
         );
-        states::clear_range();
     }
 
     #[test]
     fn loaded_sequencer_continues_saved_timer() {
         use crate::sequencer::{Instruction, Kind, Run, Speed};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
-        states::set_range(10, 1);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [(
@@ -11012,20 +10802,17 @@ mod tests {
         assert_eq!(s.duration, 7);
         assert_eq!(s.timer, 3);
         assert_eq!(s.progress, 28.800001);
-        states::clear_range();
     }
 
     #[test]
     fn replacing_a_sequencer_program_commits_before_the_next_kinetic_tick() {
         use crate::sequencer::{Instruction, Kind, Run, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names = [
             ("create:sequenced_gearshift", seq("0")),
             ("create:sequenced_gearshift", seq("3")),
             ("create:creative_motor", vec![("facing", "east")]),
         ];
-        states::set_range(10, names.len() as u32);
         // ConfigureSequencedGearshiftPacket.applySettings calls run(-1) even while
         // AWAIT's modifier is zero (no detachKinetics), then commits state 0 now.
         for kind in [Kind::Await, Kind::TurnDistance] {
@@ -11084,13 +10871,11 @@ mod tests {
             );
             assert_eq!(w.sequencer_run(0, pos).unwrap().current, -1);
         }
-        states::clear_range();
     }
 
     #[test]
     fn sequencer_instruction_change_attaches_on_the_following_tick() {
         use crate::sequencer::{Instruction, Kind, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names = [
             ("create:sequenced_gearshift", seq("0")),
@@ -11098,7 +10883,6 @@ mod tests {
             ("create:sequenced_gearshift", seq("2")),
             ("create:creative_motor", vec![("facing", "east")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11159,7 +10943,6 @@ mod tests {
                 .is_some()
         );
         assert_eq!(w.sequencer_run(0, pos).unwrap().progress, 1.0);
-        states::clear_range();
     }
 
     #[test]
@@ -11173,7 +10956,6 @@ mod tests {
         // capacity its save restored: Java reports 256 there, with stress 0, speed 0 and no
         // network.
         use crate::sequencer::Step;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names = [
             ("create:shaft", vec![("axis", "x")]),
@@ -11181,7 +10963,6 @@ mod tests {
             ("create:sequenced_gearshift", seq("1")),
             ("create:hand_crank", vec![("facing", "west")]),
         ];
-        states::set_range(10, names.len() as u32);
         let (shaft, idle, running, crank) = (10, 11, 12, 13);
         let mut w = CreateWorld::new(StateTable::new(
             10,
@@ -11280,13 +11061,11 @@ mod tests {
             (saved.speed, saved.source, saved.network),
             (0.0, None, None)
         );
-        states::clear_range();
     }
 
     #[test]
     fn a_sequenced_gearshift_turns_its_output_face_through_its_sequence() {
         use crate::sequencer::Step;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:sequenced_gearshift", seq("0")),
@@ -11294,7 +11073,6 @@ mod tests {
             ("create:creative_motor", vec![("facing", "east")]),
             ("create:shaft", vec![("axis", "x")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11340,20 +11118,17 @@ mod tests {
             w.tick(0, &mut Vec::new()).1.is_empty(),
             "idle: nothing ticks"
         );
-        states::clear_range();
     }
 
     #[test]
     fn gearshifts_powered_in_one_tick_take_the_first_one_s_tick() {
         use crate::sequencer::Step;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:sequenced_gearshift", seq("0")),
             ("create:sequenced_gearshift", seq("1")),
             ("create:creative_motor", vec![("facing", "east")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11409,13 +11184,11 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.sequencer_run(0, second).unwrap().current, -1);
         assert_eq!(w.state_at(0, second), Some(10));
-        states::clear_range();
     }
 
     #[test]
     fn a_gearshift_repowered_when_its_column_reloads_restarts_its_program() {
         use crate::sequencer::{Instruction, Kind, Run, Speed, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:shaft", vec![("axis", "x")]),
@@ -11423,7 +11196,6 @@ mod tests {
             ("create:sequenced_gearshift", seq("1")),
             ("create:hand_crank", vec![("facing", "west")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11505,20 +11277,17 @@ mod tests {
         let saved = w.dims[0].kinetics.saved_state(gearshift, 0).unwrap();
         assert_eq!((saved.speed, saved.needs_speed_update), (-32.0, false));
         assert_eq!(saved.source.map(|s| s.pos), Some(shaft));
-        states::clear_range();
     }
 
     #[test]
     fn a_turned_crank_turns_a_gearshift_before_its_scheduled_block_tick_runs() {
         use crate::sequencer::{Instruction, Kind, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:shaft", vec![("axis", "x")]),
             ("create:sequenced_gearshift", seq("0")),
             ("create:hand_crank", vec![("facing", "west")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11550,13 +11319,11 @@ mod tests {
             Some(Step::Run(1)),
             "`SequencedGearshiftBlock.tick` sees `getSpeed() != 0` and runs instruction 0"
         );
-        states::clear_range();
     }
 
     #[test]
     fn a_gearshifts_speed_loss_writes_its_state_before_the_base_tick_clears_the_flag() {
         use crate::sequencer::{Instruction, Kind, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:clutch", vec![("axis", "x"), ("powered", "false")]),
@@ -11566,7 +11333,6 @@ mod tests {
             ("create:sequenced_gearshift", seq("0")),
             ("create:sequenced_gearshift", seq("1")),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11608,12 +11374,10 @@ mod tests {
             !saved.needs_speed_update,
             "the write's `updateSpeed` was cleared by the same tick's attach"
         );
-        states::clear_range();
     }
 
     #[test]
     fn a_gearshifts_scheduled_reattach_runs_before_the_sequencers_check() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:gearshift",
@@ -11627,7 +11391,6 @@ mod tests {
                 vec![("axis", "x"), ("state", "0"), ("vertical", "false")],
             ),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11686,13 +11449,11 @@ mod tests {
             [(sequencer, false)],
             "one tick per position"
         );
-        states::clear_range();
     }
 
     #[test]
     fn a_sequenced_gearshift_loaded_at_an_await_goes_on_at_the_next_pulse() {
         use crate::sequencer::{Instruction, Kind, Run, Step};
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let seq = |state| vec![("axis", "x"), ("state", state), ("vertical", "false")];
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:sequenced_gearshift", seq("2")),
@@ -11700,7 +11461,6 @@ mod tests {
             ("create:shaft", vec![("axis", "x")]),
             ("create:sequenced_gearshift", seq("1")),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11738,18 +11498,15 @@ mod tests {
         w.block_changed(0, [0, 0, 0], 13, 10);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [1, 0, 0]), Some(16.0));
-        states::clear_range();
     }
 
     #[test]
     fn a_speed_controller_is_set_like_a_motor() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:rotation_speed_controller", vec![("axis", "x")]),
             ("create:large_cogwheel", vec![("axis", "z")]),
             ("create:creative_motor", vec![("facing", "east")]),
         ];
-        states::set_range(10, names.len() as u32);
         let mut w = CreateWorld::new(StateTable::new(
             10,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11764,12 +11521,10 @@ mod tests {
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, [0, 1, 0]), Some(64.0));
         assert_eq!(w.column_settings(0, 0, 0), [([0, 0, 0], 64)]);
-        states::clear_range();
     }
 
     #[test]
     fn diodes_tick_only_while_they_have_work_and_lamps_are_tracked() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             ("create:pulse_extender", vec![("facing", "north")]),
             (
@@ -11787,7 +11542,6 @@ mod tests {
             ("create:pulse_timer", vec![("facing", "north")]),
             ("create:rose_quartz_lamp", vec![]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let (off, powered, on, timer, lamp) = (2, 3, 4, 5, 6);
@@ -11831,12 +11585,10 @@ mod tests {
         assert_eq!(w.block_at(0, [1, 64, 0]), Some(Block::RoseQuartzLamp));
         w.neighbor_changed(0, [1, 64, 0], lamp);
         assert_eq!(w.dims[0].lamp_checks, [[1, 64, 0]]);
-        states::clear_range();
     }
 
     #[test]
     fn levers_and_detectors_are_kept_by_position_and_told_of_their_targets() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
             (
                 "create:analog_lever",
@@ -11857,7 +11609,6 @@ mod tests {
             ("create:fluid_tank", vec![]),
             ("create:cuckoo_clock", vec![("facing", "north")]),
         ];
-        states::set_range(2, names.len() as u32);
         let table = StateTable::new(2, names.iter().map(|(n, p)| (*n, p.iter().copied())));
         let mut w = CreateWorld::new(table);
         let (lever, observer, powered, switch, tank, clock) = (2, 3, 4, 5, 6, 7);
@@ -11891,7 +11642,6 @@ mod tests {
         assert_eq!(w.dims[0].levers.removed, [l]);
         assert!(!w.dims[0].detectors.target_of.contains_key(&o));
         assert!(w.dims[0].detectors.target_of.contains_key(&s));
-        states::clear_range();
     }
 
     /// The states of the basin operator tests, ids from 2: basins facing down, west and east, a
@@ -11918,7 +11668,6 @@ mod tests {
                 vec![("blaze", "none"), ("facing", "north")],
             ),
         ];
-        states::set_range(2, names.len() as u32);
         CreateWorld::new(StateTable::new(
             2,
             names.iter().map(|(n, p)| (*n, p.iter().copied())),
@@ -11950,7 +11699,6 @@ mod tests {
     #[test]
     fn an_operator_looks_in_the_tick_its_basin_tells_it_or_the_next() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for operator in [MIXER, PRESS] {
             for operator_first in [true, false] {
                 let mut w = basin_world();
@@ -11980,7 +11728,6 @@ mod tests {
                 assert!(!w.dims[0].operators[&at].checker.pending());
             }
         }
-        states::clear_range();
     }
 
     /// `BasinBlockEntity.tick` hands the spout's output on (`tryClearingSpoutputOverflow`) at the
@@ -11991,7 +11738,6 @@ mod tests {
     #[test]
     fn a_basin_has_its_turn_in_the_block_entity_order() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         for operator_first in [true, false] {
             let mut w = basin_world();
             let (basin, at) = ([0, 8, 0], [0, 10, 0]);
@@ -12017,28 +11763,24 @@ mod tests {
             };
             assert_eq!(order, expected, "operator first: {operator_first}");
         }
-        states::clear_range();
     }
 
     /// The basin's `SmartBlockEntity.tick` runs at its turn: the first tick is a lazy tick, then
     /// every eleventh (`lazyTickRate + 1`), and a basin without a block entity has none.
     #[test]
     fn a_basin_s_lazy_tick_comes_at_its_turn() {
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let basin = [0, 8, 0];
         assert!(!w.tick_basin_lazy(0, basin));
         w.block_changed(0, basin, 0, BASIN[1]);
         let lazy: Vec<usize> = (0..23).filter(|_| w.tick_basin_lazy(0, basin)).collect();
         assert_eq!(lazy, [0, 10, 21]);
-        states::clear_range();
     }
 
     /// A mixer that is running turns every tick, with nothing asked of it; one at rest does not.
     #[test]
     fn a_running_mixer_turns_and_an_idle_one_does_not() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let (basin, at) = ([0, 8, 0], [0, 10, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
@@ -12050,7 +11792,6 @@ mod tests {
         for _ in 0..3 {
             assert_eq!(operator_turns(&mut w), [(at, false, false)]);
         }
-        states::clear_range();
     }
 
     /// `BasinBlockEntity.onEmptied`: the operator two above finds `basinRemoved` at its next
@@ -12058,7 +11799,6 @@ mod tests {
     #[test]
     fn an_emptied_basin_stops_its_operator_at_the_operator_s_turn() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let (basin, at, other) = ([0, 8, 0], [0, 10, 0], [4, 10, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
@@ -12076,7 +11816,6 @@ mod tests {
         w.dims[0].basin_emptied(basin);
         assert_eq!(operator_turns(&mut w), [(at, true, false)]);
         assert_eq!(operator_turns(&mut w), [(at, false, false)]);
-        states::clear_range();
     }
 
     /// `BasinBlock.onRemove` -> `BasinBlockEntity.remove` -> `onEmptied`: a basin broken or
@@ -12084,7 +11823,6 @@ mod tests {
     #[test]
     fn a_removed_basin_stops_the_mixer_over_it() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let (basin, at) = ([0, 8, 0], [0, 10, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
@@ -12101,7 +11839,6 @@ mod tests {
         w.dims[0].basin_contents.clear();
         w.block_changed(0, basin, BASIN[0], BASIN[1]);
         assert!(!w.dims[0].operators[&at].removed);
-        states::clear_range();
     }
 
     /// `BlazeBurnerBlock.onPlace`: a burner placed, lit or changed under a basin tells the basin
@@ -12110,7 +11847,6 @@ mod tests {
     #[test]
     fn a_burner_set_under_a_basin_wakes_its_operator() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let (basin, at, burner) = ([0, 8, 0], [0, 10, 0], [0, 7, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
@@ -12128,7 +11864,6 @@ mod tests {
         w.block_changed(0, burner, COLD_BURNER, BURNER);
         assert_eq!(operator_turns(&mut w), [(at, false, true)]);
         assert!(operator_turns(&mut w).is_empty());
-        states::clear_range();
     }
 
     /// `BasinBlockEntity.tick`: a basin whose change of contents reaches the one level above
@@ -12137,7 +11872,6 @@ mod tests {
     #[test]
     fn a_change_of_contents_reaches_the_basin_that_pours_into_it() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let lower = [0, 8, 0];
         // East of it and up: facing west, it pours into the lower one. West of it, facing west,
@@ -12158,7 +11892,6 @@ mod tests {
         w.dims[0].notify_basin_contents(lower);
         assert_eq!(operator_turns(&mut w), [(pouring_at, false, true)]);
         assert!(w.dims[0].basin_contents.is_empty());
-        states::clear_range();
     }
 
     /// After `onBasinRemoved` returns early on a running mixer (`running = false`,
@@ -12167,7 +11900,6 @@ mod tests {
     #[test]
     fn mixer_with_running_ticks_at_forty_still_gets_a_turn_after_removal() {
         use crate::basin_operator::Operator;
-        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let mut w = basin_world();
         let at = [0, 10, 0];
         w.block_changed(0, at, 0, MIXER);
@@ -12178,6 +11910,5 @@ mod tests {
             m.running_ticks = 40;
         }
         assert_eq!(operator_turns(&mut w), [(at, false, false)]);
-        states::clear_range();
     }
 }

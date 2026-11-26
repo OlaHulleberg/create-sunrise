@@ -1173,10 +1173,6 @@ mod tests {
 
     #[test]
     fn unloading_an_earlier_column_does_not_redistribute_restored_pressure() {
-        let _guard = crate::states::TEST_LOCK
-            .lock()
-            .unwrap_or_else(|e| e.into_inner());
-        crate::states::set_range(10, 1);
         // Issue #73: Java restores 128, not 256, between the two 128 RPM pumps.
         // SmartBlockEntity.onChunkUnloaded suppresses remove(); it does not
         // propagate a changed pipe into the columns still awaiting their unload.
@@ -1203,7 +1199,6 @@ mod tests {
         world.block_loaded(0, [2, 4, -1], 10);
         world.dims[0].fluid_transport = transport;
         world.column_unloaded(0, 0, -1);
-        crate::states::clear_range();
         let mut transport = std::mem::take(&mut world.dims[0].fluid_transport);
         transport.prepare(&host);
         for pos in [[2, 4, 0], [3, 4, 0], [4, 4, 0]] {
