@@ -2,6 +2,7 @@ package dev.createfuzz;
 
 import com.google.gson.JsonElement;
 import com.google.gson.JsonObject;
+import com.simibubi.create.content.kinetics.KineticNetwork;
 import com.simibubi.create.content.kinetics.base.IRotate;
 import com.simibubi.create.content.kinetics.base.KineticBlockEntity;
 import com.simibubi.create.content.kinetics.gauge.GaugeBlock;
@@ -24,6 +25,7 @@ final class Observations {
         JsonObject blocks = new JsonObject();
         var networks = new java.util.TreeMap<Long, java.util.List<String>>();
         JsonObject sizes = new JsonObject();
+        var unspecified = new com.google.gson.JsonArray();
         List<JsonObject> all = new ArrayList<>();
         for (JsonElement b : c.getAsJsonArray("blocks")) all.add(b.getAsJsonObject());
         if (c.has("events"))
@@ -118,6 +120,7 @@ final class Observations {
                             networks.computeIfAbsent(k.network, ignored -> new ArrayList<>())
                                     .add(key);
                             sizes.addProperty(key, networkSize(k));
+                            if (UNSPECIFIED_SEEDS.contains(k.network)) unspecified.add(key);
                         }
                     }
                     var bracket =
@@ -150,13 +153,17 @@ final class Observations {
         JsonObject normalized = new JsonObject();
         normalized.add("partitions", CreateFuzz.GSON.toJsonTree(partitions));
         normalized.add("sizes", sizes);
+        normalized.add("unspecified", unspecified);
         out.add("networks", normalized);
         return out;
     }
 
-    /** Read the registry without getOrCreateNetworkFor: observing must never mutate it. */
+    /**
+     * The network a kinetic entity names, or null when a reload just re-created the entity and it
+     * has not ticked yet. Read without getOrCreateNetworkFor: observing must never mutate it.
+     */
     @SuppressWarnings("unchecked")
-    static int networkSize(KineticBlockEntity k) {
+    static KineticNetwork storedNetwork(KineticBlockEntity k) {
         try {
             var f =
                     com.simibubi.create.content.kinetics.TorquePropagator.class.getDeclaredField(
@@ -170,13 +177,64 @@ final class Observations {
                                             com.simibubi.create.content.kinetics.KineticNetwork>>)
                             f.get(null);
             var networks = worlds.get(k.getLevel());
-            var network = networks == null ? null : networks.get(k.network);
-            if (network == null)
-                throw new IllegalStateException("kinetic entity names an absent network");
-            return network.getSize();
+            return networks == null ? null : networks.get(k.network);
         } catch (ReflectiveOperationException ex) {
             throw new RuntimeException(ex);
         }
+    }
+
+    static KineticNetwork namedNetwork(KineticBlockEntity k) {
+        KineticNetwork network = storedNetwork(k);
+        if (network == null)
+            throw new IllegalStateException("kinetic entity names an absent network");
+        return network;
+    }
+
+    /** Networks a reload re-seeded from a figure Create does not repeat, by network id. */
+    static final java.util.Set<Long> UNSPECIFIED_SEEDS = new java.util.HashSet<>();
+
+    /**
+     * `KineticBlockEntity.initialize` seeds a loaded network with its first entity's saved
+     * figures (`KineticNetwork.initFromTE`). A cached figure that differs from the network's
+     * recalculated one is not repeated by Java, so the size and totals the reload seeds from it
+     * are not specified either. An entity a reload earlier in this tick re-created keeps the
+     * figures that reload judged.
+     */
+    static void markUnspecifiedSeed(KineticBlockEntity k) {
+        KineticNetwork network = storedNetwork(k);
+        if (network == null)
+            return;
+        float[] totals = networkTotals(k);
+        boolean fresh = close(field(k, "capacity"), totals[1]) && close(field(k, "stress"), totals[0])
+                && field(k, "networkSize") == network.getSize();
+        if (!fresh) UNSPECIFIED_SEEDS.add(k.network);
+    }
+
+    private static boolean close(float a, float b) {
+        return Math.abs(a - b) <= 1e-3 * Math.max(Math.max(Math.abs(a), Math.abs(b)), 1);
+    }
+
+    static int networkSize(KineticBlockEntity k) {
+        return namedNetwork(k).getSize();
+    }
+
+    /**
+     * KineticNetwork.calculateStress and calculateCapacity over the entries still in the level,
+     * summed as they sum them, without their pruning.
+     */
+    static float[] networkTotals(KineticBlockEntity k) {
+        KineticNetwork network = namedNetwork(k);
+        float stress =
+                TransportObservations.<Float>field(network, KineticNetwork.class, "unloadedStress");
+        for (KineticBlockEntity be : network.members.keySet())
+            if (be.getLevel().getBlockEntity(be.getBlockPos()) == be)
+                stress += network.getActualStressOf(be);
+        float capacity =
+                TransportObservations.<Float>field(network, KineticNetwork.class, "unloadedCapacity");
+        for (KineticBlockEntity be : network.sources.keySet())
+            if (be.getLevel().getBlockEntity(be.getBlockPos()) == be)
+                capacity += network.getActualCapacityOf(be);
+        return new float[] {stress, capacity};
     }
 
     static JsonObject kinetic(KineticBlockEntity k) {
@@ -202,6 +260,11 @@ final class Observations {
         o.addProperty("overstressed", k.isOverStressed());
         o.addProperty("stress", field(k, "stress"));
         o.addProperty("capacity", field(k, "capacity"));
+        if (k.network != null) {
+            float[] totals = networkTotals(k);
+            o.addProperty("network_stress", totals[0]);
+            o.addProperty("network_capacity", totals[1]);
+        }
         // calculateStressApplied/calculateAddedStressCapacity also cache their result in the
         // entity (lastStressApplied, lastCapacityProvided), which write() saves: observing must
         // not change what Create later saves, so the caches are put back.

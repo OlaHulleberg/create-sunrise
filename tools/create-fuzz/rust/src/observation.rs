@@ -94,6 +94,12 @@ pub struct Kinetic {
     /// The network's stress and capacity as the block holds them (`stress`, `capacity`).
     pub stress: f32,
     pub capacity: f32,
+    /// The network's stress and capacity recalculated from its sources and members
+    /// (`KineticNetwork.calculateStress`, `calculateCapacity`).
+    #[serde(default)]
+    pub network_stress: f32,
+    #[serde(default)]
+    pub network_capacity: f32,
     /// Its own stress impact and capacity per rpm (`calculateStressApplied`,
     /// `calculateAddedStressCapacity`).
     pub impact: f32,
@@ -117,6 +123,10 @@ pub struct Kinetic {
 pub struct Networks {
     pub partitions: Vec<Vec<String>>,
     pub sizes: BTreeMap<String, i32>,
+    /// Blocks whose network a reload re-seeded from figures Create does not repeat: its size
+    /// and recalculated totals are not compared there.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub unspecified: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]

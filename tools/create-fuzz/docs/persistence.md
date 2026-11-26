@@ -36,9 +36,13 @@ sequencer writes. This is timing metadata, not a compared result. `rust <case.js
 matching standalone replay (default phase 0). No world clock is reset.
 
 The additive saved records compare kinetic speed/update flag/source position
-and network stress/capacity/added contributions. The saved network `size` is not
-compared: after `KineticNetwork.remove` it is not specified (`rust/src/allow.rs`,
-`saved_network_size`). The live network sizes are. Raw network ids are never
+and network added contributions. The saved network `size`, `stress` and
+`capacity` are not compared: Create does not specify which members a change
+reaches (`rust/src/allow.rs`, `saved_network_size`,
+`cached_network_figures`). The live network sizes and the recalculated network
+stress and capacity are, except for a network the reload re-seeded from a stale
+saved figure (`KineticBlockEntity.initialize`, `initFromTE`): its blocks are
+listed in `networks.unspecified`. Raw network ids are never
 emitted. Subsystem payloads compare sequencer instructions/run; valve selected
 angle/total use duration/target; belt controller/index/length/casing, persisted
 inventory order/stack/position/lock; and depot held slots. Floating fields use

@@ -5,6 +5,7 @@ impl Run {
         let mut blocks = BTreeMap::new();
         let mut groups: BTreeMap<i64, Vec<String>> = BTreeMap::new();
         let mut sizes = BTreeMap::new();
+        let mut unspecified = Vec::new();
         for p in sc.region() {
             let id = self.at(p);
             let state = self.name(id);
@@ -17,6 +18,9 @@ impl Run {
                     key(p),
                     i32::try_from(size).expect("network size fits Java int"),
                 );
+                if self.unspecified_seeds.contains(&network) {
+                    unspecified.push(key(p));
+                }
             }
             blocks.insert(
                 key(p),
@@ -83,6 +87,7 @@ impl Run {
             group.sort();
         }
         partitions.sort();
+        unspecified.sort();
         Snapshot {
             origin: self.native_origin,
             save_phase: self.persisted.phase,
@@ -96,7 +101,11 @@ impl Run {
                 }
                 unavailable
             },
-            networks: Some(crate::observation::Networks { partitions, sizes }),
+            networks: Some(crate::observation::Networks {
+                partitions,
+                sizes,
+                unspecified,
+            }),
             blocks,
             notes: self.notes.clone(),
             checkpoints: BTreeMap::new(),
@@ -121,6 +130,7 @@ impl Run {
         };
         let part = parts(block, info, &settings)?;
         let (theoretical, stress, capacity, overstressed) = k.network(p, 0)?;
+        let (network_stress, network_capacity) = k.network_totals(p, 0)?;
         let speed = k.speed(p, 0)?;
         let generated = k.generated(p, 0)?;
         // A split shaft is one block entity in Create: each face turns at the speed its source
@@ -147,6 +157,8 @@ impl Run {
             overstressed,
             stress,
             capacity,
+            network_stress,
+            network_capacity,
             impact: part.impact,
             added_capacity: part.capacity,
             generated,

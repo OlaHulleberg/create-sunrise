@@ -1153,6 +1153,18 @@ impl Kinetics {
         Some((net, self.networks.figures(Some(net)).2))
     }
 
+    /// A part's network stress and capacity, summed over the network's sources and members as
+    /// `KineticNetwork.calculateStress` and `calculateCapacity` do at their next run, without
+    /// changing the registry.
+    pub fn network_totals(&self, pos: [i32; 3], sub: u8) -> Option<(f32, f32)> {
+        let id = *self.at.get(&pos)?.get(sub as usize)?;
+        if id == NONE {
+            return None;
+        }
+        let net = self.nodes[id as usize].state.net;
+        Some(self.networks.totals(net, &self.nodes))
+    }
+
     /// The speed a part generates (`getGeneratedSpeed`), 0 for one that does not.
     pub fn generated(&self, pos: [i32; 3], sub: u8) -> Option<f32> {
         let id = *self.at.get(&pos)?.get(sub as usize)?;

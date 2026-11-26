@@ -58,6 +58,12 @@ pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
     {
         out.push(format!("drops: java {j:?} rust {r:?}"));
     }
+    let unspecified: std::collections::BTreeSet<&String> = java
+        .networks
+        .iter()
+        .chain(rust.networks.iter())
+        .flat_map(|n| n.unspecified.iter())
+        .collect();
     if let (Some(j), Some(r)) = (&java.networks, &rust.networks) {
         let normalize = |groups: &[Vec<String>]| {
             let mut groups = groups.to_vec();
@@ -70,13 +76,21 @@ pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
         if normalize(&j.partitions) != normalize(&r.partitions) {
             out.push("network partitions differ".into());
         }
-        if j.sizes != r.sizes {
+        let specified = |sizes: &std::collections::BTreeMap<String, i32>| {
+            sizes
+                .iter()
+                .filter(|(k, _)| !unspecified.contains(k))
+                .map(|(k, v)| (k.clone(), *v))
+                .collect::<std::collections::BTreeMap<_, _>>()
+        };
+        if specified(&j.sizes) != specified(&r.sizes) {
             out.push("network sizes differ".into());
         }
     }
     let keys: std::collections::BTreeSet<&String> =
         java.blocks.keys().chain(rust.blocks.keys()).collect();
     for k in keys {
+        let unspecified = unspecified.contains(k);
         match (java.blocks.get(k), rust.blocks.get(k)) {
             (Some(j), None) => out.push(format!("{k}: java has {}, rust has air", j.state)),
             (None, Some(r)) => out.push(format!("{k}: java has air, rust has {}", r.state)),
@@ -182,9 +196,11 @@ pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
                     out.push(format!("{k}: state {d}"));
                 }
                 match (&j.kinetic, &r.kinetic) {
-                    (Some(a), Some(b)) => {
-                        out.extend(kinetic_diff(a, b).into_iter().map(|d| format!("{k}: {d}")))
-                    }
+                    (Some(a), Some(b)) => out.extend(
+                        kinetic_diff(a, b, unspecified)
+                            .into_iter()
+                            .map(|d| format!("{k}: {d}")),
+                    ),
                     (Some(_), None) => {
                         out.push(format!("{k}: java kinetic, rust not ({})", j.state))
                     }
@@ -457,7 +473,7 @@ fn state_diff(j: &str, r: &str) -> Option<String> {
     (!differing.is_empty()).then(|| differing.join(", "))
 }
 
-fn kinetic_diff(j: &Kinetic, r: &Kinetic) -> Vec<String> {
+fn kinetic_diff(j: &Kinetic, r: &Kinetic, unspecified: bool) -> Vec<String> {
     let mut out = Vec::new();
     let mut f = |name: &str, a: f32, b: f32| {
         if !close(a, b) {
@@ -466,11 +482,19 @@ fn kinetic_diff(j: &Kinetic, r: &Kinetic) -> Vec<String> {
     };
     f("speed", j.speed, r.speed);
     f("theoretical", j.theoretical, r.theoretical);
-    f("stress", j.stress, r.stress);
-    f("capacity", j.capacity, r.capacity);
+    if !unspecified {
+        f("network stress", j.network_stress, r.network_stress);
+        f("network capacity", j.network_capacity, r.network_capacity);
+    }
     f("impact", j.impact, r.impact);
     f("added_capacity", j.added_capacity, r.added_capacity);
     f("generated", j.generated, r.generated);
+    if !crate::allow::cached_network_figures((j.stress, j.capacity), (r.stress, r.capacity)) {
+        out.push(format!(
+            "cached stress and capacity: java {} {} rust {} {}",
+            j.stress, j.capacity, r.stress, r.capacity
+        ));
+    }
     if let (Some(jf), Some(rf)) = (&j.faces, &r.faces) {
         for (face, a) in jf {
             let b = rf.get(face).copied().unwrap_or(f32::NAN);
@@ -657,6 +681,51 @@ mod tests {
                 assert!(!reason.is_empty());
             }
         }
+    }
+    #[test]
+    fn an_unspecified_networks_size_and_totals_are_not_compared() {
+        use crate::scenario::BlockSnap;
+        let snapshot = |size: i32, capacity: f32, unspecified: Vec<String>| Snapshot {
+            networks: Some(Networks {
+                partitions: vec![vec!["0,8,0".into()]],
+                sizes: [("0,8,0".to_string(), size)].into_iter().collect(),
+                unspecified,
+            }),
+            blocks: [(
+                "0,8,0".to_string(),
+                BlockSnap {
+                    kinetic: Some(crate::scenario::Kinetic {
+                        network_capacity: capacity,
+                        ..Default::default()
+                    }),
+                    ..Default::default()
+                },
+            )]
+            .into_iter()
+            .collect(),
+            ..Snapshot::default()
+        };
+        assert_eq!(
+            diff(&snapshot(2, 0., vec![]), &snapshot(5, 524288., vec![])),
+            [
+                "network sizes differ",
+                "0,8,0: network capacity: java 0 rust 524288"
+            ]
+        );
+        assert!(
+            diff(
+                &snapshot(2, 0., vec!["0,8,0".into()]),
+                &snapshot(5, 524288., vec![])
+            )
+            .is_empty()
+        );
+        assert!(
+            diff(
+                &snapshot(2, 0., vec![]),
+                &snapshot(5, 524288., vec!["0,8,0".into()])
+            )
+            .is_empty()
+        );
     }
     #[test]
     fn partitions_compare_membership_independently_of_order() {

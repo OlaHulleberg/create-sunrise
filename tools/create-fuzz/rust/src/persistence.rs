@@ -50,8 +50,10 @@ pub fn equal(a: &Option<Saved>, b: &Option<Saved>) -> bool {
                     (None, None) => true,
                     (Some(a), Some(b)) => {
                         crate::allow::saved_network_size(a.size, b.size)
-                            && close(a.stress, b.stress)
-                            && close(a.capacity, b.capacity)
+                            && crate::allow::cached_network_figures(
+                                (a.stress, a.capacity),
+                                (b.stress, b.capacity),
+                            )
                             && close(a.added_stress, b.added_stress)
                             && close(a.added_capacity, b.added_capacity)
                     }
@@ -101,7 +103,7 @@ mod tests {
     use create_engine::kinetics::{SavedKineticState, SavedNetwork};
 
     #[test]
-    fn identity_is_excluded_but_saved_network_figures_are_compared() {
+    fn identity_and_cached_network_figures_are_excluded() {
         let saved = |id| SavedKineticState {
             speed: 32.,
             source: None,
@@ -119,10 +121,13 @@ mod tests {
         let a = Some(Saved::from(saved(1)));
         let mut b = Some(Saved::from(saved(9999)));
         assert!(equal(&a, &b));
-        // `allow::saved_network_size`: Create's own value is unspecified.
+        // `allow::saved_network_size`, `allow::cached_network_figures`: Create's own values
+        // are unspecified.
         b.as_mut().unwrap().network.as_mut().unwrap().size = 3;
-        assert!(equal(&a, &b));
         b.as_mut().unwrap().network.as_mut().unwrap().capacity = 513.;
+        b.as_mut().unwrap().network.as_mut().unwrap().stress = 65.;
+        assert!(equal(&a, &b));
+        b.as_mut().unwrap().network.as_mut().unwrap().added_capacity = 15.;
         assert!(!equal(&a, &b));
         assert!(!equal(&a, &None));
     }

@@ -153,6 +153,7 @@ final class CaseIsolation {
 
     static void begin(ServerLevel level) {
         empty(level);
+        Observations.UNSPECIFIED_SEEDS.clear();
         NetworkIsolation.reset(level);
         try {
             var field = TorquePropagator.class.getDeclaredField("networks");

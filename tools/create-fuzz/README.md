@@ -97,6 +97,10 @@ strictly its own `strength`.
   processing results: those compare by structure, and no family does what a roll would change
   ([rolled results](docs/processing-scope.md#rolled-results)).
 - `rust/src/allow.rs` lists the differences confirmed not to be port bugs, each with its evidence.
+- A block's cached network `stress` and `capacity`, live and saved, are not compared: Create syncs them per
+  member on a schedule its `HashMap` order picks, so Java does not repeat them (`allow.rs`,
+  `cached_network_figures`). The network's recalculated totals are (`network_stress`, `network_capacity`),
+  as its live size is, except for a network a reload re-seeded from a stale saved figure (`networks.unspecified`).
 - A placed block's state starts from the port's `default_state` (`create/data/create/sunrise/block/<name>.json` in the
   checkout `run.sh` drives, `CREATE_HORIZON_DIR`), as the game's placement starts from the block's default.
 - The port's glue rules the engine lacks (a crank breaks when its support goes) are mirrored in `rust/src/engine.rs`.

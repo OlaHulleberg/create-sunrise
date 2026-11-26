@@ -252,6 +252,10 @@ pub struct Run {
     /// Tank layers a player's placement queued (`FluidTankItem.tryMultiPlace`).
     tank_layers: Vec<Vec<Pos>>,
     measured_trig: HashMap<Pos, String>,
+    /// Networks a reload re-seeded from figures Create does not repeat.
+    unspecified_seeds: std::collections::HashSet<i64>,
+    /// The tick of the last reload: one more in the same tick judges nothing new.
+    reloaded_at: Option<u32>,
     java_ties: bool,
     native_origin: Pos,
     creative: bool,
@@ -351,6 +355,8 @@ impl Run {
             fluid_host: None,
             fluid_host_enabled: crate::fluid_world::stepping(sc),
             native_failed: false,
+            unspecified_seeds: std::collections::HashSet::new(),
+            reloaded_at: None,
             fluid_rules: crate::fluid_world::Rules::default(),
             fluid_facts: HashMap::new(),
             fluid_host_changes: Vec::new(),

@@ -366,6 +366,25 @@ impl Run {
             .iter()
             .map(|(p, e)| (*p, reloaded_ejector(e)))
             .collect();
+        // KineticBlockEntity.initialize seeds a loaded network with its first entity's saved
+        // figures (KineticNetwork.initFromTE); one Create does not repeat leaves them unspecified.
+        let again = self.reloaded_at == Some(self.now);
+        let changed = |a: f32, b: f32| (a - b).abs() > 1e-3 * a.abs().max(b.abs()).max(1.);
+        for (p, sub, data) in entities.iter().filter(|_| !again) {
+            let Some(network) = codec::saved_from_nbt(data).and_then(|saved| saved.network) else {
+                continue;
+            };
+            let kinetics = &self.w.dims[0].kinetics;
+            let totals = kinetics.network_totals(*p, *sub);
+            let live = kinetics.network_membership(*p, *sub);
+            if totals.is_none_or(|(stress, capacity)| {
+                changed(network.stress, stress) || changed(network.capacity, capacity)
+            }) || live.is_none_or(|(_, size)| size != network.size)
+            {
+                self.unspecified_seeds.insert(network.id);
+            }
+        }
+        self.reloaded_at = Some(self.now);
         for &(cx, cz) in &columns {
             self.w.column_unloaded(0, cx, cz);
         }

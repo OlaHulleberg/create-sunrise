@@ -74,8 +74,56 @@ pub fn trig_state(java: &str, port: &str, measured: Option<&MeasuredTrigState>) 
 /// Not a port bug: Create's code does not define the value, and no pick of the port's is Java's
 /// (identity hashes). A member can leave and rejoin a network within one tick, which no snapshot
 /// shows, so the comparison cannot tell where a saved size is still specified, and leaves the
-/// field out. The live `networks.sizes` (`KineticNetwork.getSize`) are compared.
+/// field out. The live `networks.sizes` (`KineticNetwork.getSize`) are compared, until a reload
+/// seeds the network from such a figure (`cached_network_figures`).
 pub fn saved_network_size(_java: u32, _port: u32) -> bool {
+    true
+}
+
+/// Whether a block's cached network stress and capacity agree, as `(stress, capacity)`. They
+/// always do: live (`KineticBlockEntity.capacity`, `.stress`) and saved (`Network.Capacity`,
+/// `Network.Stress`), the four are left out of the comparison.
+///
+/// `KineticBlockEntity.capacity` and `.stress` (`KineticBlockEntity.java:66-67`) hold what its
+/// last `updateFromNetwork` (:155-169) wrote: its network's totals when the `KineticNetwork.add`
+/// that enrolled it ran (:58-66) or at a later `sync` (:98-101), which only a recalculation that
+/// changed a total runs (:107-131); or the zeros of `remove` (:84) and `clearKineticInformation`
+/// (:487-496). Which members a change reaches is not specified. `remove` flags whichever member
+/// its `HashMap` yields first (:92-95), and a flagged member's `tick` recalculates the network it
+/// is in by then (`KineticBlockEntity.java:120-124`). `clearKineticInformation` empties `network`
+/// without leaving the network's `members`: the entity stays there as a stale entry the flag can
+/// land on, and `add` returns early for it (:59-60) without syncing it.
+///
+/// Measured on Java 6.0.11 (`b62e837`), the case of `persistence/network-capacity-case.json`
+/// (shrunk from seed 1453 of `transmission/sequenced_gearshift`: a motor, a sequenced gearshift,
+/// two shafts and a hand crank; two signal pulses, the crank turned at ticks 26 and 50), each run
+/// alone in the same slot. At checkpoints 51-54 all five are in one network that holds the motor
+/// (524288) and the crank (256): in 24 runs its recalculated stress and capacity read 0 and
+/// 524544 for all five every time, while the sequencer's cached `capacity` was 0, its `Size` 4,
+/// in 9 runs and 524544, its `Size` 5, in 15. A trace of seeds 429, 1453 and 2477 (36 runs)
+/// places the fork at tick 28, when the far side leaves the motor's network: with the stale
+/// sequencer first in `members` the network keeps 524544, the crank's 256 included, and with the
+/// motor first it is recalculated to 524288; that told the sequencer's figure at tick 51 in 36 of
+/// 36. The same case with `create:mechanical_press[facing=north]` for the second shaft saves
+/// `stress` 0 in 3 of 8 runs and 256 in 5. With the caches compared, `repeat-java 6 --compact
+/// 429 1453 2477` differs in 15 of 30 rounds on the default JVM and in 0 of 30 under
+/// `-XX:hashCode=2`, where every identity hash is equal.
+///
+/// The caches reach a reload too: `KineticBlockEntity.initialize` (:86-92) seeds a loaded network
+/// with its first entity's saved `capacity`, `stress` and `networkSize`
+/// (`KineticNetwork.initFromTE`, :27-34), so from then on even the live `getSize` and the
+/// recalculated totals hold what was saved. Seed 3501 of the same shape (`dead_face`, upright)
+/// reloads at tick 47 with the motor's cache fresh in one Java run, size 2 and 524288, and stale
+/// in another, 5 and 524544: the live sizes agree until then and read 2 and 5 from tick 48 to
+/// 70. A network whose saved figures differ from its recalculated ones is listed in
+/// `networks.unspecified` on both sides, and its size and totals are not compared there.
+///
+/// Not a port bug: Create's code does not define which member a change reaches, and no pick of
+/// the port's is Java's (identity hashes). A snapshot cannot tell a stale figure from a current
+/// one, so the comparison leaves the caches out and compares `network_stress` and
+/// `network_capacity`: the totals recalculated from the network's sources and members, which no
+/// member's cache affects.
+pub fn cached_network_figures(_java: (f32, f32), _port: (f32, f32)) -> bool {
     true
 }
 
@@ -178,6 +226,53 @@ mod measured_tests {
         assert!(crate::compare::diff(&j, &snap).contains(&"network sizes differ".into()));
     }
     #[test]
+    fn cached_network_figures_are_not_compared() {
+        let sc: crate::scenario::Scenario =
+            serde_json::from_str(include_str!("persistence/network-capacity-case.json")).unwrap();
+        let snap = crate::engine::run(&sc);
+        let tick = &snap.checkpoints[&51];
+        for key in ["0,8,-1", "0,8,0", "0,8,1", "0,8,2", "0,8,3"] {
+            let kinetic = tick.blocks[key].kinetic.as_ref().unwrap();
+            assert_eq!(
+                (kinetic.network_stress, kinetic.network_capacity),
+                (0.0, 524544.0),
+                "{key}"
+            );
+        }
+        assert!([0.0, 524544.0].contains(&tick.blocks["0,8,0"].kinetic.as_ref().unwrap().capacity));
+        let mut other = snap.clone();
+        for block in other.blocks.values_mut().chain(
+            other
+                .checkpoints
+                .values_mut()
+                .flat_map(|c| c.blocks.values_mut()),
+        ) {
+            if let Some(kinetic) = block.kinetic.as_mut() {
+                kinetic.stress += 1.;
+                kinetic.capacity += 1.;
+            }
+            if let Some(network) = block.saved.as_mut().and_then(|s| s.network.as_mut()) {
+                network.stress += 1.;
+                network.capacity += 1.;
+            }
+        }
+        assert!(crate::compare::diff(&other, &snap).is_empty());
+        let sequencer = other
+            .checkpoints
+            .get_mut(&51)
+            .unwrap()
+            .blocks
+            .get_mut("0,8,0")
+            .unwrap();
+        sequencer.kinetic.as_mut().unwrap().network_capacity *= 0.5;
+        assert!(
+            crate::compare::diff(&other, &snap)
+                .iter()
+                .any(|d| d.contains("network capacity"))
+        );
+    }
+
+    #[test]
     fn saved_network_size_is_not_compared() {
         let sc = serde_json::from_str(include_str!("persistence/network-size-case.json")).unwrap();
         let snap = crate::engine::run(&sc);
@@ -214,7 +309,7 @@ mod measured_tests {
             .network
             .as_mut()
             .unwrap()
-            .capacity *= 2.;
+            .added_capacity *= 2.;
         assert!(
             crate::compare::diff(&other, &snap)
                 .iter()
