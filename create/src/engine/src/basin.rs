@@ -548,6 +548,7 @@ impl Mixer {
     }
 
     /// One server tick at `speed` (rpm, signed); `time` the recipe's processing duration.
+    pub fn tick(&mut self, speed: f32, time: i32) -> MixStep {
         // `isSpeedRequirementFulfilled` (`MechanicalMixerBlock`'s medium speed): too slow, the
         // head goes back up as when still.
         let fulfilled = speed.abs() >= MIXER_MIN_SPEED;
