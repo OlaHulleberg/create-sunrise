@@ -312,6 +312,15 @@ pub trait Subsystem: Sync {
     ) {
     }
 
+    /// A world fluid is asked whether it may flow one step sideways (`FlowingFluid.canPassThrough`):
+    /// set `passes` to false to close that side. Read-only, and asked often: answer from reads.
+    fn fluid_passage(
+        &self,
+        _level: &dyn mod_api::LevelHost,
+        _event: &mut mod_api::FluidPassageEvent<'_>,
+    ) {
+    }
+
     /// An item on the belt segment at `segment` reaches its middle (`locked` false:
     /// `BeltProcessingBehaviour.handleReceivedItem`) or is held there (`handleHeldItem`): what
     /// a machine above it does. The first subsystem to answer acts; None when it has none there.

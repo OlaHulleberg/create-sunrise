@@ -19,8 +19,8 @@ use create_engine::Block;
 use create_engine::client::Draw;
 use create_engine::dye;
 use mod_api::{
-    ClientHost, Compound, EquipmentSlot, Flow, HostSide, ParticleProviders, Registrar,
-    RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
+    ClientHost, Compound, EquipmentSlot, Flow, FluidPassageEvent, HostSide, LevelHost,
+    ParticleProviders, Registrar, RegistrationContext, RightClickBlockEvent, ServerHost, Tag,
 };
 use std::cell::RefCell;
 
@@ -198,6 +198,10 @@ impl Subsystem for Sources {
         handles::client_reset();
         stress::client_reset();
         ambience::client_reset();
+    }
+
+    fn fluid_passage(&self, level: &dyn LevelHost, event: &mut FluidPassageEvent<'_>) {
+        waterwheels::fluid_passage(level, event);
     }
 
     fn right_click_block(&self, host: HostSide, event: &mut RightClickBlockEvent<'_>) -> Flow {
