@@ -695,42 +695,6 @@ impl MenuPart for ToolboxButtons {
     }
 }
 
-#[cfg(test)]
-mod toolbox_button_tests {
-    use super::*;
-
-    #[test]
-    fn the_shared_toolbox_menu_only_decodes_deposit_and_confirm() {
-        let menu = create_engine::toolbox::MENU;
-        for block in Block::ALL
-            .iter()
-            .copied()
-            .filter(|block| dye::is_toolbox(*block))
-        {
-            let name = format!("create:{}", block.name());
-            let decode = |id| ToolboxAction::decode(menu, Some(&name), id);
-            assert_eq!(
-                decode(TOOLBOX_DEPOSIT_BUTTON),
-                Some(ToolboxAction::DepositAll)
-            );
-            assert_eq!(decode(TOOLBOX_CONFIRM_BUTTON), Some(ToolboxAction::Confirm));
-            for id in [i32::MIN, 2, 100, i32::MAX] {
-                assert_eq!(decode(id), None);
-            }
-        }
-        for (menu, block) in [
-            (menu, None),
-            (menu, Some("create:schematicannon")),
-            ("create:schematicannon", Some("create:red_toolbox")),
-        ] {
-            assert_eq!(
-                ToolboxAction::decode(menu, block, TOOLBOX_DEPOSIT_BUTTON),
-                None
-            );
-        }
-    }
-}
-
 /// `ToolboxScreen.renderBg`: each compartment shows its first stack with the compartment's total
 /// (`totalCountInCompartment`) for its count. The screen's slots draw their own stack's count, so
 /// over a compartment holding more than its first stack the slot is drawn again: the
@@ -896,5 +860,41 @@ fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
     });
     if let Some(entity) = entity {
         let _ = entity.set_changed(event.subject.host());
+    }
+}
+
+#[cfg(test)]
+mod toolbox_button_tests {
+    use super::*;
+
+    #[test]
+    fn the_shared_toolbox_menu_only_decodes_deposit_and_confirm() {
+        let menu = create_engine::toolbox::MENU;
+        for block in Block::ALL
+            .iter()
+            .copied()
+            .filter(|block| dye::is_toolbox(*block))
+        {
+            let name = format!("create:{}", block.name());
+            let decode = |id| ToolboxAction::decode(menu, Some(&name), id);
+            assert_eq!(
+                decode(TOOLBOX_DEPOSIT_BUTTON),
+                Some(ToolboxAction::DepositAll)
+            );
+            assert_eq!(decode(TOOLBOX_CONFIRM_BUTTON), Some(ToolboxAction::Confirm));
+            for id in [i32::MIN, 2, 100, i32::MAX] {
+                assert_eq!(decode(id), None);
+            }
+        }
+        for (menu, block) in [
+            (menu, None),
+            (menu, Some("create:schematicannon")),
+            ("create:schematicannon", Some("create:red_toolbox")),
+        ] {
+            assert_eq!(
+                ToolboxAction::decode(menu, block, TOOLBOX_DEPOSIT_BUTTON),
+                None
+            );
+        }
     }
 }

@@ -1708,55 +1708,6 @@ impl MenuPart for SchematicMenus {
     }
 }
 
-#[cfg(test)]
-mod menu_tests {
-    use super::*;
-    use body::TableFile::{Local, Saved};
-
-    #[test]
-    fn table_only_decodes_indexed_uploads_for_its_own_backing() {
-        assert_eq!(
-            SchematicAction::decode(TABLE_MENU, Some(TABLE_MENU), screens::UPLOAD + 1),
-            Some(SchematicAction::Upload(TableUpload(1)))
-        );
-        for id in [i32::MIN, 0, screens::UPLOAD - 1] {
-            assert_eq!(TableUpload::decode(id), None);
-        }
-        assert_eq!(
-            TableUpload::decode(i32::MAX),
-            Some(TableUpload((i32::MAX - screens::UPLOAD) as usize))
-        );
-        for (menu, block) in [
-            (TABLE_MENU, None),
-            (TABLE_MENU, Some(CANNON_MENU)),
-            (CANNON_MENU, Some(CANNON_MENU)),
-            ("create:toolbox", Some(TABLE_MENU)),
-        ] {
-            assert_eq!(SchematicAction::decode(menu, block, screens::UPLOAD), None);
-        }
-    }
-
-    #[test]
-    fn table_selection_cannot_escape_the_players_current_list() {
-        let root = || Local("root.nbt".into());
-        let saved = || Saved("saved.nbt".into());
-        let select = |id, files| match SchematicAction::decode(TABLE_MENU, Some(TABLE_MENU), id) {
-            Some(SchematicAction::Upload(action)) => action.select(files),
-            _ => None,
-        };
-        assert_eq!(select(screens::UPLOAD, vec![root()]), Some(root()));
-        // The same ordinal resolves to the owner's save only if the authenticated list includes it.
-        assert_eq!(
-            select(screens::UPLOAD + 1, vec![root(), saved()]),
-            Some(saved())
-        );
-        assert_eq!(select(screens::UPLOAD + 1, vec![root()]), None);
-        assert_eq!(select(screens::UPLOAD, vec![]), None);
-        assert_eq!(select(screens::UPLOAD - 1, vec![root()]), None);
-        assert_eq!(select(i32::MAX, vec![root(), saved()]), None);
-    }
-}
-
 /// A cannon's slots changed (a player's click in its menu): it looks at them again.
 struct CannonBlock;
 
@@ -2795,4 +2746,53 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
             d.wake(pos, now);
         }
     });
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+    use body::TableFile::{Local, Saved};
+
+    #[test]
+    fn table_only_decodes_indexed_uploads_for_its_own_backing() {
+        assert_eq!(
+            SchematicAction::decode(TABLE_MENU, Some(TABLE_MENU), screens::UPLOAD + 1),
+            Some(SchematicAction::Upload(TableUpload(1)))
+        );
+        for id in [i32::MIN, 0, screens::UPLOAD - 1] {
+            assert_eq!(TableUpload::decode(id), None);
+        }
+        assert_eq!(
+            TableUpload::decode(i32::MAX),
+            Some(TableUpload((i32::MAX - screens::UPLOAD) as usize))
+        );
+        for (menu, block) in [
+            (TABLE_MENU, None),
+            (TABLE_MENU, Some(CANNON_MENU)),
+            (CANNON_MENU, Some(CANNON_MENU)),
+            ("create:toolbox", Some(TABLE_MENU)),
+        ] {
+            assert_eq!(SchematicAction::decode(menu, block, screens::UPLOAD), None);
+        }
+    }
+
+    #[test]
+    fn table_selection_cannot_escape_the_players_current_list() {
+        let root = || Local("root.nbt".into());
+        let saved = || Saved("saved.nbt".into());
+        let select = |id, files| match SchematicAction::decode(TABLE_MENU, Some(TABLE_MENU), id) {
+            Some(SchematicAction::Upload(action)) => action.select(files),
+            _ => None,
+        };
+        assert_eq!(select(screens::UPLOAD, vec![root()]), Some(root()));
+        // The same ordinal resolves to the owner's save only if the authenticated list includes it.
+        assert_eq!(
+            select(screens::UPLOAD + 1, vec![root(), saved()]),
+            Some(saved())
+        );
+        assert_eq!(select(screens::UPLOAD + 1, vec![root()]), None);
+        assert_eq!(select(screens::UPLOAD, vec![]), None);
+        assert_eq!(select(screens::UPLOAD - 1, vec![root()]), None);
+        assert_eq!(select(i32::MAX, vec![root(), saved()]), None);
+    }
 }
