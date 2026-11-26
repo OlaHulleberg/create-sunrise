@@ -16,11 +16,12 @@ use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::client::{Draw, Model};
 use create_engine::kinetics::{Axis, Dir};
+use create_engine::parts::StateInfo;
 use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
 use mod_api::{
-    BlockEntityPart, BlockPart, BlockState, CanSurviveEvent, ClientHost, Compound, Flow, Hand,
-    HostBlockStates, HostSide, InteractionResult, Registrar, RightClickBlockEvent, Tag,
-    UseItemOnEvent,
+    BlockEntityPart, BlockPart, BlockState, CanSurviveEvent, ClientHost, Compound, Flow,
+    FluidPassageEvent, Hand, HostBlockStates, HostSide, InteractionResult, LevelHost, Registrar,
+    RightClickBlockEvent, Tag, UseItemOnEvent,
 };
 
 /// The key of a wheel's material in its block entity data (`WaterWheelBlockEntity.write`).
@@ -341,4 +342,185 @@ pub fn flow_at(lv: &ServerLevel<'_>, at: [i32; 3]) -> [f64; 3] {
     lv.level
         .fluid_flow(&*lv.host, at)
         .map_or([0.0; 3], |v| [v.x, v.y, v.z])
+}
+
+/// `WaterWheelFluidSpreadMixin.canPassThroughOnWaterWheel`: a fluid does not flow sideways along
+/// the axis of the water wheel (or the large wheel its frame holds) in the cell below it.
+pub fn fluid_passage(level: &dyn LevelHost, event: &mut FluidPassageEvent<'_>) {
+    if !event.passes {
+        return;
+    }
+    let direction = Dir::ALL[event.direction as usize];
+    let below = [event.from.x, event.from.y - 1, event.from.z];
+    if wheel_blocks(direction, below, &|p| states::level_info_at(level, p)) {
+        event.passes = false;
+    }
+}
+
+/// Whether the wheel below a fluid cell closes its step `direction`: a horizontal step along the
+/// rotation axis of the water wheel at `below`, or of the large wheel its frame cell holds
+/// (`stillValid`, then `getMaster`). `info_at` reads the Create block at a position.
+fn wheel_blocks(
+    direction: Dir,
+    below: [i32; 3],
+    info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+) -> bool {
+    if direction.axis() == Axis::Y {
+        return false;
+    }
+    let axis = match info_at(below) {
+        Some((Block::WaterWheel, info)) => info.facing.map(Dir::axis),
+        Some((Block::WaterWheelStructure, info)) => info
+            .facing
+            .filter(|&f| frame_holds(below, f, false, info_at))
+            .and_then(|f| master_axis(below, f, info_at)),
+        _ => None,
+    };
+    axis == Some(direction.axis())
+}
+
+/// `WaterWheelStructuralBlock.stillValid`: the frame cell at `pos` facing `facing` points at a
+/// large wheel turning across it, directly or through the frame cell beside the wheel.
+fn frame_holds(
+    pos: [i32; 3],
+    facing: Dir,
+    directly_adjacent: bool,
+    info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+) -> bool {
+    let target = add(pos, facing.offset());
+    let target_info = info_at(target);
+    if !directly_adjacent
+        && let Some((Block::WaterWheelStructure, info)) = target_info
+        && let Some(next) = info.facing
+        && frame_holds(target, next, true, info_at)
+    {
+        return true;
+    }
+    matches!(target_info, Some((Block::LargeWaterWheel, info))
+        if info.axis.is_some_and(|a| a != facing.axis()))
+}
+
+/// `WaterWheelStructuralBlock.getMaster`'s wheel: the rotation axis of the large wheel the frame
+/// cell at `pos` facing `facing` leads to, through any frame cells on the way.
+fn master_axis(
+    pos: [i32; 3],
+    facing: Dir,
+    info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+) -> Option<Axis> {
+    let target = add(pos, facing.offset());
+    match info_at(target)? {
+        (Block::WaterWheelStructure, info) => master_axis(target, info.facing?, info_at),
+        (Block::LargeWaterWheel, info) => info.axis,
+        _ => None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashMap;
+
+    fn wheel(facing: Dir) -> (Block, StateInfo) {
+        (
+            Block::WaterWheel,
+            StateInfo {
+                facing: Some(facing),
+                ..StateInfo::default()
+            },
+        )
+    }
+
+    fn large(axis: Axis) -> (Block, StateInfo) {
+        (
+            Block::LargeWaterWheel,
+            StateInfo {
+                axis: Some(axis),
+                ..StateInfo::default()
+            },
+        )
+    }
+
+    fn frame(facing: Dir) -> (Block, StateInfo) {
+        (
+            Block::WaterWheelStructure,
+            StateInfo {
+                facing: Some(facing),
+                ..StateInfo::default()
+            },
+        )
+    }
+
+    /// Whether `direction` is closed above the cell `[0, 1, 0]`, with `cells` the world.
+    fn closed(direction: Dir, cells: &[([i32; 3], (Block, StateInfo))]) -> bool {
+        let world: HashMap<_, _> = cells.iter().copied().collect();
+        wheel_blocks(direction, [0, 0, 0], &|p| world.get(&p).copied())
+    }
+
+    #[test]
+    fn vertical_steps_always_pass() {
+        let cells = [([0, 0, 0], wheel(Dir::East))];
+        assert!(!closed(Dir::Up, &cells));
+        assert!(!closed(Dir::Down, &cells));
+        let cells = [([0, 0, 0], frame(Dir::East)), ([1, 0, 0], large(Axis::Z))];
+        assert!(!closed(Dir::Up, &cells));
+        assert!(!closed(Dir::Down, &cells));
+    }
+
+    #[test]
+    fn a_water_wheel_closes_its_axis() {
+        let cells = [([0, 0, 0], wheel(Dir::East))];
+        assert!(closed(Dir::East, &cells));
+        assert!(closed(Dir::West, &cells));
+        assert!(!closed(Dir::North, &cells));
+        assert!(!closed(Dir::South, &cells));
+    }
+
+    #[test]
+    fn a_frame_beside_a_large_wheel_closes_the_wheels_axis() {
+        // The wheel turns on Z, so its frame cell beside it faces along X.
+        let cells = [([0, 0, 0], frame(Dir::East)), ([1, 0, 0], large(Axis::Z))];
+        assert!(closed(Dir::North, &cells));
+        assert!(closed(Dir::South, &cells));
+        assert!(!closed(Dir::East, &cells));
+        assert!(!closed(Dir::West, &cells));
+    }
+
+    #[test]
+    fn a_corner_frame_closes_through_the_frame_beside_it() {
+        let cells = [
+            ([0, 0, 0], frame(Dir::East)),
+            ([1, 0, 0], frame(Dir::Up)),
+            ([1, 1, 0], large(Axis::Z)),
+        ];
+        assert!(closed(Dir::North, &cells));
+        assert!(closed(Dir::South, &cells));
+        assert!(!closed(Dir::East, &cells));
+        assert!(!closed(Dir::West, &cells));
+    }
+
+    #[test]
+    fn a_frame_that_holds_no_wheel_closes_nothing() {
+        let air = [([0, 0, 0], frame(Dir::East))];
+        let wrong_axis = [([0, 0, 0], frame(Dir::East)), ([1, 0, 0], large(Axis::X))];
+        let too_far = [
+            ([0, 0, 0], frame(Dir::East)),
+            ([1, 0, 0], frame(Dir::East)),
+            ([2, 0, 0], frame(Dir::East)),
+            ([3, 0, 0], large(Axis::Z)),
+        ];
+        for cells in [&air[..], &wrong_axis[..], &too_far[..]] {
+            for d in [Dir::North, Dir::South, Dir::East, Dir::West] {
+                assert!(!closed(d, cells), "{d:?} in {cells:?}");
+            }
+        }
+    }
+
+    #[test]
+    fn other_blocks_below_close_nothing() {
+        let cells = [([0, 0, 0], large(Axis::Z))];
+        for d in Dir::ALL {
+            assert!(!closed(d, &cells));
+            assert!(!closed(d, &[]));
+        }
+    }
 }
