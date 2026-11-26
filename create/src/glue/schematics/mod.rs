@@ -154,11 +154,6 @@ struct Interned {
 }
 
 thread_local! {
-    /// The frame's overlay batches (the quill's outline, the tools' guides), prepared in
-    /// `prepare_render_buffers` for `render_level_stage` (classic `AfterTranslucentBlocks` or
-    /// the three `OitTranslucent` sub-passes under improved transparency).
-    static PREPARED: RefCell<Vec<(mod_api::RenderLevelStage, mod_api::PreparedWorldDraw)>> =
-        const { RefCell::new(Vec::new()) };
     static CANNONS: RefCell<Option<Vec<Dim>>> = const { RefCell::new(None) };
     static EVENTS: RefCell<Vec<Event>> = const { RefCell::new(Vec::new()) };
     static INTERNED: RefCell<Interned> = RefCell::new(Interned::default());
@@ -301,44 +296,8 @@ impl Subsystem for Schematics {
         host: &dyn mod_api::ClientHost,
         event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
     ) {
-        PREPARED.with_borrow_mut(Vec::clear);
         quill::prepare_render_buffers(host, event);
         tools::prepare_render_buffers(event);
-    }
-
-    /// Draws the overlays `prepare_render_buffers` prepared for `event.stage`.
-    fn render_level_stage(
-        &self,
-        _host: &dyn mod_api::ClientHost,
-        event: &mut mod_api::RenderLevelStageEvent<'_>,
-    ) {
-        let mut batches = Vec::new();
-        PREPARED.with_borrow_mut(|prepared| {
-            let mut i = 0;
-            while i < prepared.len() {
-                if prepared[i].0 == event.stage {
-                    batches.push(prepared.remove(i).1);
-                } else {
-                    i += 1;
-                }
-            }
-        });
-        if batches.is_empty() {
-            return;
-        }
-        match event.context.pass() {
-            mod_api::StagePass::World(pass) => {
-                for batch in batches {
-                    let _ = pass.draw(batch);
-                }
-            }
-            mod_api::StagePass::Oit(_, pass) => {
-                for batch in batches {
-                    let _ = pass.draw(batch);
-                }
-            }
-            mod_api::StagePass::None => {}
-        }
     }
 
     fn screen_render_post(
@@ -2668,44 +2627,4 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
             d.wake(pos, now);
         }
     });
-}
-
-/// Which render-level stages carry translucent schematic overlays for `view`:
-/// `AfterTranslucentBlocks` in classic transparency, or all three `OitTranslucent` sub-passes
-/// when improved transparency (OIT) is active.
-fn overlay_stages(view: &mod_api::WorldRenderView<'_>) -> &'static [mod_api::RenderLevelStage] {
-    use mod_api::{OitStage, RenderLevelStage};
-    const CLASSIC: &[RenderLevelStage] = &[RenderLevelStage::AfterTranslucentBlocks];
-    const OIT: &[RenderLevelStage] = &[
-        RenderLevelStage::OitTranslucent(OitStage::DepthBounds),
-        RenderLevelStage::OitTranslucent(OitStage::Transmittance),
-        RenderLevelStage::OitTranslucent(OitStage::Accumulate),
-    ];
-    if view.improved_transparency {
-        OIT
-    } else {
-        CLASSIC
-    }
-}
-
-pub(super) fn prepare_lines(
-    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
-    lines: &[mod_api::WorldLine],
-) {
-    for &stage in overlay_stages(event.view) {
-        if let Ok(batch) = event.context.lines(stage, lines) {
-            PREPARED.with_borrow_mut(|p| p.push((stage, batch)));
-        }
-    }
-}
-
-pub(super) fn prepare_quads(
-    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
-    quads: &[mod_api::WorldQuad],
-) {
-    for &stage in overlay_stages(event.view) {
-        if let Ok(batch) = event.context.quads(stage, quads) {
-            PREPARED.with_borrow_mut(|p| p.push((stage, batch)));
-        }
-    }
 }

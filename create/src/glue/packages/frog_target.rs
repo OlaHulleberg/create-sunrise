@@ -506,9 +506,9 @@ pub(super) fn server_message(channel: &str) -> bool {
 }
 
 /// The point under the crosshair (white) and the chosen one (green), as small boxes.
-pub(super) fn submit_custom_geometry(
+pub(super) fn prepare_render_buffers(
     host: &dyn ClientHost,
-    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
 ) {
     let held = host
         .local_player()
@@ -550,9 +550,7 @@ pub(super) fn submit_custom_geometry(
     if holding && let Some(p) = hovered {
         point(&mut lines, p.at, 0xFFFF_FFFF);
     }
-    if !lines.is_empty() {
-        let _ = event.draw.lines(&lines);
-    }
+    crate::glue::subsystem::prepare_lines(event, &lines);
 }
 
 // ---------------------------------------------------------------------------------------------

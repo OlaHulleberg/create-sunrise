@@ -23,6 +23,101 @@ use mod_api::{
     ScreenMouseButtonReleasedPreEvent, ScreenMouseScrolledPreEvent, ScreenRenderPostEvent,
     ServerHost,
 };
+use std::cell::RefCell;
+
+thread_local! {
+    /// The frame's overlay batches, prepared in `prepare_render_buffers` for `render_level_stage`
+    /// (classic `AfterTranslucentBlocks` or the three `OitTranslucent` sub-passes under improved
+    /// transparency).
+    static PREPARED: RefCell<Vec<(mod_api::RenderLevelStage, mod_api::PreparedWorldDraw)>> =
+        const { RefCell::new(Vec::new()) };
+}
+
+/// Which render-level stages carry translucent overlays for `view`: `AfterTranslucentBlocks` in
+/// classic transparency, or all three `OitTranslucent` sub-passes when improved transparency
+/// (OIT) is active.
+fn overlay_stages(view: &mod_api::WorldRenderView<'_>) -> &'static [mod_api::RenderLevelStage] {
+    use mod_api::{OitStage, RenderLevelStage};
+    const CLASSIC: &[RenderLevelStage] = &[RenderLevelStage::AfterTranslucentBlocks];
+    const OIT: &[RenderLevelStage] = &[
+        RenderLevelStage::OitTranslucent(OitStage::DepthBounds),
+        RenderLevelStage::OitTranslucent(OitStage::Transmittance),
+        RenderLevelStage::OitTranslucent(OitStage::Accumulate),
+    ];
+    if view.improved_transparency {
+        OIT
+    } else {
+        CLASSIC
+    }
+}
+
+/// Drops last frame's prepared overlays (`Hooks::prepare_render_buffers`, before any subsystem
+/// prepares).
+pub(crate) fn clear_prepared_overlays() {
+    PREPARED.with_borrow_mut(Vec::clear);
+}
+
+/// Prepares `lines` for each overlay stage of this frame.
+pub(crate) fn prepare_lines(
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    lines: &[mod_api::WorldLine],
+) {
+    if lines.is_empty() {
+        return;
+    }
+    for &stage in overlay_stages(event.view) {
+        if let Ok(batch) = event.context.lines(stage, lines) {
+            PREPARED.with_borrow_mut(|p| p.push((stage, batch)));
+        }
+    }
+}
+
+/// Prepares `quads` for each overlay stage of this frame.
+pub(crate) fn prepare_quads(
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    quads: &[mod_api::WorldQuad],
+) {
+    if quads.is_empty() {
+        return;
+    }
+    for &stage in overlay_stages(event.view) {
+        if let Ok(batch) = event.context.quads(stage, quads) {
+            PREPARED.with_borrow_mut(|p| p.push((stage, batch)));
+        }
+    }
+}
+
+/// Draws the overlays prepared for `event.stage` (`Hooks::render_level_stage`, before any
+/// subsystem's own stage work).
+pub(crate) fn draw_prepared_overlays(event: &mut mod_api::RenderLevelStageEvent<'_>) {
+    let mut batches = Vec::new();
+    PREPARED.with_borrow_mut(|prepared| {
+        let mut i = 0;
+        while i < prepared.len() {
+            if prepared[i].0 == event.stage {
+                batches.push(prepared.remove(i).1);
+            } else {
+                i += 1;
+            }
+        }
+    });
+    if batches.is_empty() {
+        return;
+    }
+    match event.context.pass() {
+        mod_api::StagePass::World(pass) => {
+            for batch in batches {
+                let _ = pass.draw(batch);
+            }
+        }
+        mod_api::StagePass::Oit(_, pass) => {
+            for batch in batches {
+                let _ = pass.draw(batch);
+            }
+        }
+        mod_api::StagePass::None => {}
+    }
+}
 
 /// A block about to be placed (`Hooks::entity_place`, or a placement the glue makes itself).
 pub struct Placed {
@@ -621,4 +716,42 @@ pub trait Subsystem: Sync {
 
     /// `Hooks::screen_closing`: the open screen is being replaced or closed.
     fn screen_closing(&self, _host: &dyn ClientHost, _event: &mut ScreenClosingEvent<'_>) {}
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mod_api::{OitStage, RenderLevelStage};
+
+    #[test]
+    fn overlay_stages_follow_the_transparency_mode() {
+        let camera = mod_api::Camera {
+            position: [0.0; 3],
+            eye_height: 1.62,
+            partial_tick: 0.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            roll: 0.0,
+            fov_degrees: 70.0,
+            near: 0.05,
+            far: 128.0,
+            view: [0.0; 16],
+            projection: [0.0; 16],
+            dimension: "minecraft:overworld".into(),
+        };
+        let classic = mod_api::WorldRenderView::new(&camera, 0.0, 0, false, &[]);
+        assert_eq!(
+            overlay_stages(&classic),
+            &[RenderLevelStage::AfterTranslucentBlocks]
+        );
+        let oit = mod_api::WorldRenderView::new(&camera, 0.0, 0, true, &[]);
+        assert_eq!(
+            overlay_stages(&oit),
+            &[
+                RenderLevelStage::OitTranslucent(OitStage::DepthBounds),
+                RenderLevelStage::OitTranslucent(OitStage::Transmittance),
+                RenderLevelStage::OitTranslucent(OitStage::Accumulate),
+            ]
+        );
+    }
 }

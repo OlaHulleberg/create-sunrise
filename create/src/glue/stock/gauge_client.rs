@@ -527,9 +527,9 @@ pub(super) fn animated(pos: [i32; 3], nbt: &Compound, host: &dyn Host) -> bool {
 }
 
 /// The outline of the panel being joined (`Outliner.showAABB`, green blinking).
-pub(super) fn submit_custom_geometry(
+pub(super) fn prepare_render_buffers(
     host: &dyn ClientHost,
-    event: &mut mod_api::SubmitCustomGeometryEvent<'_>,
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
 ) {
     let Some((pp, t)) = CLIENT.with_borrow(|c| c.connecting) else {
         return;
@@ -549,7 +549,7 @@ pub(super) fn submit_custom_geometry(
         let (min, max) = panel_bb(face, facing, p);
         crate::glue::logistics::client::box_lines(&mut lines, min, max, color);
     }
-    let _ = event.draw.lines(&lines);
+    crate::glue::subsystem::prepare_lines(event, &lines);
 }
 
 /// `getBB`: the slot's centre, 3/16 out in the face's plane.

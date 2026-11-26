@@ -411,7 +411,7 @@ impl Subsystem for Items {
         symmetry::models_baked(&*host);
     }
 
-    /// The mirrors (`SymmetryHandler.onRenderWorld`) and the worldshaper's outline.
+    /// The mirrors (`SymmetryHandler.onRenderWorld`) and the worldshaper's outline faces.
     fn submit_custom_geometry(
         &self,
         host: &dyn ClientHost,
@@ -419,6 +419,15 @@ impl Subsystem for Items {
     ) {
         symmetry::submit_custom_geometry(host, event);
         worldshaper::submit_custom_geometry(host, event);
+    }
+
+    /// The worldshaper's outline edges.
+    fn prepare_render_buffers(
+        &self,
+        _host: &dyn ClientHost,
+        event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+    ) {
+        worldshaper::prepare_render_buffers(event);
     }
 
     fn screen_render_post(&self, host: &dyn ClientHost, event: &mut ScreenRenderPostEvent<'_>) {

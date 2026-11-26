@@ -311,7 +311,10 @@ const DEPOSIT_COLOR: u32 = 0xFFDD_C166;
 /// `ArmInteractionPointHandler.drawOutlines`: with the arm item in the main hand, the points
 /// chosen for it; with a wrench, the points of the arm looked at (`checkForWrench`). Each is
 /// outlined by its block's shape, in its mode's colour.
-pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::SubmitCustomGeometryEvent<'_>) {
+pub fn prepare_arm_points(
+    host: &dyn ClientHost,
+    event: &mut mod_api::PrepareRenderBuffersEvent<'_>,
+) {
     let Some(player) = host.local_player() else {
         return;
     };
@@ -353,9 +356,7 @@ pub fn draw_arm_points(host: &dyn ClientHost, event: &mut mod_api::SubmitCustomG
         box_lines(&mut lines, min, max, color);
     }
     draw_ejector_target(host, &mut lines);
-    if !lines.is_empty() {
-        let _ = event.draw.lines(&lines);
-    }
+    crate::glue::subsystem::prepare_lines(event, &lines);
 }
 
 /// The twelve edges of a box, as Create's outliner draws them (1/16 of a block wide).
