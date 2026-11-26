@@ -7,35 +7,62 @@
 //! API reaches a mod's own folders only, not the game folder's `schematics/` where Create keeps
 //! them.
 
+use crate::glue::data_dir::{DataDir, Leaf};
 use crate::glue::names::Named as _;
 use crate::glue::packages::body::{CustomData, set_custom};
 use create_engine::gzip;
-use create_engine::schematic::{Nbt, SchematicData, SchematicUpload, UploadRetention};
+use create_engine::schematic::{
+    self as sch, Nbt, SchematicData, SchematicUpload, Structure, UploadRetention,
+};
 use mod_api::{Host, ItemStack, Tag};
 use std::collections::HashMap;
-use std::io;
-use std::path::{Component, Path, PathBuf};
+use std::io::{self, Read};
+use std::path::Path;
 
 /// `SchematicItem.loadSchematic`'s `NbtAccounter.create(0x20000000L)`.
 const MAX_BYTES: usize = 0x2000_0000;
 
-/// The folder under the mod's data root.
-const ROOT: &str = "schematics";
+const UPLOAD_BYTES: u64 = sch::MAX_TOTAL_SCHEMATIC_SIZE_KB * 1000;
 
-/// `rel` under the mod's bulk data folder (`<instance>/sunrise-mod-data/create/schematics`).
-/// Names come from clients, so only plain components are taken: no `..`, root or prefix.
-fn path(host: &dyn Host, rel: &str) -> Option<PathBuf> {
-    let rel = Path::new(rel);
-    let plain =
-        !rel.as_os_str().is_empty() && rel.components().all(|c| matches!(c, Component::Normal(_)));
-    plain.then(|| folder(host).join(rel))
+fn folder(instance: &Path, create: bool) -> io::Result<DataDir> {
+    DataDir::open(instance, create)?.subdir(Leaf::new("schematics")?, create)
 }
 
-fn folder(host: &dyn Host) -> PathBuf {
-    host.instance_dir()
-        .join("sunrise-mod-data")
-        .join("create")
-        .join(ROOT)
+fn file_leaf(file: &str) -> io::Result<Leaf<'_>> {
+    if !sch::valid_file(file) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            "not an .nbt schematic name",
+        ));
+    }
+    Leaf::new(file)
+}
+
+#[derive(Clone, Copy)]
+pub(super) struct Uploaded<'a> {
+    owner: Leaf<'a>,
+    file: Leaf<'a>,
+}
+
+impl<'a> Uploaded<'a> {
+    pub(super) fn new(owner: &'a str, file: &'a str) -> io::Result<Self> {
+        if owner.starts_with('.') {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "not a schematic owner",
+            ));
+        }
+        Ok(Self {
+            owner: Leaf::new(owner)?,
+            file: file_leaf(file)?,
+        })
+    }
+
+    fn folder(self, instance: &Path, create: bool) -> io::Result<DataDir> {
+        folder(instance, create)?
+            .subdir(Leaf::new("uploaded")?, create)?
+            .subdir(self.owner, create)
+    }
 }
 
 pub(crate) fn to_engine(t: &Tag) -> Nbt {
@@ -105,108 +132,164 @@ fn write_named(tag: &Tag) -> Option<Vec<u8>> {
     Some(named)
 }
 
-/// A structure file under `schematics/` (`NbtIo.read` of the gzip stream), once per load.
-pub fn read_structure(host: &dyn Host, rel: &str) -> Option<Nbt> {
-    let bytes = std::fs::read(path(host, rel)?).ok()?;
-    let raw = match gzip::decode(&bytes, MAX_BYTES) {
+pub(super) fn decode_structure(file: &str, bytes: &[u8]) -> Option<Structure> {
+    let raw = match gzip::decode(bytes, MAX_BYTES) {
         Ok(raw) => raw,
         Err(e) => {
-            crate::create_log!("[create] Failed to read schematic {rel}: {e:?}");
+            crate::create_log!("[create] Failed to read schematic {file}: {e:?}");
             return None;
         }
     };
-    match read_named(&raw) {
-        Some(t) => Some(to_engine(&t)),
-        None => {
-            crate::create_log!("[create] Failed to read schematic {rel}: not NBT");
-            None
+    let structure = read_named(&raw).and_then(|tag| Structure::from_nbt(&to_engine(&tag)));
+    if structure.is_none() {
+        crate::create_log!("[create] Failed to read schematic {file}: invalid structure NBT");
+    }
+    structure
+}
+
+/// An independently supplied file in the root, with the NBT accounter but not the upload cap.
+pub(super) fn read_local(host: &dyn Host, file: &str) -> Option<Structure> {
+    let dir = folder(&host.instance_dir(), false).ok()?;
+    let (mut handle, _) = dir.read_file(file_leaf(file).ok()?).ok()?;
+    let mut bytes = Vec::new();
+    handle.read_to_end(&mut bytes).ok()?;
+    decode_structure(file, &bytes)
+}
+
+pub(super) fn read_uploaded(host: &dyn Host, target: Uploaded<'_>) -> Option<Structure> {
+    let dir = target.folder(&host.instance_dir(), false).ok()?;
+    let bytes = read_bounded(&dir, target.file).ok()?;
+    decode_structure(target.file.name(), &bytes)
+}
+
+pub(super) fn encode_structure(structure: &Structure) -> Option<Vec<u8>> {
+    let raw = write_named(&to_game(&structure.to_nbt()))?;
+    Some(gzip::encode(&raw))
+}
+
+/// `SchematicExport`: choose a free filename and reserve it without opening an existing inode.
+pub(super) fn write_export(host: &dyn Host, name: &str, bytes: &[u8]) -> io::Result<String> {
+    let dir = folder(&host.instance_dir(), true)?;
+    loop {
+        let file = free_name(&dir, name)?;
+        match dir.write_new(file_leaf(&file)?, bytes) {
+            Ok(()) => return Ok(file),
+            Err(e) if e.kind() == io::ErrorKind::AlreadyExists => (),
+            Err(e) => return Err(e),
         }
     }
 }
 
-/// `NbtIo.writeCompressed` to a file under `schematics/` (its folders made, an old file
-/// replaced); its size.
-pub fn write_structure(host: &dyn Host, rel: &str, tag: &Nbt) -> Result<u64, String> {
-    let file = path(host, rel).ok_or("not a file name")?;
-    let raw = write_named(&to_game(tag)).ok_or("not writable as NBT")?;
-    let gz = gzip::encode(&raw);
-    if let Some(parent) = file.parent() {
-        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-    }
-    std::fs::write(&file, &gz).map_err(|e| e.to_string())?;
-    Ok(gz.len() as u64)
-}
-
-/// The schematics saved in `schematics/` (`ClientSchematicLoader.refresh`: its `.nbt` files, by
-/// name).
-pub fn local_files(host: &dyn Host) -> Vec<String> {
-    let Ok(entries) = std::fs::read_dir(folder(host)) else {
-        return Vec::new();
-    };
-    let mut out: Vec<String> = entries
-        .flatten()
-        .filter_map(|e| e.file_name().into_string().ok())
-        .filter(|n| n.ends_with(".nbt"))
-        .collect();
-    out.sort();
-    out
-}
-
-pub fn exists(host: &dyn Host, rel: &str) -> bool {
-    path(host, rel).is_some_and(|p| p.exists())
-}
-
-pub fn size(host: &dyn Host, rel: &str) -> Option<u64> {
-    let meta = std::fs::metadata(path(host, rel)?).ok()?;
-    meta.is_file().then_some(meta.len())
-}
-
-/// Store a local schematic as its owner's upload, evicting the oldest at the cap.
-/// Table uploads exclude the destination name before counting; instant uploads include it.
-pub(super) fn upload(
-    host: &dyn Host,
-    from: &str,
-    to: &str,
-    upload: SchematicUpload,
-) -> io::Result<()> {
-    let invalid = || io::Error::new(io::ErrorKind::InvalidInput, "not a file name");
-    let from = path(host, from).ok_or_else(invalid)?;
-    let to = path(host, to).ok_or_else(invalid)?;
-    let upload_folder = to.parent().ok_or_else(invalid)?;
-    let name = to
-        .file_name()
-        .and_then(|n| n.to_str())
-        .ok_or_else(invalid)?;
-    let bytes = std::fs::read(&from)?;
-
-    let mut retention = UploadRetention::default();
-    match std::fs::read_dir(upload_folder) {
-        Ok(entries) => {
-            for entry in entries.flatten() {
-                let Ok(meta) = entry.metadata() else {
-                    continue;
-                };
-                let Ok(entry_name) = entry.file_name().into_string() else {
-                    continue;
-                };
-                if meta.is_file() {
-                    let modified = meta
-                        .modified()
-                        .ok()
-                        .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
-                        .map_or(0, |d| d.as_millis() as u64);
-                    retention.record(upload, name, entry_name, modified);
-                }
+fn free_name(dir: &DataDir, name: &str) -> io::Result<String> {
+    let error = std::cell::OnceCell::new();
+    let file = sch::export_name(name, false, |candidate| {
+        match file_leaf(candidate).and_then(|leaf| dir.occupied(leaf)) {
+            Ok(exists) => exists,
+            Err(e) => {
+                let _ = error.set(e);
+                false
             }
         }
-        Err(e) if e.kind() == io::ErrorKind::NotFound => {}
-        Err(e) => return Err(e),
+    });
+    error.into_inner().map_or(Ok(file), Err)
+}
+
+/// The schematics saved in `schematics/` (`ClientSchematicLoader.refresh`), by name.
+pub(super) fn local_files(host: &dyn Host) -> Vec<String> {
+    let Ok(files) =
+        folder(&host.instance_dir(), false).and_then(|d| d.regular_files(sch::valid_file))
+    else {
+        return Vec::new();
+    };
+    let mut names: Vec<_> = files.into_iter().map(|(name, _)| name).collect();
+    names.sort();
+    names
+}
+
+#[derive(Debug)]
+pub(super) enum UploadReadError {
+    Io(io::Error),
+    TooLarge(u64),
+}
+
+impl From<io::Error> for UploadReadError {
+    fn from(error: io::Error) -> Self {
+        Self::Io(error)
     }
-    if let Some(oldest) = retention.evict() {
-        std::fs::remove_file(upload_folder.join(oldest))?;
+}
+
+fn read_bounded(dir: &DataDir, file: Leaf<'_>) -> Result<Vec<u8>, UploadReadError> {
+    let (handle, meta) = dir.read_file(file)?;
+    if !sch::size_allowed(meta.len()) {
+        return Err(UploadReadError::TooLarge(meta.len()));
     }
-    std::fs::create_dir_all(upload_folder)?;
-    std::fs::write(&to, &bytes)
+    let mut bytes = Vec::new();
+    // The file could grow after the fstat; its actual bytes are what count.
+    handle.take(UPLOAD_BYTES + 1).read_to_end(&mut bytes)?;
+    let size = bytes.len() as u64;
+    if !sch::size_allowed(size) {
+        return Err(UploadReadError::TooLarge(size));
+    }
+    Ok(bytes)
+}
+
+pub(super) fn read_for_upload(host: &dyn Host, file: &str) -> Result<Vec<u8>, UploadReadError> {
+    read_bounded(&folder(&host.instance_dir(), false)?, file_leaf(file)?)
+}
+
+/// Publish already-validated upload bytes. Table replacement doesn't count the old destination;
+/// instant replacement does, and replacing that same oldest file already retires it.
+pub(super) fn store_upload(
+    host: &dyn Host,
+    target: Uploaded<'_>,
+    upload: SchematicUpload,
+    bytes: &[u8],
+) -> io::Result<()> {
+    store(
+        &target.folder(&host.instance_dir(), true)?,
+        target.file,
+        upload,
+        bytes,
+    )
+}
+
+fn store(dir: &DataDir, file: Leaf<'_>, upload: SchematicUpload, bytes: &[u8]) -> io::Result<()> {
+    if !sch::size_allowed(bytes.len() as u64) {
+        return Err(io::Error::new(
+            io::ErrorKind::FileTooLarge,
+            "schematic exceeds upload limit",
+        ));
+    }
+    let replaces = dir.existing_name(file)?;
+    let mut retention = UploadRetention::default();
+    for (name, meta) in dir.regular_files(sch::valid_file)? {
+        let modified = meta
+            .modified()
+            .ok()
+            .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+            .map_or(0, |d| d.as_millis() as u64);
+        retention.record(
+            upload,
+            replaces.as_deref().unwrap_or(file.name()),
+            name,
+            modified,
+        );
+    }
+    dir.replace(file, bytes)?;
+    if let Some(oldest) = retention
+        .evict()
+        .filter(|name| Some(name) != replaces.as_ref())
+    {
+        if let Err(e) = dir.remove(file_leaf(&oldest)?) {
+            if replaces.is_none() {
+                // A failed eviction must not increase the owner's count.
+                dir.remove(file)?;
+                return Err(e);
+            }
+            crate::create_log!("[create] Could not retire old schematic {oldest}: {e}");
+        }
+    }
+    Ok(())
 }
 
 const KEYS: [&str; 7] = [
@@ -252,10 +335,43 @@ pub fn item_for_block(host: &dyn Host, block: &str) -> Option<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{read_named, to_engine, to_game, write_named};
-    use create_engine::gzip;
-    use create_engine::schematic::Nbt;
-    use mod_api::Tag;
+    use super::*;
+    use crate::glue::temp_dir::TempDir;
+
+    #[test]
+    fn upload_reads_and_replaces_a_regular_file() {
+        let instance = TempDir::new("create-schematics");
+        let target = Uploaded::new("Alex", "build.nbt").unwrap();
+        let dir = target.folder(instance.path(), true).unwrap();
+        dir.write_new(target.file, b"original").unwrap();
+        assert_eq!(read_bounded(&dir, target.file).unwrap(), b"original");
+        store(&dir, target.file, SchematicUpload::Table, b"updated").unwrap();
+        assert_eq!(read_bounded(&dir, target.file).unwrap(), b"updated");
+    }
+
+    #[test]
+    fn oversized_upload_does_not_replace_or_evict() {
+        let instance = TempDir::new("create-schematic-cap");
+        let target = Uploaded::new("Alex", "first.nbt").unwrap();
+        let dir = target.folder(instance.path(), true).unwrap();
+        for i in 0..sch::MAX_SCHEMATICS {
+            dir.write_new(file_leaf(&format!("{i}.nbt")).unwrap(), b"keep")
+                .unwrap();
+        }
+        let bytes = vec![0; UPLOAD_BYTES as usize + 1];
+        assert!(store(&dir, target.file, SchematicUpload::Instant, &bytes).is_err());
+        assert!(!dir.occupied(target.file).unwrap());
+        assert_eq!(
+            dir.regular_files(sch::valid_file).unwrap().len(),
+            sch::MAX_SCHEMATICS
+        );
+        let source = folder(instance.path(), false).unwrap();
+        source.write_new(target.file, &bytes).unwrap();
+        assert!(matches!(
+            read_bounded(&source, target.file),
+            Err(UploadReadError::TooLarge(_))
+        ));
+    }
 
     #[test]
     fn files_keep_their_root_through_gzip() {
