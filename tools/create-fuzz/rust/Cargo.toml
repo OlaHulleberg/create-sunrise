@@ -10,4 +10,7 @@ publish = false
 create-engine = { path = "../../../create/src/engine" }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Feature unification with create-engine's `zlib-rs` selects that backend and its
+# CRC in flate2 1.1.10 (src/ffi/mod.rs and src/crc.rs). The fuzzer's defaults build
+# miniz_oxide but do not use it; the shipped mod's flate2 lock entry has only zlib-rs.
 flate2 = "1"
