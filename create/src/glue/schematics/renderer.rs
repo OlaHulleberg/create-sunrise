@@ -37,9 +37,8 @@ impl Variant {
         let mut palette_states: Vec<Option<(BlockState, bool)>> =
             Vec::with_capacity(structure.palette.len());
         for entry in &structure.palette {
-            let mut props = entry.properties.clone();
-            sch::transform_state(&entry.name, &mut props, mirror, Rotation::None);
-            let resolved = resolve_client_state(host, &entry.name, &props).and_then(|s| {
+            let (name, props) = entry.transformed(mirror, Rotation::None).into_parts();
+            let resolved = resolve_client_state(host, &name, &props).and_then(|s| {
                 if is_air(host, s) {
                     None
                 } else {

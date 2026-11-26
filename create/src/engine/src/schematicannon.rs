@@ -8,7 +8,8 @@
 //! ticks it sleeps through are the ones where Create only counts its cooldown down (`settle`).
 
 use crate::schematic::{Mirror, Rotation, SchematicData, Structure, transform};
-use std::collections::VecDeque;
+use std::collections::{BTreeMap, VecDeque};
+use std::ops::Bound::{Excluded, Unbounded};
 
 /// `CSchematics.schematicannonDelay`: ticks between shots.
 pub const DELAY: u32 = 10;
@@ -265,17 +266,15 @@ pub enum Stage {
     Entities,
 }
 
-const NONE: u32 = u32::MAX;
-
-/// `SchematicPrinter` over a schematic placed in its `SchematicLevel`: the blocks by position
-/// relative to the anchor (a dense box), the level's bounds and where printing stands.
+/// `SchematicPrinter` over a schematic placed in its `SchematicLevel`: the recorded blocks by
+/// position relative to the anchor, the level's bounds and where printing stands.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Printer {
     pub anchor: [i32; 3],
     pub min: [i32; 3],
     pub max: [i32; 3],
-    cells: Vec<u32>,
-    set: usize,
+    /// Keys are [y, z, x] so recorded cells iterate in the same order as the print cursor.
+    cells: BTreeMap<[i32; 3], u32>,
     /// `currentPos`, relative to the anchor.
     pub current: [i32; 3],
     pub stage: Stage,
@@ -316,174 +315,149 @@ impl Printer {
             .flatten()
     }
 
-    /// `SchematicPrinter.loadSchematic`: the template placed into a `SchematicLevel` at the
-    /// anchor (each block at `transform(pos)`, the level's bounds growing from the origin over
-    /// them), the bounds grown over the transformed far corner, printing from before the first
-    /// block. `entry` gives each block's palette index the entry the printer reads.
+    /// `SchematicPrinter.loadSchematic`: the recorded blocks placed relative to the anchor,
+    /// with bounds from the origin to the transformed far corner. In-bounds block positions
+    /// stay in that box under rotation and mirroring.
     pub fn load(s: &Structure, anchor: [i32; 3], rotation: Rotation, mirror: Mirror) -> Printer {
-        let mut min = [0; 3];
-        let mut max = [0; 3];
-        let grow = |p: [i32; 3], min: &mut [i32; 3], max: &mut [i32; 3]| {
-            for i in 0..3 {
-                min[i] = min[i].min(p[i]);
-                max[i] = max[i].max(p[i]);
-            }
-        };
-        let placed: Vec<([i32; 3], u32)> = s
-            .blocks
-            .iter()
-            .map(|b| (transform(b.pos, mirror, rotation, [0; 3]), b.state as u32))
-            .collect();
-        let casings = s
-            .blocks
-            .iter()
-            .filter_map(|b| {
-                let c = casing_of(b.nbt.as_ref());
-                (c != 0).then(|| (transform(b.pos, mirror, rotation, [0; 3]), c))
-            })
-            .collect();
-        let data = s
-            .blocks
-            .iter()
-            .filter_map(|b| Some((transform(b.pos, mirror, rotation, [0; 3]), b.nbt.clone()?)))
-            .collect();
-        for (p, _) in &placed {
-            grow(*p, &mut min, &mut max);
-        }
-        let far = [s.size[0] - 1, s.size[1] - 1, s.size[2] - 1];
-        grow(transform(far, mirror, rotation, [0; 3]), &mut min, &mut max);
-        let span = [0, 1, 2].map(|i| (max[i] - min[i] + 1) as usize);
+        let far = transform(s.size.map(|n| n.max(1) - 1), mirror, rotation, [0; 3]);
+        let min = far.map(|v| v.min(0));
+        let max = far.map(|v| v.max(0));
         let mut p = Printer {
             anchor,
             min,
             max,
-            cells: vec![NONE; span[0] * span[1] * span[2]],
-            set: 0,
+            cells: BTreeMap::new(),
             current: [min[0] - 1, min[1], min[2]],
             stage: Stage::Blocks,
             deferred: VecDeque::new(),
-            entities: s
-                .entities
-                .iter()
-                .map(|e| {
-                    crate::schematic::transform_vec(e.pos, mirror, rotation, [0; 3])
-                        .map(|v| v.floor() as i32)
-                })
-                .collect(),
+            entities: Vec::new(),
             entity_index: -1,
-            casings,
-            data,
+            casings: Default::default(),
+            data: Default::default(),
         };
-        for (pos, state) in placed {
-            let i = p.index(pos).unwrap();
-            if p.cells[i] == NONE {
-                p.set += 1;
-            }
-            p.cells[i] = state;
+        // The anchor is supplied separately from the parsed template. A box that overflows
+        // world coordinates cannot be placed; use the same empty path as a refused file.
+        if s.size == [0; 3] || offset(anchor, min).is_none() || offset(anchor, max).is_none() {
+            p.stage = Stage::Entities;
+            return p;
         }
+        for b in &s.blocks {
+            let rel @ [x, y, z] = transform(b.pos, mirror, rotation, [0; 3]);
+            p.cells.insert([y, z, x], b.state as u32);
+            let casing = casing_of(b.nbt.as_ref());
+            if casing != 0 {
+                p.casings.insert(rel, casing);
+            }
+            if let Some(nbt) = &b.nbt {
+                p.data.insert(rel, nbt.clone());
+            }
+        }
+        p.entities = s
+            .entities
+            .iter()
+            .map(|e| {
+                crate::schematic::transform_vec(e.pos, mirror, rotation, [0; 3])
+                    .map(|v| v.floor() as i32)
+            })
+            .collect();
         p
-    }
-
-    fn span(&self) -> [i32; 3] {
-        [0, 1, 2].map(|i| self.max[i] - self.min[i] + 1)
     }
 
     fn inside(&self, p: [i32; 3]) -> bool {
         (0..3).all(|i| p[i] >= self.min[i] && p[i] <= self.max[i])
     }
 
-    fn index(&self, p: [i32; 3]) -> Option<usize> {
-        if !self.inside(p) {
-            return None;
-        }
-        let s = self.span();
-        let d = [0, 1, 2].map(|i| (p[i] - self.min[i]) as usize);
-        Some((d[1] * s[2] as usize + d[2]) * s[0] as usize + d[0])
-    }
-
     /// The palette index at a position relative to the anchor (`SchematicLevel.getBlockState`:
     /// none outside the bounds or where nothing was placed, which reads as air).
-    pub fn at(&self, rel: [i32; 3]) -> Option<u32> {
-        let v = self.cells[self.index(rel)?];
-        (v != NONE).then_some(v)
+    pub fn at(&self, [x, y, z]: [i32; 3]) -> Option<u32> {
+        self.cells.get(&[y, z, x]).copied()
     }
 
     /// `isWorldEmpty`.
     pub fn is_empty(&self) -> bool {
-        self.set == 0
+        self.cells.is_empty()
     }
 
     /// Every placed position and its palette index (`getAllPositions`).
     pub fn positions(&self) -> impl Iterator<Item = ([i32; 3], u32)> + '_ {
-        let s = self.span();
-        self.cells.iter().enumerate().filter_map(move |(i, &v)| {
-            if v == NONE {
-                return None;
+        self.cells
+            .iter()
+            .map(|(&[y, z, x], &state)| ([x, y, z], state))
+    }
+
+    /// `getCurrentTarget`. A position yielded by `advance` or `advance_placed` is in the
+    /// representable box. The initial cursor is one cell outside it, as in Create.
+    pub fn target(&self) -> [i32; 3] {
+        [0, 1, 2].map(|i| self.anchor[i].wrapping_add(self.current[i]))
+    }
+
+    /// `advanceCurrentPos`: x fastest, then z and y. Walk even the unrecorded cells so the
+    /// cannon's clearing mode can print their implicit air.
+    pub fn advance(&mut self, defer: impl Fn(u32) -> bool) -> bool {
+        self.advance_with(defer, |printer| {
+            let [x, y, z] = printer.current;
+            let [min_x, _, min_z] = printer.min;
+            let [max_x, max_y, max_z] = printer.max;
+            if x < max_x {
+                Some([x + 1, y, z])
+            } else if z < max_z {
+                Some([min_x, y, z + 1])
+            } else if y < max_y {
+                Some([min_x, y + 1, min_z])
+            } else {
+                None
             }
-            let x = (i % s[0] as usize) as i32;
-            let rest = i / s[0] as usize;
-            let z = (rest % s[2] as usize) as i32;
-            let y = (rest / s[2] as usize) as i32;
-            Some(([self.min[0] + x, self.min[1] + y, self.min[2] + z], v))
         })
     }
 
-    /// `getCurrentTarget`.
-    pub fn target(&self) -> [i32; 3] {
-        [0, 1, 2].map(|i| self.anchor[i] + self.current[i])
+    /// As `advance`, but skips unrecorded (implicit air) cells. Explicit states, including
+    /// explicit air, still go through the same deferred-block and entity stages.
+    pub fn advance_placed(&mut self, defer: impl Fn(u32) -> bool) -> bool {
+        self.advance_with(defer, |printer| {
+            let [x, y, z] = printer.current;
+            printer
+                .cells
+                .range((Excluded([y, z, x]), Unbounded))
+                .next()
+                .map(|(&[y, z, x], _)| [x, y, z])
+        })
     }
 
-    /// `tryAdvanceCurrentPos`: one step east, wrapping to the next row and layer as Create's
-    /// arithmetic does (rows and layers past the bounds are walked too); true when the block
-    /// there is one to defer.
-    fn try_advance(&mut self, defer: &impl Fn(u32) -> bool) -> bool {
-        self.current[0] += 1;
-        let span = self.span();
-        let in_bounds = [0, 1, 2].map(|i| self.current[i] - self.min[i]);
-        if in_bounds[0] > span[0] {
-            self.current = [self.min[0] - 1, self.current[1], self.current[2] + 1];
-        }
-        if in_bounds[2] > span[2] {
-            self.current = [self.current[0] - 1, self.current[1] + 1, self.min[2]];
-        }
-        if self.current[1] > span[1] {
+    fn advance_with(
+        &mut self,
+        defer: impl Fn(u32) -> bool,
+        next_block: impl Fn(&Self) -> Option<[i32; 3]>,
+    ) -> bool {
+        if self.stage == Stage::Blocks {
+            while let Some(p) = next_block(self) {
+                self.current = p;
+                if !self.at(p).is_some_and(&defer) {
+                    return true;
+                }
+                self.deferred.push_back(p);
+            }
             self.stage = Stage::DeferredBlocks;
-            return false;
         }
-        self.at(self.current).is_some_and(defer)
-    }
-
-    /// `advanceCurrentPos`: the next position to print, deferred blocks after the rest; false
-    /// once everything was gone through (entities are not printed here).
-    pub fn advance(&mut self, defer: impl Fn(u32) -> bool) -> bool {
-        loop {
-            if self.stage == Stage::Blocks {
-                while self.try_advance(&defer) {
-                    self.deferred.push_back(self.current);
-                }
+        if self.stage == Stage::DeferredBlocks {
+            if let Some(p) = self.deferred.pop_front() {
+                self.current = p;
+                return true;
             }
-            if self.stage == Stage::DeferredBlocks {
-                match self.deferred.pop_front() {
-                    None => self.stage = Stage::Entities,
-                    Some(p) => self.current = p,
-                }
-            }
-            if self.stage == Stage::Entities {
-                let next = self.entity_index + 1;
-                match self.entities.get(next as usize) {
-                    Some(&p) => {
-                        self.entity_index = next;
-                        self.current = p;
-                    }
-                    // The end of printing.
-                    None => return false,
-                }
-            }
-            if self.inside(self.current) {
+            self.stage = Stage::Entities;
+        }
+        while let Some(&p) = self.entities.get((self.entity_index + 1) as usize) {
+            self.entity_index += 1;
+            if self.inside(p) {
+                self.current = p;
                 return true;
             }
         }
+        false
     }
+}
+
+fn offset([x, y, z]: [i32; 3], [dx, dy, dz]: [i32; 3]) -> Option<[i32; 3]> {
+    Some([x.checked_add(dx)?, y.checked_add(dy)?, z.checked_add(dz)?])
 }
 
 /// A block in the world as the printer reads it.
@@ -513,7 +487,7 @@ pub fn should_place(
     if here.unbreakable || other.is_some_and(|o| o.unbreakable) {
         return false;
     }
-    let d = [0, 1, 2].map(|i| f64::from(pos[i] - cannon[i]));
+    let d = [0, 1, 2].map(|i| f64::from(pos[i]) - f64::from(cannon[i]));
     if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] < 4.0 {
         return false;
     }
@@ -537,7 +511,7 @@ pub fn should_place(
 
 /// `LaunchedItem.ticksForDistance`.
 pub fn flight_ticks(from: [i32; 3], to: [i32; 3]) -> u32 {
-    let d = [0, 1, 2].map(|i| f64::from(to[i] - from[i]));
+    let d = [0, 1, 2].map(|i| f64::from(to[i]) - f64::from(from[i]));
     let dist2 = d[0] * d[0] + d[1] * d[1] + d[2] * d[2];
     (dist2.sqrt().sqrt() * 4.0).max(10.0) as u32
 }
@@ -820,7 +794,9 @@ impl Cannon {
 
     /// `printer.getCurrentTarget()`: where the barrel points, while printing.
     pub fn target(&self) -> Option<[i32; 3]> {
-        self.loaded.as_ref().map(|l| l.printer.target())
+        self.loaded
+            .as_ref()
+            .and_then(|l| offset(l.printer.anchor, l.printer.current))
     }
 
     /// The ticks from the last one ticked up to `now` (not included) are counted: what Create
@@ -995,7 +971,7 @@ impl Cannon {
             return;
         }
         let a = loaded.printer.anchor;
-        let d = [0, 1, 2].map(|i| f64::from(a[i] - self.pos[i]));
+        let d = [0, 1, 2].map(|i| f64::from(a[i]) - f64::from(self.pos[i]));
         if d[0] * d[0] + d[1] * d[1] + d[2] * d[2] >= MAX_ANCHOR_DISTANCE * MAX_ANCHOR_DISTANCE {
             self.state = State::Stopped;
             self.status = Status::TargetOutsideRange;
@@ -1053,9 +1029,14 @@ impl Cannon {
             return false;
         }
         let here = w.spot(pos);
-        let other = e
-            .other
-            .map(|o| w.spot([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]));
+        let other = if let Some(delta) = e.other {
+            let Some(other_pos) = offset(pos, delta) else {
+                return false;
+            };
+            Some(w.spot(other_pos))
+        } else {
+            None
+        };
         should_place(self.pos, &self.options, pos, e, here, other)
     }
 
@@ -1133,7 +1114,7 @@ impl Cannon {
             self.position_not_loaded = false;
             self.state = State::Running;
         }
-        let rel = [0, 1, 2].map(|i| target[i] - l.printer.anchor[i]);
+        let rel = l.printer.current;
         let entry = match l.printer.at(rel) {
             Some(i) => &l.entries[i as usize],
             None => &l.air,
@@ -1319,7 +1300,7 @@ pub fn aim(pos: [i32; 3], target: Option<[i32; 3]>, default_yaw: f32) -> (f32, f
     let Some(t) = target else {
         return (default_yaw, 40.0);
     };
-    let d = [0, 1, 2].map(|i| f64::from(t[i] - pos[i]));
+    let d = [0, 1, 2].map(|i| f64::from(t[i]) - f64::from(pos[i]));
     let yaw = d[0].atan2(d[2]).to_degrees();
     let distance = f64::from(((d[0] * d[0] + d[2] * d[2]) as f32).sqrt());
     let y_offset = distance * 2.0;
@@ -1574,6 +1555,51 @@ mod tests {
         let m = Printer::load(&s, [0, 0, 0], Rotation::None, Mirror::FrontBack);
         assert_eq!((m.min, m.max), ([-2, 0, 0], [0, 0, 0]));
         assert_eq!(m.positions().count(), 2);
+    }
+
+    #[test]
+    fn a_large_sparse_template_visits_only_its_records_when_not_clearing() {
+        let far = i32::MAX - 1;
+        let mut s = structure(
+            [i32::MAX, 2, 2],
+            &[
+                ([0, 1, 1], 2),
+                ([0, 0, 0], 2),
+                ([0, 0, 1], 1),
+                ([far, 0, 0], 0),
+            ],
+            3,
+        );
+        s.palette[1] = PaletteState::new("minecraft:wall_torch".into(), BTreeMap::new()).unwrap();
+        s.palette[2] = PaletteState::new("minecraft:stone".into(), BTreeMap::new()).unwrap();
+        let s = Structure::from_nbt(&s.to_nbt()).unwrap();
+        let mut p = Printer::load(&s, [10, 20, 30], Rotation::Clockwise90, Mirror::FrontBack);
+        assert_eq!((p.min, p.max), ([-1, 0, -far], [0, 1, 0]));
+        assert_eq!(p.at([0, 0, -far]), Some(0), "explicit air is a record");
+        assert_eq!(p.at([0, 0, -far + 1]), None, "no record is implicit air");
+        assert_eq!(
+            p.positions().collect::<Vec<_>>(),
+            vec![
+                ([0, 0, -far], 0),
+                ([-1, 0, 0], 1),
+                ([0, 0, 0], 2),
+                ([-1, 1, 0], 2)
+            ]
+        );
+        for expected in [[10, 20, 30 - far], [10, 20, 30], [9, 21, 30], [9, 20, 30]] {
+            assert!(p.advance_placed(|i| i == 1));
+            assert_eq!(p.target(), expected);
+        }
+        assert!(!p.advance_placed(|i| i == 1));
+    }
+
+    #[test]
+    fn a_transformed_box_must_fit_at_its_anchor() {
+        let s = structure([2, 1, 1], &[([0; 3], 0)], 1);
+        let mut p = Printer::load(&s, [i32::MIN, 0, 0], Rotation::None, Mirror::FrontBack);
+        assert!(p.is_empty());
+        assert!(!p.advance_placed(|_| false));
+        assert!(!p.advance(|_| false));
     }
 
     #[test]

@@ -55,6 +55,18 @@ impl Nbt {
             _ => None,
         }
     }
+    /// An exact coordinate triple in the file, without defaulting missing or invalid axes.
+    fn coords3(&self) -> Option<[i32; 3]> {
+        match self {
+            Nbt::List(l) => {
+                let [x, y, z] = l.as_slice() else { return None };
+                Some([x.int()?, y.int()?, z.int()?])
+            }
+            Nbt::IntArray(a) => a.as_slice().try_into().ok(),
+            _ => None,
+        }
+    }
+
     /// `ListTag.getInt(i)` over a list of ints, or an int array, as three coordinates.
     fn ints3(&self) -> [i32; 3] {
         let mut out = [0; 3];
@@ -86,16 +98,85 @@ pub const DATA_VERSION: i32 = 3955;
 /// A palette entry (`NbtUtils.writeBlockState`): the block and its properties.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PaletteState {
-    pub name: String,
-    pub properties: BTreeMap<String, String>,
+    name: String,
+    properties: BTreeMap<String, String>,
+    rotation: Option<u8>,
+    item_count: u8,
 }
 
 impl PaletteState {
+    /// Parse the numeric properties Create uses before the game resolves the rest of the state.
+    pub fn new(name: String, properties: BTreeMap<String, String>) -> Option<Self> {
+        let parse = |value: &str, range: std::ops::RangeInclusive<u8>| {
+            value.parse::<u8>().ok().filter(|n| range.contains(n))
+        };
+        // Identifier.bySeparator defaults unqualified names to minecraft.
+        let minecraft = name
+            .strip_prefix("minecraft:")
+            .or_else(|| name.strip_prefix(':'))
+            .or_else(|| (!name.contains(':')).then_some(name.as_str()));
+        let rotation = match properties.get("rotation") {
+            // BlockStateProperties.ROTATION_16 uses RotationSegment's 0..=15.
+            Some(value) if minecraft.is_some() => Some(parse(value, 0..=15)?),
+            // Keep the existing port transform for numeric foreign properties, without
+            // restricting what their registries may store. Non-numeric values stay opaque.
+            Some(value) => legacy_rotation(value),
+            None => None,
+        };
+        // BlockStateProperties.EGGS, PICKLES and LAYERS, with their blocks' default of one.
+        let count_property = match minecraft {
+            Some("turtle_egg") => Some(("eggs", 4)),
+            Some("sea_pickle") => Some(("pickles", 4)),
+            Some("snow") => Some(("layers", 8)),
+            _ => None,
+        };
+        let item_count =
+            match count_property.and_then(|(key, max)| Some((properties.get(key)?, max))) {
+                Some((value, max)) => parse(value, 1..=max)?,
+                None => 1,
+            };
+        Some(Self {
+            name,
+            properties,
+            rotation,
+            item_count,
+        })
+    }
+
     pub fn air() -> Self {
         Self {
             name: AIR.into(),
             properties: BTreeMap::new(),
+            rotation: None,
+            item_count: 1,
         }
+    }
+
+    pub fn name(&self) -> &str {
+        &self.name
+    }
+
+    pub fn into_parts(self) -> (String, BTreeMap<String, String>) {
+        (self.name, self.properties)
+    }
+
+    /// `info.state.mirror(mirror).rotate(rotation)`, as `StructureTemplate.placeInWorld` turns
+    /// each block. The sixteen-step angle was parsed when the palette was read.
+    pub fn transformed(&self, mirror: Mirror, rotation: Rotation) -> Self {
+        let mut state = self.clone();
+        mirror_properties(
+            &state.name,
+            &mut state.properties,
+            mirror,
+            &mut state.rotation,
+        );
+        rotate_properties(
+            &state.name,
+            &mut state.properties,
+            rotation,
+            &mut state.rotation,
+        );
+        state
     }
 }
 
@@ -143,12 +224,25 @@ impl Structure {
     /// `StructureTemplate.load`: `size`, the `palette` (or the first of `palettes`, which a
     /// single-palette placement uses), `blocks` and `entities` (those with `nbt`). A palette entry
     /// is read as `NbtUtils.readBlockState` reads it, `Name` and `Properties` (26.3's `id` and
-    /// `properties` too); a missing block name reads as air. None when `tag` isn't a compound.
+    /// `properties` too); a missing block name reads as air. Refuses malformed dimensions,
+    /// sixteen-step rotations and block records before they reach preview or printing.
     pub fn from_nbt(tag: &Nbt) -> Option<Structure> {
         let Nbt::Compound(_) = tag else {
             return None;
         };
-        let size = tag.get("size").map_or([0; 3], Nbt::ints3);
+        let size = match tag.get("size") {
+            Some(size) => size.coords3()?,
+            None => [0; 3],
+        };
+        // `StructureTemplate` starts at Vec3i.ZERO; a placeable template needs all axes positive.
+        // Only check representability of the cell count; storage never uses this product.
+        if size != [0; 3] {
+            size.into_iter().try_fold(1_u64, |volume, axis| {
+                let axis = u64::try_from(axis).ok()?;
+                (axis != 0).then_some(())?;
+                volume.checked_mul(axis)
+            })?;
+        }
         let palette_list = match (tag.get("palettes"), tag.get("palette")) {
             (Some(Nbt::List(lists)), _) => match lists.first() {
                 Some(Nbt::List(p)) => p.as_slice(),
@@ -169,29 +263,39 @@ impl Structure {
                 let properties = match t.get("Properties").or_else(|| t.get("properties")) {
                     Some(Nbt::Compound(p)) => p
                         .iter()
-                        .filter_map(|(k, v)| Some((k.clone(), v.text()?.to_owned())))
-                        .collect(),
-                    _ => BTreeMap::new(),
+                        .map(|(k, v)| Some((k.clone(), v.text()?.to_owned())))
+                        .collect::<Option<_>>()?,
+                    None => BTreeMap::new(),
+                    Some(_) => return None,
                 };
-                PaletteState { name, properties }
+                PaletteState::new(name, properties)
             })
-            .collect();
+            .collect::<Option<Vec<_>>>()?;
         let blocks = match tag.get("blocks") {
             Some(Nbt::List(l)) => l
                 .iter()
-                .filter(|b| matches!(b, Nbt::Compound(_)))
-                .map(|b| BlockInfo {
-                    pos: b.get("pos").map_or([0; 3], Nbt::ints3),
-                    state: b.get("state").and_then(Nbt::int).unwrap_or(0).max(0) as usize,
-                    nbt: b
-                        .get("nbt")
-                        .filter(|n| matches!(n, Nbt::Compound(_)))
-                        .cloned(),
+                .map(|b| {
+                    let pos = b.get("pos")?.coords3()?;
+                    let state = usize::try_from(b.get("state")?.int()?).ok()?;
+                    if state >= palette.len()
+                        || !pos.into_iter().zip(size).all(|(p, n)| (0..n).contains(&p))
+                    {
+                        return None;
+                    }
+                    Some(BlockInfo {
+                        pos,
+                        state,
+                        nbt: b
+                            .get("nbt")
+                            .filter(|n| matches!(n, Nbt::Compound(_)))
+                            .cloned(),
+                    })
                 })
-                .collect(),
-            _ => Vec::new(),
+                .collect::<Option<Vec<_>>>()?,
+            None => Vec::new(),
+            Some(_) => return None,
         };
-        let entities = match tag.get("entities") {
+        let entities: Vec<_> = match tag.get("entities") {
             Some(Nbt::List(l)) => l
                 .iter()
                 .filter_map(|e| {
@@ -213,6 +317,9 @@ impl Structure {
                 .collect(),
             _ => Vec::new(),
         };
+        if size == [0; 3] && !entities.is_empty() {
+            return None;
+        }
         Some(Structure {
             data_version: tag.get("DataVersion").and_then(Nbt::int),
             size,
@@ -392,16 +499,30 @@ impl Mirror {
 /// `StructureTemplate.transform(pos, mirror, rotation, pivot)`.
 pub fn transform(pos: [i32; 3], mirror: Mirror, rotation: Rotation, pivot: [i32; 3]) -> [i32; 3] {
     let [mut x, y, mut z] = pos;
+    // Blocks are already bounded by the template; other callers, such as entity positions,
+    // can pass any BlockPos. Use the same 32-bit arithmetic as StructureTemplate.transform.
     match mirror {
-        Mirror::LeftRight => z = -z,
-        Mirror::FrontBack => x = -x,
+        Mirror::LeftRight => z = z.wrapping_neg(),
+        Mirror::FrontBack => x = x.wrapping_neg(),
         Mirror::None => {}
     }
     let (l, i1) = (pivot[0], pivot[2]);
     match rotation {
-        Rotation::Counterclockwise90 => [l - i1 + z, y, l + i1 - x],
-        Rotation::Clockwise90 => [l + i1 - z, y, i1 - l + x],
-        Rotation::Clockwise180 => [l + l - x, y, i1 + i1 - z],
+        Rotation::Counterclockwise90 => [
+            l.wrapping_sub(i1).wrapping_add(z),
+            y,
+            l.wrapping_add(i1).wrapping_sub(x),
+        ],
+        Rotation::Clockwise90 => [
+            l.wrapping_add(i1).wrapping_sub(z),
+            y,
+            i1.wrapping_sub(l).wrapping_add(x),
+        ],
+        Rotation::Clockwise180 => [
+            l.wrapping_mul(2).wrapping_sub(x),
+            y,
+            i1.wrapping_mul(2).wrapping_sub(z),
+        ],
         Rotation::None => [x, y, z],
     }
 }
@@ -491,15 +612,21 @@ fn mirror_rotation(m: Mirror, facing: &str) -> Rotation {
 }
 
 /// `Rotation.rotate(int, 16)` and `Mirror.mirror(int, 16)` of a 16-step `rotation`.
-fn rotate16(r: i32, rot: Rotation) -> i32 {
-    (r + rot.quarters() as i32 * 4).rem_euclid(16)
+fn rotate16(r: u8, rot: Rotation) -> u8 {
+    (r + rot.quarters() as u8 * 4) % 16
 }
-fn mirror16(r: i32, m: Mirror) -> i32 {
+fn mirror16(r: u8, m: Mirror) -> u8 {
     match m {
-        Mirror::LeftRight => (16 - r).rem_euclid(16),
-        Mirror::FrontBack => (8 - r).rem_euclid(16),
+        Mirror::LeftRight => (16 - r) % 16,
+        Mirror::FrontBack => (24 - r) % 16,
         Mirror::None => r,
     }
+}
+
+// Serialized foreign states and the symmetry wand's live states used a 16-step transform for
+// integer rotation strings. Compute the residue before arithmetic, including for large angles.
+fn legacy_rotation(value: &str) -> Option<u8> {
+    value.parse::<i32>().ok().map(|r| r.rem_euclid(16) as u8)
 }
 
 const RAIL_SHAPES: [&str; 10] = [
@@ -590,13 +717,22 @@ fn is_stairs(props: &BTreeMap<String, String>) -> bool {
 /// the four sides of fences, walls, panes, wire and vines, and Create's `axis_along_first`
 /// (`DirectionalAxisKineticBlock`: it flips on a quarter turn).
 pub fn rotate_state(name: &str, props: &mut BTreeMap<String, String>, r: Rotation) {
+    let mut segment = props.get("rotation").and_then(|v| legacy_rotation(v));
+    rotate_properties(name, props, r, &mut segment);
+}
+
+fn rotate_properties(
+    name: &str,
+    props: &mut BTreeMap<String, String>,
+    r: Rotation,
+    segment: &mut Option<u8>,
+) {
     if r == Rotation::None {
         return;
     }
-    if let Some(v) = props.get_mut("rotation")
-        && let Ok(n) = v.parse::<i32>()
-    {
-        *v = rotate16(n, r).to_string();
+    if let Some(n) = segment {
+        *n = rotate16(*n, r);
+        props.insert("rotation".into(), n.to_string());
     }
     if is_rail(name, props) {
         let shape = props["shape"].clone();
@@ -633,13 +769,22 @@ pub fn rotate_state(name: &str, props: &mut BTreeMap<String, String>, r: Rotatio
 /// and `type` swapped); a rail's `shape`; any other `facing` turned round when it lies along the
 /// mirrored axis (`state.rotate(mirror.getRotation(facing))`); the four sides swapped across it.
 pub fn mirror_state(name: &str, props: &mut BTreeMap<String, String>, m: Mirror) {
+    let mut segment = props.get("rotation").and_then(|v| legacy_rotation(v));
+    mirror_properties(name, props, m, &mut segment);
+}
+
+fn mirror_properties(
+    name: &str,
+    props: &mut BTreeMap<String, String>,
+    m: Mirror,
+    segment: &mut Option<u8>,
+) {
     if m == Mirror::None {
         return;
     }
-    if let Some(v) = props.get_mut("rotation")
-        && let Ok(n) = v.parse::<i32>()
-    {
-        *v = mirror16(n, m).to_string();
+    if let Some(n) = segment {
+        *n = mirror16(*n, m);
+        props.insert("rotation".into(), n.to_string());
         return;
     }
     if is_stairs(props) {
@@ -653,7 +798,7 @@ pub fn mirror_state(name: &str, props: &mut BTreeMap<String, String>, m: Mirror)
                 s => s,
             }
             .to_owned();
-            rotate_state(name, props, Rotation::Clockwise180);
+            rotate_properties(name, props, Rotation::Clockwise180, segment);
             props.insert("shape".into(), shape);
         }
         return;
@@ -665,7 +810,7 @@ pub fn mirror_state(name: &str, props: &mut BTreeMap<String, String>, m: Mirror)
     }
     if let Some(facing) = props.get("facing").cloned() {
         let turn = mirror_rotation(m, &facing);
-        rotate_state(name, props, turn);
+        rotate_properties(name, props, turn, segment);
         if let Some(h) = props.get_mut("hinge") {
             *h = if h == "left" { "right" } else { "left" }.into();
         }
@@ -687,18 +832,6 @@ pub fn mirror_state(name: &str, props: &mut BTreeMap<String, String>, m: Mirror)
         props.insert(a.into(), vb);
         props.insert(b.into(), va);
     }
-}
-
-/// `info.state.mirror(mirror).rotate(rotation)`, as `StructureTemplate.placeInWorld` turns each
-/// block.
-pub fn transform_state(
-    name: &str,
-    props: &mut BTreeMap<String, String>,
-    mirror: Mirror,
-    rotation: Rotation,
-) {
-    mirror_state(name, props, mirror);
-    rotate_state(name, props, rotation);
 }
 
 /// The schematic item's data (`AllDataComponents.SCHEMATIC_*`): its file, owner, whether it is
@@ -907,20 +1040,21 @@ pub enum Need {
     },
 }
 
-pub fn need(name: &str, props: &BTreeMap<String, String>) -> Need {
-    let p = |k: &str| props.get(k).map(String::as_str);
-    let n = |k: &str| p(k).and_then(|v| v.parse::<u32>().ok()).unwrap_or(1);
-    let item = |count, item| Need::Item { count, item };
-    match name {
-        AIR => Need::Nothing,
-        _ if p("type") == Some("double") && name.ends_with("_slab") => item(2, None),
-        "minecraft:turtle_egg" => item(n("eggs"), None),
-        "minecraft:sea_pickle" => item(n("pickles"), None),
-        "minecraft:snow" => item(n("layers"), None),
-        "minecraft:farmland" | "minecraft:dirt_path" => item(1, Some("minecraft:dirt")),
-        "minecraft:tall_grass" => item(2, Some("minecraft:short_grass")),
-        "minecraft:large_fern" => item(2, Some("minecraft:fern")),
-        _ => item(1, None),
+impl PaletteState {
+    pub fn need(&self) -> Need {
+        let item = |count, item| Need::Item { count, item };
+        match self.name.as_str() {
+            AIR => Need::Nothing,
+            name if name.ends_with("_slab")
+                && self.properties.get("type").is_some_and(|t| t == "double") =>
+            {
+                item(2, None)
+            }
+            "minecraft:farmland" | "minecraft:dirt_path" => item(1, Some("minecraft:dirt")),
+            "minecraft:tall_grass" => item(2, Some("minecraft:short_grass")),
+            "minecraft:large_fern" => item(1, Some("minecraft:fern")),
+            _ => item(u32::from(self.item_count), None),
+        }
     }
 }
 
@@ -1173,10 +1307,23 @@ mod tests {
     }
 
     fn state(name: &str, p: &[(&str, &str)]) -> PaletteState {
-        PaletteState {
-            name: name.into(),
-            properties: props(p),
-        }
+        PaletteState::new(name.into(), props(p)).unwrap()
+    }
+
+    fn palette_template(name: &str, key: &str, value: &str) -> Nbt {
+        Nbt::compound([
+            ("size", int_list([1; 3])),
+            (
+                "palette",
+                Nbt::List(vec![Nbt::compound([
+                    ("Name", Nbt::String(name.into())),
+                    (
+                        "Properties",
+                        Nbt::compound([(key, Nbt::String(value.into()))]),
+                    ),
+                ])]),
+            ),
+        ])
     }
 
     #[test]
@@ -1261,6 +1408,109 @@ mod tests {
     }
 
     #[test]
+    fn refuses_unrepresentable_dimensions_but_keeps_the_empty_template() {
+        assert_eq!(
+            Structure::from_nbt(&Nbt::compound([])),
+            Some(Structure::default())
+        );
+        for size in [[i32::MAX; 3], [-1, 1, 1], [1, 0, 1]] {
+            assert!(Structure::from_nbt(&Nbt::compound([("size", int_list(size))])).is_none());
+        }
+        let too_wide = Nbt::List(vec![
+            Nbt::Long(i64::from(i32::MAX) + 1),
+            Nbt::Int(1),
+            Nbt::Int(1),
+        ]);
+        assert!(Structure::from_nbt(&Nbt::compound([("size", too_wide)])).is_none());
+    }
+
+    #[test]
+    fn refuses_each_invalid_block_record_without_losing_its_valid_neighbor() {
+        let valid = Nbt::compound([("pos", int_list([0; 3])), ("state", Nbt::Int(0))]);
+        let template = |size, blocks| {
+            Nbt::compound([
+                ("size", int_list(size)),
+                (
+                    "palette",
+                    Nbt::List(vec![Nbt::compound([("Name", Nbt::String(AIR.into()))])]),
+                ),
+                ("blocks", Nbt::List(blocks)),
+            ])
+        };
+        assert!(Structure::from_nbt(&template([1; 3], vec![valid.clone()])).is_some());
+        assert!(Structure::from_nbt(&template([0; 3], vec![valid.clone()])).is_none());
+        for invalid in [
+            Nbt::compound([("pos", int_list([0; 3])), ("state", Nbt::Int(1))]),
+            Nbt::compound([("pos", int_list([0; 3])), ("state", Nbt::Int(-1))]),
+            Nbt::compound([("pos", int_list([1, 0, 0])), ("state", Nbt::Int(0))]),
+            Nbt::compound([("pos", int_list([0, 0, -1])), ("state", Nbt::Int(0))]),
+            Nbt::compound([("pos", Nbt::IntArray(vec![0, 0])), ("state", Nbt::Int(0))]),
+            Nbt::compound([("pos", int_list([0; 3]))]),
+            Nbt::Int(0),
+        ] {
+            assert!(Structure::from_nbt(&template([1; 3], vec![valid.clone(), invalid])).is_none());
+        }
+    }
+
+    #[test]
+    fn reads_sixteen_step_rotations_and_refuses_invalid_values() {
+        let template = |r| palette_template("minecraft:oak_sign", "rotation", r);
+        for r in ["-1", "16", "not an integer", "2147483647", "-2147483648"] {
+            assert!(Structure::from_nbt(&template(r)).is_none());
+        }
+        let s = Structure::from_nbt(&template("15")).unwrap();
+        let p = s.palette[0].transformed(Mirror::None, Rotation::Clockwise90);
+        assert_eq!(p.properties["rotation"], "3");
+        assert_eq!(
+            p.transformed(Mirror::LeftRight, Rotation::None).properties["rotation"],
+            "13"
+        );
+    }
+
+    #[test]
+    fn leaves_foreign_rotation_domains_to_the_registry() {
+        for (raw, turned) in [("32", "4"), ("standby", "standby")] {
+            let s =
+                Structure::from_nbt(&palette_template("example:drive", "rotation", raw)).unwrap();
+            let p = &s.palette[0];
+            assert_eq!(p.properties["rotation"], raw);
+            assert_eq!(
+                p.transformed(Mirror::None, Rotation::Clockwise90)
+                    .properties["rotation"],
+                turned
+            );
+        }
+    }
+
+    #[test]
+    fn refuses_counts_outside_each_blocks_property_domain() {
+        for (name, property, invalid, max) in [
+            ("minecraft:turtle_egg", "eggs", "5", "4"),
+            ("minecraft:sea_pickle", "pickles", "5", "4"),
+            ("minecraft:snow", "layers", "9", "8"),
+        ] {
+            for value in ["0", invalid, "4294967295"] {
+                assert!(Structure::from_nbt(&palette_template(name, property, value)).is_none());
+            }
+            let s = Structure::from_nbt(&palette_template(name, property, max)).unwrap();
+            assert_eq!(
+                s.palette[0].need(),
+                Need::Item {
+                    count: max.parse().unwrap(),
+                    item: None
+                }
+            );
+            assert_eq!(
+                state(name, &[]).need(),
+                Need::Item {
+                    count: 1,
+                    item: None
+                }
+            );
+        }
+    }
+
+    #[test]
     fn capture_orders_blocks_as_build_info_list_and_skips_air() {
         let stone = state("minecraft:stone", &[]);
         let torch = state("minecraft:torch", &[]);
@@ -1321,9 +1571,7 @@ mod tests {
     #[test]
     fn states_turn_as_vanilla_blocks_do() {
         let turned = |name: &str, p: &[(&str, &str)], m: Mirror, r: Rotation| {
-            let mut s = props(p);
-            transform_state(name, &mut s, m, r);
-            s
+            state(name, p).transformed(m, r).properties
         };
         // A furnace facing north, turned a quarter clockwise, faces east.
         assert_eq!(
@@ -1522,23 +1770,23 @@ mod tests {
 
     #[test]
     fn requirements_and_printed_states_follow_create() {
-        assert_eq!(need(AIR, &props(&[])), Need::Nothing);
+        assert_eq!(PaletteState::air().need(), Need::Nothing);
         assert_eq!(
-            need("minecraft:stone_slab", &props(&[("type", "double")])),
+            state("minecraft:stone_slab", &[("type", "double")]).need(),
             Need::Item {
                 count: 2,
                 item: None
             }
         );
         assert_eq!(
-            need("minecraft:sea_pickle", &props(&[("pickles", "3")])),
+            state("minecraft:sea_pickle", &[("pickles", "3")]).need(),
             Need::Item {
                 count: 3,
                 item: None
             }
         );
         assert_eq!(
-            need("minecraft:farmland", &props(&[("moisture", "7")])),
+            state("minecraft:farmland", &[("moisture", "7")]).need(),
             Need::Item {
                 count: 1,
                 item: Some("minecraft:dirt")
