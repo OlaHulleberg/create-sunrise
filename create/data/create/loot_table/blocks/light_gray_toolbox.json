@@ -3,11 +3,6 @@
   "pools": [
     {
       "bonus_rolls": 0.0,
-      "conditions": [
-        {
-          "type": "minecraft:survives_explosion"
-        }
-      ],
       "entries": [
         {
           "type": "minecraft:item",
@@ -41,7 +36,10 @@
           ]
         }
       ],
-      "rolls": 1.0
+      "rolls": 1.0,
+      "condition": {
+        "type": "minecraft:survives_explosion"
+      }
     }
   ],
   "random_sequence": "create:blocks/light_gray_toolbox"

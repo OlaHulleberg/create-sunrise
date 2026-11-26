@@ -10,17 +10,15 @@
           "modifier": [
             {
               "add": false,
-              "conditions": [
-                {
-                  "type": "minecraft:match_block",
-                  "blocks": "create:polished_cut_scoria_slab",
-                  "state": {
-                    "type": "double"
-                  }
-                }
-              ],
               "count": 2.0,
-              "type": "minecraft:set_count"
+              "type": "minecraft:set_count",
+              "condition": {
+                "type": "minecraft:match_block",
+                "blocks": "create:polished_cut_scoria_slab",
+                "state": {
+                  "type": "double"
+                }
+              }
             },
             {
               "type": "minecraft:explosion_decay"
