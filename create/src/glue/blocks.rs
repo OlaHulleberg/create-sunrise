@@ -860,7 +860,7 @@ fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
                         v.set_item_slot(i as u32, stack).map_err(|_| ())?;
                     }
                 }
-                Ok(v.handle())
+                Ok::<_, ()>(v.handle())
             })
             .ok_or(())?
     });
