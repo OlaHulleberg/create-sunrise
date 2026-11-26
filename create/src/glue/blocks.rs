@@ -788,77 +788,84 @@ fn toolbox_confirm() -> [f32; 2] {
 /// (`insertItemStacked`).
 fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
     use create_engine::toolbox::{STACKS_PER_COMPARTMENT, STORED};
-    let player = event.context.player;
-    let Some(mut items) = event.subject.with_view(|v| {
-        (0..STORED as u32)
-            .map(|i| v.item_slot(i).and_then(|s| s.to_owned()))
-            .collect::<Vec<_>>()
-    }) else {
-        return;
-    };
-    let host = event.subject.host();
-    let Some(player) = host.player(player) else {
-        return;
-    };
-    let Some(slots) = player.with_inventory(&*host, |view| {
-        view.iter()
-            .take_while(|(slot, _)| *slot < 36)
-            .filter_map(|(slot, stack)| Some((slot, stack.project()?)))
-            .collect::<Vec<_>>()
-    }) else {
-        return;
-    };
-    let mut changed = vec![false; items.len()];
-    for (slot, stack) in slots {
-        let mut left = stack.count();
-        let max = host.max_stack_size(stack.item()).unwrap_or(64);
-        for c in 0..STORED / STACKS_PER_COMPARTMENT {
-            let range = c * STACKS_PER_COMPARTMENT..(c + 1) * STACKS_PER_COMPARTMENT;
-            // The compartment's kind: its first stack that holds anything.
-            let kind = range.clone().find_map(|i| items.get(i).cloned().flatten());
-            if !kind.is_some_and(|k| k.item() == stack.item() && k.same_components(&stack)) {
-                continue;
-            }
-            for i in range.clone() {
-                if let Some(Some(held)) = items.get_mut(i) {
-                    let room = max.saturating_sub(held.count()).min(left);
-                    if room > 0 && held.set_count(held.count() + room).is_ok() {
-                        left -= room;
-                        changed[i] = true;
+    let who = event.context.player;
+    // Every write on both sides is accepted or none stays: a refusal aborts the transaction, which
+    // restores the player's slots and the toolbox's.
+    let moved = event.subject.transaction(|scope, _| {
+        let mut items = scope
+            .with_view(|v| {
+                (0..STORED as u32)
+                    .map(|i| v.item_slot(i).and_then(|s| s.to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .ok_or(())?;
+        let host = scope.host();
+        let player = host.player(who).ok_or(())?;
+        let slots = player
+            .with_inventory(&*host, |view| {
+                view.iter()
+                    .take_while(|(slot, _)| *slot < 36)
+                    .filter_map(|(slot, stack)| Some((slot, stack.project()?)))
+                    .collect::<Vec<_>>()
+            })
+            .ok_or(())?;
+        let mut changed = vec![false; items.len()];
+        for (slot, stack) in slots {
+            let mut left = stack.count();
+            let max = host.max_stack_size(stack.item()).unwrap_or(64);
+            for c in 0..STORED / STACKS_PER_COMPARTMENT {
+                let range = c * STACKS_PER_COMPARTMENT..(c + 1) * STACKS_PER_COMPARTMENT;
+                // The compartment's kind: its first stack that holds anything.
+                let kind = range.clone().find_map(|i| items.get(i).cloned().flatten());
+                if !kind.is_some_and(|k| k.item() == stack.item() && k.same_components(&stack)) {
+                    continue;
+                }
+                for i in range.clone() {
+                    if let Some(Some(held)) = items.get_mut(i) {
+                        let room = max.saturating_sub(held.count()).min(left);
+                        if room > 0 && held.set_count(held.count() + room).is_ok() {
+                            left -= room;
+                            changed[i] = true;
+                        }
                     }
                 }
-            }
-            for i in range {
-                if left == 0 {
-                    break;
-                }
-                if let Some(empty @ None) = items.get_mut(i) {
-                    let n = left.min(max);
-                    let mut put = stack.clone();
-                    if put.set_count(n).is_ok() {
-                        left -= n;
-                        *empty = Some(put);
-                        changed[i] = true;
+                for i in range {
+                    if left == 0 {
+                        break;
+                    }
+                    if let Some(empty @ None) = items.get_mut(i) {
+                        let n = left.min(max);
+                        let mut put = stack.clone();
+                        if put.set_count(n).is_ok() {
+                            left -= n;
+                            *empty = Some(put);
+                            changed[i] = true;
+                        }
                     }
                 }
+                break;
             }
-            break;
-        }
-        if left != stack.count() {
-            let mut rest = stack;
-            let rest = (left > 0 && rest.set_count(left).is_ok()).then_some(rest);
-            let _ = player.set_inventory_slot(host, slot, rest);
-        }
-    }
-    let entity = event.subject.with_view(|mut v| {
-        for (i, stack) in items.into_iter().enumerate() {
-            if changed[i] {
-                let _ = v.set_item_slot(i as u32, stack);
+            if left != stack.count() {
+                let mut rest = stack;
+                let rest = (left > 0 && rest.set_count(left).is_ok()).then_some(rest);
+                player
+                    .set_inventory_slot(host, slot, rest)
+                    .map_err(|_| ())?;
             }
         }
-        v.handle()
+        scope
+            .with_view(|mut v| {
+                for (i, stack) in items.into_iter().enumerate() {
+                    if changed[i] {
+                        v.set_item_slot(i as u32, stack).map_err(|_| ())?;
+                    }
+                }
+                Ok(v.handle())
+            })
+            .ok_or(())?
     });
-    if let Some(entity) = entity {
+    // `setChanged` is not journaled, so only a committed transfer issues it.
+    if let Ok(entity) = moved {
         let _ = entity.set_changed(event.subject.host());
     }
 }
