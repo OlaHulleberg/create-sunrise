@@ -987,9 +987,14 @@ fn prepare_punch_player(
     let (eye, yaw, pitch) = fake_pose(pos, facing, false);
     let feet = [eye[0], eye[1] - 1.62, eye[2]];
     let host = &mut *lv.host;
-    let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
-    crate::glue::items::set_held(host, fake, Hand::Main, stack);
-    Some(fake)
+    if !fake.entity().teleport_to(host, feet, Some([yaw, pitch])) {
+        return None;
+    }
+    let living = host.living(fake.entity())?;
+    living
+        .set_hand_item(host, Hand::Main, stack)
+        .ok()?
+        .then_some(fake)
 }
 
 /// `Mode.PUNCH` on an entity (`DeployerHandler.activate`: `resetAttackStrengthTicker`, then
@@ -1094,7 +1099,12 @@ fn punch(
     };
     let host = &mut *lv.host;
     let per_hit = fake.destroy_progress(host, lv.level, at, state);
-    crate::glue::items::set_held(host, fake, Hand::Main, None);
+    let Some(living) = host.living(fake.entity()) else {
+        return Vec::new();
+    };
+    if !matches!(living.set_hand_item(host, Hand::Main, None), Ok(true)) {
+        return Vec::new();
+    }
     let Some(per_hit) = per_hit else {
         return Vec::new();
     };
