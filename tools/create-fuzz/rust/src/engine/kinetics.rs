@@ -80,9 +80,9 @@ impl Run {
             self.sequencer_step(p, step);
         }
         let mut events = Vec::new();
-        // `Processing::level_tick`: crafters, millstones, fans, crushers, burners, the basins'
-        // lazy ticks (`spoutput::tick`: spouts, then each basin's backup check). The mixers and
-        // the presses over basins take their turns in the transport walk.
+        // `Processing::level_tick`: crafters, millstones, fans, crushers, burners, the
+        // leftovers of gone basins (`spoutput::forget_gone`). The basins (lazy tick, spout, backup
+        // check), the mixers and the presses over basins take their turns in the transport walk.
         self.tick_millstones();
         self.tick_fans();
         self.tick_crushers();
@@ -90,7 +90,7 @@ impl Run {
         self.tick_fluids();
         self.tick_boilers();
         self.tick_burners();
-        self.tick_spouts();
+        self.forget_gone_basins();
         // Ejector redstone before the walk ticks them (Java's `neighborChanged` runs at the
         // block change).
         self.ejector_signals();

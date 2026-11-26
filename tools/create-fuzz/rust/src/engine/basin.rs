@@ -1,7 +1,7 @@
 //! Basins and the machines over them, mirroring glue/processing/basin.rs and spoutput.rs:
 //! the heat under a basin, what a landing item, a player or an item handler does to it, the
 //! backup check (each basin's own lazy ticks, 21 of them apart), the mixers and the presses
-//! compacting at their own turns in the transport walk, and each basin's spout every 10 ticks.
+//! compacting at their own turns in the transport walk, and each basin's spout at its own turn (lazy tick every 11 ticks).
 use super::*;
 use crate::transport::Stack;
 use create_engine::{
@@ -345,27 +345,26 @@ impl Run {
         true
     }
 
-    /// `backup_check`: each basin whose lazy tick came (`due`) counts its `recipeBackupCheck`
-    /// down, and on the 21st a basin that holds something is told its contents changed, so its
-    /// mixer or press looks for a recipe again at its next turn.
-    fn backup_check(&mut self, due: &[Pos]) {
+    /// `forget_backups`: a basin that is gone forgets its `recipeBackupCheck` count.
+    fn forget_backups(&mut self) {
         let basins = &self.w.dims[0].basins;
         self.backup_checks.retain(|p, _| basins.contains_key(p));
-        for &pos in due {
-            if !self.basin_at(pos) {
-                continue;
-            }
-            if !self.backup_checks.entry(pos).or_default().lazy_tick() {
-                continue;
-            }
-            let tanks = self.basin_tanks(pos);
-            let filled = self
-                .basin_slots(pos)
-                .is_some_and(|s| s.iter().any(Option::is_some))
-                || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
-            if filled {
-                self.w.dims[0].notify_basin_contents(pos);
-            }
+    }
+
+    /// `backup_check`: the basin at `pos`, whose lazy tick came, counts its `recipeBackupCheck`
+    /// down, and on the 21st one that holds something is told its contents changed, so its
+    /// mixer or press looks for a recipe again at its next turn.
+    fn backup_check(&mut self, pos: Pos) {
+        if !self.backup_checks.entry(pos).or_default().lazy_tick() {
+            return;
+        }
+        let tanks = self.basin_tanks(pos);
+        let filled = self
+            .basin_slots(pos)
+            .is_some_and(|s| s.iter().any(Option::is_some))
+            || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
+        if filled {
+            self.w.dims[0].notify_basin_contents(pos);
         }
     }
 
@@ -959,30 +958,35 @@ impl Run {
         }
     }
 
-    /// `spoutput::tick`: the basins whose `SmartBlockEntity` lazy tick came look where to put
-    /// their results; those with results waiting put them out.
-    pub(super) fn tick_spouts(&mut self) {
-        let due = self.w.tick_basins(0);
-        for &pos in &due {
-            if !self.basin_at(pos) {
-                continue;
-            }
-            self.spout_update(pos);
-            if !self.spout_can_continue(pos) {
-                self.spout_busy.insert(pos);
-            }
-        }
-        self.backup_check(&due);
+    /// `spoutput::forget_gone`: what was kept for a basin that is gone is forgotten.
+    pub(super) fn forget_gone_basins(&mut self) {
+        self.forget_backups();
         let busy: Vec<Pos> = self.spout_busy.iter().copied().collect();
         for pos in busy {
             if !self.basin_at(pos) {
                 self.spout_busy.remove(&pos);
-                continue;
             }
-            if !self.clear_overflow(pos) {
+        }
+    }
+
+    /// `spoutput::turn`: `BasinBlockEntity.tick` at the basin's own turn in the block-entity
+    /// walk: its lazy tick looks where to put its results and counts the backup check down,
+    /// results waiting go out, then a change of contents is told on.
+    pub(super) fn basin_turn(&mut self, pos: Pos) {
+        let lazy = self.w.tick_basin_lazy(0, pos);
+        if self.basin_at(pos) {
+            if lazy {
+                self.spout_update(pos);
+                if !self.spout_can_continue(pos) {
+                    self.spout_busy.insert(pos);
+                }
+                self.backup_check(pos);
+            }
+            if self.spout_busy.contains(&pos) && !self.clear_overflow(pos) {
                 self.spout_busy.remove(&pos);
             }
         }
+        self.w.tick_basin(0, pos);
     }
 
     /// `tryClearingSpoutputOverflow`: each waiting stack into the target as far as it takes

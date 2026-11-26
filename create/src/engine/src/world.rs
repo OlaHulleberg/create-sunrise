@@ -873,6 +873,10 @@ pub enum TransportTick {
     Mixer([i32; 3]),
     /// `SawBlockEntity.tick` of a saw holding items.
     Saw([i32; 3]),
+    /// `BasinBlockEntity.tick`: the lazy tick (`updateSpoutput`, `recipeBackupCheck`), the spout's
+    /// hand-off (`tryClearingSpoutputOverflow`), then the change of contents
+    /// ([`CreateWorld::tick_basin`]), all at the basin's own turn.
+    Basin([i32; 3]),
 }
 
 /// Resumable level transport walk; inventories are inspected at their turn.
@@ -925,10 +929,7 @@ impl TransportTicks {
                     }
                     continue;
                 }
-                Some(Block::Basin) => {
-                    world.tick_basin(self.dim, p);
-                    continue;
-                }
+                Some(Block::Basin) => return Some(TransportTick::Basin(p)),
                 Some(Block::MechanicalSaw) => {
                     if world.dims[self.dim].saws.contains_key(&p) {
                         return Some(TransportTick::Saw(p));
@@ -2254,16 +2255,12 @@ impl CreateWorld {
         out
     }
 
-    /// Ticks every loaded basin's `SmartBlockEntity` and returns the ones whose lazy tick is due
-    /// (`lazyTick`), in position order.
-    pub fn tick_basins(&mut self, dim: usize) -> Vec<[i32; 3]> {
-        let mut due: Vec<[i32; 3]> = self.dims[dim]
+    /// `SmartBlockEntity.tick` of the basin at `pos` at its turn: whether its `lazyTick` runs.
+    pub fn tick_basin_lazy(&mut self, dim: usize, pos: [i32; 3]) -> bool {
+        self.dims[dim]
             .basins
-            .iter_mut()
-            .filter_map(|(pos, be)| be.tick().then_some(*pos))
-            .collect();
-        due.sort_unstable();
-        due
+            .get_mut(&pos)
+            .is_some_and(|be| be.tick())
     }
 
     /// Makes sure level `dim` has its state (a mod dimension opening).
@@ -5555,7 +5552,7 @@ impl CreateWorld {
         }
     }
 
-    /// `BasinBlockEntity.tick`'s end at the basin's turn: a change of contents asks the operator
+    /// `BasinBlockEntity.tick`'s end, after the spout's hand-off at the basin's turn: a change of contents asks the operator
     /// two above to look (`basinChecker.scheduleUpdate`) and the basins beside the level above,
     /// whose spouts face this one, to do the same at their turns.
     pub fn tick_basin(&mut self, dim: usize, pos: [i32; 3]) {
@@ -11934,10 +11931,14 @@ mod tests {
         let mut out = Vec::new();
         let mut turns = w.transport_ticks(0, 0);
         while let Some(turn) = turns.next(w) {
-            if let TransportTick::Mixer(p) | TransportTick::Press(p) = turn {
-                let o = w.dims[0].operators.get_mut(&p).unwrap();
-                let removed = o.take_removed();
-                out.push((p, removed, !removed && o.checker.take()));
+            match turn {
+                TransportTick::Basin(p) => w.tick_basin(0, p),
+                TransportTick::Mixer(p) | TransportTick::Press(p) => {
+                    let o = w.dims[0].operators.get_mut(&p).unwrap();
+                    let removed = o.take_removed();
+                    out.push((p, removed, !removed && o.checker.take()));
+                }
+                _ => {}
             }
         }
         out
@@ -11979,6 +11980,59 @@ mod tests {
                 assert!(!w.dims[0].operators[&at].checker.pending());
             }
         }
+        states::clear_range();
+    }
+
+    /// `BasinBlockEntity.tick` hands the spout's output on (`tryClearingSpoutputOverflow`) at the
+    /// basin's own turn, not before the walk: the walk yields it in the level's block-entity
+    /// order, after an operator registered before it and before one registered after it, so what
+    /// an operator's turn puts in the basin goes out the same tick in the first case and at
+    /// the basin's next turn in the second (issue #346).
+    #[test]
+    fn a_basin_has_its_turn_in_the_block_entity_order() {
+        use crate::basin_operator::Operator;
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        for operator_first in [true, false] {
+            let mut w = basin_world();
+            let (basin, at) = ([0, 8, 0], [0, 10, 0]);
+            let blocks = if operator_first {
+                [(at, MIXER), (basin, BASIN[1])]
+            } else {
+                [(basin, BASIN[1]), (at, MIXER)]
+            };
+            for (p, state) in blocks {
+                w.block_changed(0, p, 0, state);
+            }
+            w.dims[0].operators.insert(at, Operator::default());
+            w.dims[0].mixers.get_mut(&at).unwrap().running = true;
+            let mut order = Vec::new();
+            let mut turns = w.transport_ticks(0, 0);
+            while let Some(turn) = turns.next(&mut w) {
+                order.push(turn);
+            }
+            let expected = if operator_first {
+                vec![TransportTick::Mixer(at), TransportTick::Basin(basin)]
+            } else {
+                vec![TransportTick::Basin(basin), TransportTick::Mixer(at)]
+            };
+            assert_eq!(order, expected, "operator first: {operator_first}");
+        }
+        states::clear_range();
+    }
+
+    /// The basin's `SmartBlockEntity.tick` runs at its turn: the first tick is a lazy tick, then
+    /// every eleventh (`lazyTickRate + 1`), and a basin without a block entity has none.
+    #[test]
+    fn a_basin_s_lazy_tick_comes_at_its_turn() {
+        let _guard = states::TEST_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+        let mut w = basin_world();
+        let basin = [0, 8, 0];
+        assert!(!w.tick_basin_lazy(0, basin));
+        w.block_changed(0, basin, 0, BASIN[1]);
+        let lazy: Vec<usize> = (0..23)
+            .filter(|_| w.tick_basin_lazy(0, basin))
+            .collect();
+        assert_eq!(lazy, [0, 10, 21]);
         states::clear_range();
     }
 

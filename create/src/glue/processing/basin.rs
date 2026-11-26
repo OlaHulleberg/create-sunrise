@@ -395,31 +395,30 @@ pub fn use_basin(
         || recipes::with(|r| create_engine::spout::fillable(&held, &r.filling)).unwrap_or(false)
 }
 
-/// `BasinBlockEntity.lazyTick`'s `recipeBackupCheck` for the basins whose lazy tick came
-/// (`due`): each counts its own lazy ticks down, and on the 21st a basin that holds something is
-/// told its contents changed, so its mixer or press looks for a recipe again at its next turn: a
-/// burner lit (or a recipe reloaded) after the items went in still gets them going. A basin
-/// that is no longer loaded forgets its count (a new block entity starts at 20).
-pub fn backup_check(lv: &mut ServerLevel<'_>, due: &[[i32; 3]]) {
-    let dim = lv.dim;
+/// A basin that is no longer loaded forgets its `recipeBackupCheck` count (a new block entity
+/// starts at 20).
+pub fn forget_backups(dim: usize) {
     with_world(|w| {
         let basins = &w.dims[dim].basins;
         BACKUP.with_borrow_mut(|b| b.retain(|(d, p), _| *d != dim || basins.contains_key(p)));
     });
-    for &pos in due {
-        if !lv.is_loaded(pos) || !basin_at(lv, pos) {
-            continue;
-        }
-        let fires = BACKUP.with_borrow_mut(|b| b.entry((dim, pos)).or_default().lazy_tick());
-        if !fires {
-            continue;
-        }
-        let tanks = basin_tanks(dim, pos);
-        let filled = basin_slots(lv, pos).is_some_and(|s| s.iter().any(Option::is_some))
-            || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
-        if filled {
-            with_world(|w| w.dims[dim].notify_basin_contents(pos));
-        }
+}
+
+/// `BasinBlockEntity.lazyTick`'s `recipeBackupCheck` for the basin at `pos` whose lazy tick
+/// came: it counts its own lazy ticks down, and on the 21st a basin that holds something is
+/// told its contents changed, so its mixer or press looks for a recipe again at its next turn: a
+/// burner lit (or a recipe reloaded) after the items went in still gets them going.
+pub fn backup_check(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let fires = BACKUP.with_borrow_mut(|b| b.entry((dim, pos)).or_default().lazy_tick());
+    if !fires {
+        return;
+    }
+    let tanks = basin_tanks(dim, pos);
+    let filled = basin_slots(lv, pos).is_some_and(|s| s.iter().any(Option::is_some))
+        || tanks.input.iter().chain(&tanks.output).any(Option::is_some);
+    if filled {
+        with_world(|w| w.dims[dim].notify_basin_contents(pos));
     }
 }
 
