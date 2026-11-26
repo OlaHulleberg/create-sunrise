@@ -820,10 +820,9 @@ impl Kinetics {
                 self.nodes[existing as usize].state.update_speed = true;
             }
             self.pending_events.extend(events);
-            let n = &mut self.nodes[existing as usize];
-            n.stamp = self.stamp;
-            n.fresh = true;
-            self.scheduler.validate_later(self.now, existing, n.stamp);
+            // A value change keeps the entity, so its stamp and every ticket keyed by it stay:
+            // `validationCountdown` and the generator's reactivation are untouched in Java.
+            self.nodes[existing as usize].fresh = true;
             self.mark_changed(existing);
             self.dirty.push(existing);
             return;
@@ -1896,6 +1895,40 @@ mod tests {
         assert_eq!(k.nodes[end as usize].state.source, None);
         assert_eq!(k.speed([2, 0, 0], 0), Some(0.0));
         assert_eq!(k.networks.figures(Some(network_id([0, 0, 0]))).2, 1);
+    }
+
+    #[test]
+    fn changing_a_part_in_place_keeps_its_validation_deadline() {
+        // `KineticBlockEntity.validationCountdown` is not touched by a value change: the shaft
+        // still validates 61 ticks after its first tick, not 61 after the change.
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        for _ in 0..30 {
+            k.advance();
+        }
+        k.set(
+            [1, 0, 0],
+            0,
+            Part {
+                impact: 1.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        // Simulate the source disappearing without handleRemoved.
+        let root = k.at[&[0, 0, 0]][0];
+        k.nodes[root as usize].live = false;
+        for _ in 0..30 {
+            k.advance();
+        }
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        k.advance();
+        assert!(k.has_dirty());
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0));
     }
 
     #[test]
