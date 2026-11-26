@@ -112,7 +112,7 @@ impl<'a> ServerLevel<'a> {
     pub fn destroy_block(&mut self, pos: [i32; 3], drops: bool) -> bool {
         matches!(
             self.level
-                .destroy_block(&mut *self.host, pos, drops, None, false),
+                .destroy_block(&mut *self.host, pos, drops, None, None, false),
             Ok(Some(_))
         )
     }

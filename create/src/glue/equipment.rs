@@ -1554,7 +1554,11 @@ impl mod_api::SpecialModelRenderer for GripModel {
     ) -> Result<(), String> {
         for (geometry, pose) in &self.0 {
             collector.with_pose(*pose, |c| {
-                c.submit_geometry(geometry, mod_api::SpecialModelTints::Untinted)
+                c.submit_model(
+                    geometry,
+                    mod_api::SpecialModelTints::Untinted,
+                    mod_api::SpecialModelSubmitOptions::default(),
+                )
             })?;
         }
         Ok(())

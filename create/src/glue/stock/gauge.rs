@@ -1290,7 +1290,7 @@ pub(super) fn break_sub_panel(host: &mut dyn ServerHost, pos: [i32; 3]) -> bool 
         return false;
     };
     let reach = 6.0;
-    let Some(hit) = player.entity().pick(&*lv.host, reach) else {
+    let Some(hit) = player.entity().pick(&*lv.host, reach, false) else {
         return false;
     };
     let local = [0, 1, 2].map(|i| hit.location[i] - f64::from(pos[i]));

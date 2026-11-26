@@ -114,7 +114,7 @@ fn breaker_id(pos: [i32; 3]) -> i32 {
 /// Breaks the block at `at` with its drops, which come back rather than falling as items.
 fn destroy_collect(lv: &mut ServerLevel<'_>, at: [i32; 3]) -> Vec<ItemStack> {
     lv.level
-        .destroy_block(&mut *lv.host, at, true, None, true)
+        .destroy_block(&mut *lv.host, at, true, None, None, true)
         .ok()
         .flatten()
         .unwrap_or_default()

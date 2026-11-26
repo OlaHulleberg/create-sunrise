@@ -197,7 +197,7 @@ fn in_tag(host: &dyn Host, id: &str, tag: &str) -> bool {
     };
     let tags = host.tags();
     tags.key(&tag)
-        .and_then(|t| tags.is_in_tag(item, t))
+        .and_then(|t| tags.is_in_tag(item, t.typed()))
         .unwrap_or(false)
 }
 

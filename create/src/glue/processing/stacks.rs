@@ -101,7 +101,7 @@ pub fn item_tagged(host: &dyn Host, id: &str, tag: &str) -> bool {
     ) else {
         return false;
     };
-    host.tags().is_in_tag(item, tag).unwrap_or(false)
+    host.tags().is_in_tag(item, tag.typed()).unwrap_or(false)
 }
 
 /// `AllDataComponents.SEQUENCED_ASSEMBLY` of a stack (kept in `minecraft:custom_data`).

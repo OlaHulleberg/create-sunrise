@@ -21,9 +21,9 @@ use create_engine::collider::{self, Aabb, Frame, Pose};
 use create_engine::kinetics::Dir;
 use mod_api::{
     AttachmentCodec, AttachmentDescriptor, AttachmentError, AttachmentKey, BlockShapeKind,
-    BlockState, Collider, ColliderBox, Compound, EntityJoinLevelEvent, EntityPart, EntityRef,
-    EntitySpawn, Flow, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy, Holder,
-    Registrar, RegistrationContext, RemovalReason, ServerHost, SpawnBody, Tag,
+    BlockState, Collider, ColliderBox, ColliderPose, Compound, EntityJoinLevelEvent, EntityPart,
+    EntityRef, EntitySpawn, Flow, GeneralEntityCategory, GeneralEntityTickEvent, GeneralSavePolicy,
+    Holder, Registrar, RegistrationContext, RemovalReason, ServerHost, SpawnBody, Tag,
 };
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -283,7 +283,7 @@ pub fn apply_to(host: &mut dyn ServerHost, entity: EntityRef) {
         return;
     };
     if let Some(rotation) = rotation {
-        let _ = entity.set_collider_transform(host, rotation);
+        let _ = entity.set_collider_pose(host, ColliderPose::new(rotation, [0.0; 3]));
     }
     if let Some(at) = at {
         entity.teleport_to(host, at, None);
@@ -522,10 +522,7 @@ pub fn place(
         .is_some_and(|p| p.blocks == hash && (0..3).all(|i| (p.shift[i] - shift[i]).abs() < 1e-6));
     if !same_boxes {
         let boxes = boxes(lv, &blocks(), state, pose, shift);
-        let collider = Collider {
-            boxes,
-            rotation: was_turned,
-        };
+        let collider = Collider::new(boxes).with_rotation(was_turned);
         if let Err(e) = entity.set_collider(&mut *lv.host, Some(collider)) {
             crate::create_log!("[create] a moving structure's collider was refused: {e:?}");
             if own {

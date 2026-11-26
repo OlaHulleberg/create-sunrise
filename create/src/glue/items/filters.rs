@@ -470,7 +470,7 @@ impl Probe for Looked<'_> {
             Attribute::InTag(tag) => Identifier::parse(tag)
                 .ok()
                 .and_then(|id| host.tags().key(&id))
-                .and_then(|k| host.tags().is_in_tag(item, k))
+                .and_then(|k| host.tags().is_in_tag(item, k.typed()))
                 .unwrap_or(false),
             Attribute::InItemGroup(group) => item_groups(host).is_some_and(|tabs| {
                 tabs.tab(group)
@@ -1362,7 +1362,7 @@ pub(crate) fn item_tags(host: &dyn Host, stack: &ItemStack) -> Vec<String> {
             Identifier::parse(tag)
                 .ok()
                 .and_then(|id| host.tags().key(&id))
-                .and_then(|k| host.tags().is_in_tag(stack.item(), k))
+                .and_then(|k| host.tags().is_in_tag(stack.item(), k.typed()))
                 .unwrap_or(false)
         })
         .collect()
@@ -1506,7 +1506,7 @@ fn attributes_of(host: &dyn Host, stack: &ItemStack) -> Vec<filter_screen::AttrL
         let inside = Identifier::parse(&tag)
             .ok()
             .and_then(|id| host.tags().key(&id))
-            .and_then(|k| host.tags().is_in_tag(stack.item(), k))
+            .and_then(|k| host.tags().is_in_tag(stack.item(), k.typed()))
             .unwrap_or(false);
         if inside {
             out.push(attr_line(host, "create:in_tag", Some(tag)));

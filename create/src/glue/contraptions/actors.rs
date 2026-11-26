@@ -1847,7 +1847,7 @@ fn break_block(lv: &mut ServerLevel<'_>, at: [i32; 3], tool: Option<&ItemStack>)
     let ice = lv.block_name(at).is_some_and(|n| n == "minecraft:ice");
     let drops = lv
         .level
-        .destroy_block(&mut *lv.host, at, true, tool, true)
+        .destroy_block(&mut *lv.host, at, true, tool, None, true)
         .ok()
         .flatten()
         .unwrap_or_default();
