@@ -5,6 +5,7 @@ mod belt_surface;
 mod belts;
 mod brass;
 mod brass_funnels;
+mod breaking;
 mod catalogue;
 mod chute_columns;
 mod chutes;

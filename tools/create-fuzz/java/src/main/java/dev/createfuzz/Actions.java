@@ -140,6 +140,8 @@ final class Actions {
                 new com.simibubi.create.content.kinetics.chainConveyor.ChainConveyorConnectionPacket(pos,target,new ItemStack(net.minecraft.world.item.Items.CHAIN),action.get("connect").getAsBoolean()).handle(player);
             }
             case "remove" -> player.gameMode.destroyBlock(pos);
+            // `doTileDrops` until the case ends (the batch restores the server's rules).
+            case "game_rule" -> level.getGameRules().getRule(net.minecraft.world.level.GameRules.RULE_DOBLOCKDROPS).set(action.get("do_tile_drops").getAsBoolean(),level.getServer());
             case "signal" -> {
                 int strength = action.get("strength").getAsInt();
                 if (strength < 0 || strength > 15)

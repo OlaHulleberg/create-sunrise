@@ -72,7 +72,7 @@ const fn low_half(r: u64) -> [(u64, u64); 4] {
     [(128, r), (128, r + 16), (128, r + 32), (128, r + 48)]
 }
 
-use crate::{geometry, network_inputs as net, transmission};
+use crate::{breaking, geometry, network_inputs as net, transmission};
 
 pub const FAMILIES: &[Family] = &[
     // Kinetic network histories: one residue modulo 64 each.
@@ -209,7 +209,7 @@ pub const FAMILIES: &[Family] = &[
     ),
     family(
         "geometry/stress_boundary",
-        &[(256, 0), (256, 64), (256, 192)],
+        &[(256, 0)],
         geometry::stress_boundary,
     ),
     family("geometry/network", &[(256, 92)], geometry::network),
@@ -236,6 +236,10 @@ pub const FAMILIES: &[Family] = &[
         &[(256, 93)],
         crate::basin::compacting,
     ),
+    // Stationary block breaking, on geometry/stress_boundary's 64 and 192; neither reloads by
+    // seed bit (the drill history reloads by its own actions).
+    family("breaking/drill", &[(256, 64)], breaking_drill),
+    family("breaking/saw", &[(256, 192)], breaking_saw),
     family(
         "geometry/states",
         &[(128, 109), (128, 125)],
@@ -245,6 +249,12 @@ pub const FAMILIES: &[Family] = &[
 
 fn waterwheel(seed: u64) -> Scenario {
     crate::waterwheel::generate(seed, index(seed))
+}
+fn breaking_drill(seed: u64) -> Scenario {
+    breaking::drill(seed, index(seed))
+}
+fn breaking_saw(seed: u64) -> Scenario {
+    breaking::saw(seed, index(seed))
 }
 fn steam_engine(seed: u64) -> Scenario {
     crate::steam_engine::generate(seed, index(seed))
@@ -550,7 +560,7 @@ mod tests {
             (0..128).filter(|r| old(*r) != family_name(*r)).collect()
         };
         for r in 0..128 {
-            if ![0, 2, 13, 45, 77, 92, 93, 124].contains(&r) {
+            if ![0, 2, 13, 45, 64, 77, 92, 93, 124].contains(&r) {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
@@ -565,18 +575,21 @@ mod tests {
         assert_eq!(family_name(221), "processing/crushing");
         assert_eq!(family_name(77), "processing/mixing");
         assert_eq!(family_name(93), "processing/compacting");
+        assert_eq!(family_name(64), "breaking/drill");
+        assert_eq!(family_name(320), "breaking/drill");
+        assert_eq!(family_name(192), "breaking/saw");
         assert_eq!(
             moved(at_9f00743),
             [
-                23, 29, 35, 39, 55, 61, 66, 77, 78, 87, 93, 94, 99, 103, 110, 119, 124, 126
+                23, 29, 35, 39, 55, 61, 64, 66, 77, 78, 87, 93, 94, 99, 103, 110, 119, 124, 126
             ]
         );
         // #7's own moves and the belt families'; 87 and 119 are actions' again.
         assert_eq!(
             moved(before),
             [
-                23, 29, 35, 39, 55, 61, 66, 74, 75, 76, 77, 78, 90, 91, 92, 93, 94, 99, 103, 106,
-                107, 108, 109, 110, 122, 123, 124, 125, 126
+                23, 29, 35, 39, 55, 61, 64, 66, 74, 75, 76, 77, 78, 90, 91, 92, 93, 94, 99, 103,
+                106, 107, 108, 109, 110, 122, 123, 124, 125, 126
             ]
         );
     }

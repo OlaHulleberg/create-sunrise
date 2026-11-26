@@ -4,6 +4,15 @@
 //! `survives_explosion`, `match_block`, `inverted` and `all_of` pool conditions.
 use serde_json::Value;
 
+/// A property the port declares for Create's block (`create/data/create/sunrise/block/<name>.json`).
+fn declared(block: &str, key: &str) -> Option<serde_json::Value> {
+    let name = block.strip_prefix("create:")?;
+    let path =
+        crate::defaults::checkout().join(format!("create/data/create/sunrise/block/{name}.json"));
+    let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
+    doc["properties"].get(key).cloned()
+}
+
 /// Whether a player's empty hand breaks the block in `state` without its drops
 /// (`requiresCorrectToolForDrops`): the port's block data for Create's blocks, and for the
 /// vanilla blocks cases place what a hand-broken one was seen to drop. None for others.
@@ -18,15 +27,15 @@ pub fn requires_tool(state: &str) -> Option<bool> {
     ) {
         return Some(true);
     }
-    let name = block.strip_prefix("create:")?;
-    let path =
-        crate::defaults::checkout().join(format!("create/data/create/sunrise/block/{name}.json"));
-    let doc: Value = serde_json::from_str(&std::fs::read_to_string(path).ok()?).ok()?;
-    Some(
-        doc["properties"]["requires_tool"]
-            .as_bool()
-            .unwrap_or(false),
-    )
+    declared(&block, "requires_tool")?.as_bool()
+}
+
+/// The hardness the port declares for Create's block in `state`, as the host's `destroy_speed`
+/// reports it. None for other blocks (`breaking::hardness` has the vanilla ones).
+pub fn hardness(state: &str) -> Option<f32> {
+    declared(&crate::scenario::parse_state(state).0, "hardness")?
+        .as_f64()
+        .map(|h| h as f32)
 }
 
 /// The stacks the block in `state` drops. The harness's own blocks and absent tables drop
@@ -209,5 +218,10 @@ mod tests {
             super::requires_tool("create:belt[facing=east]"),
             Some(false)
         );
+        assert_eq!(
+            super::hardness("create:mechanical_drill[facing=up,waterlogged=false]"),
+            Some(1.5)
+        );
+        assert_eq!(super::hardness("minecraft:stone"), None);
     }
 }

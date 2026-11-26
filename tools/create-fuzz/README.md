@@ -364,8 +364,9 @@ table's comments say.
 | steam_engine | 75, 91, 107, 123 mod 128 | 1/32 | As water wheels |
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
 | geometry/states | 109, 125 mod 128 | 2/128 | Static kinetics: one catalogue state per seed by index, every block, face and order; always reloads |
-| geometry/stress_boundary | 0, 64, 192 mod 256 | 3/256 | Every eighth static kinetics seed but 128 mod 256; its load steps (seed / 8 mod 3) are all still reached |
+| geometry/stress_boundary | 0 mod 256 | 1/256 | Every eighth static kinetics seed but 128 mod 256, 64 and 192 having gone to the breaking families; its load steps (seed / 8 mod 3) are all still reached |
 | processing/millstone, crushing, saw, mixing, compacting | 205, 221, 128, 77, 93 mod 256 | 5/256 | Machine work ([processing scope](docs/processing-scope.md)): geometry/states' 205, 221, 77 and 93 and stress_boundary's 128, none of which reloads |
+| breaking/drill, saw | 64, 192 mod 256 | 2/256 | Stationary block breaking, drills and sideways saws ([processing scope](docs/processing-scope.md#block-breaking)): stress_boundary's 64 and 192; neither reloads by seed bit (the drill history reloads by its own actions) |
 | geometry/network | 92 mod 256 | 1/256 | Random networks through compatible faces (unreached since the fluid families) |
 | network/face_placement, face_wrench, driven_placement | 220, 252, 124 mod 256 | 3/256 | Placement on and wrench turns from every face of the kinetic blocks a player builds with, and placement into a running shaft line; geometry/network's other residues. Variants by `index`; face_placement never reloads, the other two always ([kinetics scope](docs/kinetics-scope.md)) |
 | geometry/source_faces | 76, 108 mod 128 | 1/64 | Six input faces of gearboxes, clutches and gearshifts (unreached since fluid_pumps took 18 mod 32) |
@@ -381,6 +382,9 @@ The sequenced gearshift family then took transmission/crank's 173 (mod 256).
 The processing families then took geometry/states' 205 and 221 and geometry/stress_boundary's
 128 (mod 256), and the basin families geometry/states' 77 and 93, which leaves it with two
 residues that both always reload.
+
+The breaking families then took geometry/stress_boundary's 64 and 192 (mod 256): the drill's was
+geometry/states' 93 until the basin families took it.
 
 The belt logistics families (from `belts-cover`, whose lanes the network campaign had taken)
 then took: actions' 23, 35, 39, 55 (funnel_push, chute_columns, brass_funnels, depot_outputs);

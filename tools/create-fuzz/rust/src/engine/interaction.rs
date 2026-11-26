@@ -26,6 +26,7 @@ impl Run {
         use crate::actions::Action;
         match action {
             Action::GameMode { creative } => self.creative = *creative,
+            Action::GameRule { do_tile_drops } => self.rules.do_tile_drops = *do_tile_drops,
             Action::Reload => self.reload(),
             Action::Item { input } => self.item_input(p, input),
             Action::Capability {
@@ -243,6 +244,9 @@ impl Run {
                 && !(name == "create:belt"
                     && (item == "create:shaft"
                         || create_engine::dye::DyeColor::of_item(item).is_some()))
+                // A breaker has no use of its own for a wrench: `IWrenchable` turns or takes it.
+                && !(item == "create:wrench"
+                    && matches!(block, Block::MechanicalDrill | Block::MechanicalSaw))
             {
                 self.notes.push(format!("adapter gap: RightClickBlock/value-box and block-use handlers for {name} at {p:?} are outside the supported subset; input retained"));
                 return;
@@ -561,9 +565,15 @@ impl Run {
             if !create_engine::wrench::turns(name.trim_start_matches("create:")) {
                 return;
             }
+            // The breakers turn by `IWrenchable.getRotatedBlockState` alone (`facing`, and the
+            // saw's `axis_along_first`).
             if !crate::actions::BLOCKS.contains(&name.as_str())
                 && !name.ends_with("_encased_shaft")
                 && !name.ends_with("_casing")
+                && !matches!(
+                    name.as_str(),
+                    "create:mechanical_drill" | "create:mechanical_saw"
+                )
             {
                 self.notes.push(format!(
                     "adapter gap: unsupported wrench override at {p:?}: {name}"
