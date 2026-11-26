@@ -144,6 +144,29 @@ impl Run {
         if item == "minecraft:air" && self.transport_empty_use(p, face, sneaking) {
             return;
         }
+        // glue/logistics/depot.rs `use_depot` (`SharedDepotBlockMethods.onUse`): an item used
+        // on a depot's top is put on it, the mechanical arm excepted. A sneaking player's
+        // block use is skipped (`ServerPlayerGameMode.useItemOn`: `flag1`).
+        if !sneaking
+            && face == Dir::Up
+            && self.w.block_at(0, p) == Some(Block::Depot)
+            && item != "minecraft:air"
+            && item != "create:mechanical_arm"
+            && crate::transport::contract()
+                .items
+                .iter()
+                .any(|i| i.id == item)
+        {
+            let count = if crate::deployers::item(item).is_some_and(|i| i.max_stack == 1)
+                || item.ends_with("_bucket")
+            {
+                1
+            } else {
+                64
+            };
+            self.depot_use(p, item, count);
+            return;
+        }
         if self.belt_use(p, item, face, hit, sneaking) {
             return;
         }
@@ -204,6 +227,12 @@ impl Run {
             self.publish_interaction();
             return;
         }
+        // glue/processing/mod.rs `use_block`: a deployer's filter slot, its mode by wrench and
+        // its hand by a click.
+        if self.deployer_use(p, item, face, hit, sneaking) {
+            self.publish_interaction();
+            return;
+        }
         // WrenchItem.useOn dispatches a sneaking belt use to
         // IWrenchable.onSneakWrenched (destroyBlock), handled below like the glue.
         if let Some((block, info)) = own {
@@ -242,7 +271,7 @@ impl Run {
                 // is no middle one, goes on to the item (`DyeItem` does nothing to a block, the
                 // shaft is placed against the clicked face).
                 && !(name == "create:belt"
-                    && (item == "create:shaft"
+                    && (item == "create:shaft" || item == "create:deployer"
                         || create_engine::dye::DyeColor::of_item(item).is_some()))
                 // A breaker has no use of its own for a wrench: `IWrenchable` turns or takes it.
                 && !(item == "create:wrench"
@@ -460,7 +489,10 @@ impl Run {
         }
         if item == "create:wrench" {
             let (name, props) = parse_state(&self.name(state));
-            if name == "minecraft:air" || name == "minecraft:stone" {
+            if name == "minecraft:air"
+                || name == "minecraft:stone"
+                || crate::deployers::vanilla(&name)
+            {
                 return;
             }
             if let Some((block, info)) = own
@@ -615,6 +647,30 @@ impl Run {
         } else {
             add(p, face.offset())
         };
+        // `AssemblyOperatorBlockItem.place`: a deployer item on top of a basin or a horizontal
+        // belt goes two above it, its click moved to that spot's top face.
+        if item == "create:deployer" && face == Dir::Up {
+            let on = if self.replaceable(p) {
+                [p[0], p[1] - 1, p[2]]
+            } else {
+                p
+            };
+            let operates = match self.w.table.get(self.at(on)) {
+                Some((Block::Basin | Block::Depot | Block::WeightedEjector, _)) => true,
+                Some((Block::Belt, info)) => info
+                    .belt
+                    .is_some_and(|s| s.slope == create_engine::belt::Slope::Horizontal),
+                _ => false,
+            };
+            if operates {
+                let up = [on[0], on[1] + 2, on[2]];
+                if !self.replaceable(up) {
+                    return;
+                }
+                self.place_player(up, item, yaw, pitch, Dir::Up, sneaking);
+                return;
+            }
+        }
         if !self.replaceable(p) {
             return;
         }
@@ -719,6 +775,12 @@ impl Run {
         if self.place_pipe(p, block, yaw, pitch, sneaking) {
             return;
         }
+        if let Some(next) = crate::deployers::item_block(block)
+            && next.starts_with("minecraft:")
+        {
+            self.set(p, self.id(&crate::deployers::placed_state(next, face)));
+            return;
+        }
         if block == "create:water_wheel" {
             self.place_water_wheel(p, yaw, pitch, sneaking, face);
             return;
@@ -751,6 +813,7 @@ impl Run {
             self.set(p, self.id(block));
             return;
         }
+        let deployer = block == "create:deployer";
         if block == "create:vertical_gearbox" {
             let shafts: Vec<_> = [Dir::South, Dir::West, Dir::North, Dir::East]
                 .into_iter()
@@ -863,6 +926,14 @@ impl Run {
             if self.replaceable(add(p, facing.opposite().offset())) {
                 return;
             }
+        }
+        if deployer && let Some(f) = place::facing(b, ctx, shaft) {
+            let along = place::along_first(f, ctx, shaft);
+            next = with_prop(
+                &next,
+                "axis_along_first",
+                if along { "true" } else { "false" },
+            );
         }
         self.set(p, self.id(&next));
         if let Some(property) = measured {

@@ -371,13 +371,140 @@ before the fixes. The smallest is one leaf (seed 23488 shrunk: at tick 12 `3,14,
 7 on the driver). A wrench on a drill does not arm it: `IWrenchable.onWrenched` runs the drill's own
 `updateShape` and its neighbours' `neighborChanged`, never the drill's own.
 
+## Deployers
+
+`kinetics/deployer/`: `DeployerBlock`, `DeployerBlockEntity`, its `DeployerFakePlayer`,
+`DeployerHandler` (what the fake player does to the block it reaches), `BeltDeployerCallbacks`
+(a deployer facing down over a belt or a depot), `DeployerItemHandler`, and the item that places
+it (`processing/AssemblyOperatorBlockItem`), with the two mixins that bend block item placement
+and block drops to the fake player (`foundation/mixin/BlockItemMixin`, `BlockMixin`).
+
+### Deployers: driven
+
+One family, `deployers` (`rust/src/deployers.rs`), on residues 64, 125 and 253 mod 256. A seed
+≡ 64 never reloads (`seed & 32` is clear), the others always do. Nine histories, picked by
+`index / 3`; the table gives the first seed of each:
+
+| History | Seed | What happens |
+| --- | --- | --- |
+| depot | 64 | Facing down over a depot. A click on its front gives the hand (a `(stack, tool)` pair of the contract, or dirt and planks, which no recipe takes), stacks are dropped under it, the wrench turns it to punch and back, a signal beside it locks it, the hand is taken back and another given mid-cycle, and a handler or an empty hand takes what the depot holds |
+| belt | 320 | The same over a belt of 4 to 6 segments at ±32 rpm, built with the connector; the stacks land on its first segment |
+| placing | 576 | A block item in its hand (planks, cobblestone, dirt, an andesite casing, a honeycomb block) on every facing: its block appears two ahead, stands there from the start, or a stone is in the way two or one ahead; it goes, and may come back |
+| punching | 832 | Punch mode on stone, cobblestone, dirt, planks, a depot or bedrock two ahead, with nothing, a stick or a pickaxe in hand; the block changes to air, dirt, stone or itself |
+| tools | 1088 | An axe on a log, a shovel on grass, a hoe on dirt or grass, an andesite alloy, a brass or a copper ingot on a stripped log, an inert pickaxe or ingot; the block is set back and another tool comes |
+| fist bump | 1344 | Two punchers two to four blocks apart, the second wrenched to punch or left using, its motor at the same speed or at 1 rpm (a board set to 0) |
+| filter | 1600 | The depot history with a filter on its slot, naming its tool (it works) or iron ingots (the tool is put away); the filter is cleared again |
+| swapping | 1856 | The hand taken back and another given, stacks under it, the hand swapped by clicks |
+| removed | 2112 | The deployer taken while empty and put back, its motor slowed to 1 rpm and set again, the other way or not, its depot taken under a stack it holds and put back |
+
+The contract (`rust/src/deployers.json`) names the 21 full states a deployer may reach, the 33
+items it may hold (a block item names the block it places; an axe, a shovel or a hoe the blocks
+it turns), the hardness and outline top of 10 blocks, what one punch does for each of 45 (held,
+block) pairs (the progress, whether it harvests, the drops), and the 11 recipes the pairs meet (7
+deploying, 3 item application, 1 sandpaper polishing). `DeployerAudit` checks every entry at
+startup with the game's own fake player, by experiment in a probe area of slot 127, and fails the
+start on a mismatch.
+
+Version 3 snapshots report each deployer (`DeployerObservations`, `deployers::Observation`):
+`mode`, `state`, `timer`, `reach`, the hand (`held`: item, count, damage), the fake player's other
+slots (`inventory`), `overflow`, `locked`, whether it has an `owner` (a player placed it), the
+filter item, `fist_bump`, and the block it is breaking with its progress. The Rust driver
+(`rust/src/engine/deployer.rs`) re-implements the port's glue (`create/src/glue/processing/deployer.rs`,
+`fist.rs`, `filtering.rs`, `operator.rs`) on the port's engine (`create/src/engine/src/deployer.rs`),
+in the port's order, as the other families' drivers do; it takes no rule from Create's Java.
+
+What the Java does, as measured:
+
+- `tick` (`DeployerBlockEntity.java:172`): still, nothing. `timer > 0`: down by
+  `clamp(|speed| × 2, 8, 512)`. At rest, holding overflow, or holding what its filter refuses
+  (which goes to the overflow), or using over a block it should not activate on: `timer =
+  timerSpeed × 10` and return, so it looks again 11 ticks later at any speed. A puncher looks 2 to
+  4 blocks ahead for another facing it and punching: both expand at once, `reach = (distance − 2)
+  × 0.5`, and retract together when the first runs out (`startFistBump`, `triggerFistBump`).
+  Locked by a signal, it starts nothing. Else `start()`, and the stroke counts from the next tick.
+- `start` (:258): a ray from 1.5 to 2.5 blocks ahead gives `reach = 0.5 + min(hit, 0.75)`: 1.25 in
+  the air, 0.6875 over a depot's or a belt's top, 0.5625 over farmland's, and 0.501 against a full
+  block whose face the ray starts on (the game's `clip` puts that hit a thousandth in: stone, dirt
+  or a depot seen from the side). `reach` is synced to clients but not saved (:389, :422): 0 after
+  a reload.
+- `shouldActivate` (`DeployerHandler.java:120`): a block item over its own block, a bucket over
+  its own fluid, or anything held over a depot or belt starts no stroke by itself. An empty hand,
+  or a held stack over anything else, strokes on; over a depot or a belt `activate` then returns
+  at once (:351).
+- Over a depot or a belt (`BeltDeployerCallbacks.java`): a stack arriving under a deployer at rest
+  starts its stroke when a recipe takes the stack with the hand, and passes otherwise; one
+  arriving mid-stroke is held whatever it is (:48). A held stack is asked every tick: without a
+  recipe it is let go (:80); the recipe applies in the tick the stroke bottoms (`RETRACTING`,
+  timer 1000, :83); a deployer that comes to rest starts a new stroke for it, unless locked (:88).
+- A punch (`DeployerHandler.java:241`): `getDestroyProgress × 16` a stroke, as the fake player is
+  never on the ground and digs at a fifth of a player's rate: an iron pickaxe takes stone in three
+  strokes (0.427 each); without a held stack nothing breaks. A broken block's drops go into the
+  fake player's inventory (:416).
+- A use (:286): the hand's `useOn` on the block two ahead. A block item places there, or one block
+  nearer when that is taken, and nowhere when the clicked block cannot be replaced
+  (`BlockItemMixin`). An axe, a shovel or a hoe turns the block, a shovel not from below.
+- By hand: the wrench on its front half changes the mode; anywhere else it turns the deployer as
+  any wrenchable block, and sneaking picks it up. A click on its front swaps the hand and the held
+  stack. A click on the side that holds its filter slot sets or clears the filter. Its item, used
+  on top of a belt, a basin, a depot or a weighted ejector, places it two above, facing down;
+  a depot takes the item instead unless the player sneaks.
+
+### Deployers: not driven, and why
+
+- Entities: a use on one, a punch, food and drinks (`finishUsingItem`), spawn eggs, carts and
+  rails. The harness has no entities but items, which it discards in flight.
+- Buckets and flint and steel from the fake player (`ItemUseWorld`, the bucket's own ray): fluid
+  item flight is outside the item transport ([item transport](item-transport.md)).
+- Sequenced assembly's deploying steps: their in-between items carry components.
+- Tools with enchantments or a name: the hand's components.
+- `DeployerRecipeSearchEvent`: other mods cancel recipe lookups there; none is installed.
+- `DeployerMovementBehaviour`, `DeployerMovingInteraction`: a contraption (out of scope).
+- `DeployerBlock$PlacementHelper` (catnip's placement helpers): the packet flow of
+  `IPlacementHelper`, which the port does not have either.
+- The filter's amount (`filter_setting`): a deployer's filter matches items only
+  (`FilteringBehaviour.test`, :236); the amount changes nothing it does.
+- The owner's identity beyond "player placed it": the fake player's UUID and name are its owner's
+  (`DeployerFakePlayer.java`, `getUUID`), which no harness action reads.
+- A mechanical arm filling a deployer's hand: the arm family is not driven.
+- `clearContent` (the game's empty-command path) and `invalidate`.
+
+### Deployers: port differences found
+
+Open, against `main` at `ed78c18e`. `cases/` holds only cases that match on `main` (of the 31
+written for deployers, the four that do: an item used on a depot, a deployer item refused above a
+taken belt, the wrench on a deployer's back and sneaking with it), so a difference's repro is the
+shrunk scenario named in the first column, kept with the report rather than here; the ticks in
+brackets are its checkpoints. The driver mirrors the port, so each shows the port's own answer.
+The three sweeps agree with the cases: `fuzz-lane` on each residue (427 seeds each, 1281 in all)
+matched 0 and differed 1281, none java-unstable or driver-unsupported; one seed of each history
+is shrunk beside the cases: 64, 320, 576, 832, 1088, 1344, 1600, 1856 and 2112.
+
+| Repro | Java | Port | Deciding Java | Port code |
+| --- | --- | --- | --- | --- |
+| `deployer-punch-stone` (85), `deployer-fist-bump` (86-94), `deployer-placement` (86-96) | A stroke started, and each wait to look again, counts from the next tick: 1000 on the tick a stroke starts, 968 on the next at 16 rpm; a fist bump's initiator keeps 1000; the look-again period is 11 ticks (320 at 96 where the port is at 256) | The start tick counts: 968 on it, so every stroke after the first runs a tick early, and the period is 10 ticks | `DeployerBlockEntity.java:234-235`, `:222-226`, `:184-187`, `:229-230`, `:299-305` | `glue/processing/deployer.rs:427-441` starts or waits, then `:446-472` ticks the same deployer in the same tick |
+| `deployer-stroke` (2), `deployer-reach` (3) | Its first tick with a speed is its second tick, and its first stroke starts there (`expanding 1000`) | Still `waiting 0` there: the deployer's pass reads no speed before that tick's solve (#370); it starts on the next tick and counts it. From then on the two errors cancel | `KineticBlockEntity.java:98-99` (`attachKinetics` in its own `tick`, before the subclass) | `glue/processing/mod.rs:615-621`, `glue/processing/deployer.rs:372-381` |
+| `deployer-filter-mismatch` (8), `deployer-removed-held` (10), `deployer-lock` (70), seed 320 | A using deployer over a depot or belt strokes on its own with an empty hand or a hand `shouldActivate` lets (`expanding 840` at tick 8 over an empty depot), and holds what arrives until its stroke bottoms; a stack under a deployer that was already retracting is let go when it comes to rest, without a recipe (the shaft x8 at 70); over a belt a held stack's timer counts `timerSpeed × 10` down (5120 to 0 on seed 320) | It starts strokes only from the depot's and the belt's callbacks: at rest its timer stands still (`waiting 0`; `waiting -12` from tick 140 on, on seed 320), and the shaft under `deployer-lock` is made a cogwheel at 74 by the stroke its arrival started, though the deployer was locked at 60 | `DeployerBlockEntity.java:221-235`, `:351-353`, `DeployerHandler.java:133-137` | `glue/processing/deployer.rs:412-415` |
+| `deployer-belt-deploying` (72, 105-106) | A belt formed after its deployer ticks after it: a held stack's recipe applies in the tick the stroke bottoms (105), and a stack held under a deployer that just came to rest starts its stroke at once (72: `expanding 1000`) | Belts and depots always come first: `waiting 500` at 72, the recipe at 106 (see #370) | `BeltDeployerCallbacks.java:83-92`, block entities in placement order | `glue/processing/mod.rs:324` |
+| `deployer-reach` (3), `deployer-tools` (100), `deployer-punch-stone` (85), `deployer-axe-log` (10-15) | `reach` follows the block two ahead: 0.501 against stone, dirt or a log with air between, 0.5625 over farmland's top | 1.25 whenever the block one ahead is replaceable; with a solid block one ahead too, 0.5 where Java has 0.501 | `DeployerBlockEntity.java:258-272` | `glue/processing/deployer.rs:422-426` |
+| `deployer-punch-stone` (200), seeds 832, 893 | The broken stone's cobblestone is in the fake player's inventory, then in the deployer's overflow for a hopper or funnel to take; no item entity | An item entity at the block's middle (`pop_resource`) | `DeployerHandler.java:416-417`, `DeployerBlockEntity.java:200-219` | `glue/processing/deployer.rs:1106-1109` (`PlayerAction::BreakBlock`) |
+| `deployer-removed-held` (41) | The held stack is dropped by the fake player where it stands, in the block in front, with a throw (0.74, 9.36, 0.81) | Dropped at the deployer's middle (0.5, 10.375, 0.5) without a throw | `DeployerBlockEntity.java:466-474` | `glue/processing/mod.rs:109-117` (`drop_slot`) |
+| `deployer-handler` (11-16) | The handler's slot 0 is the hand: 3 planks then 2 more are taken (5), dirt refused, one placed at 35, 2 and then the rest extracted | The container has the 11 overflow slots only: both inserts refused whole, nothing placed, nothing to extract | `DeployerItemHandler.java:49-118` | `glue/processing/containers.rs:145-157` |
+| `deployer-placed-by` (11), `deployer-placed-operator-depot` (11) | A player-placed deployer has an `owner`, saved as `Owner`; its fake player answers with that UUID | None; one fixed fake player | `DeployerBlock.java:86-90`, `DeployerBlockEntity.java:406-407`, `DeployerFakePlayer.java:104-107` | `engine/src/deployer.rs:65-80` (no owner), `glue/processing/deployer.rs:35-36` |
+| `deployer-placed-operator-basin` (11), `deployer-placed-operator-belt` (25) | Placed two above what it works on, it faces down, whatever the player's view | Faces by the player's view: up when not sneaking and looked at from above (pitch 60); `down` only when the player sneaks (`-depot`, which matches but for its owner) | `DeployerBlock.java:167-173`, `AssemblyOperatorBlockItem.java:37`, `:45-48` | `glue/processing/operator.rs:131-146` |
+| `deployer-reload` (31) | `reach` is 0 after a reload: not saved | 1.25 kept | `DeployerBlockEntity.java:389-392`, `:422-425` | `glue/processing/persist.rs:407-440` |
+
+What matches, tick for tick apart from those: the stroke's progress, a punch's `getDestroyProgress × 16`
+a stroke (stone goes in the third stroke of an iron pickaxe, the pickaxe wears), a fist bump
+between two punchers two to four apart and one stopped mid-bump, a block item placed two ahead or
+nowhere against a wall, an axe, a shovel and a hoe turning blocks, the recipes over a depot and a
+belt, the filter slot, the wrench on the front and the back, and the hand swapped by a click.
+
 ## Not driven yet
 
 | Machine | Java | Why not yet |
 | --- | --- | --- |
 | A drill in a cobble generator | `kinetics/drill/DrillBlockEntity.onBlockBroken` (:41), `CobbleGenOptimisation` | Lava and water sources around a drill with a belt, hopper or chute under it; lava is not among the fluids the harness places |
 | Dynamic Trees | `saw/TreeCutter.canDynamicTreeCutFrom` (:51), `findDynamicTree` | That mod is not installed |
-| Deployer | `kinetics/deployer/DeployerBlockEntity.tick` (:173), `DeployerHandler` | A fake player's item use |
 | Mechanical arm | `kinetics/mechanicalArm/ArmBlockEntity.tick` (:128), interaction points | Placement selection packets and points |
 | Mechanical crafter | `kinetics/crafter/MechanicalCrafterBlockEntity.tick` (:255) | Grids, connected inputs and crafting recipes |
 | Fans on entities | `kinetics/fan/AirCurrent`, `fan/processing/FanProcessing` | Item entities in flight, which the harness discards |

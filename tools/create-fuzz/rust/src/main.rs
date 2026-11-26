@@ -13,6 +13,7 @@ mod compare;
 mod corpus;
 mod coverage;
 mod defaults;
+mod deployers;
 mod depot_outputs;
 mod depots;
 mod ejectors;

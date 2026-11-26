@@ -240,11 +240,9 @@ pub const FAMILIES: &[Family] = &[
     // seed bit (the drill history reloads by its own actions).
     family("breaking/drill", &[(256, 64)], breaking_drill),
     family("breaking/saw", &[(256, 192)], breaking_saw),
-    family(
-        "geometry/states",
-        &[(128, 109), (128, 125)],
-        geometry_states,
-    ),
+    family("geometry/states", &[(128, 109)], geometry_states),
+    // Deployers, on residues geometry/states gave up; both always reload.
+    family("deployers", &[(256, 125), (256, 253)], deployers),
 ];
 
 fn waterwheel(seed: u64) -> Scenario {
@@ -282,6 +280,9 @@ fn cog_casing(seed: u64) -> Scenario {
 }
 fn geometry_states(seed: u64) -> Scenario {
     geometry::states(seed, index(seed))
+}
+fn deployers(seed: u64) -> Scenario {
+    crate::deployers::generate(seed, index(seed))
 }
 
 /// The owning family of each residue.
@@ -564,6 +565,10 @@ mod tests {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
+        assert_eq!(family_name(64), "deployers");
+        assert_eq!(family_name(125), "deployers");
+        assert_eq!(family_name(253), "deployers");
+        assert_eq!(family_name(192), "geometry/stress_boundary");
         assert_eq!(family_name(220), "network/face_placement");
         assert_eq!(family_name(252), "network/face_wrench");
         assert_eq!(family_name(124), "network/driven_placement");
@@ -581,7 +586,8 @@ mod tests {
         assert_eq!(
             moved(at_9f00743),
             [
-                23, 29, 35, 39, 55, 61, 64, 66, 77, 78, 87, 93, 94, 99, 103, 110, 119, 124, 126
+                23, 29, 35, 39, 55, 61, 64, 66, 77, 78, 87, 93, 94, 99, 103, 110, 119, 124, 125,
+                126
             ]
         );
         // #7's own moves and the belt families'; 87 and 119 are actions' again.

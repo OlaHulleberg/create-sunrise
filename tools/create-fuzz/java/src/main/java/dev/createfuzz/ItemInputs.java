@@ -18,7 +18,8 @@ final class ItemInputs {
             var doc=JsonParser.parseString(java.nio.file.Files.readString(java.nio.file.Path.of(System.getenv("FUZZ_TRANSPORT_MANIFEST")))).getAsJsonObject();
             for(var e:doc.getAsJsonArray("items")) {
                 var i=e.getAsJsonObject();var id=ResourceLocation.parse(i.get("id").getAsString());
-                if(!BuiltInRegistries.ITEM.containsKey(id) || new ItemStack(BuiltInRegistries.ITEM.get(id)).getMaxStackSize()!=i.get("max_stack").getAsInt()) throw new IllegalStateException("transport item contract: "+id);
+                if(!BuiltInRegistries.ITEM.containsKey(id)) throw new IllegalStateException("transport item contract: no item "+id);
+                if(new ItemStack(BuiltInRegistries.ITEM.get(id)).getMaxStackSize()!=i.get("max_stack").getAsInt()) throw new IllegalStateException("transport item contract: "+id+" max stack "+new ItemStack(BuiltInRegistries.ITEM.get(id)).getMaxStackSize());
             }
             for(var e:doc.getAsJsonArray("blocks")) {
                 var b=e.getAsJsonObject();var id=ResourceLocation.parse(b.get("id").getAsString());

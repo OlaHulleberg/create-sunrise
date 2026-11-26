@@ -63,6 +63,9 @@ impl Run {
                         .then(|| self.breaking_observation(p))
                         .flatten(),
                     cracks: (sc.version >= 3).then(|| self.cracks_at(p)).flatten(),
+                    deployer: (sc.version >= 3)
+                        .then(|| self.deployer_observation(p))
+                        .flatten(),
                     measured_trig: self.measured_trig.get(&p).map(|property| {
                         crate::allow::MeasuredTrigState {
                             tie: Some(crate::allow::NearestTie::Yaw45Pitch0),

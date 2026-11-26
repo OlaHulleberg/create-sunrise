@@ -102,6 +102,8 @@ final class Observations {
                             BlockPos shown = BreakingObservations.cracksAt(breaker);
                             if (shown != null) cracks.computeIfAbsent(shown.subtract(origin), k -> new ArrayList<>()).add(BreakingObservations.progress(breaker));
                         }
+                        if(transportVersion && be instanceof com.simibubi.create.content.kinetics.deployer.DeployerBlockEntity deployer)
+                            snap.add("deployer",DeployerObservations.observe(deployer,origin));
                     }
                     if (be instanceof com.simibubi.create.content.kinetics.belt.BeltBlockEntity belt) {
                         JsonObject b = new JsonObject();

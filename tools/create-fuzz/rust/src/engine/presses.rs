@@ -26,11 +26,23 @@ impl Run {
         let above = [space[0], space[1] + 1, space[2]];
         belt::processing_blocked(self.w.block_at(0, above), || self.host_collision(above))
     }
-    /// `tick_presses`: the deployers the depots asked for (none in the contract, so the asks
-    /// are dropped). Presses are asked at their depot's turn (`press_depot_turn`) and move at
-    /// their own (`press_turn`), in the transport walk.
+    /// `tick_presses`: the depots that asked look at the deployer two above them, and keep
+    /// asking while it holds their stack. Presses are asked at their depot's turn
+    /// (`press_depot_turn`) and move at their own (`press_turn`), in the transport walk.
     pub(super) fn tick_presses(&mut self) {
-        self.w.dims[0].depot_work.clear();
+        let work = std::mem::take(&mut self.w.dims[0].depot_work);
+        let mut keep = Vec::new();
+        for depot in work {
+            if self.deployer_on_depot(depot) {
+                keep.push(depot);
+            }
+        }
+        let d = &mut self.w.dims[0];
+        for p in keep {
+            if !d.depot_work.contains(&p) {
+                d.depot_work.push(p);
+            }
+        }
     }
     /// glue/processing/press.rs `depot_turn`: the depot at `at`, its stack arrived and not
     /// blocked, asks the press two above (`press::depot_step`).

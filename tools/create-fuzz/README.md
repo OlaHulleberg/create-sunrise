@@ -282,6 +282,12 @@ amounts (with the `filter_setting` action), chute columns (diagonal and smart ch
 encased fans at a belt's end) and presses over depots and belts. Each family's residues are in
 [Seed families](#seed-families). See [item transport](docs/item-transport.md).
 
+The deployers family (`rust/src/deployers.rs`, `deployers.json`, checked by `DeployerAudit` at
+startup) runs deployers over depots and belts (the recipes, locks, filters), placing blocks,
+punching blocks, with tools, in fist bumps, with the hand swapped, and removed and reloaded. A
+version 3 snapshot reports each deployer's mode, cycle, timer, reach, hand, overflow, lock, owner,
+filter and breaking progress. See [deployers](docs/processing-scope.md#deployers).
+
 The water wheel family drives a wheel's flow from a
 contained falling-water column, both flow signs, a lava column, the plank material through
 player uses (a non-block item, the wheel's own spruce, an invalid block and a valid plank),
@@ -363,8 +369,9 @@ table's comments say.
 | waterwheel | 74, 90, 106, 122 mod 128 | 1/32 | Back after the network campaign took its residues; its pre-campaign share |
 | steam_engine | 75, 91, 107, 123 mod 128 | 1/32 | As water wheels |
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
-| geometry/states | 109, 125 mod 128 | 2/128 | Static kinetics: one catalogue state per seed by index, every block, face and order; always reloads |
+| geometry/states | 109 mod 128 | 1/128 | Static kinetics: one catalogue state per seed by index, every block, face and order; always reloads |
 | geometry/stress_boundary | 0 mod 256 | 1/256 | Every eighth static kinetics seed but 128 mod 256, 64 and 192 having gone to the breaking families; its load steps (seed / 8 mod 3) are all still reached |
+| deployers | 125, 253 mod 256 | 2/256 | Deployers facing every way on a motor: over a depot or a belt (deploying, polishing and item-application recipes, locks, filters), placing blocks, punching blocks, tools, fist bumps, the hand swapped, the block removed and reloaded. Nine histories picked by `index`; both always reload ([deployers](docs/processing-scope.md#deployers)) |
 | processing/millstone, crushing, saw, mixing, compacting | 205, 221, 128, 77, 93 mod 256 | 5/256 | Machine work ([processing scope](docs/processing-scope.md)): geometry/states' 205, 221, 77 and 93 and stress_boundary's 128, none of which reloads |
 | breaking/drill, saw | 64, 192 mod 256 | 2/256 | Stationary block breaking, drills and sideways saws ([processing scope](docs/processing-scope.md#block-breaking)): stress_boundary's 64 and 192; neither reloads by seed bit (the drill history reloads by its own actions) |
 | geometry/network | 92 mod 256 | 1/256 | Random networks through compatible faces (unreached since the fluid families) |
@@ -393,3 +400,5 @@ geometry/states' 78 (press_processing), 94 (belt surface), 99 (slicer), 103 (tun
 transmission/flicker's 66 (chutes); geometry/states' 87 and 119 went to actions. A belt issue
 that cites a `belts-cover` sweep seed reproduces from its `.min.json`; the seed itself generates
 the same history only at 23, 35, 39 or 55 mod 128.
+
+The deployers family then took geometry/states' 125 and 253 (mod 256).

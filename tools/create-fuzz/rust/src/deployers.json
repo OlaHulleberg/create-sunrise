@@ -1,0 +1,925 @@
+{
+ "_comment": "The deployers' contract: the blocks a deployer may reach (full states), the items it may hold and what the game does with them (DeployerHandler: a block item places `block`, an axe, a shovel or a hoe turns the block it is used on), what a punch with each held stack does on each block (`getDestroyProgress` from the tool's speed and whether it harvests; the drops of `tryHarvestBlock`), and Create's deploying, item application and sandpaper polishing recipes for the pairs the families reach (data/create/recipe, MIT; each tag ingredient as the items of this contract it takes). The server audits every entry at startup (DeployerAudit).",
+ "states": [
+  "create:andesite_casing",
+  "create:belt[facing=south,slope=horizontal,casing=false,waterlogged=false]",
+  "create:brass_casing",
+  "create:copper_casing",
+  "create:depot[waterlogged=false]",
+  "minecraft:air",
+  "minecraft:bedrock",
+  "minecraft:cobblestone",
+  "minecraft:copper_block",
+  "minecraft:dirt",
+  "minecraft:dirt_path",
+  "minecraft:exposed_copper",
+  "minecraft:farmland[moisture=0]",
+  "minecraft:grass_block[snowy=false]",
+  "minecraft:honeycomb_block",
+  "minecraft:oak_log[axis=y]",
+  "minecraft:oak_planks",
+  "minecraft:stone",
+  "minecraft:stripped_oak_log[axis=y]",
+  "minecraft:waxed_copper_block",
+  "minecraft:waxed_exposed_copper"
+ ],
+ "items": [
+  {
+   "id": "minecraft:oak_planks",
+   "max_stack": 64,
+   "block": "minecraft:oak_planks"
+  },
+  {
+   "id": "minecraft:cobblestone",
+   "max_stack": 64,
+   "block": "minecraft:cobblestone"
+  },
+  {
+   "id": "minecraft:dirt",
+   "max_stack": 64,
+   "block": "minecraft:dirt"
+  },
+  {
+   "id": "minecraft:stripped_oak_log",
+   "max_stack": 64,
+   "block": "minecraft:stripped_oak_log[axis=y]"
+  },
+  {
+   "id": "minecraft:oak_log",
+   "max_stack": 64,
+   "block": "minecraft:oak_log[axis=y]"
+  },
+  {
+   "id": "minecraft:exposed_copper",
+   "max_stack": 64,
+   "block": "minecraft:exposed_copper"
+  },
+  {
+   "id": "minecraft:waxed_exposed_copper",
+   "max_stack": 64,
+   "block": "minecraft:waxed_exposed_copper"
+  },
+  {
+   "id": "minecraft:copper_block",
+   "max_stack": 64,
+   "block": "minecraft:copper_block"
+  },
+  {
+   "id": "minecraft:waxed_copper_block",
+   "max_stack": 64,
+   "block": "minecraft:waxed_copper_block"
+  },
+  {
+   "id": "minecraft:honeycomb_block",
+   "max_stack": 64,
+   "block": "minecraft:honeycomb_block"
+  },
+  {
+   "id": "create:shaft",
+   "max_stack": 64,
+   "block": "create:shaft"
+  },
+  {
+   "id": "create:cogwheel",
+   "max_stack": 64,
+   "block": "create:cogwheel"
+  },
+  {
+   "id": "create:large_cogwheel",
+   "max_stack": 64,
+   "block": "create:large_cogwheel"
+  },
+  {
+   "id": "create:andesite_casing",
+   "max_stack": 64,
+   "block": "create:andesite_casing"
+  },
+  {
+   "id": "create:brass_casing",
+   "max_stack": 64,
+   "block": "create:brass_casing"
+  },
+  {
+   "id": "create:deployer",
+   "max_stack": 64,
+   "block": "create:deployer"
+  },
+  {
+   "id": "create:copper_casing",
+   "max_stack": 64,
+   "block": "create:copper_casing"
+  },
+  {
+   "id": "create:rose_quartz",
+   "max_stack": 64
+  },
+  {
+   "id": "create:polished_rose_quartz",
+   "max_stack": 64
+  },
+  {
+   "id": "create:sand_paper",
+   "max_stack": 1,
+   "max_damage": 8
+  },
+  {
+   "id": "create:andesite_alloy",
+   "max_stack": 64
+  },
+  {
+   "id": "create:brass_ingot",
+   "max_stack": 64
+  },
+  {
+   "id": "minecraft:copper_ingot",
+   "max_stack": 64
+  },
+  {
+   "id": "minecraft:wooden_pickaxe",
+   "max_stack": 1,
+   "max_damage": 59
+  },
+  {
+   "id": "minecraft:iron_pickaxe",
+   "max_stack": 1,
+   "max_damage": 250
+  },
+  {
+   "id": "minecraft:wooden_axe",
+   "max_stack": 1,
+   "max_damage": 59,
+   "turns": {
+    "minecraft:oak_log": "minecraft:stripped_oak_log"
+   }
+  },
+  {
+   "id": "minecraft:iron_axe",
+   "max_stack": 1,
+   "max_damage": 250,
+   "turns": {
+    "minecraft:oak_log": "minecraft:stripped_oak_log"
+   }
+  },
+  {
+   "id": "minecraft:iron_shovel",
+   "max_stack": 1,
+   "max_damage": 250,
+   "turns": {
+    "minecraft:grass_block": "minecraft:dirt_path",
+    "minecraft:dirt": "minecraft:dirt_path"
+   },
+   "turns_from_below": false
+  },
+  {
+   "id": "minecraft:iron_hoe",
+   "max_stack": 1,
+   "max_damage": 250,
+   "turns": {
+    "minecraft:grass_block": "minecraft:farmland",
+    "minecraft:dirt": "minecraft:farmland"
+   }
+  },
+  {
+   "id": "minecraft:stick",
+   "max_stack": 64
+  },
+  {
+   "id": "minecraft:bucket",
+   "max_stack": 16
+  },
+  {
+   "id": "minecraft:ender_pearl",
+   "max_stack": 16
+  },
+  {
+   "id": "create:wrench",
+   "max_stack": 1
+  }
+ ],
+ "blocks": [
+  {
+   "state": "minecraft:stone",
+   "hardness": 1.5,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:cobblestone",
+   "hardness": 2.0,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:dirt",
+   "hardness": 0.5,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:grass_block[snowy=false]",
+   "hardness": 0.6,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:oak_planks",
+   "hardness": 2.0,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:oak_log[axis=y]",
+   "hardness": 2.0,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:stripped_oak_log[axis=y]",
+   "hardness": 2.0,
+   "top": 1.0
+  },
+  {
+   "state": "minecraft:bedrock",
+   "hardness": -1.0,
+   "top": 1.0
+  },
+  {
+   "state": "create:depot[waterlogged=false]",
+   "hardness": 1.5,
+   "top": 0.8125
+  },
+  {
+   "state": "create:belt[facing=south,slope=horizontal,casing=false,waterlogged=false]",
+   "top": 0.8125
+  }
+ ],
+ "dig": [
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:stone",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:cobblestone",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:dirt",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:grass_block[snowy=false]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:oak_planks",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_planks",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:stripped_oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:stripped_oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "minecraft:bedrock",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": []
+  },
+  {
+   "held": "minecraft:stick",
+   "block": "create:depot[waterlogged=false]",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:stone",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:cobblestone",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:dirt",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:grass_block[snowy=false]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:oak_planks",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_planks",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:stripped_oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:stripped_oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "minecraft:bedrock",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": []
+  },
+  {
+   "held": "minecraft:oak_planks",
+   "block": "create:depot[waterlogged=false]",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:stone",
+   "speed": 2.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:cobblestone",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:cobblestone",
+   "speed": 2.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:cobblestone",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:dirt",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:grass_block[snowy=false]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:oak_planks",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_planks",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:stripped_oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:stripped_oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "minecraft:bedrock",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": []
+  },
+  {
+   "held": "minecraft:wooden_pickaxe",
+   "block": "create:depot[waterlogged=false]",
+   "speed": 2.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "create:depot",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:stone",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:cobblestone",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:cobblestone",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:cobblestone",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:dirt",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:grass_block[snowy=false]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:oak_planks",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_planks",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:stripped_oak_log[axis=y]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:stripped_oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "minecraft:bedrock",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": []
+  },
+  {
+   "held": "minecraft:iron_pickaxe",
+   "block": "create:depot[waterlogged=false]",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "create:depot",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:stone",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:cobblestone",
+   "speed": 1.0,
+   "harvest": false,
+   "drops": []
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:dirt",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:grass_block[snowy=false]",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:dirt",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:oak_planks",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_planks",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:oak_log[axis=y]",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:stripped_oak_log[axis=y]",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "minecraft:stripped_oak_log",
+     "count": 1
+    }
+   ]
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "minecraft:bedrock",
+   "speed": 1.0,
+   "harvest": true,
+   "drops": []
+  },
+  {
+   "held": "minecraft:iron_axe",
+   "block": "create:depot[waterlogged=false]",
+   "speed": 6.0,
+   "harvest": true,
+   "drops": [
+    {
+     "item": "create:depot",
+     "count": 1
+    }
+   ]
+  }
+ ],
+ "recipes": {
+  "polishing": [
+   {
+    "id": "create:sandpaper_polishing/rose_quartz",
+    "target": [
+     "create:rose_quartz"
+    ],
+    "tool": [
+     "create:sand_paper"
+    ],
+    "results": [
+     {
+      "item": "create:polished_rose_quartz",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": false
+   }
+  ],
+  "deploying": [
+   {
+    "id": "create:deploying/cogwheel",
+    "target": [
+     "create:shaft"
+    ],
+    "tool": [
+     "minecraft:oak_planks"
+    ],
+    "results": [
+     {
+      "item": "create:cogwheel",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": false
+   },
+   {
+    "id": "create:deploying/large_cogwheel",
+    "target": [
+     "create:cogwheel"
+    ],
+    "tool": [
+     "minecraft:oak_planks"
+    ],
+    "results": [
+     {
+      "item": "create:large_cogwheel",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": false
+   },
+   {
+    "id": "create:deploying/copper_block_from_deoxidising",
+    "target": [
+     "minecraft:exposed_copper"
+    ],
+    "tool": [
+     "minecraft:wooden_axe",
+     "minecraft:iron_axe"
+    ],
+    "results": [
+     {
+      "item": "minecraft:copper_block",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": true
+   },
+   {
+    "id": "create:deploying/waxed_copper_block_from_adding_wax",
+    "target": [
+     "minecraft:copper_block"
+    ],
+    "tool": [
+     "minecraft:honeycomb_block"
+    ],
+    "results": [
+     {
+      "item": "minecraft:waxed_copper_block",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": true
+   },
+   {
+    "id": "create:deploying/waxed_exposed_copper_from_adding_wax",
+    "target": [
+     "minecraft:exposed_copper"
+    ],
+    "tool": [
+     "minecraft:honeycomb_block"
+    ],
+    "results": [
+     {
+      "item": "minecraft:waxed_exposed_copper",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": true
+   },
+   {
+    "id": "create:deploying/exposed_copper_from_removing_wax",
+    "target": [
+     "minecraft:waxed_exposed_copper"
+    ],
+    "tool": [
+     "minecraft:wooden_axe",
+     "minecraft:iron_axe"
+    ],
+    "results": [
+     {
+      "item": "minecraft:exposed_copper",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": true
+   },
+   {
+    "id": "create:deploying/copper_block_from_removing_wax",
+    "target": [
+     "minecraft:waxed_copper_block"
+    ],
+    "tool": [
+     "minecraft:wooden_axe",
+     "minecraft:iron_axe"
+    ],
+    "results": [
+     {
+      "item": "minecraft:copper_block",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": true
+   }
+  ],
+  "application": [
+   {
+    "id": "create:item_application/andesite_casing_from_log",
+    "target": [
+     "minecraft:stripped_oak_log"
+    ],
+    "tool": [
+     "create:andesite_alloy"
+    ],
+    "results": [
+     {
+      "item": "create:andesite_casing",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": false
+   },
+   {
+    "id": "create:item_application/brass_casing_from_log",
+    "target": [
+     "minecraft:stripped_oak_log"
+    ],
+    "tool": [
+     "create:brass_ingot"
+    ],
+    "results": [
+     {
+      "item": "create:brass_casing",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": false
+   },
+   {
+    "id": "create:item_application/copper_casing_from_log",
+    "target": [
+     "minecraft:stripped_oak_log"
+    ],
+    "tool": [
+     "minecraft:copper_ingot"
+    ],
+    "results": [
+     {
+      "item": "create:copper_casing",
+      "count": 1,
+      "chance": 1.0
+     }
+    ],
+    "keep_held": false
+   }
+  ]
+ }
+}
