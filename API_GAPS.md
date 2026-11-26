@@ -75,9 +75,6 @@ API, and remove it once the API has it and the port uses it.
   cart's speed outside the rail step. Create uses: overrides `onMinecartPass`, reading
   `AbstractMinecart.getMaxSpeedWithRail` ([`ControllerRailBlock.java:144`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/rail/ControllerRailBlock.java#L144)). sunrise-org/sunrise#5075
 
-## Items and inventories
-
-
 ## Client
 
 - **Setting the clipboard when a server reply to the player's own command arrives**: `/create debuginfo` can't copy
