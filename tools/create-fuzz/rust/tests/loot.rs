@@ -1,10 +1,12 @@
+mod support;
+
 use serde_json::{Value, json};
-use std::{env, fs, path::Path, process::Command};
+use std::{fs, path::Path, process::Command};
 
 #[test]
 fn belt_mining_keeps_its_connector_and_reports_bad_shaft_loot() {
-    let root = env::temp_dir().join(format!("create-fuzz-loot-{}", std::process::id()));
-    fs::create_dir(&root).unwrap();
+    let fixture = support::TempDir::new("loot");
+    let root = fixture.path();
     let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../..");
     for file in [
         "tools/create-data/src/default_states.json",
@@ -25,7 +27,7 @@ fn belt_mining_keeps_its_connector_and_reports_bad_shaft_loot() {
         let output = Command::new(env!("CARGO_BIN_EXE_create-fuzz"))
             .arg("rust")
             .arg(repo.join("tools/create-fuzz/cases/belts-connector.json"))
-            .env("CREATE_HORIZON_DIR", &root)
+            .env("CREATE_HORIZON_DIR", root)
             .output()
             .unwrap();
         assert!(
@@ -42,7 +44,6 @@ fn belt_mining_keeps_its_connector_and_reports_bad_shaft_loot() {
     fs::remove_dir(&shaft).unwrap();
     fs::write(&shaft, "{").unwrap();
     let malformed = observe();
-    fs::remove_dir_all(&root).unwrap();
 
     assert!(absent.get("notes").is_none());
     let gap = json!(["adapter gap: loot of create:shaft at [0, 8, 0]"]);
