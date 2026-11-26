@@ -507,11 +507,18 @@ fn git_blob(bytes: &[u8]) -> String {
     format!("{:x}", digest.finalize())
 }
 
-/// `compile` owns the startup declarations and top-level advancements. `registry` owns all
-/// other Create data JSON, its additions to vanilla and convention tags, and simple item definitions.
+/// `compile` owns the startup declarations, top-level advancements and the block tags of
+/// [`crate::blocks::CLASS_TAGS`]. `registry` owns all other Create data JSON, its additions to
+/// vanilla and convention tags, and simple item definitions.
 fn compile_advancement(path: &str) -> bool {
     path.strip_prefix("data/create/advancement/")
         .is_some_and(|name| !name.contains('/') && name.ends_with(".json"))
+}
+
+fn compile_class_tag(path: &str) -> bool {
+    crate::blocks::CLASS_TAGS
+        .iter()
+        .any(|(name, _)| path == format!("data/create/tags/block/{name}.json"))
 }
 
 const MANDATORY_NOTICES: &[(&str, &[u8])] = &[
@@ -525,7 +532,8 @@ const MANDATORY_NOTICES: &[(&str, &[u8])] = &[
 fn owned(path: &str) -> bool {
     (path.starts_with("data/create/")
         && !path.starts_with("data/create/sunrise/")
-        && !compile_advancement(path))
+        && !compile_advancement(path)
+        && !compile_class_tag(path))
         || path.starts_with("data/minecraft/tags/")
         || path.starts_with("data/c/tags/")
         || path.starts_with("assets/create/items/")

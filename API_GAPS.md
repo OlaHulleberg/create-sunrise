@@ -54,9 +54,11 @@ API, and remove it once the API has it and the port uses it.
   draw**: a potato cannon shot can't face the camera in every view. Create uses: calls vanilla
   `Minecraft.getCameraEntity().getEyePosition(pt)` ([`AllPotatoProjectileRenderModes.java:48`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/AllPotatoProjectileRenderModes.java#L48)) and `ItemRenderer.renderStatic` ([`PotatoProjectileRenderer.java:34`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/equipment/potatoCannon/PotatoProjectileRenderer.java#L34)).
   sunrise-org/sunrise#5077
-- **A block's face-skip rule against other blocks, for model faces only** (`skipRendering`): faces between different
-  glass kinds are drawn, and copycats aren't culled by their material. Create uses: overrides vanilla
-  `Block.skipRendering` ([`ConnectedGlassBlock.java:20`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/palettes/ConnectedGlassBlock.java#L20)) and `hidesNeighborFace` ([`CopycatPanelBlock.java:176`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatPanelBlock.java#L176)). sunrise-org/sunrise#5080
+- **A block's face-skip rule that reads a block entity or `blocksMotion`** (Dev 2's data rules, `skip_rendering` and
+  `hides_neighbor_face`, are static per block state): copycats aren't culled by their material, and the metal ladder
+  keeps its sides drawn beside blocks that don't block motion. Create uses: `hidesNeighborFace` reading the copycat's
+  material through its block entity ([`CopycatPanelBlock.java:176`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatPanelBlock.java#L176), `CopycatStepBlock`) and `skipRendering` testing `BlockState.blocksMotion`
+  ([`MetalLadderBlock.java:54`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/MetalLadderBlock.java#L54); the rules' facts have no such flag). The connected glass, panes, encased cogwheels and metal scaffolding are declared with the rules (sunrise-org/sunrise#5080)
 - **Connected-texture rules that read a neighbour's state per face, a neighbour's appearance (`getAppearance`), a rule
   that block-entity data turns off, and position-seeded random sheets**: casings join only their own block, a brass
   tunnel without distribution still connects, and the weathered iron window keeps its plain texture, as no rule
