@@ -308,7 +308,10 @@ pub fn client_reset(_host: &mut dyn ClientHost) {
 /// Whether `block` is in the block tag named `tag` (`minecraft:rails`): the tag's key is looked
 /// up in `tags` by its name, and `None` when the name or the tag does not exist.
 pub fn block_in_tag(tags: &dyn mod_api::Tags, block: mod_api::BlockKey, tag: &str) -> Option<bool> {
-    tags.block_in_tag(block, tags.key(&mod_api::Identifier::parse(tag).ok()?)?)
+    tags.block_in_tag(
+        block,
+        tags.key(&mod_api::Identifier::parse(tag).ok()?)?.typed(),
+    )
 }
 
 /// The block-local boxes of `state`'s `kind` shape at `pos` (`BlockState.getShape`,

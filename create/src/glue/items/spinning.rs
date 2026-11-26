@@ -6,7 +6,7 @@ use create_engine::equipment::ToolSpin;
 use mod_api::{
     ClientHost, Identifier, SpecialModelBakeContext, SpecialModelCollector, SpecialModelContext,
     SpecialModelFactory, SpecialModelGeometry, SpecialModelRenderer, SpecialModelRenderers,
-    SpecialModelStack, SpecialModelTints,
+    SpecialModelStack, SpecialModelSubmitOptions, SpecialModelTints,
 };
 
 #[derive(Clone, Copy)]
@@ -86,12 +86,20 @@ impl SpecialModelRenderer for Spinning {
         collector: &mut SpecialModelCollector<'_>,
     ) -> Result<(), String> {
         for part in &self.fixed {
-            collector.submit_geometry(part, SpecialModelTints::Untinted)?;
+            collector.submit_model(
+                part,
+                SpecialModelTints::Untinted,
+                SpecialModelSubmitOptions::default(),
+            )?;
         }
         let (degrees, axis, pivot) = self.spin.pose(*seconds);
         let pose = Pose::at([0.0; 3]).rotate(axis, degrees, pivot);
         collector.with_pose(pose.affine(), |c| {
-            c.submit_geometry(&self.moving, SpecialModelTints::Untinted)
+            c.submit_model(
+                &self.moving,
+                SpecialModelTints::Untinted,
+                SpecialModelSubmitOptions::default(),
+            )
         })
     }
 }

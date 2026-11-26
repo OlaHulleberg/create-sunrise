@@ -214,7 +214,7 @@ fn pick_up(
         .living(entity)
         .and_then(|l| l.attribute_value(&*host, "minecraft:block_interaction_range"))
         .unwrap_or(4.5);
-    let hit = entity.pick(&*host, reach)?.location;
+    let hit = entity.pick(&*host, reach, false)?.location;
     let me = entity.position(&*host)?;
     let found = level
         .entities_in(&*host, hit.map(|v| v - 1.0), hit.map(|v| v + 1.0))

@@ -78,7 +78,7 @@ fn target(host: &mut dyn ServerHost, player: PlayerRef) -> Option<Sent> {
     let reach = living
         .attribute_value(&*host, "minecraft:block_interaction_range")
         .unwrap_or(4.5);
-    let hit = player.entity().pick(&*host, reach)?;
+    let hit = player.entity().pick(&*host, reach, false)?;
     if hit.miss {
         return None;
     }
