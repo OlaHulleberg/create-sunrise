@@ -84,6 +84,11 @@ API, and remove it once the API has it and the port uses it.
 
 ## Client
 
+- **Client-side structure capture with saved block and entity data**: Java Create saves the quill's ordinary
+  export in the client instance (`SchematicAndQuillHandler.saveSchematic` / `SchematicExport.saveSchematic`).
+  The client API sees synced block-entity data and cannot save entity NBT. For now both actions use one
+  scoped server save; local preview can see it only for the integrated world's owner. Create #378 / sunrise-org/sunrise#6232
+
 - **Setting the clipboard when a server reply to the player's own command arrives**: `/create debuginfo` can't copy
   its report. Create uses: a Catnip clientbound payload whose handler calls vanilla `KeyboardHandler.setClipboard`
   ([`ServerDebugInfoPacket.java:41`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/infrastructure/debugInfo/ServerDebugInfoPacket.java#L41)). sunrise-org/sunrise#5088
