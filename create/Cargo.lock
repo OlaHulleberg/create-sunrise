@@ -77,7 +77,7 @@ dependencies = [
 
 [[package]]
 name = "create"
-version = "0.1.0"
+version = "6.0.11-0.1.0"
 dependencies = [
  "create-engine",
  "sunrise-mod-api",
