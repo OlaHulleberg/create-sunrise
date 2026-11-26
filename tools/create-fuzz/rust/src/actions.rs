@@ -113,6 +113,7 @@ pub const BLOCKS: &[&str] = &[
     "create:smart_fluid_pipe",
     "create:fluid_valve",
     "create:spout",
+    "create:deployer",
     "create:item_drain",
     "create:depot",
     "create:fluid_pipe",
@@ -227,7 +228,8 @@ impl Action {
                 assert!(
                     BLOCKS.contains(&item.as_str())
                         || ITEMS.contains(&item.as_str())
-                        || create_engine::dye::DyeColor::of_item(item).is_some(),
+                        || create_engine::dye::DyeColor::of_item(item).is_some()
+                        || crate::deployers::item(item).is_some(),
                     "unsupported use item {item}"
                 );
                 assert!(yaw.is_finite() && pitch.is_finite() && pitch.abs() <= 90.);

@@ -95,6 +95,8 @@ final class Observations {
                         // kinetic cases use ejectors as stress loads only.
                         var ejector=transportVersion?TransportObservations.ejector(be):null;if(ejector!=null) snap.add("ejector",ejector);
                         var processing=transportVersion?ProcessingObservations.observe(be):null;if(processing!=null) snap.add("processing",processing);
+                        if(transportVersion && be instanceof com.simibubi.create.content.kinetics.deployer.DeployerBlockEntity deployer)
+                            snap.add("deployer",DeployerObservations.observe(deployer,origin));
                     }
                     if (be instanceof com.simibubi.create.content.kinetics.belt.BeltBlockEntity belt) {
                         JsonObject b = new JsonObject();

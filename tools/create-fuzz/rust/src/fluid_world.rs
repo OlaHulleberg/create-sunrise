@@ -134,6 +134,9 @@ pub fn enabled(sc: &crate::scenario::Scenario) -> bool {
         .chain(sc.events.iter().filter_map(|e| e.state.as_deref()))
         .any(|state| {
             id(state).is_some()
+                // The deployers' vanilla blocks (`FluidBounds.enabled`: any vanilla block but
+                // the harness's three).
+                || crate::deployers::id(state).is_some()
                 || fluid(state).is_some()
                 || state.contains("cauldron")
                 || state.contains("honey_level")

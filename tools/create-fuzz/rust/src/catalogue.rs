@@ -20,7 +20,12 @@ pub fn entries() -> &'static [Entry] {
 }
 pub fn validate(state: &str) -> Result<(), String> {
     let (id, props) = parse_state(state);
-    if crate::fluid_world::id(state).is_some() {
+    // The fluid world's and the deployers' contracts name whole states, Create's own too (the
+    // casings a deployer places); the Java audits check them at startup.
+    if crate::fluid_world::id(state).is_some()
+        || crate::deployers::id(state).is_some()
+        || crate::deployers::names_state(state)
+    {
         return Ok(());
     }
     if !id.starts_with("create:") {

@@ -10,6 +10,7 @@ mod belts;
 mod brass;
 mod chutes;
 mod conveyors;
+mod deployer;
 mod ejectors;
 mod fans;
 mod fluid_machines;
@@ -290,6 +291,10 @@ pub struct Run {
     /// and the time it started its cut with.
     saw_index: HashMap<Pos, usize>,
     saw_duration: HashMap<Pos, f32>,
+    /// The deployers' overflow slots (`overflowItems`), by deployer.
+    deployer_overflow: HashMap<Pos, [Option<crate::deployers::Held>; 11]>,
+    /// The deployers in a fist bump (`fist.rs`'s `BUMPING`).
+    bumping: std::collections::BTreeSet<Pos>,
     /// The side the current item handler access asks from.
     capability_side: Option<create_engine::kinetics::Dir>,
     _guard: std::sync::MutexGuard<'static, ()>,
@@ -376,6 +381,8 @@ impl Run {
             compressed: HashMap::new(),
             saw_index: HashMap::new(),
             saw_duration: HashMap::new(),
+            deployer_overflow: HashMap::new(),
+            bumping: Default::default(),
             capability_side: None,
             _guard: guard,
         }
@@ -390,6 +397,9 @@ impl Run {
             return 3 + v;
         }
         if let Some(id) = crate::fluid_world::id(state) {
+            return id;
+        }
+        if let Some(id) = crate::deployers::id(state) {
             return id;
         }
         if state == "minecraft:air" {
@@ -424,7 +434,9 @@ impl Run {
             REDSTONE_BLOCK => "minecraft:redstone_block".into(),
             OTHER => "minecraft:stone".into(),
             3..=18 => format!("createfuzz:signal[strength={}]", id - 3),
-            19..=255 => crate::fluid_world::name(id).expect("registered external state"),
+            19..=255 => crate::fluid_world::name(id)
+                .or_else(|| crate::deployers::name(id))
+                .expect("registered external state"),
             _ => self.names[(id - FIRST) as usize].clone(),
         }
     }
@@ -593,6 +605,9 @@ impl Run {
         }
         self.w
             .apply_block_change(0, p, old, new, skip_shape_updates);
+        if old_block == Some(create_engine::Block::Deployer) && old_block != new_block {
+            self.deployer_removed(p);
+        }
         // `CrushingWheelControllerBlock.onRemove`, `SawBlockEntity.destroy`.
         let removed = self.w.dims[0].removed_inventories.remove(&p);
         for (item, count) in removed.into_iter().flatten().flatten() {

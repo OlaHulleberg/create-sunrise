@@ -40,6 +40,26 @@ impl Run {
             false
         }
     }
+    /// A player's use of `item` on the top of the depot at `p` (`SharedDepotBlockMethods.onUse`):
+    /// what the depot holds goes to the player and `count` of the item takes its place. A
+    /// `use` action records no outcome, unlike an `item` one.
+    pub(super) fn depot_use(&mut self, p: Pos, item: &str, count: u8) {
+        let outcome = self.item_outcomes.len();
+        self.item_input(
+            p,
+            &Input::Use {
+                stack: Some(Stack {
+                    item: item.into(),
+                    count,
+                }),
+                face: crate::actions::Face::Up,
+                yaw: 0.,
+                sneaking: false,
+            },
+        );
+        self.item_outcomes.truncate(outcome);
+    }
+
     pub(super) fn item_input(&mut self, p: Pos, input: &Input) {
         // `ItemInputs.apply`: the offered stack goes into the main hand first.
         let before = self.inventory.begin(input);
@@ -307,6 +327,9 @@ impl Run {
             }
             Some(Block::Belt) => {
                 self.belt_capability(p, slot, insert, extract, simulate, &mut outcome)
+            }
+            Some(Block::Deployer) => {
+                self.deployer_capability(p, slot, extract, simulate, &mut outcome)
             }
             Some(Block::AndesiteTunnel) | None => {}
             Some(b) => self.notes.push(format!(
@@ -962,7 +985,11 @@ impl belt::Surroundings for Side<'_> {
         if !locked && self.run.processing_blocked(p) {
             return None;
         }
-        // `belt_process` in subsystem order: processing (presses) before fluids (spouts).
+        // `belt_process` in subsystem order: processing (a deployer, then presses) before
+        // fluids (spouts).
+        if let Some((d, rpm)) = self.run.deployer_above(p) {
+            return Some(self.run.deployer_on_belt(p, item, locked, d, rpm));
+        }
         if let Some(r) = self.run.press_on_belt(p, item, locked) {
             return Some(r);
         }

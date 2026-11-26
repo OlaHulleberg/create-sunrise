@@ -436,6 +436,86 @@
     {
       "id": "minecraft:hay_block",
       "max_stack": 64
+    },
+    {
+      "id": "minecraft:exposed_copper",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:copper_block",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:waxed_copper_block",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:honeycomb_block",
+      "max_stack": 64
+    },
+    {
+      "id": "create:andesite_casing",
+      "max_stack": 64
+    },
+    {
+      "id": "create:brass_casing",
+      "max_stack": 64
+    },
+    {
+      "id": "create:copper_casing",
+      "max_stack": 64
+    },
+    {
+      "id": "create:rose_quartz",
+      "max_stack": 64
+    },
+    {
+      "id": "create:polished_rose_quartz",
+      "max_stack": 64
+    },
+    {
+      "id": "create:sand_paper",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:wooden_pickaxe",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:iron_pickaxe",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:wooden_axe",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:iron_axe",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:iron_shovel",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:iron_hoe",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:stick",
+      "max_stack": 64
+    },
+    {
+      "id": "create:wrench",
+      "max_stack": 1
+    },
+    {
+      "id": "minecraft:waxed_exposed_copper",
+      "max_stack": 64
+    },
+    {
+      "id": "create:deployer",
+      "max_stack": 64
     }
   ]
 }

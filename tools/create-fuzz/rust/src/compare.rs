@@ -184,6 +184,12 @@ pub(crate) fn diff_exact(java: &Snapshot, rust: &Snapshot) -> Vec<String> {
                         j.processing, r.processing
                     ));
                 }
+                if !crate::deployers::equal(j.deployer.as_ref(), r.deployer.as_ref()) {
+                    out.push(format!(
+                        "{k}: deployer: java {:?} rust {:?}",
+                        j.deployer, r.deployer
+                    ));
+                }
                 if j.bracket != r.bracket {
                     out.push(format!(
                         "{k}: bracket: java {:?} rust {:?}",

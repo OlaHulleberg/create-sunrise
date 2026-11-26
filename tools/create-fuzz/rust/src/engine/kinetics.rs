@@ -95,8 +95,10 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: the deployers the depots asked for.
+        // `processing::Tools`: the depots the deployers hold (`tick_presses`), then the
+        // deployers' strokes.
         self.tick_presses();
+        self.tick_deployers();
         self.ejectors_ticked();
         self.save_fluid_entities();
         // CreateWorld::tick: the solve, then sequencer instructions (committed after it).

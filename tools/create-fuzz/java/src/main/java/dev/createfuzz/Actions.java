@@ -54,9 +54,11 @@ final class Actions {
                 var item =
                         BuiltInRegistries.ITEM.get(
                                 ResourceLocation.parse(action.get("item").getAsString()));
+                // A tool or another stack of one, as one.
+                int count = item.getDefaultInstance().getMaxStackSize() == 1 ? 1 : 64;
                 var stack = action.get("item").getAsString().equals("create:belt_connector")
                     ? connectors.computeIfAbsent(player, ignored -> new ItemStack(item, 64))
-                    : new ItemStack(item, item instanceof net.minecraft.world.item.BucketItem ? 1 : 64);
+                    : new ItemStack(item, item instanceof net.minecraft.world.item.BucketItem ? 1 : count);
                 player.setYRot(action.get("yaw").getAsFloat());
                 player.setYHeadRot(action.get("yaw").getAsFloat());
                 player.setXRot(action.get("pitch").getAsFloat());
