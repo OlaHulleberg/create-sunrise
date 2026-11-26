@@ -265,16 +265,13 @@ impl Kinetics {
                 potential.extend(pair.iter().copied().filter(|&m| m != NONE));
             }
         }
-        let dependents = potential
-            .into_iter()
-            .filter(|&m| {
-                self.nodes[m as usize].live
-                    && self.nodes[m as usize].state.source
-                        == Some(self_location(&self.nodes[id as usize]))
-            })
-            .collect::<Vec<_>>();
-        for m in dependents {
-            self.propagate_missing_source(m, events);
+        let removed = self_location(n);
+        // Java collects the positions once and reads each entity's source at its own turn,
+        // after the earlier dependents' propagateMissingSource calls.
+        for m in potential {
+            if self.nodes[m as usize].live && self.nodes[m as usize].state.source == Some(removed) {
+                self.propagate_missing_source(m, events);
+            }
         }
     }
 

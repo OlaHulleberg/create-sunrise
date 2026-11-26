@@ -2071,6 +2071,65 @@ mod tests {
     }
 
     #[test]
+    fn handle_removed_skips_a_dependent_an_earlier_pass_gave_another_source() {
+        // RotationPropagator.handleRemoved reads each neighbour's source in its own iteration.
+        // Removing the generator at 0 leaves the shafts at -1 and 1 depending on it; they are
+        // also joined by a chain. Clearing the first lets the live network at -2 drive it again,
+        // and through the chain the second, which then no longer depends on the generator.
+        let saved = |speed: f32, source: Option<[i32; 3]>, net: [i32; 3]| SavedKineticState {
+            speed,
+            sequence: None,
+            source: source.map(|pos| PartLocation { pos, sub: 0 }),
+            network: Some(SavedNetwork {
+                id: network_id(net),
+                stress: 0.0,
+                capacity: 0.0,
+                size: 1,
+                added_stress: 0.0,
+                added_capacity: 0.0,
+            }),
+            needs_speed_update: false,
+        };
+        let mut k = Kinetics::new();
+        let generator = Part {
+            generated: 16.0,
+            capacity: 16384.0 / 256.0,
+            ..Part::shaft(Axis::X)
+        };
+        let parts = [
+            (
+                [-2, 0, 0],
+                Part::shaft(Axis::X),
+                saved(32.0, Some([-3, 0, 0]), [-3, 0, 0]),
+            ),
+            (
+                [-1, 0, 0],
+                Part::shaft(Axis::X),
+                saved(16.0, Some([0, 0, 0]), [0, 0, 0]),
+            ),
+            ([0, 0, 0], generator, saved(16.0, None, [0, 0, 0])),
+            (
+                [1, 0, 0],
+                Part::shaft(Axis::X),
+                saved(16.0, Some([0, 0, 0]), [0, 0, 0]),
+            ),
+        ];
+        for (pos, part, state) in parts {
+            k.set(pos, 0, part);
+            assert!(k.restore_state(pos, 0, state));
+        }
+        k.far.insert([-1, 0, 0], vec![[1, 0, 0]]);
+        k.far.insert([1, 0, 0], vec![[-1, 0, 0]]);
+        k.remove([0, 0, 0]);
+        assert_eq!(k.speed([-1, 0, 0], 0), Some(32.0));
+        assert_eq!(k.speed([1, 0, 0], 0), Some(32.0));
+        assert_eq!(
+            k.saved_state([1, 0, 0], 0).unwrap().source.map(|s| s.pos),
+            Some([-1, 0, 0])
+        );
+    }
+
+    #[test]
     fn a_gearshift_power_change_detaches_without_owing_an_entity_attach() {
         // GearshiftBlock.neighborChanged: handleRemoved, a scheduled tick and an equivalent
         // state write. `updateSpeed` stays false; only GearshiftBlock.tick attaches again.
