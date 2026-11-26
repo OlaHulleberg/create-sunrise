@@ -35,8 +35,8 @@ pub fn write(path: &Path, value: &impl serde::Serialize, compressed: bool) {
 }
 
 #[cfg(test)]
-#[path = "../tests/support/mod.rs"]
-mod support;
+#[path = "../../../test-support/temp_dir.rs"]
+mod temp_dir;
 
 #[cfg(test)]
 mod tests {
@@ -44,7 +44,7 @@ mod tests {
 
     #[test]
     fn complete_records_round_trip_in_both_formats() {
-        let fixture = support::TempDir::new("records");
+        let fixture = temp_dir::TempDir::new("create-fuzz-records");
         let dir = fixture.path();
         let value = serde_json::json!({"scenario":{"seed":42},"java":vec!["water"; 1000],"diffs":["field"]});
         for compressed in [false, true] {
