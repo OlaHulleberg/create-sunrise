@@ -3,7 +3,7 @@
 pub(crate) mod items;
 pub(crate) mod visuals;
 
-use serde_json::{Value, json};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Read;
@@ -124,36 +124,28 @@ fn convert_recipe(mut doc: Value) -> Option<Value> {
 /// `GearboxBlock.getDrops`: a gearbox on a horizontal axis drops one vertical gearbox, whatever
 /// the loot table says (no explosion decay); an upright one keeps the table's drop.
 fn gearbox_drops(doc: &mut Value) {
-    let Some(pool) = doc
-        .get_mut("pools")
-        .and_then(Value::as_array_mut)
-        .and_then(|p| p.first_mut())
-    else {
+    let Some(pools) = doc.get_mut("pools").and_then(Value::as_array_mut) else {
         return;
     };
-    if let Some(conditions) = pool.get_mut("conditions").and_then(Value::as_array_mut) {
-        conditions.push(serde_json::json!({
-            "type": "minecraft:match_block",
-            "blocks": "create:gearbox",
-            "state": { "axis": "y" }
-        }));
-    }
-    let horizontal = serde_json::json!({
+    let Some(pool) = pools.first_mut().and_then(Value::as_object_mut) else {
+        return;
+    };
+    let axis_y = json!({
+        "type": "minecraft:match_block",
+        "blocks": "create:gearbox",
+        "state": { "axis": "y" }
+    });
+    let upright = match pool.shift_remove("condition") {
+        Some(condition) => all_of(vec![condition, axis_y.clone()]),
+        None => axis_y.clone(),
+    };
+    pool.insert("condition".into(), upright);
+    pools.push(json!({
         "bonus_rolls": 0.0,
-        "conditions": [{
-            "type": "minecraft:inverted",
-            "term": {
-                "type": "minecraft:match_block",
-                "blocks": "create:gearbox",
-                "state": { "axis": "y" }
-            }
-        }],
+        "condition": { "type": "minecraft:inverted", "term": axis_y },
         "entries": [{ "type": "minecraft:item", "name": "create:vertical_gearbox" }],
         "rolls": 1.0
-    });
-    if let Some(pools) = doc.get_mut("pools").and_then(Value::as_array_mut) {
-        pools.push(horizontal);
-    }
+    }));
 }
 
 /// The mod keeps the same toolbox data in vanilla custom data, not Create's Java-only
@@ -179,39 +171,163 @@ fn toolbox_drops(doc: &mut Value) {
     }
 }
 
-/// A 1.21.1 loot table as 26.3 writes it, the form Horizon reads: a condition names its kind in
-/// `type` (1.21.1: `condition`), a function in `type` (1.21.1: `function`), and a pool's or
-/// entry's functions are its `modifier` list (1.21.1: `functions`).
-fn convert_loot(v: &mut Value) {
-    match v {
+fn all_of(terms: Vec<Value>) -> Value {
+    json!({ "type": "minecraft:all_of", "terms": terms })
+}
+
+fn convert_type(o: &mut Map<String, Value>, key: &str) {
+    if !o.contains_key("type")
+        && let Some(kind @ Value::String(_)) = o.get(key).cloned()
+    {
+        o.remove(key);
+        o.insert("type".into(), kind);
+    }
+}
+
+fn convert_match_block(o: &mut Map<String, Value>) {
+    // 26.3's `match_block` takes a `BlockPredicate`, not a `block_state_property`.
+    if o.get("type").and_then(Value::as_str) == Some("minecraft:block_state_property") {
+        o.insert("type".into(), json!("minecraft:match_block"));
+        if let Some(block) = o.remove("block") {
+            o.insert("blocks".into(), block);
+        }
+        if let Some(properties) = o.remove("properties") {
+            o.insert("state".into(), properties);
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+enum LootNode {
+    Table,
+    Pool,
+    Entry,
+    Modifier,
+    Predicate,
+}
+
+/// Follow the loot slots, not arbitrary modifier or predicate payloads (which can contain NBT).
+fn visit_loot(
+    doc: &mut Value,
+    node: LootNode,
+    at: &str,
+    visit: &mut impl FnMut(LootNode, &mut Map<String, Value>, &str) -> Result<(), String>,
+) -> Result<(), String> {
+    use LootNode::*;
+    if matches!(node, Predicate) && doc.as_str().is_some_and(|id| !id.is_empty()) {
+        return Ok(());
+    }
+    let o = doc.as_object_mut().ok_or_else(|| {
+        if matches!(node, Predicate) {
+            format!("{at}: expected a predicate object or reference string")
+        } else {
+            format!("{at}: expected an object")
+        }
+    })?;
+    visit(node, o, at)?;
+    let kind = o
+        .get("type")
+        .and_then(Value::as_str)
+        .filter(|kind| !kind.is_empty());
+    if matches!(node, Entry | Modifier | Predicate) && kind.is_none() {
+        return Err(format!("{at}.type: expected a type string"));
+    }
+    let kind = kind.map(|kind| kind.strip_prefix("minecraft:").unwrap_or(kind));
+    let typed_child = match (node, kind) {
+        (Entry, Some("loot_table")) => Some(("value", Table, false)),
+        (Modifier, Some("sequence")) => Some(("functions", Modifier, true)),
+        (Predicate, Some("all_of" | "any_of")) => Some(("terms", Predicate, true)),
+        (Predicate, Some("inverted")) => Some(("term", Predicate, false)),
+        _ => None,
+    };
+    if let Some((field, ..)) = typed_child
+        && !o.contains_key(field)
+    {
+        return Err(format!("{at}.{field}: missing field"));
+    }
+    for (field, child) in o {
+        let (next, list) = match (node, field.as_str()) {
+            (Table, "pools") => (Pool, true),
+            (Pool, "entries") | (Entry, "children") => (Entry, true),
+            (Pool | Entry | Modifier, "condition") => (Predicate, false),
+            (Table | Pool | Entry, "modifier") => (Modifier, child.is_array()),
+            _ => {
+                let Some((key, next, list)) = typed_child else {
+                    continue;
+                };
+                if field.as_str() != key || (matches!(next, Table) && child.is_string()) {
+                    continue;
+                }
+                (next, list)
+            }
+        };
+        let path = format!("{at}.{field}");
+        if list {
+            let children = child
+                .as_array_mut()
+                .ok_or_else(|| format!("{path}: expected an array"))?;
+            for (i, child) in children.iter_mut().enumerate() {
+                visit_loot(child, next, &format!("{path}[{i}]"), visit)?;
+            }
+        } else {
+            visit_loot(child, next, &path, visit)?;
+        }
+    }
+    Ok(())
+}
+
+/// A 1.21.1 loot table with 26.3's singular conditions, type discriminators and modifiers.
+fn convert_loot(doc: &mut Value) -> Result<(), String> {
+    use LootNode::*;
+    visit_loot(doc, Table, "$", &mut |node, o, at| {
+        match node {
+            Predicate => {
+                convert_type(o, "condition");
+                convert_match_block(o);
+            }
+            Modifier => convert_type(o, "function"),
+            _ => {}
+        }
+        if matches!(node, Pool | Entry | Modifier)
+            && let Some(conditions) = o.shift_remove("conditions")
+        {
+            if o.contains_key("condition") {
+                return Err(format!("{at}.conditions: conflicts with condition"));
+            }
+            let Value::Array(mut terms) = conditions else {
+                return Err(format!("{at}.conditions: expected an array"));
+            };
+            let condition = match terms.len() {
+                0 => None,
+                1 => terms.pop(),
+                _ => Some(all_of(terms)),
+            };
+            if let Some(condition) = condition {
+                o.insert("condition".into(), condition);
+            }
+        }
+        if matches!(node, Table | Pool | Entry)
+            && let Some(f) = o.remove("functions")
+        {
+            o.insert("modifier".into(), f);
+        }
+        Ok(())
+    })
+}
+
+// Enchantment effects keep their existing conversion; their payloads are not loot tables.
+fn convert_enchantment_loot(doc: &mut Value) {
+    match doc {
         Value::Object(o) => {
             if let Some(f) = o.remove("functions") {
                 o.insert("modifier".into(), f);
             }
-            for key in ["condition", "function"] {
-                if !o.contains_key("type")
-                    && let Some(Value::String(kind)) = o.get(key).cloned()
-                {
-                    o.remove(key);
-                    o.insert("type".into(), Value::String(kind));
-                }
-            }
-            // 26.3 has no `block_state_property`: `match_block` takes a `BlockPredicate`, whose
-            // `blocks` is the block and `state` its property matchers.
-            if o.get("type").and_then(Value::as_str) == Some("minecraft:block_state_property") {
-                o.insert("type".into(), Value::String("minecraft:match_block".into()));
-                if let Some(block) = o.remove("block") {
-                    o.insert("blocks".into(), block);
-                }
-                if let Some(properties) = o.remove("properties") {
-                    o.insert("state".into(), properties);
-                }
-            }
-            for child in o.values_mut() {
-                convert_loot(child);
-            }
+            convert_type(o, "condition");
+            convert_type(o, "function");
+            convert_match_block(o);
+            o.values_mut().for_each(convert_enchantment_loot);
         }
-        Value::Array(a) => a.iter_mut().for_each(convert_loot),
+        Value::Array(a) => a.iter_mut().for_each(convert_enchantment_loot),
         _ => {}
     }
 }
@@ -559,9 +675,8 @@ fn data_overlays(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, V
             if !convert_worldgen(path, &mut doc, &unplaced) {
                 continue;
             }
-        } else {
-            // Loot tables and enchantments use the same condition codec.
-            convert_loot(&mut doc);
+        } else if path.starts_with("data/create/loot_table/") {
+            convert_loot(&mut doc).map_err(|e| format!("{path}: {e}"))?;
             if path == "data/create/loot_table/blocks/gearbox.json" {
                 gearbox_drops(&mut doc);
             } else if path.starts_with("data/create/loot_table/blocks/")
@@ -569,6 +684,8 @@ fn data_overlays(files: &BTreeMap<String, Vec<u8>>) -> Result<BTreeMap<String, V
             {
                 toolbox_drops(&mut doc);
             }
+        } else if path.starts_with("data/create/enchantment/") {
+            convert_enchantment_loot(&mut doc);
         }
         // 26.3's directory for configured features is `feature`.
         let dest = path.replace("/worldgen/configured_feature/", "/worldgen/feature/");
@@ -858,33 +975,77 @@ mod tests {
     fn converts_1_21_1_loot_tables() {
         let mut t = json!({"type": "minecraft:block", "pools": [{
             "conditions": [{"condition": "minecraft:survives_explosion"}],
-            "entries": [{"type": "minecraft:item", "name": "create:shaft",
+            "entries": [{"type": "minecraft:alternatives", "children": [{
+                "type": "minecraft:item", "name": "create:shaft",
+                "conditions": ["create:first", {"condition": "minecraft:inverted", "term": "create:second"}],
                 "functions": [{"function": "minecraft:set_count", "count": 2.0,
-                    "conditions": [{"condition": "minecraft:inverted",
-                        "term": {"condition": "minecraft:random_chance", "chance": 0.5}}]}]}],
+                    "conditions": [{"condition": "minecraft:random_chance", "chance": 0.5}]}]
+            }]}],
             "rolls": 1.0}]});
-        convert_loot(&mut t);
-        let pool = &t["pools"][0];
+        convert_loot(&mut t).unwrap();
         assert_eq!(
-            pool["conditions"][0],
-            json!({"type": "minecraft:survives_explosion"})
+            t,
+            json!({"type": "minecraft:block", "pools": [{
+            "condition": {"type": "minecraft:survives_explosion"},
+            "entries": [{"type": "minecraft:alternatives", "children": [{
+                "type": "minecraft:item", "name": "create:shaft",
+                "condition": {"type": "minecraft:all_of", "terms": [
+                    "create:first", {"type": "minecraft:inverted", "term": "create:second"}]},
+                "modifier": [{"type": "minecraft:set_count", "count": 2.0,
+                    "condition": {"type": "minecraft:random_chance", "chance": 0.5}}]
+            }]}],
+            "rolls": 1.0}]})
         );
-        let f = &pool["entries"][0]["modifier"][0];
-        assert_eq!(f["type"], "minecraft:set_count");
+    }
+
+    #[test]
+    fn visits_inline_loot_and_sequence_elements_but_not_custom_data() {
+        let payload =
+            json!({"conditions": [1], "condition": "keep", "function": "keep", "functions": [2]});
+        let mut t = json!({"pools": [{"conditions": [], "entries": [{
+            "type": "minecraft:loot_table", "condition": "create:entry", "value": {
+                "pools": [{"conditions": ["create:one"], "entries": []},
+                    {"condition": {"type": "minecraft:survives_explosion"}}],
+                "functions": [{"function": "minecraft:sequence", "functions": [{
+                    "type": "minecraft:set_custom_data", "conditions": ["create:modifier"],
+                    "tag": payload
+                }]}]
+            }
+        }]}]});
+        convert_loot(&mut t).unwrap();
         assert_eq!(
-            f["conditions"][0]["term"]["type"],
-            "minecraft:random_chance"
+            t,
+            json!({"pools": [{"entries": [{
+                "type": "minecraft:loot_table", "condition": "create:entry", "value": {
+                    "pools": [{"condition": "create:one", "entries": []},
+                        {"condition": {"type": "minecraft:survives_explosion"}}],
+                    "modifier": [{"type": "minecraft:sequence", "functions": [{
+                        "type": "minecraft:set_custom_data", "condition": "create:modifier",
+                        "tag": payload
+                    }]}]
+                }
+            }]}]})
         );
-        assert!(pool["entries"][0].get("functions").is_none());
+        assert!(validate_loot_format(&mut t).is_ok());
+    }
+
+    #[test]
+    fn rejects_ambiguous_loot_conditions() {
+        let path = "data/create/loot_table/blocks/example.json";
+        let bytes = br#"{"pools": [{"conditions": [], "condition": "create:existing"}]}"#;
+        assert_eq!(
+            data_overlays(&BTreeMap::from([(path.into(), bytes.to_vec())])).unwrap_err(),
+            format!("{path}: $.pools[0].conditions: conflicts with condition")
+        );
     }
 
     #[test]
     fn block_state_property_becomes_match_block() {
-        let mut t = json!({"conditions": [{"condition": "minecraft:block_state_property",
-            "block": "create:cut_limestone_slab", "properties": {"type": "double"}}]});
-        convert_loot(&mut t);
+        let mut t = json!({"pools": [{"conditions": [{"condition": "minecraft:block_state_property",
+            "block": "create:cut_limestone_slab", "properties": {"type": "double"}}]}]});
+        convert_loot(&mut t).unwrap();
         assert_eq!(
-            t["conditions"][0],
+            t["pools"][0]["condition"],
             json!({"type": "minecraft:match_block", "blocks": "create:cut_limestone_slab",
                 "state": {"type": "double"}})
         );
@@ -892,16 +1053,105 @@ mod tests {
 
     #[test]
     fn horizontal_gearboxes_drop_vertical_gearboxes() {
-        let mut t = json!({"type": "minecraft:block", "pools": [{
-            "conditions": [{"type": "minecraft:survives_explosion"}],
+        let path = "data/create/loot_table/blocks/gearbox.json";
+        let bytes = br#"{"type": "minecraft:block", "pools": [{
+            "conditions": [{"condition": "minecraft:survives_explosion"}],
             "entries": [{"type": "minecraft:item", "name": "create:gearbox"}],
-            "rolls": 1.0}]});
-        gearbox_drops(&mut t);
-        let pools = t["pools"].as_array().unwrap();
-        assert_eq!(pools.len(), 2);
-        assert_eq!(pools[0]["conditions"][1]["state"]["axis"], "y");
-        assert_eq!(pools[1]["conditions"][0]["type"], "minecraft:inverted");
-        assert_eq!(pools[1]["entries"][0]["name"], "create:vertical_gearbox");
+            "rolls": 1.0}]}"#;
+        let overlays = data_overlays(&BTreeMap::from([(path.into(), bytes.to_vec())])).unwrap();
+        let t: Value = serde_json::from_slice(&overlays[path]).unwrap();
+        let axis_y = json!({"type": "minecraft:match_block", "blocks": "create:gearbox", "state": {"axis": "y"}});
+        assert_eq!(
+            t["pools"],
+            json!([
+                {
+                    "condition": {"type": "minecraft:all_of", "terms": [
+                        {"type": "minecraft:survives_explosion"}, axis_y]},
+                    "entries": [{"type": "minecraft:item", "name": "create:gearbox"}],
+                    "rolls": 1.0
+                },
+                {
+                    "bonus_rolls": 0.0,
+                    "condition": {"type": "minecraft:inverted", "term": axis_y},
+                    "entries": [{"type": "minecraft:item", "name": "create:vertical_gearbox"}],
+                    "rolls": 1.0
+                }
+            ])
+        );
+    }
+
+    fn validate_loot_format(doc: &mut Value) -> Result<(), String> {
+        use LootNode::*;
+        visit_loot(doc, Table, "$", &mut |node, o, at| {
+            if o.contains_key("conditions") {
+                return Err(format!("{at}.conditions: legacy plural conditions"));
+            }
+            if matches!(node, Predicate) && o.contains_key("condition") {
+                return Err(format!("{at}.condition: legacy predicate discriminator"));
+            }
+            if matches!(node, Modifier) && o.get("function").is_some_and(Value::is_string) {
+                return Err(format!("{at}.function: legacy modifier discriminator"));
+            }
+            if o.contains_key("functions")
+                && !(matches!(node, Modifier)
+                    && matches!(
+                        o.get("type").and_then(Value::as_str),
+                        Some("minecraft:sequence" | "sequence")
+                    ))
+            {
+                return Err(format!("{at}.functions: legacy container functions"));
+            }
+            Ok(())
+        })
+    }
+
+    #[test]
+    fn loot_format_check_reports_nested_bad_fields() {
+        for (mut doc, field) in [
+            (
+                json!({"pools": [{"conditions": []}]}),
+                "$.pools[0].conditions",
+            ),
+            (
+                json!({"pools": [{"condition": []}]}),
+                "$.pools[0].condition",
+            ),
+            (
+                json!({"pools": [{"condition": {"type": "minecraft:all_of", "terms": [
+                {"condition": "minecraft:survives_explosion"}]}}]}),
+                "$.pools[0].condition.terms[0].condition",
+            ),
+            (
+                json!({"pools": [{"condition": {"type": "minecraft:all_of", "terms": "create:one"}}]}),
+                "$.pools[0].condition.terms",
+            ),
+            (json!({"functions": []}), "$.functions"),
+            (json!({"modifier": false}), "$.modifier"),
+            (
+                json!({"modifier": [{"type": "minecraft:sequence", "functions": [
+                {"function": "minecraft:set_count"}]}]}),
+                "$.modifier[0].functions[0].function",
+            ),
+        ] {
+            let error = validate_loot_format(&mut doc).unwrap_err();
+            assert!(error.starts_with(&format!("{field}:")), "{error}");
+        }
+    }
+
+    #[test]
+    fn shipped_loot_uses_26_3_format() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../create");
+        let mut files = BTreeMap::new();
+        walk(&root, &root.join("data/create/loot_table"), &mut files).unwrap();
+        let mut tables = files
+            .into_iter()
+            .filter(|(path, _)| path.ends_with(".json"))
+            .peekable();
+        assert!(tables.peek().is_some(), "no shipped loot tables");
+        for (path, bytes) in tables {
+            let mut doc = serde_json::from_slice(&bytes).unwrap_or_else(|e| panic!("{path}: {e}"));
+            validate_loot_format(&mut doc).unwrap_or_else(|e| panic!("{path}: {e}"));
+        }
     }
 
     #[test]
