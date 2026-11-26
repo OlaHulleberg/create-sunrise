@@ -1,5 +1,6 @@
 mod actions;
 mod allow;
+mod basin;
 mod belt_surface;
 mod belts;
 mod brass;

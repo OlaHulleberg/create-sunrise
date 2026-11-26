@@ -492,7 +492,14 @@ pub fn validate_scenario(sc: &crate::scenario::Scenario) {
                 // The processing families' machines (`processing.rs`).
                 "create:millstone",
                 "create:crushing_wheel",
-                "create:mechanical_saw"
+                "create:mechanical_saw",
+                // The basin families' machines, burner and heat (`basin.rs`).
+                "create:basin",
+                "create:mechanical_mixer",
+                "create:blaze_burner",
+                "create:cogwheel",
+                "minecraft:magma_block",
+                "minecraft:campfire"
             ]
             .contains(&id.as_str())
                 || crate::fluids::contract()
@@ -526,7 +533,9 @@ pub fn validate_scenario(sc: &crate::scenario::Scenario) {
                     || ["minecraft:iron_ingot", "minecraft:gold_ingot", "minecraft:diamond"]
                         .contains(&item.as_str())
                     || crate::fluid_recipes::contents(item).is_some()
-                    || item == "minecraft:bucket",
+                    || item == "minecraft:bucket"
+                    // Fuel for a blaze burner (`BlazeBurnerBlock.useItemOn`).
+                    || ["create:blaze_cake", "create:creative_blaze_cake"].contains(&item.as_str()),
                 "item override requires a separate transport adapter"
             );
         }

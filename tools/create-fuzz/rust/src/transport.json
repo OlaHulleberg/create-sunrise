@@ -11,6 +11,19 @@
       "source": "DepotBlock.createBlockStateDefinition/getStateForPlacement"
     },
     {
+      "id": "create:basin",
+      "properties": {
+        "facing": [
+          "down",
+          "north",
+          "south",
+          "west",
+          "east"
+        ]
+      },
+      "source": "BasinBlock.createBlockStateDefinition (FACING_HOPPER)"
+    },
+    {
       "id": "create:andesite_belt_funnel",
       "properties": {
         "facing": [
@@ -306,6 +319,122 @@
     },
     {
       "id": "minecraft:oak_planks",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:iron_nugget",
+      "max_stack": 64
+    },
+    {
+      "id": "create:zinc_nugget",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:copper_ingot",
+      "max_stack": 64
+    },
+    {
+      "id": "create:zinc_ingot",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:diorite",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:cocoa_beans",
+      "max_stack": 64
+    },
+    {
+      "id": "create:bar_of_chocolate",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:honey_block",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:oak_leaves",
+      "max_stack": 64
+    },
+    {
+      "id": "create:shaft",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:snowball",
+      "max_stack": 16
+    },
+    {
+      "id": "minecraft:egg",
+      "max_stack": 16
+    },
+    {
+      "id": "create:cinder_flour",
+      "max_stack": 64
+    },
+    {
+      "id": "create:andesite_alloy",
+      "max_stack": 64
+    },
+    {
+      "id": "create:brass_ingot",
+      "max_stack": 64
+    },
+    {
+      "id": "create:dough",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:mud",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:packed_mud",
+      "max_stack": 64
+    },
+    {
+      "id": "create:cogwheel",
+      "max_stack": 64
+    },
+    {
+      "id": "create:large_cogwheel",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:snow_block",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:ice",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:crafting_table",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:clay",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:coal_block",
+      "max_stack": 64
+    },
+    {
+      "id": "create:zinc_block",
+      "max_stack": 64
+    },
+    {
+      "id": "create:blaze_cake_base",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:polished_andesite",
+      "max_stack": 64
+    },
+    {
+      "id": "minecraft:hay_block",
       "max_stack": 64
     }
   ]
