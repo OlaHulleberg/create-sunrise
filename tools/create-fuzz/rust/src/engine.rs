@@ -36,7 +36,6 @@ use crate::scenario::{
     BlockSnap, Kinetic, Placed, Pos, Scenario, Snapshot, key, parse_state, with_prop,
 };
 use create_engine::parts::{Settings, StateInfo, parts};
-use create_engine::states;
 use create_engine::world::{CreateWorld, StateTable};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
@@ -288,20 +287,14 @@ pub struct Run {
     saw_duration: HashMap<Pos, f32>,
     /// The side the current item handler access asks from.
     capability_side: Option<create_engine::kinetics::Dir>,
-    _guard: std::sync::MutexGuard<'static, ()>,
 }
-
-/// The engine's state range is one static per process: one run at a time.
-static LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 impl Run {
     pub fn new(sc: &Scenario) -> Run {
         crate::catalogue::scenario(sc);
-        let guard = LOCK.lock().unwrap_or_else(|e| e.into_inner());
         let names = create_states(sc);
         let parsed: Vec<(String, Vec<(String, String)>)> =
             names.iter().map(|s| parse_state(s)).collect();
-        states::set_range(FIRST, names.len() as u32);
         let table = StateTable::new(
             FIRST,
             parsed
@@ -371,7 +364,6 @@ impl Run {
             saw_index: HashMap::new(),
             saw_duration: HashMap::new(),
             capability_side: None,
-            _guard: guard,
         }
     }
 
