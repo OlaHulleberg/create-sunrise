@@ -351,7 +351,14 @@ pub(super) fn broken(host: &mut dyn ServerHost, event: &BreakBlockEvent<'_>) -> 
             }
             let drops = lv
                 .level
-                .destroy_block(&mut *lv.host, p, !creative, tool.as_ref(), None, true)
+                .destroy_block(
+                    &mut *lv.host,
+                    p,
+                    !creative,
+                    tool.as_ref(),
+                    Some(player.entity()),
+                    true,
+                )
                 .ok()
                 .flatten()
                 .unwrap_or_default();

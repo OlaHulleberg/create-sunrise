@@ -1073,8 +1073,14 @@ pub(crate) fn set_schedule_ghosts(
     stacks: Vec<Option<ItemStack>>,
 ) {
     let Some(mut session) = SESSIONS.with_borrow_mut(|m| {
-        m.remove(&player.uuid())
-            .filter(|s| s.menu.kind == ghost_menu::Kind::Schedule)
+        let schedule = m
+            .get(&player.uuid())
+            .is_some_and(|s| s.menu.kind == ghost_menu::Kind::Schedule);
+        if schedule {
+            m.remove(&player.uuid())
+        } else {
+            None
+        }
     }) else {
         return;
     };
