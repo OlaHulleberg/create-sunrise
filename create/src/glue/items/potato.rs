@@ -5,8 +5,10 @@
 //! cannon's durability or a backtank's air paid, and `FWOOMP`. A saved `create:potato_projectile`
 //! owns its ammunition and flight state. Its tick sweeps for blocks and entities before moving,
 //! with Create's gravity, drag and hit margin. Hits apply damage, sticking, ammo actions,
-//! recovery or leftovers, and sound and crumbs. See `API_GAPS.md` for missing native projectile
-//! movement, impact, rendering, and damage operations.
+//! recovery or leftovers, and sound and crumbs. A shot is drawn as its type's render mode turns it:
+//! facing the camera's eye (`Billboard`, `Tumble`), or along the heading its flight tick gives its
+//! rotation (`TowardMotion`). See `API_GAPS.md` for missing native projectile movement, impact,
+//! and damage operations.
 
 use super::super::equipment;
 use super::super::subsystem::Subsystem;
@@ -24,7 +26,7 @@ use mod_api::{
     ParticleKey, ParticleOptions, PlayerRef, Registrar, RegistrationContext, ServerHost,
     SoundSource, SpawnBody, Tag, Text, TooltipEvent, UseItemEvent,
 };
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 use std::sync::{Arc, Mutex, OnceLock, RwLock};
 
@@ -156,7 +158,6 @@ static ITEM_PARTICLE: OnceLock<ParticleKey> = OnceLock::new();
 const SWAP: &str = "create:shaper_swap";
 
 thread_local! {
-    static CAMERA: Cell<[f32; 2]> = const { Cell::new([0.0; 2]) };
     /// The players whose main arm is the left (`Player.getMainArm`, from their client's
     /// information).
     static LEFT_HANDED: RefCell<std::collections::HashSet<u128>> =
@@ -330,14 +331,6 @@ impl Subsystem for PotatoCannon {
         renderers.register(SHOT.to_owned(), Arc::new(Projectile));
     }
 
-    fn compute_camera_angles(
-        &self,
-        _host: &dyn ClientHost,
-        event: &mut mod_api::ComputeCameraAnglesEvent,
-    ) {
-        CAMERA.set([event.yaw, event.pitch]);
-    }
-
     /// Each player's main arm, for the barrel's side.
     fn client_info(&self, player: u128, info: &mod_api::ClientInfo) {
         let left = matches!(info.main_hand, mod_api::MainHand::Left);
@@ -390,9 +383,59 @@ impl EntityRenderer for Projectile {
         else {
             return Ok(());
         };
-        let [yaw, pitch] = CAMERA.get();
-        draw.rotate_about([0.0, 1.0, 0.0], 180.0 - yaw, [0.0; 3]);
-        draw.rotate_about([1.0, 0.0, 0.0], -pitch, [0.0; 3]);
+        // `AllPotatoProjectileRenderModes`: the pose starts at the shot's centre, as
+        // `PotatoProjectileRenderer.render` places it.
+        draw.translate([0.0, entity.size[1] / 2.0 - 1.0 / 8.0, 0.0]);
+        // `entityRandom`: the shot's own constant (the network id stands for the identity hash).
+        let random = |max: i32| (entity.id as i32).wrapping_mul(31) % max;
+        let facing_camera = |draw: &mut dyn BlockEntityDrawContext| {
+            // `Billboard`: from the camera entity's eye to the shot's box centre, both at the
+            // frame's interpolated placement.
+            let Some(eye) = draw.view().camera_entity_eye else {
+                return;
+            };
+            let centre = [
+                entity.position[0],
+                entity.position[1] + f64::from(entity.size[1]) / 2.0,
+                entity.position[2],
+            ];
+            let diff = std::array::from_fn::<_, 3, _>(|i| (centre[i] - eye[i]) as f32);
+            let flat = diff[0].hypot(diff[2]);
+            draw.rotate_about(
+                [0.0, 1.0, 0.0],
+                diff[0].atan2(diff[2]).to_degrees() + 180.0,
+                [0.0; 3],
+            );
+            draw.rotate_about([1.0, 0.0, 0.0], diff[1].atan2(flat).to_degrees(), [0.0; 3]);
+        };
+        match ammo.kind.render {
+            potato::Render::Billboard => facing_camera(draw),
+            potato::Render::Tumble => {
+                facing_camera(draw);
+                draw.rotate_about(
+                    [0.0, 0.0, 1.0],
+                    entity.age * 2.0 * random(16) as f32,
+                    [0.0; 3],
+                );
+                draw.rotate_about([1.0, 0.0, 0.0], entity.age * random(32) as f32, [0.0; 3]);
+            }
+            potato::Render::TowardMotion {
+                sprite_angle_offset,
+                spin,
+            } => {
+                // The flight tick turns the shot to its motion (yaw `-atan2(x, z)`, pitch
+                // `-atan2(y, horizontal)`), so the heading `getDeltaMovement` gives is read back
+                // from the entity's own rotation: Y by `atan2(x, z)`, X by `270 + atan2(y, -h)`.
+                draw.rotate_about([0.0, 1.0, 0.0], -entity.yaw, [0.0; 3]);
+                draw.rotate_about([1.0, 0.0, 0.0], 90.0 + entity.pitch, [0.0; 3]);
+                draw.rotate_about(
+                    [0.0, 1.0, 0.0],
+                    entity.age * 20.0 * spin + random(360) as f32,
+                    [0.0; 3],
+                );
+                draw.rotate_about([0.0, 0.0, 1.0], -(sprite_angle_offset as f32), [0.0; 3]);
+            }
+        }
         draw.item(&ammo.stack, ItemDisplayContext::Ground, None, 0);
         Ok(())
     }
@@ -813,7 +856,15 @@ fn fly(host: &mut dyn ServerHost, level: LevelRef, e: EntityRef) {
     }
     // An unanswered clip isn't evidence of either kind of hit. Keep flying, including
     // above the build ceiling; don't publish any impact on an unanswered segment.
-    let _ = e.teleport_to(host, to, None);
+    // `ProjectileUtil.rotateTowardsMovement`'s heading, which `TowardMotion` draws along.
+    let flat = motion[0].hypot(motion[2]);
+    let turn = (flat > 1e-5 || motion[1].abs() > 1e-5).then(|| {
+        [
+            (-motion[0].atan2(motion[2])).to_degrees() as f32,
+            (-motion[1].atan2(flat)).to_degrees() as f32,
+        ]
+    });
+    let _ = e.teleport_to(host, to, turn);
     e.set_velocity(host, motion);
 }
 
