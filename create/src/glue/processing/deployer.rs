@@ -976,6 +976,23 @@ fn fake_pose(pos: [i32; 3], facing: Dir, use_item: bool) -> ([f64; 3], f32, f32)
     (eye, yaw, pitch)
 }
 
+/// Positions the fake player and equips its main hand for a direct punch action.
+fn prepare_punch_player(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    stack: impl FnOnce(&ServerLevel<'_>) -> Option<ItemStack>,
+) -> Option<PlayerRef> {
+    let fake = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME)?;
+    let (eye, yaw, pitch) = fake_pose(pos, facing, false);
+    let feet = [eye[0], eye[1] - 1.62, eye[2]];
+    let stack = stack(lv);
+    let host = &mut *lv.host;
+    let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
+    crate::glue::items::set_held(host, fake, Hand::Main, stack);
+    Some(fake)
+}
+
 /// `Mode.PUNCH` on an entity (`DeployerHandler.activate`: `resetAttackStrengthTicker`, then
 /// `player.attack(entity)`): the fake player stands in the deployer holding what `d` holds and
 /// strikes `target` with `Player.attack`, so the attack hooks, the held weapon's damage,
@@ -990,15 +1007,10 @@ fn attack(
     d: &mut Deployer,
     target: mod_api::EntityRef,
 ) {
-    let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
+    let Some(fake) = prepare_punch_player(lv, pos, facing, |lv| held_of(lv, d)) else {
         return;
     };
-    let (eye, yaw, pitch) = fake_pose(pos, facing, false);
-    let feet = [eye[0], eye[1] - 1.62, eye[2]];
-    let stack = held_of(lv, d);
     let host = &mut *lv.host;
-    let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
-    crate::glue::items::set_held(host, fake, Hand::Main, stack);
     let _ = fake.set_attack_strength_ticker(host, i32::MAX);
     let _ = fake.attack(host, target);
     let left = crate::glue::items::held(&*host, fake, Hand::Main);
@@ -1069,23 +1081,18 @@ fn punch(
         let _ = lv.level.remove_block(&mut *lv.host, front, false);
         return Vec::new();
     }
-    if d.held.is_none() {
+    let Some(stack) = held_of(lv, d) else {
         return Vec::new();
-    }
+    };
     let Some(state) = lv.block_state(at) else {
         return Vec::new();
     };
     // `DeployerHandler.activateInner`: `getDestroyProgress(player, ..)` of the fake player
     // holding the whole stack, its components and wear included.
-    let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
+    let Some(fake) = prepare_punch_player(lv, pos, facing, |_| Some(stack)) else {
         return Vec::new();
     };
-    let (eye, yaw, pitch) = fake_pose(pos, facing, false);
-    let feet = [eye[0], eye[1] - 1.62, eye[2]];
-    let stack = held_of(lv, d);
     let host = &mut *lv.host;
-    let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
-    crate::glue::items::set_held(host, fake, Hand::Main, stack);
     let per_hit = fake.destroy_progress(host, lv.level, at, state);
     crate::glue::items::set_held(host, fake, Hand::Main, None);
     let Some(per_hit) = per_hit else {
