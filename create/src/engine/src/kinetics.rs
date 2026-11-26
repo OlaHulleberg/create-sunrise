@@ -1469,10 +1469,7 @@ impl Kinetics {
             return;
         }
         if self.nodes[id as usize].state.update_speed {
-            self.nodes[id as usize].state.update_speed = false;
-            // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
-            self.saved_dirty.insert(self.nodes[id as usize].pos);
-            self.propagate_new_source(id, events);
+            self.attach_kinetics(id, events);
         }
         // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after attachKinetics,
         // before the generator's own initialize callback - even when the attach just
@@ -1544,10 +1541,7 @@ impl Kinetics {
             && id != NONE
         {
             let mut events = Vec::new();
-            self.nodes[id as usize].state.update_speed = false;
-            // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
-            self.saved_dirty.insert(self.nodes[id as usize].pos);
-            self.propagate_new_source(id, &mut events);
+            self.attach_kinetics(id, &mut events);
             self.pending_events.extend(events);
         }
     }
@@ -2035,6 +2029,19 @@ mod tests {
             );
         }
         assert!(broke, "the reversing generator breaks");
+    }
+
+    #[test]
+    fn a_generator_update_before_its_first_tick_attaches_once() {
+        // applyNewSpeed calls attachKinetics, which clears `updateSpeed`: the first tick does
+        // not attach again and the entity saves `NeedsSpeedUpdate` as false.
+        let pos = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(pos, 0, motor(Dir::East, 16.0));
+        assert!(k.saved_state(pos, 0).unwrap().needs_speed_update);
+        k.set(pos, 0, motor(Dir::East, 32.0));
+        assert_eq!(k.theoretical(pos, 0), Some((32.0, false)));
+        assert!(!k.saved_state(pos, 0).unwrap().needs_speed_update);
     }
 
     #[test]

@@ -350,6 +350,14 @@ impl Kinetics {
         }
     }
 
+    /// KineticBlockEntity.attachKinetics: `updateSpeed` is cleared, then handleAdded propagates.
+    pub(super) fn attach_kinetics(&mut self, id: u32, events: &mut Vec<Event>) {
+        self.nodes[id as usize].state.update_speed = false;
+        // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
+        self.saved_dirty.insert(self.nodes[id as usize].pos);
+        self.propagate_new_source(id, events);
+    }
+
     /// GeneratingKineticBlockEntity.updateGeneratedRotation / applyNewSpeed.
     pub(super) fn update_generated_rotation(&mut self, id: u32, events: &mut Vec<Event>) {
         let n = &self.nodes[id as usize];
@@ -411,7 +419,7 @@ impl Kinetics {
         } else if prev == 0.0 {
             self.set_speed(id, generated);
             self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
-            self.propagate_new_source(id, events);
+            self.attach_kinetics(id, events);
         } else if source.is_some() && prev.abs() >= generated.abs() {
             if prev.signum() != generated.signum() {
                 let pos = self.nodes[id as usize].pos;
@@ -427,7 +435,7 @@ impl Kinetics {
                 self.nodes[id as usize].state.source = None;
                 self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             }
-            self.propagate_new_source(id, events);
+            self.attach_kinetics(id, events);
         }
     }
 }
