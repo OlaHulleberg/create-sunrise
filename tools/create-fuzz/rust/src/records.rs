@@ -35,12 +35,17 @@ pub fn write(path: &Path, value: &impl serde::Serialize, compressed: bool) {
 }
 
 #[cfg(test)]
+#[path = "../tests/support/mod.rs"]
+mod support;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
     #[test]
     fn complete_records_round_trip_in_both_formats() {
-        let dir = std::env::temp_dir().join(format!("fuzz-records-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
+        let fixture = support::TempDir::new("records");
+        let dir = fixture.path();
         let value = serde_json::json!({"scenario":{"seed":42},"java":vec!["water"; 1000],"diffs":["field"]});
         for compressed in [false, true] {
             let path = dir.join("record.json");
@@ -57,6 +62,5 @@ mod tests {
             std::fs::metadata(dir.join("record.json.gz")).unwrap().len()
                 < std::fs::metadata(dir.join("record.json")).unwrap().len()
         );
-        std::fs::remove_dir_all(dir).unwrap();
     }
 }
