@@ -11,9 +11,10 @@
 //! game's `Player.attack` (`PlayerRef::attack`, run outside `perform_action_scoped`, which
 //! refuses it) and block break. Sand paper polishes what lies under it. A player in front whose
 //! interaction passed is fed what it holds, if it is a food they can eat or a deployable
-//! drink (`finishUsingItem` on them, `finish_using`). A punch digs a block whose drops need
-//! another tool slower (`getDestroyProgress`) by vanilla's rule for the held stack; a block's own
-//! `canHarvestBlock` (a copycat's material) is not asked of the deployer's player there.
+//! drink (`finishUsingItem` on them, `finish_using`). A punch digs at the pace the
+//! fake player holding the whole stack gets from the game (`PlayerRef::destroy_progress`, Create's
+//! `getDestroyProgress`: tool, enchantments, and the slower digging of a block whose drops need
+//! another tool).
 
 use super::takes_from_side;
 use super::{press, recipes, stacks};
@@ -1068,29 +1069,28 @@ fn punch(
         let _ = lv.level.remove_block(&mut *lv.host, front, false);
         return Vec::new();
     }
-    let Some(held) = d.held.clone() else {
+    if d.held.is_none() {
         return Vec::new();
-    };
+    }
     let Some(state) = lv.block_state(at) else {
         return Vec::new();
     };
-    let facts = mod_api::HostBlockStates::block_states(&*lv.host);
-    let hardness = facts.destroy_speed(state).unwrap_or(0.0);
-    let Some(tool) = stacks::stack(&*lv.host, &held.0, 1) else {
+    // `DeployerHandler.activateInner`: `getDestroyProgress(player, ..)` of the fake player
+    // holding the whole stack, its components and wear included.
+    let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
         return Vec::new();
     };
-    let harvest = facts.requires_correct_tool(state) != Some(true)
-        || facts.is_correct_tool_for_drops(&tool, state) == Some(true);
-    let per_hit = deployer::destroy_progress(deployer::Dig {
-        hardness,
-        tool_speed: lv
-            .level
-            .block_break_speed(&*lv.host, at, Some(&tool))
-            .unwrap_or(1.0),
-        // Held stacks carry no enchantments here.
-        efficiency: 0.0,
-        harvest,
-    });
+    let (eye, yaw, pitch) = fake_pose(pos, facing, false);
+    let feet = [eye[0], eye[1] - 1.62, eye[2]];
+    let stack = held_of(lv, d);
+    let host = &mut *lv.host;
+    let _ = fake.entity().teleport_to(host, feet, Some([yaw, pitch]));
+    crate::glue::items::set_held(host, fake, Hand::Main, stack);
+    let per_hit = fake.destroy_progress(host, lv.level, at, state);
+    crate::glue::items::set_held(host, fake, Hand::Main, None);
+    let Some(per_hit) = per_hit else {
+        return Vec::new();
+    };
     // `level.playSound(.., getHitSound(), NEUTRAL, .25, 1)`.
     if let Some(sound) = mod_api::HostBlockStates::block_states(&*lv.host).sound(state) {
         let _ = lv.level.play_sound(

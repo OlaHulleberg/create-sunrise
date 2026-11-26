@@ -419,33 +419,6 @@ pub fn spawn_egg_offsets_more(facing: Dir, reached_empty: bool) -> bool {
     !reached_empty && clicked_face(facing) == Dir::Up
 }
 
-/// What `getDestroyProgress` reads of the block and the held tool: its hardness (-1
-/// unbreakable), the tool's `Tool.getMiningSpeed` and `mining_efficiency` bonus, and whether it
-/// harvests it (`!requiresCorrectToolForDrops || isCorrectForDrops`).
-#[derive(Clone, Copy, Debug, PartialEq)]
-pub struct Dig {
-    pub hardness: f32,
-    pub tool_speed: f32,
-    pub efficiency: f32,
-    pub harvest: bool,
-}
-
-/// `BlockBehaviour.getDestroyProgress` for the fake player (`Player.getDestroySpeed`): the tool's
-/// speed, plus its efficiency above 1; no effects (`canBeAffected` is false), the block break
-/// speed attribute at 1; never eyes in water nor on the ground (a fake player never ticks), so a
-/// fifth; over the hardness and 30 when it harvests, else 100. 0 for an unbreakable block.
-pub fn destroy_progress(d: Dig) -> f32 {
-    if d.hardness == -1.0 {
-        return 0.0;
-    }
-    let mut speed = d.tool_speed;
-    if speed > 1.0 {
-        speed += d.efficiency;
-    }
-    speed /= 5.0;
-    speed / d.hardness / if d.harvest { 30.0 } else { 100.0 }
-}
-
 /// What a punch at a block did (`activateInner`, `Mode.PUNCH`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Punch {
@@ -678,48 +651,20 @@ mod tests {
             ..Deployer::default()
         };
         let at = [0, 0, 0];
-        // A diamond pickaxe (8) on stone (1.5): 8 / 5 / 1.5 / 30 × 16 = .569 a stroke.
-        let diamond = destroy_progress(Dig {
-            hardness: 1.5,
-            tool_speed: 8.0,
-            efficiency: 0.0,
-            harvest: true,
-        });
-        assert!((diamond * 16.0 - 0.568_888).abs() < 1e-5, "{diamond}");
+        // `getDestroyProgress` of a diamond pickaxe (8) on stone (1.5) for a fake player:
+        // 8 / 5 / 1.5 / 30 per hit, .569 a stroke.
+        let diamond = 8.0 / 5.0 / 1.5 / 30.0;
         assert_eq!(d.punch(at, diamond), Punch::Crack(Some(5)));
         assert_eq!(d.punch(at, diamond), Punch::Broken);
         assert_eq!(d.breaking, None);
         // A wooden pickaxe (2): .142 a stroke, eight strokes.
-        let wood = destroy_progress(Dig {
-            hardness: 1.5,
-            tool_speed: 2.0,
-            efficiency: 0.0,
-            harvest: true,
-        });
+        let wood = 2.0 / 5.0 / 1.5 / 30.0;
         let strokes = (1..20).find(|_| d.punch(at, wood) == Punch::Broken);
         assert_eq!(strokes, Some(8));
-        // A stick on stone it cannot harvest (1, over 100): 1 / 5 / 1.5 / 100 × 16.
-        let stick = destroy_progress(Dig {
-            hardness: 1.5,
-            tool_speed: 1.0,
-            efficiency: 5.0,
-            harvest: false,
-        });
-        assert!((stick * 16.0 - 0.021_333).abs() < 1e-5, "{stick}");
         // Bedrock: no progress, and none is kept.
-        let bedrock = Dig {
-            hardness: -1.0,
-            tool_speed: 8.0,
-            efficiency: 0.0,
-            harvest: false,
-        };
-        assert_eq!(d.punch(at, destroy_progress(bedrock)), Punch::Stop);
+        assert_eq!(d.punch(at, 0.0), Punch::Stop);
         // Instant blocks (0 hardness) break on the first stroke.
-        let grass = Dig {
-            hardness: 0.0,
-            ..bedrock
-        };
-        assert_eq!(d.punch(at, destroy_progress(grass)), Punch::Broken);
+        assert_eq!(d.punch(at, f32::INFINITY), Punch::Broken);
     }
 
     #[test]
