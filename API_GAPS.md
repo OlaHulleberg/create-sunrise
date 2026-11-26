@@ -68,6 +68,9 @@ API, and remove it once the API has it and the port uses it.
 - **A client re-asking a block's light emission once the data it reads arrives**: a copycat shows a new material's
   light only after its chunk is sent again. Create uses: NeoForge `AuxiliaryLightManager.setLightAt` ([`CopycatBlockEntity.java:124`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/copycat/CopycatBlockEntity.java#L124)). Not
   filed.
+- **Client-only `item_uses_block_light` for server-side item displays**: item displays on moving contraptions
+  (`trains/contents.rs`, `DisplayItemLayout`) still approximate `gui3d` through `is_block_item`. Client renderers
+  (placards, belts, depots, links, smart pipes, gauges) all use `item_uses_block_light`.
 
 ## Blocks and world
 
