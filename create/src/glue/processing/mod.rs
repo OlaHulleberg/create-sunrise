@@ -23,14 +23,8 @@
 //!
 //! Left out, the API having no way yet:
 //! - A toolbox's one item kind per compartment: `ModContainer` has no per-slot insert check.
-//! - The deployer's slower digging of a block whose drops need another tool
-//!   (`requiresCorrectToolForDrops` and `isCorrectToolForDrops`): no query for either, so it
-//!   digs every block at its harvestable speed (the drops still follow the game's rules).
 //! - Create's own damage types (`create:crush`): a native mod's are not registered, so the
 //!   crushing wheels deal vanilla's cramming.
-//! - The deployer's punch at full strength (`DeployerFakePlayer.getCurrentItemAttackStrengthDelay`
-//!   of 1/64): the game's fake player attacks with its own, uncharged, attack strength, so a
-//!   punch deals about a fifth of its damage.
 //!
 //! A blaze burner carried by a moving structure is drawn by the structure's anchor
 //! (`burner_draw::draw_moving`): its blaze faces its front rather than the nearest player.
