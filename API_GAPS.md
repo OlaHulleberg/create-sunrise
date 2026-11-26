@@ -62,8 +62,6 @@ API, and remove it once the API has it and the port uses it.
 - **Editing a humanoid's final pose after vanilla's animation** (`HumanoidModel.setupAnim`): a skyhook rider can't hold
   its riding pose. Create uses: Create mixin `HumanoidModelMixin` at the return of `HumanoidModel.setupAnim`
   ([`HumanoidModelMixin.java:23`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/client/HumanoidModelMixin.java#L23)). sunrise-org/sunrise#5078
-- **Reading an item model's `gui3d`**: placards, belts and depots can't size and lay items as Create does. Create uses:
-  calls vanilla `BakedModel.isGui3d` ([`PlacardRenderer.java:38`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/decoration/placard/PlacardRenderer.java#L38)). Not filed.
 - **A `BlockEntityDataView` built from a `Compound`**: a carried block entity's data can't be lent to a draw as a view.
   Create uses: builds a block entity with vanilla `EntityBlock.newBlockEntity` and fills it with
   `BlockEntity.handleUpdateTag` ([`ClientContraption.java:151`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/contraptions/render/ClientContraption.java#L151)). Not filed.

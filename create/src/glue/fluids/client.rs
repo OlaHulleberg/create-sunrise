@@ -448,7 +448,7 @@ fn draw_pipe_filter(host: &dyn ClientHost, event: &mut crate::glue::Submit<'_>, 
     let Some(stack) = super::super::logistics::items::stack_of(host, &id, 1) else {
         return;
     };
-    let solid = super::super::logistics::items::is_block_item(host, &id);
+    let solid = host.item_uses_block_light(&stack, mod_api::ItemDisplayContext::Fixed);
     let (slot, angle, tilt) = create_engine::fluids::smart_pipe_filter_slot(face, facing);
     let scale =
         create_engine::fluids::SMART_PIPE_SLOT_SCALE * (if solid { 1.0 } else { 0.5 } + 1.0 / 64.0);
