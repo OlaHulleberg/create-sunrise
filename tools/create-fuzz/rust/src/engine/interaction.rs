@@ -226,6 +226,7 @@ impl Run {
                 && name != "create:brass_casing"
                 && name != "create:andesite_casing"
                 && !matches!(block, Block::BrassTunnel | Block::AndesiteTunnel)
+                && name != "create:basin"
                 && !(name == "create:belt"
                     && sneaking
                     && [
@@ -546,6 +547,11 @@ impl Run {
                     let target = self.w.sneak_wrenched(0, p, state);
                     self.set(target, AIR);
                 }
+                return;
+            }
+            // `BasinBlock.onWrenched` (`wrench_used`): the spout's side is chosen, or shut.
+            if name == "create:basin" {
+                self.basin_wrenched(p, face);
                 return;
             }
             // `IWrenchable.onWrenched` answering PASS (the port's `wrench::turns`): the large

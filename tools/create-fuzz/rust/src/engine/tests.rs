@@ -835,3 +835,97 @@ fn a_press_mid_cycle_over_a_depot_survives_a_reload_and_finishes() {
     }
     assert!(r.w.dims[0].presses[&press].finished);
 }
+
+/// `processing-basin-handler`: `BasinInventory.insertItem` takes a stack only into the slot
+/// holding its item, or into the first empty one, never beside a stack of the same item; the
+/// handler gives from the input slots.
+#[test]
+fn a_basin_handler_takes_into_the_first_empty_slot_and_gives_from_its_inputs() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/processing-basin-handler.json")).unwrap();
+    let snap = super::run(&sc);
+    let basin = snap.blocks["0,6,0"].processing.as_ref().unwrap();
+    assert_eq!(
+        basin.input.as_deref(),
+        Some(
+            &[crate::processing::Slot {
+                item: "minecraft:iron_nugget".into(),
+                count: 4,
+                slot: 1
+            }][..]
+        )
+    );
+    assert_eq!(basin.outputs.as_deref(), Some(&[][..]));
+    let outcomes: Vec<_> = snap
+        .item_outcomes
+        .iter()
+        .map(|o| {
+            (
+                o.offered.as_ref().map(|s| s.item.clone()),
+                o.remainder.as_ref().map(|s| (s.item.clone(), s.count)),
+                o.taken
+                    .iter()
+                    .map(|s| (s.item.clone(), s.count))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (Some("minecraft:andesite".into()), None, vec![]),
+            (
+                Some("minecraft:andesite".into()),
+                Some(("minecraft:andesite".into(), 4)),
+                vec![]
+            ),
+            (Some("minecraft:iron_nugget".into()), None, vec![]),
+            (
+                Some("minecraft:diorite".into()),
+                Some(("minecraft:diorite".into(), 4)),
+                vec![]
+            ),
+            (None, None, vec![("minecraft:andesite".into(), 4)]),
+            (None, None, vec![]),
+        ]
+    );
+}
+
+/// `processing-basin-bucket`: a bucket emptied into a basin's tanks leaves the empty bucket in
+/// the hand (`tryEmptyItemIntoBE`), and one filled from them lands back in it
+/// (`tryFillItemFromBE`'s `placeItemBackInInventory`: the empty selected slot).
+#[test]
+fn a_bucket_emptied_into_a_basin_is_back_in_the_hand() {
+    let sc: crate::scenario::Scenario =
+        serde_json::from_str(include_str!("../../../cases/processing-basin-bucket.json")).unwrap();
+    let snap = super::run(&sc);
+    let outcomes: Vec<_> = snap
+        .item_outcomes
+        .iter()
+        .map(|o| {
+            (
+                o.offered.as_ref().map(|s| (s.item.clone(), s.count)),
+                o.remainder.as_ref().map(|s| (s.item.clone(), s.count)),
+                o.taken
+                    .iter()
+                    .map(|s| (s.item.clone(), s.count))
+                    .collect::<Vec<_>>(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        outcomes,
+        [
+            (
+                Some(("minecraft:water_bucket".into(), 1)),
+                Some(("minecraft:bucket".into(), 1)),
+                vec![]
+            ),
+            (
+                Some(("minecraft:bucket".into(), 1)),
+                Some(("minecraft:water_bucket".into(), 1)),
+                vec![]
+            ),
+        ]
+    );
+}

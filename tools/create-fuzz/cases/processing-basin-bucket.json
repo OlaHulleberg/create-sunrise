@@ -1,0 +1,68 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 17,
+  "checkpoints": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "use",
+          "stack": {
+            "item": "minecraft:water_bucket",
+            "count": 1
+          },
+          "face": "up",
+          "yaw": 0.0,
+          "sneaking": false
+        }
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "item",
+        "input": {
+          "kind": "use",
+          "stack": {
+            "item": "minecraft:bucket",
+            "count": 1
+          },
+          "face": "up",
+          "yaw": 0.0,
+          "sneaking": false
+        }
+      }
+    }
+  ]
+}

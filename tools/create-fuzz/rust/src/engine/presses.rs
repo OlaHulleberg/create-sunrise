@@ -28,7 +28,7 @@ impl Run {
     }
     /// `tick_presses`: the deployers the depots asked for (none in the contract, so the asks
     /// are dropped). Presses are asked at their depot's turn (`press_depot_turn`) and move at
-    /// their own (`tick_press`), in the transport walk.
+    /// their own (`press_turn`), in the transport walk.
     pub(super) fn tick_presses(&mut self) {
         self.w.dims[0].depot_work.clear();
     }

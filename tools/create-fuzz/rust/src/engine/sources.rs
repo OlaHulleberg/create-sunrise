@@ -168,8 +168,31 @@ impl Run {
         true
     }
 
-    /// `BlazeBurnerBlockEntity.tick` on the server: each burning burner's heat sets its block.
+    /// `BlazeBurnerBlockEntity.tick` on the server: a burner whose block changed takes the heat
+    /// its fuel gives (`updateBlockState`), then each burning burner's heat sets its block.
     pub(super) fn tick_burners(&mut self) {
+        use create_engine::fan::Heat;
+        let checks = std::mem::take(&mut self.w.dims[0].burner_checks);
+        for p in checks {
+            let Some((create_engine::Block::BlazeBurner, info)) =
+                self.w.table.get(self.at(p)).map(|(b, i)| (b, *i))
+            else {
+                continue;
+            };
+            let burner = self.w.dims[0].burners.get(&p).copied();
+            if burner.is_some_and(|b| b.creative.is_some()) {
+                continue;
+            }
+            let heat = burner.map_or(Heat::Smouldering, |b| b.heat());
+            if info.heat != Some(heat) {
+                let next = with_prop(
+                    &self.name(self.at(p)),
+                    "blaze",
+                    create_engine::burner::heat_name(heat),
+                );
+                self.set(p, self.id(&next));
+            }
+        }
         for (p, heat) in self.w.tick_burners(0) {
             let next = with_prop(
                 &self.name(self.at(p)),

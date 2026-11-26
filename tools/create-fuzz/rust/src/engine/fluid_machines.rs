@@ -2,6 +2,33 @@
 use super::*;
 use crate::transport::{Input, Outcome, Stack};
 use create_engine::{Block, belt, depot, drain, kinetics::Dir, spout};
+
+/// The end of `FluidHelper.tryEmptyItemIntoBE` for a player who is not creative (the glue's
+/// `use_basin` and `use_drain`): the item used up leaves its container in the hand; a stack of
+/// more keeps its rest in the hand, and the container goes back into the inventory.
+pub(super) fn emptied_hand(
+    hand: &mut Option<Stack>,
+    given: &mut Vec<Stack>,
+    item: &str,
+    count: u8,
+    leftover: Option<&str>,
+) {
+    if count == 1 {
+        *hand = leftover.map(|item| Stack {
+            item: item.into(),
+            count: 1,
+        });
+    } else {
+        *hand = Some(Stack {
+            item: item.into(),
+            count: count - 1,
+        });
+        given.extend(leftover.map(|item| Stack {
+            item: item.into(),
+            count: 1,
+        }));
+    }
+}
 impl Run {
     pub(super) fn fluid_item_input(&mut self, p: Pos, input: &Input) -> Option<Outcome> {
         if self.w.block_at(0, p) != Some(Block::ItemDrain) {
@@ -58,17 +85,13 @@ impl Run {
                         self.mark_column(p);
                         self.w.dims[0].analog_checks.push(p);
                         if !self.creative {
-                            if stack.count == 1 {
-                                remainder = empty.leftover.map(|item| Stack { item, count: 1 });
-                            } else {
-                                remainder = Some(Stack {
-                                    item: stack.item.clone(),
-                                    count: stack.count - 1,
-                                });
-                                if let Some(item) = empty.leftover {
-                                    taken.push(Stack { item, count: 1 });
-                                }
-                            }
+                            emptied_hand(
+                                &mut remainder,
+                                &mut taken,
+                                &stack.item,
+                                stack.count,
+                                empty.leftover.as_deref(),
+                            );
                         }
                     }
                 } else if let Some(held) = self.w.dims[0].drains.get_mut(&p).unwrap().held.take() {
