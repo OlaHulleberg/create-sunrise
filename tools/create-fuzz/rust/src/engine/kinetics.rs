@@ -59,6 +59,11 @@ impl Run {
         // tick of this tick.
         self.w.reattach_scheduled_transmissions(0, &mut events);
         self.publish_after_effects(events);
+        // `onSpeedChanged` ran with that propagation, in the block-tick phase: the state write
+        // it makes (`run(-1)`) comes before this tick's base ticks, which clear what it sets.
+        for (p, step) in self.w.take_sequencer_steps(0) {
+            self.sequencer_step(p, step);
+        }
         self.w.tick_cranks(0);
         for h in self.handles.values_mut() {
             h.remaining = h.remaining.saturating_sub(1);

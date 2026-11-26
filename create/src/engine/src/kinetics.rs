@@ -954,7 +954,10 @@ impl Kinetics {
 
     /// `SequencedGearshiftBlockEntity.run`: `detachKinetics()` detaches downstream dependents
     /// without clearing the gearshift's own speed, source or network, and installs its updated
-    /// per-face speed modifier in place.
+    /// per-face speed modifier in place. `detachKinetics` is `RotationPropagator.handleRemoved`
+    /// alone: it never sets `updateSpeed`. Only the block-state write `run` makes after it
+    /// does (`KineticBlock.updateIndirectNeighbourShapes`), so a `run` that ends while the
+    /// gearshift stays powered writes no state and leaves `NeedsSpeedUpdate` as it was.
     pub fn detach_sequencer(&mut self, pos: [i32; 3], part: Part) {
         let Some(id) = self.at.get(&pos).map(|ids| ids[0]).filter(|&id| id != NONE) else {
             return;
@@ -963,7 +966,6 @@ impl Kinetics {
         self.handle_removed(id, &mut events);
         let n = &mut self.nodes[id as usize];
         n.part = part;
-        n.state.update_speed = true;
         n.fresh = true;
         self.dirty.push(id);
         self.pending_events.extend(events);
@@ -2060,6 +2062,30 @@ mod tests {
                 .state
                 .update_speed
         );
+    }
+
+    #[test]
+    fn a_sequencer_detach_owes_no_entity_attach() {
+        // `SequencedGearshiftBlockEntity.run` ending while the gearshift stays powered calls
+        // `detachKinetics` (`handleRemoved`) and writes no state: `updateSpeed` stays false.
+        let mut k = Kinetics::new();
+        let gearshift = [0, 0, 0];
+        k.set([-1, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set(gearshift, 0, Part::split_shaft(Axis::X, 1.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        k.advance();
+        solve(&mut k);
+        assert!(!k.saved_state(gearshift, 0).unwrap().needs_speed_update);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        k.detach_sequencer(gearshift, Part::split_shaft(Axis::X, 0.0));
+        let saved = k.saved_state(gearshift, 0).unwrap();
+        assert!(!saved.needs_speed_update);
+        assert_eq!(saved.speed, 16.0, "its own speed and source stay");
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0), "what it drove is detached");
+        assert!(!k.saved_state(gearshift, 0).unwrap().needs_speed_update);
     }
 
     #[test]

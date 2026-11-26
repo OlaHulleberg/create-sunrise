@@ -531,6 +531,10 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     let mut scheduled = Vec::new();
     with_world(|w| w.reattach_scheduled_transmissions(dim, &mut scheduled));
     apply_events(lv, scheduled);
+    // `onSpeedChanged` ran with that propagation, in the block-tick phase: the state write a
+    // gearshift's `run(-1)` makes comes before this tick's base ticks.
+    let steps = with_world(|w| w.take_sequencer_steps(dim)).unwrap_or_default();
+    apply_sequencer_steps(lv, steps);
     with_world(|w| w.tick_cranks(dim));
     // Water wheels whose surroundings changed, and those whose lazy tick came.
     for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim)).unwrap_or_default() {
