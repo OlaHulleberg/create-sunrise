@@ -823,7 +823,8 @@ fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
                 for i in range.clone() {
                     if let Some(Some(held)) = items.get_mut(i) {
                         let room = max.saturating_sub(held.count()).min(left);
-                        if room > 0 && held.set_count(held.count() + room).is_ok() {
+                        if room > 0 {
+                            held.set_count(held.count() + room).map_err(|_| ())?;
                             left -= room;
                             changed[i] = true;
                         }
@@ -836,18 +837,16 @@ fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
                     if let Some(empty @ None) = items.get_mut(i) {
                         let n = left.min(max);
                         let mut put = stack.clone();
-                        if put.set_count(n).is_ok() {
-                            left -= n;
-                            *empty = Some(put);
-                            changed[i] = true;
-                        }
+                        put.set_count(n).map_err(|_| ())?;
+                        left -= n;
+                        *empty = Some(put);
+                        changed[i] = true;
                     }
                 }
                 break;
             }
             if left != stack.count() {
-                let mut rest = stack;
-                let rest = (left > 0 && rest.set_count(left).is_ok()).then_some(rest);
+                let rest = remainder(stack, left, |s, n| s.set_count(n))?;
                 player
                     .set_inventory_slot(host, slot, rest)
                     .map_err(|_| ())?;
@@ -870,9 +869,37 @@ fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
     }
 }
 
+/// What stays in the player's slot after a deposit: nothing when `left` is 0, else `rest` with
+/// that count. A refused count is an `Err`, which aborts the transaction, never an emptied slot.
+fn remainder<T, E>(
+    mut rest: T,
+    left: u32,
+    set_count: impl FnOnce(&mut T, u32) -> Result<(), E>,
+) -> Result<Option<T>, ()> {
+    if left == 0 {
+        return Ok(None);
+    }
+    set_count(&mut rest, left).map_err(|_| ())?;
+    Ok(Some(rest))
+}
+
 #[cfg(test)]
 mod toolbox_button_tests {
     use super::*;
+
+    #[test]
+    fn the_remainder_is_nothing_the_stack_or_a_failed_transaction() {
+        let set = |s: &mut (&str, u32), n| {
+            s.1 = n;
+            Ok::<(), ()>(())
+        };
+        assert_eq!(remainder(("iron", 9), 0, set), Ok(None));
+        assert_eq!(remainder(("iron", 9), 3, set), Ok(Some(("iron", 3))));
+        let refused = |_: &mut (&str, u32), _| Err::<(), _>("refused");
+        assert_eq!(remainder(("iron", 9), 3, refused), Err(()));
+        // Nothing is left over, so the count is never set.
+        assert_eq!(remainder(("iron", 9), 0, refused), Ok(None));
+    }
 
     #[test]
     fn the_shared_toolbox_menu_only_decodes_deposit_and_confirm() {
