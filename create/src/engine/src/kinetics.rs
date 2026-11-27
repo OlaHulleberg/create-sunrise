@@ -2,6 +2,7 @@
 //!
 //! Per-node sources and network identities follow Create's block entity propagation.
 
+mod gearshift;
 mod legacy_load;
 mod networks;
 use legacy_load::LoadOrigin;
@@ -203,6 +204,8 @@ pub enum SpeedChanged {
     Base,
     /// StressGaugeBlockEntity refreshes its cached network size and clears networkDirty.
     StressGauge,
+    /// SequencedGearshiftBlockEntity re-times or ends its running instruction.
+    Sequencer,
 }
 
 /// CreativeMotorBlockEntity.initialize updates generation on every load; hand cranks
@@ -520,6 +523,10 @@ pub struct Kinetics {
     pending_events: Vec<Event>,
     /// Synchronous KineticBlockEntity.onSpeedChanged callbacks, separate from reports.
     speed_notifications: Vec<([i32; 3], f32)>,
+    /// Sequenced gearshifts' sequences (`SequencedGearshiftBlockEntity`).
+    sequencers: HashMap<[i32; 3], crate::sequencer::Sequencer>,
+    /// Their block states as `run` set them, for the host to show.
+    sequencer_writes: Vec<([i32; 3], u8)>,
     networks: TorquePropagator,
     scheduler: scheduling::TickScheduler,
     reactivation_due: Vec<(u32, u64)>,
@@ -785,6 +792,7 @@ impl Kinetics {
 
     /// Adds or replaces the part at `pos` (`sub` 1 is a split shaft's second half).
     pub fn set(&mut self, pos: [i32; 3], sub: u8, part: Part) {
+        let part = self.entity_part(pos, sub, part);
         self.stamp += 1;
         let slot = self.at.entry(pos).or_insert([NONE, NONE]);
         let existing = slot[sub as usize];
@@ -865,6 +873,7 @@ impl Kinetics {
     /// source removal, notifications or initialization. Kinetic caches remain the
     /// values read by KineticBlockEntity.read until the entity's first tick.
     pub(crate) fn read_part(&mut self, pos: [i32; 3], sub: u8, part: Part) {
+        let part = self.entity_part(pos, sub, part);
         if let Some(id) = self.at.get(&pos).map(|ids| ids[sub as usize])
             && id != NONE
         {
@@ -875,6 +884,7 @@ impl Kinetics {
     /// `KineticBlock.onPlace` / `updateIndirectNeighbourShapes`: retain the entity,
     /// changing its state-derived part without invoking updateGeneratedRotation.
     pub fn change_block_state(&mut self, pos: [i32; 3], sub: u8, part: Part, equivalent: bool) {
+        let part = self.entity_part(pos, sub, part);
         let Some(id) = self
             .at
             .get(&pos)
@@ -884,21 +894,32 @@ impl Kinetics {
             self.set(pos, sub, part);
             return;
         };
-        let n = &mut self.nodes[id as usize];
-        n.part = part;
-        if !equivalent {
-            // KineticBlockEntity.clearKineticInformation (does not detach or initialize).
-            n.state.speed = 0.0;
-            n.state.theoretical = 0.0;
-            n.state.source = None;
-            n.state.net = None;
-            n.state.overstressed = false;
-            n.state.stress = 0.0;
-            n.state.capacity = 0.0;
-            n.state.last_stress = 0.0;
-            n.state.last_capacity = 0.0;
-            n.state.update_speed = true;
+        self.nodes[id as usize].part = part;
+        if equivalent {
+            let n = &mut self.nodes[id as usize];
+            n.fresh = true;
+            self.mark_changed(id);
+            self.dirty.push(id);
+        } else {
+            self.clear_kinetic_information(id);
         }
+    }
+
+    /// `KineticBlock.updateIndirectNeighbourShapes` after a state write that is not kinetically
+    /// equivalent: `clearKineticInformation` (no detach, no network removal), then
+    /// `updateSpeed = true`.
+    fn clear_kinetic_information(&mut self, id: u32) {
+        let n = &mut self.nodes[id as usize];
+        n.state.speed = 0.0;
+        n.state.theoretical = 0.0;
+        n.state.source = None;
+        n.state.net = None;
+        n.state.overstressed = false;
+        n.state.stress = 0.0;
+        n.state.capacity = 0.0;
+        n.state.last_stress = 0.0;
+        n.state.last_capacity = 0.0;
+        n.state.update_speed = true;
         n.fresh = true;
         self.mark_changed(id);
         self.dirty.push(id);
@@ -948,25 +969,6 @@ impl Kinetics {
             self.handle_removed(id, &mut events);
             self.dirty.push(id);
         }
-        self.pending_events.extend(events);
-    }
-
-    /// `SequencedGearshiftBlockEntity.run`: `detachKinetics()` detaches downstream dependents
-    /// without clearing the gearshift's own speed, source or network, and installs its updated
-    /// per-face speed modifier in place. `detachKinetics` is `RotationPropagator.handleRemoved`
-    /// alone: it never sets `updateSpeed`. Only the block-state write `run` makes after it
-    /// does (`KineticBlock.updateIndirectNeighbourShapes`), so a `run` that ends while the
-    /// gearshift stays powered writes no state and leaves `NeedsSpeedUpdate` as it was.
-    pub fn detach_sequencer(&mut self, pos: [i32; 3], part: Part) {
-        let Some(id) = self.at.get(&pos).map(|ids| ids[0]).filter(|&id| id != NONE) else {
-            return;
-        };
-        let mut events = Vec::new();
-        self.handle_removed(id, &mut events);
-        let n = &mut self.nodes[id as usize];
-        n.part = part;
-        n.fresh = true;
-        self.dirty.push(id);
         self.pending_events.extend(events);
     }
 
@@ -1327,8 +1329,9 @@ impl Kinetics {
         n.state.stress = stress;
         let over = stress > capacity;
         if over != n.state.overstressed {
+            let previous = n.state.speed;
             let shown = if over { 0.0 } else { n.state.theoretical };
-            n.state.flicker = n.state.flicker(self.now) + flicker_gain(n.state.speed, shown);
+            n.state.flicker = n.state.flicker(self.now) + flicker_gain(previous, shown);
             n.state.flicker_at = self.now;
             n.state.overstressed = over;
             n.state.speed = shown;
@@ -1336,7 +1339,7 @@ impl Kinetics {
                 self.speed_notifications.push((n.pos, shown));
             }
             self.mark_changed(id);
-            self.on_speed_changed(id);
+            self.on_speed_changed(id, previous);
         }
     }
 
@@ -1591,7 +1594,12 @@ impl Kinetics {
             let n = &self.nodes[id as usize];
             n.live && n.stamp == stamp && n.state.validate_pending
         });
-        self.dirty.clear();
+        // An entity that owes `attachKinetics` since its turn (a state write in a later
+        // entity's tick cleared it) keeps the next pass active.
+        self.dirty.retain(|&id| {
+            let n = &self.nodes[id as usize];
+            n.live && n.state.update_speed
+        });
         let mut stats = SolveStats::default();
         self.base_pass += 1;
         let mut touched_nets = HashSet::new();
@@ -2206,34 +2214,6 @@ mod tests {
                 .state
                 .update_speed
         );
-    }
-
-    #[test]
-    fn a_sequencer_detach_owes_no_entity_attach() {
-        // `SequencedGearshiftBlockEntity.run` ending while the gearshift stays powered calls
-        // `detachKinetics` (`handleRemoved`) and writes no state: `updateSpeed` stays false.
-        let mut k = Kinetics::new();
-        let gearshift = [0, 0, 0];
-        k.set([-1, 0, 0], 0, motor(Dir::East, 16.0));
-        k.set(gearshift, 0, Part::split_shaft(Axis::X, 1.0));
-        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
-        solve(&mut k);
-        k.advance();
-        solve(&mut k);
-        assert!(!k.saved_state(gearshift, 0).unwrap().needs_speed_update);
-        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
-        k.detach_sequencer(gearshift, Part::split_shaft(Axis::X, 0.0));
-        let saved = k.saved_state(gearshift, 0).unwrap();
-        assert!(!saved.needs_speed_update);
-        assert_eq!(saved.speed, 16.0, "its own speed and source stay");
-        k.advance();
-        solve(&mut k);
-        assert_eq!(
-            k.speed([1, 0, 0], 0),
-            Some(0.0),
-            "what it drove is detached"
-        );
-        assert!(!k.saved_state(gearshift, 0).unwrap().needs_speed_update);
     }
 
     #[test]

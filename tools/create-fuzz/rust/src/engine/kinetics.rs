@@ -24,6 +24,7 @@ impl Run {
             return;
         }
         self.apply_wheel_flow();
+        self.refresh_sequencer_signals();
         let mut events = Vec::new();
         // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): the
         // callback runs with the block change, before any block entity of this tick.
@@ -59,26 +60,18 @@ impl Run {
         // tick of this tick.
         self.w.reattach_scheduled_transmissions(0, &mut events);
         self.publish_after_effects(events);
-        // `onSpeedChanged` ran with that propagation, in the block-tick phase: the state write
-        // it makes (`run(-1)`) comes before this tick's base ticks, which clear what it sets.
-        for (p, step) in self.w.take_sequencer_steps(0) {
-            self.sequencer_step(p, step);
-        }
+        self.w.flush_kinetic_callbacks(0);
+        self.show_sequencer_writes();
         self.w.tick_cranks(0);
         for h in self.handles.values_mut() {
             h.remaining = h.remaining.saturating_sub(1);
         }
         self.apply_chain_shapes();
-        let mut steps = Vec::new();
         for (p, running) in self.w.take_sequencer_checks(0) {
             let powered = self.signal(p) > 0;
-            if let Some(step) = self.w.sequencer_redstone(0, p, powered, running) {
-                steps.push((p, step));
-            }
+            self.w.sequencer_redstone(0, p, powered, running);
         }
-        for (p, step) in steps {
-            self.sequencer_step(p, step);
-        }
+        self.show_sequencer_writes();
         let mut events = Vec::new();
         // `Processing::level_tick`: crafters, millstones, fans, crushers, burners, the
         // leftovers of gone basins (`spoutput::forget_gone`). The basins (lazy tick, spout, backup
@@ -99,11 +92,12 @@ impl Run {
         self.tick_presses();
         self.ejectors_ticked();
         self.save_fluid_entities();
-        // CreateWorld::tick: the solve, then sequencer instructions (committed after it).
-        let (_, steps) = self.w.tick(0, &mut events);
+        // CreateWorld::tick: the solve, then the states its sequencers set.
+        self.refresh_sequencer_signals();
+        let (_, writes) = self.w.tick(0, &mut events);
         self.persisted.dirty_columns.extend(self.w.take_unsaved(0));
-        for (p, step) in steps {
-            self.sequencer_step(p, step);
+        for (p, state) in writes {
+            self.sequencer_state(p, state);
         }
         self.w.dims[0].kinetics.take_removed();
         self.mark_package_columns();
@@ -124,17 +118,25 @@ impl Run {
         }
     }
 
-    /// The glue's commit of a sequencer step: its `state` (kept while powered at the end).
-    pub(super) fn sequencer_step(&mut self, p: [i32; 3], step: create_engine::sequencer::Step) {
+    /// The glue's `refresh_sequencer_signals`: each gearshift's `hasNeighborSignal`.
+    pub(super) fn refresh_sequencer_signals(&mut self) {
+        for p in self.w.sequencer_positions(0) {
+            let signal = self.signal(p) > 0;
+            self.w.set_sequencer_signal(0, p, signal);
+        }
+    }
+
+    /// The glue's `apply_sequencer_writes`: show the states the engine's sequencers set.
+    pub(super) fn show_sequencer_writes(&mut self) {
+        for (p, state) in self.w.take_sequencer_writes(0) {
+            self.sequencer_state(p, state);
+        }
+    }
+
+    /// The glue's `show_sequencer_states`: a sequencer's state write, its kinetic effect done.
+    pub(super) fn sequencer_state(&mut self, p: [i32; 3], state: u8) {
         self.save_sequence(p);
-        use create_engine::sequencer::Step;
-        let n = match step {
-            Step::Run(n) => n,
-            Step::Idle => 0,
-            Step::Ended if self.signal(p) > 0 => return,
-            Step::Ended => 0,
-        };
-        let next = with_prop(&self.name(self.at(p)), "state", &n.to_string());
+        let next = with_prop(&self.name(self.at(p)), "state", &state.to_string());
         self.set(p, self.id(&next));
     }
 }
