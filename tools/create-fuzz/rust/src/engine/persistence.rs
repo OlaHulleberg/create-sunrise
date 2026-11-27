@@ -42,7 +42,7 @@ struct FluidReload {
 
 impl Run {
     pub(super) fn save_sequence(&mut self, p: Pos) {
-        if let Some(seq) = self.w.dims[0].sequencers.get(&p) {
+        if let Some(seq) = self.w.dims[0].kinetics.sequencer(p) {
             let old = self.persisted.sequences.get(&p).and_then(codec::run_of_tag);
             if old == Some(seq.saved_run()) {
                 return;
@@ -151,7 +151,7 @@ impl Run {
             self.mark_column(c);
         }
         self.save_depot_records();
-        let positions: Vec<_> = self.w.dims[0].sequencers.keys().copied().collect();
+        let positions = self.w.sequencer_positions(0);
         for p in positions {
             self.save_sequence(p);
         }
@@ -177,6 +177,7 @@ impl Run {
                 break;
             }
         }
+        self.show_sequencer_writes();
         self.persisted.dirty_columns.extend(self.w.take_unsaved(0));
         self.publish_entities();
         self.flush_persistence();
@@ -947,23 +948,45 @@ mod tests {
     }
     #[test]
     fn continuing_sequencer_fields_require_end_of_tick_publication() {
-        use create_engine::sequencer::{Instruction, Kind, Sequencer, Speed};
-        let mut seq = Sequencer {
-            instructions: vec![Instruction {
-                kind: Kind::TurnAngle,
-                speed: Speed::Forward,
-                value: 90,
-            }],
-            speed: 32.,
-            ..Default::default()
+        use create_engine::kinetics::{
+            Axis, Dir, Kinetics, Part, SequenceContextSource, SpeedChanged,
         };
-        seq.run(0);
-        let written = codec::sequencer_to_nbt(&seq);
+        use create_engine::sequencer::{Instruction, Kind, Speed};
+        let p = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(
+            [-1, 0, 0],
+            0,
+            Part {
+                generated: 32.,
+                capacity: 1024.,
+                ..Part::half(Dir::East)
+            },
+        );
+        k.add_sequencer(p, 0);
+        k.sequencer_mut(p).unwrap().instructions = vec![Instruction {
+            kind: Kind::TurnAngle,
+            speed: Speed::Forward,
+            value: 90,
+        }];
+        k.set(
+            p,
+            0,
+            Part {
+                speed_changed: SpeedChanged::Sequencer,
+                context: SequenceContextSource::Owned,
+                ..Part::split_shaft(Axis::X, 0.)
+            },
+        );
+        k.solve(&mut Vec::new());
+        k.sequencer_redstone(p, true, false);
+        let written = codec::sequencer_to_nbt(k.sequencer(p).unwrap());
         // A continuing instruction emits no transition. The post-subsystem
         // publisher must nevertheless capture its progress and timer.
-        assert!(seq.tick().is_none());
+        k.solve_with(&mut Vec::new(), true, |k, pos, _| k.tick_sequencer(pos));
+        assert!(k.take_sequencer_writes().len() == 1);
         let persisted = codec::run_of_tag(&written).unwrap();
-        let current = codec::run_of_tag(&codec::sequencer_to_nbt(&seq)).unwrap();
+        let current = codec::run_of_tag(&codec::sequencer_to_nbt(k.sequencer(p).unwrap())).unwrap();
         assert_eq!((persisted.progress, persisted.timer), (0., 0));
         assert!(current.progress > persisted.progress);
         assert_eq!(current.timer, 1);
@@ -1298,14 +1321,14 @@ mod write_phase_tests {
                 }
             }
             r.tick();
-            if let Some(live) = r.w.dims[0].sequencers.get(&p) {
+            if let Some(live) = r.w.dims[0].kinetics.sequencer(p) {
                 assert_eq!(
                     codec::run_of_tag(&r.persisted.sequences[&p]),
                     Some(live.saved_run())
                 );
             }
         }
-        assert!(r.w.dims[0].sequencers[&p].progress > 0.);
+        assert!(r.w.dims[0].kinetics.sequencer(p).unwrap().progress > 0.);
     }
     #[test]
     fn column_flush_cannot_capture_unmarked_live_inventory_changes() {

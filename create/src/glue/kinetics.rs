@@ -291,14 +291,7 @@ impl Subsystem for Solve {
 
     fn write_entities(&self, lv: &mut ServerLevel<'_>) {
         publish_saved(lv);
-        let positions = with_world(|w| {
-            w.dims[lv.dim]
-                .sequencers
-                .keys()
-                .copied()
-                .collect::<Vec<_>>()
-        })
-        .unwrap_or_default();
+        let positions = with_world(|w| w.sequencer_positions(lv.dim)).unwrap_or_default();
         for pos in positions {
             super::sequencer::save_run(lv, pos);
         }
@@ -493,6 +486,7 @@ fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
 /// valves turning down, water wheels' flow, chain drives' places and sequenced gearshifts.
 fn tick_inputs(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    refresh_sequencer_signals(lv);
     // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): the callback
     // runs with the block change, before any block entity of this tick. `powered` is set
     // before solving, so the change turns the network in this tick's solve.
@@ -531,10 +525,9 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     let mut scheduled = Vec::new();
     with_world(|w| w.reattach_scheduled_transmissions(dim, &mut scheduled));
     apply_events(lv, scheduled);
-    // `onSpeedChanged` ran with that propagation, in the block-tick phase: the state write a
-    // gearshift's `run(-1)` makes comes before this tick's base ticks.
-    let steps = with_world(|w| w.take_sequencer_steps(dim)).unwrap_or_default();
-    apply_sequencer_steps(lv, steps);
+    // The valves' and bearings' `onSpeedChanged` of that propagation, before any entity ticks.
+    with_world(|w| w.flush_kinetic_callbacks(dim));
+    apply_sequencer_writes(lv);
     with_world(|w| w.tick_cranks(dim));
     // Water wheels whose surroundings changed, and those whose lazy tick came.
     for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim)).unwrap_or_default() {
@@ -595,24 +588,36 @@ fn tick_brackets(lv: &mut ServerLevel<'_>) {
 /// Apply synchronous propagation effects before any interaction or tick publication.
 pub(crate) fn drain_effects(lv: &mut ServerLevel<'_>) {
     apply_events(lv, Vec::new());
+    apply_sequencer_writes(lv);
+}
+
+/// What the sequenced gearshifts' `run` and `onRedstoneUpdate` read of the level
+/// (`hasNeighborSignal`), given to the engine before it may run them.
+pub(super) fn refresh_sequencer_signals(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    for pos in with_world(|w| w.sequencer_positions(dim)).unwrap_or_default() {
+        let signal = lv.has_neighbor_signal(pos);
+        with_world(|w| w.set_sequencer_signal(dim, pos, signal));
+    }
 }
 
 /// A level's solve: the network solved, the blocks Create breaks broken, and every changed
 /// part's speed put in its block entity's data for its clients.
 fn tick_solve(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    refresh_sequencer_signals(lv);
     let mut events = Vec::new();
-    let Some((steps, removed, unsaved)) = with_world(|w| {
-        let (_, steps) = w.tick(dim, &mut events);
+    let Some((writes, removed, unsaved)) = with_world(|w| {
+        let (_, writes) = w.tick(dim, &mut events);
         (
-            steps,
+            writes,
             w.dims[dim].kinetics.take_removed(),
             w.take_unsaved(dim),
         )
     }) else {
         return;
     };
-    apply_sequencer_steps(lv, steps);
+    show_sequencer_states(lv, writes);
     for (cx, cz) in unsaved {
         persist::mark_unsaved(dim, [cx, cz]);
     }
@@ -752,34 +757,27 @@ fn saved_fields(dim: usize, pos: [i32; 3]) -> Vec<(&'static str, Tag)> {
 /// `CreateWorld::tick`.
 fn tick_sequencers(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let mut steps = Vec::new();
     for (pos, running) in with_world(|w| w.take_sequencer_checks(dim)).unwrap_or_default() {
         let powered = lv.has_neighbor_signal(pos);
-        if let Some(step) =
-            with_world(|w| w.sequencer_redstone(dim, pos, powered, running)).flatten()
-        {
-            steps.push((pos, step));
-        }
+        with_world(|w| w.sequencer_redstone(dim, pos, powered, running));
     }
-    apply_sequencer_steps(lv, steps);
+    apply_sequencer_writes(lv);
 }
 
-/// Write the state requested by the engine after the corresponding kinetic phase.
-pub(super) fn apply_sequencer_steps(
-    lv: &mut ServerLevel<'_>,
-    steps: Vec<([i32; 3], create_engine::sequencer::Step)>,
-) {
-    use create_engine::sequencer::Step;
-    for (pos, step) in steps {
+/// Show the states the engine's sequenced gearshifts set so far.
+pub(super) fn apply_sequencer_writes(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let writes = with_world(|w| w.take_sequencer_writes(dim)).unwrap_or_default();
+    show_sequencer_states(lv, writes);
+}
+
+/// The block-state writes of `SequencedGearshiftBlockEntity.run` and `onRedstoneUpdate`
+/// (`UPDATE_ALL`), whose kinetic effect the engine already made: the level shows them and
+/// tells the neighbours.
+fn show_sequencer_states(lv: &mut ServerLevel<'_>, writes: Vec<([i32; 3], u8)>) {
+    const STATES: [&str; 6] = ["0", "1", "2", "3", "4", "5"];
+    for (pos, state) in writes {
         super::sequencer::save_run(lv, pos);
-        let state = match step {
-            Step::Run(n) => n,
-            Step::Idle => 0,
-            // `run` past the end: back to 0 unless still powered.
-            Step::Ended if lv.has_neighbor_signal(pos) => continue,
-            Step::Ended => 0,
-        };
-        const STATES: [&str; 6] = ["0", "1", "2", "3", "4", "5"];
         lv.set_property(
             pos,
             "state",

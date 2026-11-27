@@ -237,7 +237,8 @@ pub fn default_instructions() -> Vec<Instruction> {
     ]
 }
 
-/// A sequenced gearshift's block entity state.
+/// A sequenced gearshift's block entity state. Its kinetic entity runs it
+/// (`crate::kinetics::Kinetics::run_sequencer`), reading its speed live as Java's fields do.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Sequencer {
     pub instructions: Vec<Instruction>,
@@ -250,11 +251,11 @@ pub struct Sequencer {
     pub timer: i32,
     /// `poweredPreviously`.
     pub powered_before: bool,
-    /// The speed its block entity turns at (the half turned), as its tick reads it: the
-    /// theoretical one (`speed`), overstressed or not.
-    pub speed: f32,
-    /// Its network is overstressed: it shows no speed (`getSpeed` is 0).
-    pub overstressed: bool,
+    /// The block's `STATE` (0 idle, else the running instruction's index + 1) as `run` and
+    /// `onRedstoneUpdate` last set it, or as the block was placed or loaded.
+    pub state: u8,
+    /// `level.hasNeighborSignal(worldPosition)`, as the host last reported it.
+    pub signal: bool,
     /// Turning instructions started (not saved): each start is a context of its own.
     pub runs: u32,
 }
@@ -268,25 +269,12 @@ impl Default for Sequencer {
             progress: 0.0,
             timer: 0,
             powered_before: false,
-            speed: 0.0,
-            overstressed: false,
+            state: 0,
+            signal: false,
             runs: 0,
         }
     }
 }
-
-/// What a step asks of the block's `state`.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Step {
-    /// An instruction started: its index + 1.
-    Run(u8),
-    /// Idle and unpowered: 0.
-    Idle,
-    /// The sequence ended (`run` past its end): 0 unless the block is still powered.
-    Ended,
-}
-
-pub type State = Option<Step>;
 
 /// Where a sequence is, as `SequencedGearshiftBlockEntity.write` saves it: `InstructionIndex`,
 /// `InstructionDuration`, `InstructionProgress`, `Timer` and `PrevPowered`.
@@ -325,12 +313,8 @@ impl Sequencer {
         self.current == -1
     }
 
-    /// `getSpeed`: 0 while overstressed.
-    pub fn shown_speed(&self) -> f32 {
-        if self.overstressed { 0.0 } else { self.speed }
-    }
-
-    fn instruction(&self, index: i32) -> Option<Instruction> {
+    /// `getInstruction`.
+    pub fn instruction(&self, index: i32) -> Option<Instruction> {
         usize::try_from(index)
             .ok()
             .and_then(|i| self.instructions.get(i))
@@ -360,97 +344,9 @@ impl Sequencer {
         })
     }
 
-    /// `run`: starts instruction `index`, or ends (`END`, or past the list).
-    pub fn run(&mut self, index: i32) -> State {
-        let Some(instruction) = self.instruction(index).filter(|i| i.kind != Kind::End) else {
-            self.current = -1;
-            self.duration = -1;
-            self.progress = 0.0;
-            self.timer = 0;
-            return Some(Step::Ended);
-        };
-        self.duration = instruction.duration(0.0, self.speed);
-        self.runs = self.runs.wrapping_add(1);
-        self.current = index;
-        self.progress = 0.0;
-        self.timer = 0;
-        Some(Step::Run((index + 1).clamp(0, 5) as u8))
-    }
-
-    /// `tick`: the running instruction counts its ticks and progress, then the next one starts.
-    pub fn tick(&mut self) -> State {
-        if self.is_idle() || self.duration < 0 {
-            return None;
-        }
-        if self.timer < self.duration {
-            self.timer += 1;
-            if let Some(i) = self.instruction(self.current) {
-                self.progress += i.tick_progress(self.speed);
-            }
-            return None;
-        }
-        self.run(self.current + 1)
-    }
-
     /// Whether `tick` has anything to do: an instruction runs that is not waiting for a pulse.
     pub fn ticks(&self) -> bool {
         !self.is_idle() && self.duration >= 0
-    }
-
-    /// `onSpeedChanged`: the running instruction's time is worked out again for the new
-    /// theoretical `speed`; showing none ends the sequence. Create compares the speed shown
-    /// before with the theoretical one now, so becoming overstressed changes nothing, while the
-    /// speed changing as it is overstressed ends it.
-    pub fn speed_changed(&mut self, speed: f32, overstressed: bool) -> State {
-        let previous = self.shown_speed();
-        self.speed = speed;
-        self.overstressed = overstressed;
-        if self.is_idle() || previous.abs() == speed.abs() {
-            return None;
-        }
-        let instruction = self.instruction(self.current)?;
-        let state = if self.shown_speed() == 0.0 {
-            self.run(-1)
-        } else {
-            None
-        };
-        self.duration = instruction.duration(self.progress, speed);
-        self.timer = 0;
-        state
-    }
-
-    /// `onRedstoneUpdate` (the block's scheduled tick after a neighbour changed): a rising edge
-    /// moves past an await; powered while idle starts the sequence if it turns, unpowered while
-    /// idle shows `state` 0. `running` is whether the block's `state` is not 0.
-    pub fn redstone(&mut self, powered: bool, running: bool) -> State {
-        if !self.powered_before
-            && powered
-            && let Some(state) = self.rising_flank()
-        {
-            self.powered_before = powered;
-            return Some(state);
-        }
-        self.powered_before = powered;
-        if !self.is_idle() || powered == running {
-            return None;
-        }
-        if !powered {
-            return Some(Step::Idle);
-        }
-        if self.shown_speed() == 0.0 {
-            return None;
-        }
-        self.run(0)
-    }
-
-    /// `risingFlank`: an await goes on to the next instruction.
-    fn rising_flank(&mut self) -> State {
-        let instruction = self.instruction(self.current)?;
-        self.powered_before = true;
-        if instruction.kind == Kind::Await {
-            return self.run(self.current + 1);
-        }
-        None
     }
 }
 
@@ -600,115 +496,5 @@ mod tests {
         assert_eq!(turn.duration(0.0, 0.0), i32::MIN + 1);
         assert_eq!(Instruction::new(Kind::Await, 1).duration(0.0, 0.0), -1);
         assert_eq!(Sequencer::default().saved_run().duration, -1);
-    }
-
-    #[test]
-    fn a_pulse_runs_the_default_sequence_once() {
-        let mut s = Sequencer {
-            speed: 16.0,
-            ..Sequencer::default()
-        };
-        assert_eq!(s.modifier(), 0);
-        // Powered: the 90° turn starts (state 1), the output face turns.
-        assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
-        assert_eq!(s.modifier(), 1);
-        assert_eq!(s.duration, 21);
-        // 21 ticks of 4.8°, then the end (the state stays 1 while still powered).
-        for _ in 0..21 {
-            assert_eq!(s.tick(), None);
-        }
-        assert!((s.progress - 100.8).abs() < 1e-3);
-        assert_eq!(s.tick(), Some(Step::Ended));
-        assert!(s.is_idle());
-        assert_eq!(s.modifier(), 0);
-        // Power off: state 0; on again: it runs again.
-        assert_eq!(s.redstone(false, true), Some(Step::Idle));
-        assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
-    }
-
-    #[test]
-    fn it_ends_unpowered_and_waits_for_pulses() {
-        let mut s = Sequencer {
-            speed: 32.0,
-            instructions: vec![
-                Instruction::new(Kind::Delay, 2),
-                Instruction::new(Kind::Await, 1),
-                Instruction {
-                    speed: Speed::Back,
-                    ..Instruction::new(Kind::TurnAngle, 45)
-                },
-            ],
-            ..Sequencer::default()
-        };
-        assert_eq!(s.redstone(true, false), Some(Step::Run(1)));
-        assert_eq!(s.modifier(), 0, "a delay holds the output face");
-        s.tick();
-        s.tick();
-        assert_eq!(s.tick(), Some(Step::Run(2)), "the await");
-        assert!(!s.ticks(), "waiting costs nothing per tick");
-        assert_eq!(s.tick(), None);
-        // Still powered: no rising edge. Off, then on again: the turn backwards.
-        assert_eq!(s.redstone(true, true), None);
-        assert_eq!(s.redstone(false, true), None);
-        assert_eq!(s.redstone(true, true), Some(Step::Run(3)));
-        assert_eq!(s.modifier(), -1);
-        // 45° at 32 RPM: 9.6° a tick, ceil(4.69) + 2 = 7; then past the list it ends.
-        assert_eq!(s.duration, 7);
-        for _ in 0..7 {
-            s.tick();
-        }
-        assert_eq!(s.tick(), Some(Step::Ended));
-        assert!(s.is_idle());
-    }
-
-    #[test]
-    fn speed_changes_retime_or_stop_it() {
-        let mut s = Sequencer {
-            speed: 16.0,
-            ..Sequencer::default()
-        };
-        s.redstone(true, false);
-        for _ in 0..10 {
-            s.tick();
-        }
-        // 48° done; at 32 RPM the 42° left take ceil(4.375) + 2.
-        assert_eq!(s.speed_changed(32.0, false), None);
-        assert_eq!(s.duration, 7);
-        assert_eq!(s.timer, 0);
-        // The same speed the other way: nothing changes.
-        assert_eq!(s.speed_changed(-32.0, false), None);
-        assert_eq!(s.duration, 7);
-        // Stopped: it ends.
-        assert_eq!(s.speed_changed(0.0, false), Some(Step::Ended));
-        assert!(s.is_idle());
-        // Not turning, power does not start it.
-        assert_eq!(s.redstone(true, false), None);
-    }
-
-    #[test]
-    fn overstress_holds_the_sequence_at_its_theoretical_speed() {
-        let mut s = Sequencer {
-            speed: 16.0,
-            ..Sequencer::default()
-        };
-        s.redstone(true, false);
-        for _ in 0..10 {
-            s.tick();
-        }
-        // Overstressed: the shown speed before equals the theoretical one, nothing changes; it
-        // goes on counting 4.8° a tick.
-        assert_eq!(s.speed_changed(16.0, true), None);
-        assert_eq!((s.duration, s.timer), (21, 10));
-        s.tick();
-        assert!((s.progress - 52.8).abs() < 1e-3);
-        // No longer: from 0 shown, the 37.2° left are timed again at 16 RPM.
-        assert_eq!(s.speed_changed(16.0, false), None);
-        assert_eq!((s.duration, s.timer), (10, 0));
-        // The speed changing while overstressed shows none: it ends.
-        s.speed_changed(16.0, true);
-        assert_eq!(s.speed_changed(32.0, true), Some(Step::Ended));
-        // Overstressed, power does not start it.
-        s.redstone(false, false);
-        assert_eq!(s.redstone(true, false), None);
     }
 }

@@ -176,8 +176,6 @@ pub struct Settings {
     pub windmill: f32,
     /// An adjustable chain gearshift's redstone signal (`ChainGearshiftBlockEntity.signal`).
     pub signal: i8,
-    /// A sequenced gearshift's output face speed modifier (`getModifier`: 0 idle).
-    pub sequence: i8,
     /// What drives a powered shaft: its steam engine's direction and efficiency.
     pub steam: crate::steam::Output,
 }
@@ -191,7 +189,6 @@ impl Default for Settings {
             belt: None,
             windmill: 0.0,
             signal: 0,
-            sequence: 0,
             steam: crate::steam::Output::default(),
         }
     }
@@ -287,13 +284,14 @@ pub fn parts(block: Block, s: &StateInfo, settings: &Settings) -> Option<Part> {
         }),
         // SequencedGearshiftBlock: a split shaft on its horizontal axis, or vertical; the face
         // away from its source turns at the running instruction's modifier
-        // (`SequencedGearshiftBlockEntity.getRotationSpeedModifier`: 0 while idle), the source's
-        // face at 1.
+        // (`SequencedGearshiftBlockEntity.getRotationSpeedModifier`, which `Kinetics` gives it
+        // from the entity's sequencer), the source's face at 1.
         Block::SequencedGearshift => s.axis.map(|a| {
             let a = if s.vertical { Axis::Y } else { a };
             with_stress(Part {
                 context: crate::kinetics::SequenceContextSource::Owned,
-                ..Part::split_shaft(a, f32::from(settings.sequence))
+                speed_changed: crate::kinetics::SpeedChanged::Sequencer,
+                ..Part::split_shaft(a, 0.0)
             })
         }),
         Block::CreativeMotor => s.facing.and_then(|f| {
@@ -823,10 +821,7 @@ mod tests {
     fn a_sequenced_gearshift_is_one_split_shaft_on_its_axis() {
         // `SequencedGearshiftBlock`: horizontal on its `axis`, or vertical; one entity with the
         // running instruction's modifier on its output face.
-        let settings = Settings {
-            sequence: -2,
-            ..Settings::default()
-        };
+        let settings = Settings::default();
         for (props, axis) in [
             (&[("axis", "x"), ("vertical", "false")], Axis::X),
             (&[("axis", "z"), ("vertical", "false")], Axis::Z),
@@ -838,7 +833,8 @@ mod tests {
                 p.shafts,
                 Dir::from_axis(axis, true).bit() | Dir::from_axis(axis, false).bit()
             );
-            assert_eq!(p.rotation, crate::kinetics::ShaftRotation::Split(-2.0));
+            assert_eq!(p.rotation, crate::kinetics::ShaftRotation::Split(0.0));
+            assert_eq!(p.speed_changed, crate::kinetics::SpeedChanged::Sequencer);
             assert_eq!(
                 p.context,
                 crate::kinetics::SequenceContextSource::Owned,
@@ -853,22 +849,11 @@ mod tests {
 
     #[test]
     fn d1_a_delay_instruction_keeps_the_output_face_dead() {
-        use crate::sequencer::{Instruction, Kind, Sequencer, Step};
+        use crate::sequencer::{Instruction, Kind};
         // Running a DELAY (`getSpeedModifier` 0): the gearshift turns with its source, its
         // output face stays 0, and a shaft turned from the far side is no part of its network.
-        let mut seq = Sequencer {
-            speed: 16.0,
-            instructions: vec![Instruction::new(Kind::Delay, 40)],
-            ..Sequencer::default()
-        };
-        assert_eq!(seq.redstone(true, false), Some(Step::Run(1)));
-        assert_eq!(seq.modifier(), 0);
-        let settings = Settings {
-            sequence: seq.modifier() as i8,
-            ..Settings::default()
-        };
         let running = info(&[("axis", "x"), ("vertical", "false"), ("state", "1")]);
-        let gearshift = parts(Block::SequencedGearshift, &running, &settings).unwrap();
+        let gearshift = parts(Block::SequencedGearshift, &running, &Settings::default()).unwrap();
         let mut k = Kinetics::new();
         k.set(
             [-1, 0, 0],
@@ -880,6 +865,12 @@ mod tests {
             )
             .unwrap(),
         );
+        k.add_sequencer([0, 0, 0], 1);
+        let s = k.sequencer_mut([0, 0, 0]).unwrap();
+        s.instructions = vec![Instruction::new(Kind::Delay, 40)];
+        s.current = 0;
+        s.duration = 40;
+        assert_eq!(s.modifier(), 0);
         k.set([0, 0, 0], 0, gearshift);
         let shaft = parts(Block::Shaft, &info(&[("axis", "x")]), &Settings::default()).unwrap();
         k.set([1, 0, 0], 0, shaft);

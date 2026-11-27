@@ -78,14 +78,16 @@ impl Run {
                 if self.w.block_at(0, p) != Some(create_engine::Block::SequencedGearshift) {
                     return;
                 }
-                if let Some(step) = self.w.set_sequencer_instructions(
-                    0,
-                    p,
-                    instructions.iter().map(|i| i.engine()).collect(),
-                    true,
-                ) {
-                    self.sequencer_step(p, step);
-                    let list = &self.w.dims[0].sequencers[&p].instructions;
+                if self.w.dims[0].kinetics.sequencer(p).is_some() {
+                    self.refresh_sequencer_signals();
+                    self.w.set_sequencer_instructions(
+                        0,
+                        p,
+                        instructions.iter().map(|i| i.engine()).collect(),
+                        true,
+                    );
+                    self.show_sequencer_writes();
+                    let list = &self.w.dims[0].kinetics.sequencer(p).unwrap().instructions;
                     self.persisted.sequences.entry(p).or_default().insert(
                         "Instructions".into(),
                         crate::persistence::codec::to_tag(list),

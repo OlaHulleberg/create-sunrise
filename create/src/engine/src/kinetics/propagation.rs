@@ -149,19 +149,25 @@ impl Kinetics {
         if changed && n.sub == 0 {
             self.speed_notifications.push((n.pos, shown));
         }
-        self.on_speed_changed(id);
+        self.on_speed_changed(id, before);
     }
 
-    /// StressGaugeBlockEntity.onSpeedChanged calls updateFromNetwork with its cached
-    /// totals and the live network size. This also clears KineticBlockEntity.networkDirty.
-    pub(super) fn on_speed_changed(&mut self, id: u32) {
+    /// The subclass's `onSpeedChanged(previousSpeed)` override, after the base callback: it runs
+    /// at once, inside the propagation that changed the speed.
+    pub(super) fn on_speed_changed(&mut self, id: u32, previous: f32) {
         let n = &self.nodes[id as usize];
-        if n.part.speed_changed == SpeedChanged::StressGauge
-            && n.state.speed != 0.0
-            && n.state.net.is_some()
-        {
-            let (_, _, size) = self.networks.figures(n.state.net);
-            self.update_from_network(id, n.state.capacity, n.state.stress, size);
+        match n.part.speed_changed {
+            SpeedChanged::Base => {}
+            // StressGaugeBlockEntity.onSpeedChanged calls updateFromNetwork with its cached
+            // totals and the live network size. This also clears networkDirty.
+            SpeedChanged::StressGauge => {
+                if n.state.speed != 0.0 && n.state.net.is_some() {
+                    let (_, _, size) = self.networks.figures(n.state.net);
+                    self.update_from_network(id, n.state.capacity, n.state.stress, size);
+                }
+            }
+            SpeedChanged::Sequencer if n.sub == 0 => self.sequencer_speed_changed(id, previous),
+            SpeedChanged::Sequencer => {}
         }
     }
 
@@ -173,11 +179,12 @@ impl Kinetics {
             self.scheduler.reactivate_later(self.now, id, n.stamp);
         }
         let changed = n.state.seq.is_some() || n.state.overstressed;
-        n.state.source = None;
-        n.state.overstressed = false;
-        self.change_speed(id, 0.0);
-        self.nodes[id as usize].state.seq = None;
+        let before = n.state.speed;
+        let moved = self.set_speed(id, 0.0);
+        self.nodes[id as usize].state.source = None;
         self.set_network(id, None);
+        self.nodes[id as usize].state.seq = None;
+        self.speed_changed(id, before, moved);
         if changed {
             self.mark_changed(id);
         }

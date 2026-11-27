@@ -243,14 +243,9 @@ pub fn client_message(
     if !near || with_world(|w| w.block_at(dim, pos)).flatten() != Some(Block::SequencedGearshift) {
         return true;
     }
-    let Some(step) =
-        with_world(|w| w.set_sequencer_instructions(dim, pos, list.clone(), true)).flatten()
-    else {
-        return true;
-    };
-    // ConfigureSequencedGearshiftPacket.applySettings runs and commits run(-1) now,
-    // before the next KineticBlockEntity.tick can attach the cleared block.
-    super::kinetics::apply_sequencer_steps(&mut lv, vec![(pos, step)]);
+    super::kinetics::refresh_sequencer_signals(&mut lv);
+    with_world(|w| w.set_sequencer_instructions(dim, pos, list.clone(), true));
+    super::kinetics::apply_sequencer_writes(&mut lv);
     if let Some(entity) = lv.host.block_entity(lv.level, pos) {
         let data = Compound::from([(INSTRUCTIONS.into(), to_tag(&list))]);
         let _ = entity.merge_data(&mut *lv.host, data);
