@@ -777,6 +777,7 @@ pub(crate) fn put_back_blocks_with_flags(
 struct Dest {
     free: bool,
     unbreakable: bool,
+    water_source: bool,
 }
 
 /// The world a structure lands in, cell by cell (what [`land_blocks`] asks of it).
@@ -784,6 +785,8 @@ trait Landing {
     /// Whether `state` is brittle (`BlockMovementChecks.isBrittle`).
     fn brittle(&self, state: u32) -> bool;
     fn cell(&self, p: [i32; 3]) -> Dest;
+    /// Set waterlogging from the destination snapshot without reading the world.
+    fn with_waterlogged(&self, state: u32, water: bool) -> u32;
     /// `Level.destroyBlock(p, true)`; false when the block was not broken.
     fn destroy(&mut self, p: [i32; 3]) -> bool;
     /// `Level.setBlock(p, state, flags)`; false when nothing was placed.
@@ -809,7 +812,8 @@ fn land_blocks(
                 world.drop_block(p, state);
                 continue;
             }
-            if world.set(p, state) {
+            let placed = world.with_waterlogged(state, dest.water_source);
+            if world.set(p, placed) {
                 written.insert(p);
             } else {
                 world.drop_block(p, state);
@@ -835,6 +839,7 @@ impl Landing for Cells<'_, '_> {
             return Dest {
                 free: false,
                 unbreakable: false,
+                water_source: false,
             };
         };
         let text = self.lv.host.block_state_string(s);
@@ -848,7 +853,18 @@ impl Landing for Cells<'_, '_> {
                 .destroy_speed(s)
                 .is_some_and(|h| h < 0.0)
                 || name.is_some_and(unbreakable));
-        Dest { free, unbreakable }
+        Dest {
+            free,
+            unbreakable,
+            water_source: super::server::is_water_source(&*self.lv.host, s),
+        }
+    }
+
+    fn with_waterlogged(&self, state: u32, water: bool) -> u32 {
+        let Some(s) = unnum(state) else {
+            return state;
+        };
+        num(super::server::with_waterlogged(&*self.lv.host, s, water))
     }
 
     fn destroy(&mut self, p: [i32; 3]) -> bool {
@@ -1390,6 +1406,7 @@ mod tests {
         brittle: HashSet<u32>,
         free: HashSet<[i32; 3]>,
         names: HashMap<[i32; 3], &'static str>,
+        water_sources: HashSet<[i32; 3]>,
         unbreakable: HashSet<[i32; 3]>,
         keeps: HashSet<[i32; 3]>,
         refuses: HashSet<[i32; 3]>,
@@ -1404,11 +1421,23 @@ mod tests {
             Dest {
                 free: self.free.contains(&p) || is_passable_name(self.names.get(&p).copied()),
                 unbreakable: self.unbreakable.contains(&p),
+                water_source: self.water_sources.contains(&p),
+            }
+        }
+        fn with_waterlogged(&self, state: u32, water: bool) -> u32 {
+            match super::super::server::waterlogged_value(matches!(state, DRY | WET), water) {
+                Some("true") => WET,
+                Some("false") => DRY,
+                _ => state,
             }
         }
         fn destroy(&mut self, p: [i32; 3]) -> bool {
             self.log.push(format!("destroy {p:?}"));
-            !self.keeps.contains(&p)
+            if self.keeps.contains(&p) {
+                return false;
+            }
+            self.water_sources.remove(&p);
+            true
         }
         fn set(&mut self, p: [i32; 3], state: u32) -> bool {
             self.log.push(format!("set {p:?} {state}"));
@@ -1443,6 +1472,42 @@ mod tests {
             assert_eq!(w.log, expected, "{name}");
         }
         assert!(!is_passable_name(None));
+    }
+
+    const DRY: u32 = 10;
+    const WET: u32 = 11;
+
+    #[test]
+    fn landing_sets_waterlogging_from_the_original_destination() {
+        for (name, source, carried, placed) in [
+            ("minecraft:water", true, DRY, WET),
+            ("minecraft:oak_stairs", true, DRY, WET),
+            ("minecraft:air", false, WET, DRY),
+            ("minecraft:lava", false, WET, DRY),
+            ("minecraft:water", false, WET, DRY), // Flowing water.
+            ("minecraft:water", true, 2, 2),
+        ] {
+            let mut w = Fake {
+                names: HashMap::from([(A, name)]),
+                water_sources: if source {
+                    HashSet::from([A])
+                } else {
+                    HashSet::new()
+                },
+                ..Fake::default()
+            };
+            assert_eq!(land_blocks(&mut w, &[(A, carried)]), HashSet::from([A]));
+            let mut expected = Vec::new();
+            // Breaking the stairs clears the source: the new block must already be wet.
+            if name == "minecraft:oak_stairs" {
+                expected.push(format!("destroy {A:?}"));
+            }
+            expected.push(format!("set {A:?} {placed}"));
+            assert_eq!(
+                w.log, expected,
+                "{name}, source={source}, carried={carried}"
+            );
+        }
     }
 
     #[test]
