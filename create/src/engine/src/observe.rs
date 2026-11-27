@@ -746,6 +746,11 @@ impl Detectors {
         self.saved_switches.extend(switches);
     }
 
+    #[cfg(test)]
+    pub(crate) fn has_saved(&self) -> bool {
+        !self.saved_observers.is_empty() || !self.saved_switches.is_empty()
+    }
+
     /// `SmartObserverBlockEntity.read`: a placed observer takes `o` at once, one not found yet
     /// when it is.
     pub fn read_observer(&mut self, pos: [i32; 3], o: Observer) {

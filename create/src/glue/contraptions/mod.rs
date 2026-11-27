@@ -115,13 +115,14 @@ use super::subsystem::Subsystem;
 use super::world::with_world;
 use crate::glue::subsystem::CommandCall;
 use create_engine::Block;
+use create_engine::actors::Carried;
 use create_engine::contraption::{Chassis, Found, Sticky};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
     BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, HostBlockStates, ItemStack,
     LeftClickBlockEvent, PlayerRef, Registrar, RegistrationContext, ServerHost,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 pub use super::kinetics::dir_name;
@@ -878,30 +879,145 @@ impl Landing for Cells<'_, '_> {
     }
 }
 
-/// Takes `blocks` (offsets from `base`) out of the world (`removeBlocksFromWorld`).
-fn take_blocks(lv: &mut ServerLevel<'_>, base: [i32; 3], blocks: &[([i32; 3], u32)]) {
-    let cells: Vec<([i32; 3], u32)> = blocks.iter().map(|(o, s)| (add(base, *o), *s)).collect();
-    remove_cells(lv, &cells);
+/// The cells of `blocks` (offsets from `origin`) with the state each holds now, or None when
+/// one is unloaded or two offsets name one cell. A block put back after a refused removal
+/// must be the one that stood there, whatever the structure made of it.
+fn preflight_positions(
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+    state_at: impl Fn([i32; 3]) -> Option<u32>,
+) -> Option<Vec<([i32; 3], u32)>> {
+    let mut seen = HashSet::new();
+    blocks
+        .iter()
+        .map(|(o, _)| {
+            let p = add(origin, *o);
+            if !seen.insert(p) {
+                return None;
+            }
+            Some((p, state_at(p)?))
+        })
+        .collect()
+}
+
+/// Air and the cells `blocks` hold, before anything is carried or removed.
+fn preflight_cells(
+    lv: &ServerLevel<'_>,
+    origin: [i32; 3],
+    blocks: &[([i32; 3], u32)],
+) -> Option<(BlockState, Vec<([i32; 3], u32)>)> {
+    let air = lv.host.block_state_id("minecraft:air")?;
+    let cells = preflight_positions(origin, blocks, |p| lv.state_num(p))?;
+    Some((air, cells))
+}
+
+/// How far [`clear_cells`] got.
+#[derive(Debug, PartialEq)]
+enum Removal {
+    Cleared,
+    /// The host refused a removal: the cells already cleared, and every other cell.
+    Aborted {
+        cleared: Vec<([i32; 3], u32)>,
+        standing: Vec<([i32; 3], u32)>,
+    },
 }
 
 /// `removeBlocksFromWorld` for blocks at world positions: brittle ones first, each left as air
-/// with no drops and no neighbour updates (nothing hanging on them breaks off), then their
-/// neighbours hear of it.
-fn remove_cells(lv: &mut ServerLevel<'_>, cells: &[([i32; 3], u32)]) {
+/// (`set_air`). Stops at the first refusal, touching no later cell.
+fn clear_cells(
+    cells: &[([i32; 3], u32)],
+    is_brittle: impl Fn(u32) -> bool,
+    mut set_air: impl FnMut([i32; 3]) -> bool,
+) -> Removal {
+    let mut cleared = Vec::new();
+    for brittles in [true, false] {
+        for &(p, state) in cells {
+            if is_brittle(state) != brittles {
+                continue;
+            }
+            if !set_air(p) {
+                let done: HashSet<[i32; 3]> = cleared.iter().map(|c| c.0).collect();
+                let standing = cells
+                    .iter()
+                    .filter(|(q, _)| !done.contains(q))
+                    .copied()
+                    .collect();
+                return Removal::Aborted { cleared, standing };
+            }
+            cleared.push((p, state));
+        }
+    }
+    Removal::Cleared
+}
+
+/// Takes `cells` out of the world (`removeBlocksFromWorld`: no drops and no neighbour updates, so
+/// nothing hanging on them breaks off; their neighbours hear of it after). When the host
+/// refuses one, the removal is rolled back and this is false.
+fn take_or_rollback(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    air: BlockState,
+    cells: &[([i32; 3], u32)],
+    carried: &mut Carried,
+) -> bool {
     let flags = BlockUpdateFlags::MOVE_BY_PISTON
         | BlockUpdateFlags::SUPPRESS_DROPS
         | BlockUpdateFlags::KNOWN_SHAPE
         | BlockUpdateFlags::CLIENTS;
-    for brittles in [true, false] {
-        for &(p, state) in cells {
-            if brittle_state(&*lv.host, state) == brittles {
-                lv.set_air(p, flags);
+    let brittle: HashSet<u32> = cells
+        .iter()
+        .map(|c| c.1)
+        .filter(|s| brittle_state(&*lv.host, *s))
+        .collect();
+    let removal = clear_cells(
+        cells,
+        |s| brittle.contains(&s),
+        |p| lv.set_state(p, air, flags),
+    );
+    match removal {
+        Removal::Cleared => {
+            for &(p, _) in cells {
+                lv.update_signal_neighbors(p);
             }
+            true
+        }
+        Removal::Aborted { cleared, standing } => {
+            rollback_cells(lv, key, origin, &cleared, &standing, carried);
+            false
         }
     }
-    for &(p, _) in cells {
-        lv.update_signal_neighbors(p);
-    }
+}
+
+/// Undoes a refused removal as a disassembly would: what carrying staged goes back with the cells
+/// put back (`cleared`) and is read back into those that never left (`standing`); a cell that
+/// refuses its block again drops it with what it carried.
+fn rollback_cells(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    origin: [i32; 3],
+    cleared: &[([i32; 3], u32)],
+    standing: &[([i32; 3], u32)],
+    carried: &mut Carried,
+) {
+    actors::expect_back(lv, key, |o| add(origin, o));
+    let restored = put_back_blocks(lv, cleared);
+    let dim = lv.dim;
+    with_world(|w| {
+        for &(p, state) in standing {
+            w.restore_standing(dim, p, state);
+        }
+        if !w.dims[dim].displays.forgotten.is_empty() {
+            w.dims[dim]
+                .displays
+                .forgotten
+                .retain(|p| !restored.contains(p));
+        }
+    });
+    let standing: HashSet<[i32; 3]> = standing.iter().map(|c| c.0).collect();
+    actors::release(lv, key, origin, carried, |p| {
+        restored.contains(&p) || standing.contains(&p)
+    });
 }
 
 /// A radial chassis as the search reads it: its axis, glued sides and range.
@@ -1395,7 +1511,6 @@ fn in_click_level<R>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::collections::HashSet;
 
     /// A level of cells: which are free, unbreakable, refuse breaking or placing, and which
     /// states are brittle; mutations are logged.
@@ -1571,5 +1686,317 @@ mod tests {
             vec![format!("destroy {A:?}"), format!("set {A:?} 2")]
         );
         assert_eq!(written, HashSet::from([A]));
+    }
+
+    #[test]
+    fn preflight_refuses_an_unloaded_cell_and_a_cell_named_twice() {
+        let loaded = |p: [i32; 3]| (p[1] < 10).then_some(7);
+        let blocks = [([0, 0, 0], 1), ([1, 0, 0], 2)];
+        assert_eq!(
+            preflight_positions([5, 0, 5], &blocks, loaded),
+            Some(vec![([5, 0, 5], 7), ([6, 0, 5], 7)])
+        );
+        assert_eq!(preflight_positions([5, 10, 5], &blocks, loaded), None);
+        let twice = [([0, 0, 0], 1), ([0, 0, 0], 2)];
+        assert_eq!(preflight_positions([5, 0, 5], &twice, loaded), None);
+    }
+
+    /// A piston's pole is carried as the dry one its structure makes, but what stood in the
+    /// world (turned the other way, say) is what goes back.
+    #[test]
+    fn a_refused_removal_puts_back_the_state_that_stood_not_the_one_made_of_it() {
+        let (standing, made) = (2, 3);
+        let live = preflight_positions(A, &[(A, made)], |_| Some(standing)).unwrap();
+        let Removal::Aborted {
+            cleared,
+            standing: rest,
+        } = clear_cells(&[live[0], (B, 4)], |_| false, |p| p == A)
+        else {
+            panic!("the second cell refuses");
+        };
+        assert_eq!(
+            (cleared.as_slice(), rest.as_slice()),
+            (&[(A, 2)][..], &[(B, 4)][..])
+        );
+        let mut w = Fake {
+            free: HashSet::from([A]),
+            ..Fake::default()
+        };
+        land_blocks(&mut w, &cleared);
+        assert_eq!(w.log, vec![format!("set {A:?} 2")]);
+    }
+
+    #[test]
+    fn cells_clear_brittle_first_and_stop_at_the_first_refusal() {
+        let cells = [(A, 1), (B, 2), ([2, 0, 0], 3)];
+        let brittle = |s: u32| s == 3;
+        let mut order = Vec::new();
+        let all = clear_cells(&cells, brittle, |p| {
+            order.push(p);
+            true
+        });
+        assert_eq!(all, Removal::Cleared);
+        assert_eq!(order, vec![[2, 0, 0], A, B]);
+        let mut order = Vec::new();
+        let refused = clear_cells(&cells, brittle, |p| {
+            order.push(p);
+            p != A
+        });
+        assert_eq!(
+            order,
+            vec![[2, 0, 0], A],
+            "nothing after the refusal is touched"
+        );
+        assert_eq!(
+            refused,
+            Removal::Aborted {
+                cleared: vec![([2, 0, 0], 3)],
+                standing: vec![(A, 1), (B, 2)],
+            }
+        );
+    }
+
+    /// Rope cells put back after a refusal: dry or wet as they stood, and one that refuses to
+    /// come back is dropped, not lost.
+    #[test]
+    fn ropes_cleared_before_a_refusal_come_back_as_they_were_or_drop() {
+        let ropes = [(A, DRY), (B, WET), ([2, 0, 0], DRY)];
+        let Removal::Aborted { cleared, .. } = clear_cells(&ropes, |_| false, |p| p != [2, 0, 0])
+        else {
+            panic!("the third rope refuses");
+        };
+        assert_eq!(cleared, vec![(A, DRY), (B, WET)]);
+        let mut w = Fake {
+            free: HashSet::from([A, B]),
+            water_sources: HashSet::from([B]),
+            refuses: HashSet::from([B]),
+            ..Fake::default()
+        };
+        let written = land_blocks(&mut w, &cleared);
+        assert_eq!(written, HashSet::from([A]));
+        assert_eq!(
+            w.log,
+            vec![
+                format!("set {A:?} {DRY}"),
+                format!("set {B:?} {WET}"),
+                format!("drop {B:?} {WET}"),
+            ]
+        );
+    }
+
+    mod rollback {
+        use super::*;
+        use create_engine::deployer::Deployer;
+        use create_engine::tank::{Fluid, Multi, Tank};
+        use create_engine::world::{CreateWorld, StateTable};
+
+        type Stack = (String, u32);
+        const DEPLOYER: u32 = 20;
+        const TANK: u32 = 21;
+        const IRON: &str = "minecraft:iron_ingot";
+
+        fn world() -> CreateWorld {
+            let names = [
+                ("create:deployer", vec![("facing", "north")]),
+                ("create:fluid_tank", vec![]),
+            ];
+            CreateWorld::new(StateTable::new(
+                20,
+                names.iter().map(|(n, p)| (*n, p.iter().copied())),
+            ))
+        }
+
+        /// [`Fake`] landing in a real engine world: a cell written reaches the engine as the
+        /// host's block change does.
+        struct Live<'a> {
+            fake: Fake,
+            world: &'a mut CreateWorld,
+        }
+
+        impl Landing for Live<'_> {
+            fn brittle(&self, state: u32) -> bool {
+                self.fake.brittle(state)
+            }
+            fn cell(&self, p: [i32; 3]) -> Dest {
+                self.fake.cell(p)
+            }
+            fn with_waterlogged(&self, state: u32, water: bool) -> u32 {
+                self.fake.with_waterlogged(state, water)
+            }
+            fn destroy(&mut self, p: [i32; 3]) -> bool {
+                self.fake.destroy(p)
+            }
+            fn set(&mut self, p: [i32; 3], state: u32) -> bool {
+                let placed = self.fake.set(p, state);
+                if placed {
+                    self.world.apply_block_change(0, p, 0, state, true);
+                }
+                placed
+            }
+            fn drop_block(&mut self, p: [i32; 3], state: u32) {
+                self.fake.drop_block(p, state);
+            }
+        }
+
+        /// [`HeldRelease`] on an engine world with no block entities.
+        struct Held<'a>(&'a mut CreateWorld);
+
+        impl actors::HeldRelease<Stack> for Held<'_> {
+            type Entity = ();
+            fn staged_held(&mut self, p: [i32; 3]) -> Option<(String, u8)> {
+                self.0.dims[0].tanks.arriving.remove(&p);
+                self.0.dims[0].deployer_saved_remove(p).and_then(|d| d.held)
+            }
+            fn held_stack(&self, item: &str, n: u8) -> Option<Stack> {
+                Some((item.to_string(), u32::from(n)))
+            }
+            fn block_entity(&self, _: [i32; 3]) -> Option<()> {
+                None
+            }
+            fn is_create_entity(&self, _: ()) -> bool {
+                false
+            }
+            fn replace_data(&mut self, _: (), _: &Compound) -> bool {
+                false
+            }
+            fn push_items_of(&self, _: &Compound, _: impl FnMut(Stack)) {}
+            fn create_block(&self, p: [i32; 3]) -> Option<Block> {
+                self.0.block_at(0, p)
+            }
+            fn merge_own(&mut self, _: [i32; 3], _: (), _: Block, _: &Compound) {}
+            fn restore_slots(&mut self, _: (), slots: Vec<Option<Stack>>) -> Vec<Stack> {
+                slots.into_iter().flatten().collect()
+            }
+        }
+
+        /// Deployers placed at `at`, each carried out with five iron in its hand; returns what
+        /// carrying kept for them.
+        fn carry_deployers(
+            w: &mut CreateWorld,
+            at: &[[i32; 3]],
+        ) -> Vec<([i32; 3], actors::BlockData<Stack>)> {
+            at.iter()
+                .map(|&p| {
+                    w.apply_block_change(0, p, 0, DEPLOYER, false);
+                    let mut hand: Deployer = w.dims[0].deployers.remove(&p).unwrap();
+                    hand.held = Some((IRON.to_string(), 5));
+                    (
+                        p,
+                        actors::BlockData {
+                            deployer: Some(hand),
+                            ..Default::default()
+                        },
+                    )
+                })
+                .collect()
+        }
+
+        /// `rollback_cells` over the engine world and a landing that refuses `refuses`: the
+        /// stacks it drops and the block drops the landing logged.
+        fn roll_back(
+            w: &mut CreateWorld,
+            refuses: &[[i32; 3]],
+            list: Vec<([i32; 3], actors::BlockData<Stack>)>,
+            cleared: &[([i32; 3], u32)],
+            standing: &[([i32; 3], u32)],
+        ) -> (Vec<([i32; 3], Stack)>, Vec<String>) {
+            for (p, data) in &list {
+                if let Some(d) = &data.deployer {
+                    w.dims[0].deployer_saved_insert(*p, d.clone());
+                }
+                if let Some(m) = data.tank {
+                    let cells = create_engine::tank::blocks(*p, m.width, m.height).collect();
+                    let staged = create_engine::tank::restore_mounted(m, *p, cells);
+                    w.dims[0].tanks.arriving.extend(staged);
+                }
+            }
+            let mut live = Live {
+                fake: Fake {
+                    free: cleared.iter().map(|c| c.0).collect(),
+                    refuses: refuses.iter().copied().collect(),
+                    ..Fake::default()
+                },
+                world: &mut *w,
+            };
+            let restored = land_blocks(&mut live, cleared);
+            let log = std::mem::take(&mut live.fake.log);
+            for &(p, state) in standing {
+                w.restore_standing(0, p, state);
+            }
+            let kept: HashSet<[i32; 3]> = standing.iter().map(|c| c.0).collect();
+            let drops = actors::release_held_data(
+                &mut Held(w),
+                list,
+                |o| o,
+                |_| true,
+                |p| restored.contains(&p) || kept.contains(&p),
+            );
+            let block_drops = log.into_iter().filter(|l| l.starts_with("drop")).collect();
+            (drops, block_drops)
+        }
+
+        const D1: [i32; 3] = [0, 8, 0];
+        const D2: [i32; 3] = [4, 8, 0];
+
+        fn hand(w: &CreateWorld, p: [i32; 3]) -> Option<(String, u8)> {
+            w.dims[0].deployers.get(&p).and_then(|d| d.held.clone())
+        }
+
+        #[test]
+        fn a_deployer_that_stood_and_one_put_back_both_keep_their_hands() {
+            let mut w = world();
+            let list = carry_deployers(&mut w, &[D1, D2]);
+            w.apply_block_change(0, D2, DEPLOYER, 0, true);
+            let (drops, block_drops) =
+                roll_back(&mut w, &[], list, &[(D2, DEPLOYER)], &[(D1, DEPLOYER)]);
+            assert!(drops.is_empty());
+            assert!(block_drops.is_empty());
+            for p in [D1, D2] {
+                assert_eq!(hand(&w, p), Some((IRON.to_string(), 5)));
+                assert_eq!(w.dims[0].deployer_saved_remove(p), None);
+            }
+        }
+
+        #[test]
+        fn a_cell_that_refuses_its_block_again_drops_it_and_its_hand_once() {
+            let mut w = world();
+            let list = carry_deployers(&mut w, &[D1, D2]);
+            w.apply_block_change(0, D2, DEPLOYER, 0, true);
+            let (drops, block_drops) =
+                roll_back(&mut w, &[D2], list, &[(D2, DEPLOYER)], &[(D1, DEPLOYER)]);
+            assert_eq!(block_drops, vec![format!("drop {D2:?} {DEPLOYER}")]);
+            assert_eq!(drops, vec![(D2, (IRON.to_string(), 5))]);
+            assert_eq!(hand(&w, D1), Some((IRON.to_string(), 5)));
+            assert_eq!(hand(&w, D2), None);
+            assert_eq!(w.dims[0].deployer_saved_remove(D2), None);
+        }
+
+        #[test]
+        fn a_tank_that_stood_keeps_all_its_fluid_with_nothing_left_staged() {
+            let mut w = world();
+            let (controller, top) = ([1, 8, 1], [1, 9, 1]);
+            w.apply_block_change(0, controller, 0, TANK, false);
+            w.apply_block_change(0, top, 0, TANK, false);
+            let water = Tank {
+                fluid: Some(Fluid::Water),
+                amount: 12000,
+            };
+            w.dims[0].tanks.get_mut(controller).unwrap().1.tank = water;
+            let multi: Multi = w.dims[0].tanks.take(controller).unwrap();
+            assert_eq!(w.dims[0].tanks.take(top), None);
+            let list = vec![(
+                controller,
+                actors::BlockData {
+                    tank: Some(multi),
+                    ..Default::default()
+                },
+            )];
+            let (drops, block_drops) =
+                roll_back(&mut w, &[], list, &[], &[(controller, TANK), (top, TANK)]);
+            assert!(drops.is_empty() && block_drops.is_empty());
+            let (c, tank) = w.dims[0].tanks.get(top).unwrap();
+            assert_eq!((c, tank.tank), (controller, water));
+            assert!(w.dims[0].tanks.arriving.is_empty());
+        }
     }
 }
