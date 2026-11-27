@@ -7,10 +7,11 @@ use crate::glue::items;
 use crate::glue::server::ServerLevel;
 use crate::glue::world::with_world;
 use create_engine::basin::{self, MixStep};
+use create_engine::basin_operator::CRAFTED;
 use create_engine::fan::Heat;
 use create_engine::kinetics::Dir;
 use create_engine::processing::{Output, Rng, Slot};
-use create_engine::{Block, burner, press};
+use create_engine::{Block, burner};
 use mod_api::{Compound, ItemStack, PlayerRef, Tag};
 use std::cell::RefCell;
 use std::collections::HashMap;
@@ -436,15 +437,9 @@ pub(crate) fn mixer_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(mut m) = with_world(|w| w.dims[dim].mixers.get(&pos).copied()).flatten() else {
         return;
     };
-    let (removed, look) = with_world(|w| {
-        let Some(o) = w.dims[dim].operators.get_mut(&pos) else {
-            return (false, false);
-        };
-        // A removed basin ends the turn's behaviours: the checker does not tick.
-        let removed = o.take_removed();
-        (removed, !removed && o.checker.take())
-    })
-    .unwrap_or_default();
+    // A removed basin ends the turn's behaviours: the checker does not tick.
+    let removed = m.operator.take_removed();
+    let look = !removed && m.operator.checker.take();
     if removed {
         // `onBasinRemoved`: the head goes back up. `BasinOperatingBlockEntity.tick` returns, but
         // `MechanicalMixerBlockEntity.tick` goes on in the same turn: `runningTicks >= 40` rests
@@ -455,28 +450,32 @@ pub(crate) fn mixer_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         update_mixer_basin(lv, pos, &mut m);
     }
     let speed = lv.speed(pos);
-    let time = recipes::with(|r| m.recipe.and_then(|i| r.mixing.get(i)).map(|x| x.time))
-        .flatten()
-        .unwrap_or(0);
+    let time = recipes::with(|r| {
+        m.operator
+            .recipe
+            .and_then(|i| r.mixing.get(i))
+            .map(|x| x.time)
+    })
+    .flatten()
+    .unwrap_or(0);
     let basin_pos = [pos[0], pos[1] - 2, pos[2]];
     match m.tick(speed, time) {
         MixStep::None => {}
-        MixStep::Done => {
-            with_world(|w| w.dims[dim].schedule_basin_check(pos));
-        }
+        MixStep::Done => m.operator.checker.schedule(),
         MixStep::Apply => {
             let heat = basin_heat(lv, basin_pos);
             let mut rng = Rng::new(lv.seed_at(pos));
             // `acceptOutputs(.., true)`: a basin spouting to a side needs a taker there.
             let gives_items = recipes::with(|r| {
-                m.recipe
+                m.operator
+                    .recipe
                     .and_then(|i| r.mixing.get(i))
                     .is_some_and(|x| !x.results.is_empty())
             })
             .unwrap_or(false);
             let can_output = !gives_items || super::spoutput::accepts(lv, basin_pos);
             if let (Some(before), Some(i), true) =
-                (basin_slots(lv, basin_pos), m.recipe, can_output)
+                (basin_slots(lv, basin_pos), m.operator.recipe, can_output)
             {
                 // `wasEmpty = basin.canContinueProcessing()`, before the recipe applies.
                 let was_empty = super::spoutput::can_continue(lv, basin_pos);
@@ -635,15 +634,14 @@ pub(super) fn press_on_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             m.remove(&(dim, pos));
         }
     });
-    let found = found.map(|f| f.0).or(crafted.as_ref().map(|_| usize::MAX));
+    let found = found.map(|f| f.0).or(crafted.as_ref().map(|_| CRAFTED));
     if let Some(i) = found {
         with_world(|w| {
             let d = &mut w.dims[dim];
             if let Some(p) = d.presses.get_mut(&pos) {
-                p.start(press::Mode::Basin);
+                p.start_in_basin(i);
+                d.press_changes.push(pos);
             }
-            d.press_basin.insert(pos, i);
-            d.press_changes.push(pos);
         });
     }
 }
@@ -691,7 +689,7 @@ fn compressible(lv: &ServerLevel<'_>, slots: &[Slot]) -> Vec<basin::Recipe> {
 /// `tryProcessInBasin` at the head's lowest point: the press's compacting recipe on the basin.
 pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    let Some(i) = with_world(|w| w.dims[dim].press_basin.get(&pos).copied()).flatten() else {
+    let Some(i) = press_recipe(dim, pos) else {
         return;
     };
     let basin_pos = [pos[0], pos[1] - 2, pos[2]];
@@ -719,7 +717,7 @@ pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
             remainder: &remainder,
             spout,
         };
-        match crafted.filter(|_| i == usize::MAX) {
+        match crafted.filter(|_| i == CRAFTED) {
             Some(recipe) => basin::apply(&mut slots, &mut tanks, &recipe, &cx, &mut rng, false),
             None => recipes::with(|r| {
                 let recipe = r.compacting.get(i)?;
@@ -738,12 +736,18 @@ pub fn compact_in_basin(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     write_applied(lv, pos, basin_pos, "compacting", applied);
 }
 
+/// The press's `currentRecipe`: the recipe its last look chose, by index (`CRAFTED`: one of the
+/// square crafting recipes kept for it).
+fn press_recipe(dim: usize, pos: [i32; 3]) -> Option<usize> {
+    with_world(|w| w.basin_operator(dim, pos).and_then(|o| o.recipe)).flatten()
+}
+
 /// `MechanicalPressBlockEntity.onPressingCompleted`'s test: the press's `currentRecipe` still
 /// fits the basin below (`matchBasinRecipe`, with the basin's filter) and nothing waits at its
 /// spout (`canContinueProcessing`).
 pub(super) fn press_recipe_fits(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
     let dim = lv.dim;
-    let Some(i) = with_world(|w| w.dims[dim].press_basin.get(&pos).copied()).flatten() else {
+    let Some(i) = press_recipe(dim, pos) else {
         return false;
     };
     let basin_pos = [pos[0], pos[1] - 2, pos[2]];
@@ -777,7 +781,7 @@ pub(super) fn press_recipe_fits(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
             )
             .is_some()
     };
-    match crafted.filter(|_| i == usize::MAX) {
+    match crafted.filter(|_| i == CRAFTED) {
         Some(recipe) => fits(&recipe),
         None => recipes::with(|r| r.compacting.get(i).is_some_and(fits)).unwrap_or(false),
     }

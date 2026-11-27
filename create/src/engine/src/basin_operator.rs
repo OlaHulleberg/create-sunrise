@@ -3,6 +3,12 @@
 //! are read at the operator's own turn in the level's block-entity order, so a press registered
 //! before its basin finds out a tick after the basin tells it, and a mixer registered after the
 //! basin the same tick.
+//!
+//! The state is the mixer's and the press's own (`basin::Mixer::operator`,
+//! `press::Press::operator`): constructed with the block entity, placed or loaded, and gone with
+//! it. Of it only `NeedsUpdate` is saved (`DeferralBehaviour.write`); a loaded operator is told
+//! by its basin's fresh `contentsChanged` as a placed one is by its speed arriving
+//! (`onSpeedChanged`).
 
 /// `DeferralBehaviour`: an update asked for now (`scheduleUpdate`) that runs at the next
 /// `tick` of its block entity, and is done once its callback says so.
@@ -12,6 +18,11 @@ pub struct Deferral {
 }
 
 impl Deferral {
+    /// `DeferralBehaviour.read`: the saved `NeedsUpdate`.
+    pub fn read(needs_update: bool) -> Deferral {
+        Deferral { needs_update }
+    }
+
     /// `scheduleUpdate`.
     pub fn schedule(&mut self) {
         self.needs_update = true;
@@ -42,12 +53,20 @@ impl Deferral {
     }
 }
 
-/// A basin operator's state (`BasinOperatingBlockEntity`): `basinChecker` and `basinRemoved`.
+/// A press's `currentRecipe` that is one of the square crafting recipes (`canCompress`), which
+/// the glue keeps by press: not an index into its compacting book.
+pub const CRAFTED: usize = usize::MAX;
+
+/// A basin operator's state (`BasinOperatingBlockEntity`): `basinChecker`, `basinRemoved` and
+/// `currentRecipe`.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Operator {
     pub checker: Deferral,
     /// `basinRemoved`: the basin below was emptied or removed (`BasinBlockEntity.onEmptied`).
     pub removed: bool,
+    /// `currentRecipe`: the recipe its last look chose (`updateBasin`), by index into the book
+    /// the glue matched it in.
+    pub recipe: Option<usize>,
 }
 
 impl Operator {
@@ -135,6 +154,14 @@ mod tests {
             });
         }
         assert_eq!(calls, 1);
+    }
+
+    /// `DeferralBehaviour.read`.
+    #[test]
+    fn read_restores_the_saved_needs_update() {
+        assert!(Deferral::read(true).pending());
+        assert!(!Deferral::read(false).pending());
+        assert_eq!(Deferral::read(false), Deferral::default());
     }
 
     #[test]

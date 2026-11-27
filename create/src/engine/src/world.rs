@@ -266,8 +266,10 @@ pub struct Dimension {
     block_entities: BlockEntityOrder,
     /// Depots whose contents clients must see again (put down, taken, filled by a hopper).
     pub depot_changes: Vec<[i32; 3]>,
-    /// Mechanical presses and their cycle.
+    /// Mechanical presses, their `PressingBehaviour` and the basin operator each is; what was
+    /// saved for those not placed yet.
     pub presses: HashMap<[i32; 3], crate::press::Press>,
+    press_saved: HashMap<[i32; 3], crate::press::Press>,
     /// Presses whose cycle clients must see again (started, head down, done).
     pub press_changes: Vec<[i32; 3]>,
     /// Belts by controller, and each segment's controller.
@@ -431,16 +433,13 @@ pub struct Dimension {
     /// first option) when none is kept.
     pub scroll_options: HashMap<[i32; 3], u8>,
     pub tunnels_new: Vec<[i32; 3]>,
-    /// Mechanical mixers and their cycle (the running ones tick at their turn).
+    /// Mechanical mixers, their cycle and the basin operator each is (the running ones tick at
+    /// their turn); what was saved for those not placed yet.
     pub mixers: HashMap<[i32; 3], crate::basin::Mixer>,
-    /// What the mixers and presses over basins share (`BasinOperatingBlockEntity`): the look at
-    /// the basin they were asked for (`basinChecker`) and the basin removed (`basinRemoved`).
-    pub operators: HashMap<[i32; 3], crate::basin_operator::Operator>,
+    mixer_saved: HashMap<[i32; 3], crate::basin::Mixer>,
     /// The basins whose `contentsChanged` is set: at their next turn the operator above is asked
     /// to look.
     pub basin_contents: HashSet<[i32; 3]>,
-    /// Presses compacting in the basin below them, with the recipe (`currentRecipe`).
-    pub press_basin: HashMap<[i32; 3], usize>,
     /// Pumps and what their pipes reach, the turning ones (the only ones that tick), pipes to
     /// connect again, and whether pipes, pumps or tanks changed since the ends were found.
     pub fluid_transport: crate::fluids::runtime::Transport,
@@ -583,10 +582,19 @@ pub struct Dimension {
 }
 
 impl Dimension {
+    /// The basin operator at `pos`: the state the mixer or the press there shares
+    /// (`BasinOperatingBlockEntity`).
+    pub fn operator_mut(&mut self, pos: [i32; 3]) -> Option<&mut crate::basin_operator::Operator> {
+        match self.mixers.get_mut(&pos) {
+            Some(m) => Some(&mut m.operator),
+            None => self.presses.get_mut(&pos).map(|p| &mut p.operator),
+        }
+    }
+
     /// `basinChecker.scheduleUpdate` of the operator two above a basin or at `pos`: it looks at
     /// its basin at its next turn. Nothing when no operator stands there.
     pub fn schedule_basin_check(&mut self, pos: [i32; 3]) {
-        if let Some(operator) = self.operators.get_mut(&pos) {
+        if let Some(operator) = self.operator_mut(pos) {
             operator.checker.schedule();
         }
     }
@@ -602,7 +610,7 @@ impl Dimension {
     /// `BasinBlockEntity.onEmptied` of the basin at `basin`: the operator two above it finds its
     /// basin gone at its next turn (`basinRemoved`).
     pub fn basin_emptied(&mut self, basin: [i32; 3]) {
-        if let Some(operator) = self.operators.get_mut(&[basin[0], basin[1] + 2, basin[2]]) {
+        if let Some(operator) = self.operator_mut([basin[0], basin[1] + 2, basin[2]]) {
             operator.removed = true;
         }
     }
@@ -937,21 +945,19 @@ impl TransportTicks {
                 Some(Block::Spout) => return Some(TransportTick::Spout(p)),
                 Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
                 Some(Block::MechanicalPress) => {
-                    let d = &world.dims[self.dim];
-                    if d.presses.get(&p).is_some_and(|x| x.running)
-                        || d.operators.get(&p).is_some_and(|o| o.wants_turn())
+                    if world.dims[self.dim]
+                        .presses
+                        .get(&p)
+                        .is_some_and(|x| x.running || x.operator.wants_turn())
                     {
                         return Some(TransportTick::Press(p));
                     }
                     continue;
                 }
                 Some(Block::MechanicalMixer) => {
-                    let d = &world.dims[self.dim];
-                    if d.mixers
-                        .get(&p)
-                        .is_some_and(|m| m.running || m.running_ticks >= 40)
-                        || d.operators.get(&p).is_some_and(|o| o.wants_turn())
-                    {
+                    if world.dims[self.dim].mixers.get(&p).is_some_and(|m| {
+                        m.running || m.running_ticks >= 40 || m.operator.wants_turn()
+                    }) {
                         return Some(TransportTick::Mixer(p));
                     }
                     continue;
@@ -1176,9 +1182,12 @@ impl CreateWorld {
             d.redstone.push(pos);
         }
         if block == Block::MechanicalPress && !d.presses.contains_key(&pos) {
-            d.presses.insert(pos, crate::press::Press::default());
-            // A press placed over a basin looks at it (`basinChecker`).
-            d.operators.entry(pos).or_default().checker.schedule();
+            // Constructed, placed or loaded: what its `read` kept, else a new press's.
+            let press = d.press_saved.remove(&pos).unwrap_or_default();
+            if press.running {
+                d.press_changes.push(pos);
+            }
+            d.presses.insert(pos, press);
         }
         if latch_kind(block).is_some() {
             d.latch_checks.push(pos);
@@ -1389,8 +1398,9 @@ impl CreateWorld {
             d.drills.entry(pos).or_default();
         }
         if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
-            d.mixers.insert(pos, Default::default());
-            d.operators.entry(pos).or_default().checker.schedule();
+            // Constructed, placed or loaded: what its `read` kept, else a new mixer's.
+            d.mixers
+                .insert(pos, d.mixer_saved.remove(&pos).unwrap_or_default());
         }
         if block == Block::BlazeBurner && !d.burners.contains_key(&pos) {
             let b = d.burner_saved.remove(&pos).unwrap_or_default();
@@ -1863,9 +1873,12 @@ impl CreateWorld {
                 Block::AnalogLever => d.levers.removed(pos),
                 Block::ContentObserver | Block::StockpileSwitch => d.detectors.removed(pos),
                 // Replaced by another of Create's blocks (which keeps the kinetic block entity
-                // type): the drain, spout or saw that was there is gone, as on its removal.
+                // type): the drain, spout, saw, mixer or press that was there is gone, as on its
+                // removal.
                 Block::ItemDrain => d.drains.remove(&pos).is_some(),
                 Block::Spout => d.spouts.remove(&pos).is_some(),
+                Block::MechanicalMixer => d.mixers.remove(&pos).is_some(),
+                Block::MechanicalPress => d.presses.remove(&pos).is_some(),
                 // `SawBlockEntity.destroy`: its inventory drops.
                 Block::MechanicalSaw => d.saws.remove(&pos).is_some_and(|s| {
                     d.removed_inventories
@@ -2096,7 +2109,6 @@ impl CreateWorld {
             d.millstones.remove(&pos);
             d.basins.remove(&pos);
             d.presses.remove(&pos);
-            d.operators.remove(&pos);
             d.backtanks.remove(&pos);
             self.diode_removed(dim, pos);
             let d = &mut self.dims[dim];
@@ -2413,6 +2425,8 @@ impl CreateWorld {
             d.depot_incoming
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.presses.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.press_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.gauges.retain(|p, _| {
                 let keep = (p[0] >> 4, p[2] >> 4) != (cx, cz);
                 if !keep {
@@ -2425,7 +2439,7 @@ impl CreateWorld {
             d.crushers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.burners.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.mixers.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.operators
+            d.mixer_saved
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.basin_contents
                 .retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2745,7 +2759,7 @@ impl CreateWorld {
                 d.plumbing.hose_speeds.push((pos, speed));
             }
             if let Event::Speed { pos, .. } = *e
-                && let Some(operator) = d.operators.get_mut(&pos)
+                && let Some(operator) = d.operator_mut(pos)
             {
                 operator.on_speed_changed();
             }
@@ -4163,6 +4177,47 @@ impl CreateWorld {
         }
         d.plumbing.creative.insert(pos, fluid);
         d.plumbing.creative_changes.push(pos);
+    }
+
+    /// `MechanicalMixerBlockEntity.read`: a constructed mixer's state at once; until its block
+    /// loads, what it read.
+    pub fn read_mixer(&mut self, dim: usize, pos: [i32; 3], saved: crate::basin::Mixer) {
+        let d = &mut self.dims[dim];
+        match d.mixers.get_mut(&pos) {
+            Some(live) => *live = saved,
+            None => {
+                d.mixer_saved.insert(pos, saved);
+            }
+        }
+    }
+
+    /// `MechanicalPressBlockEntity.read`: a constructed press's state at once, a running one
+    /// shown to its clients again; until its block loads, what it read.
+    pub fn read_press(&mut self, dim: usize, pos: [i32; 3], saved: crate::press::Press) {
+        let d = &mut self.dims[dim];
+        match d.presses.get_mut(&pos) {
+            Some(live) => {
+                *live = saved;
+                if saved.running {
+                    d.press_changes.push(pos);
+                }
+            }
+            None => {
+                d.press_saved.insert(pos, saved);
+            }
+        }
+    }
+
+    /// The basin operator at `pos` (`BasinOperatingBlockEntity`): the mixer's or the press's.
+    pub fn basin_operator(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<&crate::basin_operator::Operator> {
+        match self.dims[dim].mixers.get(&pos) {
+            Some(m) => Some(&m.operator),
+            None => self.dims[dim].presses.get(&pos).map(|p| &p.operator),
+        }
     }
 
     /// `DeployerBlockEntity.read`: a placed deployer's state at once.
@@ -11973,7 +12028,7 @@ mod tests {
             match turn {
                 TransportTick::Basin(p) => w.tick_basin(0, p),
                 TransportTick::Mixer(p) | TransportTick::Press(p) => {
-                    let o = w.dims[0].operators.get_mut(&p).unwrap();
+                    let o = w.dims[0].operator_mut(p).unwrap();
                     let removed = o.take_removed();
                     out.push((p, removed, !removed && o.checker.take()));
                 }
@@ -11983,12 +12038,124 @@ mod tests {
         out
     }
 
+    fn told(w: &CreateWorld, at: [i32; 3]) -> bool {
+        w.basin_operator(0, at).unwrap().checker.pending()
+    }
+
+    /// A mixer's block entity as `MechanicalMixerBlockEntity.read` fills it: `Running`, `Ticks`
+    /// and its `basinChecker`'s `NeedsUpdate`; nothing else is saved.
+    fn read_mixer(running: bool, ticks: i32, needs_update: bool) -> crate::basin::Mixer {
+        crate::basin::Mixer {
+            operator: crate::basin_operator::Operator {
+                checker: crate::basin_operator::Deferral::read(needs_update),
+                ..Default::default()
+            },
+            running,
+            running_ticks: ticks,
+            ..Default::default()
+        }
+    }
+
+    /// A press's as `MechanicalPressBlockEntity.read` fills it.
+    fn read_press(running: bool, ticks: i32, needs_update: bool) -> crate::press::Press {
+        crate::press::Press {
+            operator: crate::basin_operator::Operator {
+                checker: crate::basin_operator::Deferral::read(needs_update),
+                ..Default::default()
+            },
+            running,
+            ticks,
+            ..Default::default()
+        }
+    }
+
+    /// `BasinOperatingBlockEntity.addBehaviours`: the `basinChecker` is constructed with the
+    /// block entity, placed or loaded, waiting for nothing. Whichever of the entity's `read` and
+    /// its block's load comes first, a loaded operator is what it read, and its basin's
+    /// `contentsChanged` reaches it (issue #458).
+    #[test]
+    fn an_operator_is_constructed_with_its_block_entity_whatever_is_read_first() {
+        let (basin, at) = ([0, 8, 0], [0, 10, 0]);
+        for operator in [MIXER, PRESS] {
+            for read_first in [true, false] {
+                let mut w = basin_world();
+                let read = |w: &mut CreateWorld| match operator {
+                    MIXER => w.read_mixer(0, at, read_mixer(true, 27, true)),
+                    _ => w.read_press(0, at, read_press(true, 60, true)),
+                };
+                if read_first {
+                    read(&mut w);
+                    assert!(w.basin_operator(0, at).is_none(), "not constructed yet");
+                }
+                w.block_loaded(0, at, operator);
+                if read_first {
+                    assert!(told(&w, at), "operator {operator}");
+                } else {
+                    assert_eq!(
+                        w.basin_operator(0, at),
+                        Some(&crate::basin_operator::Operator::default())
+                    );
+                    read(&mut w);
+                    assert!(told(&w, at), "operator {operator}");
+                }
+                match operator {
+                    MIXER => {
+                        let m = &w.dims[0].mixers[&at];
+                        assert_eq!(
+                            (m.running, m.running_ticks, m.processing_ticks),
+                            (true, 27, 0)
+                        );
+                    }
+                    _ => {
+                        let p = &w.dims[0].presses[&at];
+                        assert_eq!((p.running, p.ticks, p.finished), (true, 60, false));
+                        // A running press its block entity loaded is shown to its clients again.
+                        assert!(w.dims[0].press_changes.contains(&at));
+                    }
+                }
+                // Its basin's change of contents reaches the operator read before its block.
+                w.dims[0].operator_mut(at).unwrap().checker.take();
+                w.block_loaded(0, basin, BASIN[0]);
+                w.tick_basin(0, basin);
+                assert!(told(&w, at), "read first: {read_first}");
+                // A read after the load is the entity's too.
+                match operator {
+                    MIXER => w.read_mixer(0, at, read_mixer(false, 0, false)),
+                    _ => w.read_press(0, at, read_press(false, 0, false)),
+                }
+                assert!(!told(&w, at));
+                assert!(!w.dims[0].mixers.get(&at).is_some_and(|m| m.running));
+                assert!(!w.dims[0].presses.get(&at).is_some_and(|p| p.running));
+            }
+        }
+    }
+
+    /// Constructed, an operator waits for nothing: a new one's `NeedsUpdate` is false, and so is
+    /// a loaded one's that saved none.
+    #[test]
+    fn a_block_entity_s_load_alone_tells_its_operator_nothing() {
+        let at = [0, 10, 0];
+        let mut w = basin_world();
+        w.block_changed(0, at, 0, MIXER);
+        assert!(!told(&w, at));
+        w.dims[0]
+            .mixers
+            .get_mut(&at)
+            .unwrap()
+            .operator
+            .checker
+            .schedule();
+        w.column_unloaded(0, 0, 0);
+        w.block_loaded(0, at, MIXER);
+        assert!(!told(&w, at));
+        assert!(!w.dims[0].mixers[&at].running);
+    }
+
     /// `BasinBlockEntity.tick` asks the operator above to look at the basin's own turn, and the
     /// operator's `DeferralBehaviour` runs at its own: an operator registered before its basin
     /// looks the tick after, one registered after it in the same tick.
     #[test]
     fn an_operator_looks_in_the_tick_its_basin_tells_it_or_the_next() {
-        use crate::basin_operator::Operator;
         for operator in [MIXER, PRESS] {
             for operator_first in [true, false] {
                 let mut w = basin_world();
@@ -12003,7 +12170,7 @@ mod tests {
                 }
                 // A new basin's `contentsChanged`; the operator has been told nothing yet.
                 assert!(w.dims[0].basin_contents.contains(&basin));
-                w.dims[0].operators.insert(at, Operator::default());
+                assert!(!told(&w, at));
                 let first = operator_turns(&mut w);
                 let second = operator_turns(&mut w);
                 let looked = [(at, false, true)];
@@ -12015,7 +12182,7 @@ mod tests {
                     assert!(second.is_empty(), "operator {operator}");
                 }
                 assert!(w.dims[0].basin_contents.is_empty());
-                assert!(!w.dims[0].operators[&at].checker.pending());
+                assert!(!told(&w, at));
             }
         }
     }
@@ -12027,7 +12194,6 @@ mod tests {
     /// the basin's next turn in the second (issue #346).
     #[test]
     fn a_basin_has_its_turn_in_the_block_entity_order() {
-        use crate::basin_operator::Operator;
         for operator_first in [true, false] {
             let mut w = basin_world();
             let (basin, at) = ([0, 8, 0], [0, 10, 0]);
@@ -12039,7 +12205,6 @@ mod tests {
             for (p, state) in blocks {
                 w.block_changed(0, p, 0, state);
             }
-            w.dims[0].operators.insert(at, Operator::default());
             w.dims[0].mixers.get_mut(&at).unwrap().running = true;
             let mut order = Vec::new();
             let mut turns = w.transport_ticks(0, 0);
@@ -12070,12 +12235,10 @@ mod tests {
     /// A mixer that is running turns every tick, with nothing asked of it; one at rest does not.
     #[test]
     fn a_running_mixer_turns_and_an_idle_one_does_not() {
-        use crate::basin_operator::Operator;
         let mut w = basin_world();
         let (basin, at) = ([0, 8, 0], [0, 10, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
         w.block_changed(0, at, 0, MIXER);
-        w.dims[0].operators.insert(at, Operator::default());
         w.dims[0].basin_contents.clear();
         assert!(operator_turns(&mut w).is_empty());
         w.dims[0].mixers.get_mut(&at).unwrap().running = true;
@@ -12088,14 +12251,11 @@ mod tests {
     /// turn, once, whatever it was doing; an operator over another block, or none, is not told.
     #[test]
     fn an_emptied_basin_stops_its_operator_at_the_operator_s_turn() {
-        use crate::basin_operator::Operator;
         let mut w = basin_world();
         let (basin, at, other) = ([0, 8, 0], [0, 10, 0], [4, 10, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
         w.block_changed(0, at, 0, PRESS);
         w.block_changed(0, other, 0, PRESS);
-        w.dims[0].operators.insert(at, Operator::default());
-        w.dims[0].operators.insert(other, Operator::default());
         w.dims[0].basin_contents.clear();
         assert!(operator_turns(&mut w).is_empty());
         w.dims[0]
@@ -12112,12 +12272,10 @@ mod tests {
     /// replaced stops the mixer over it, and its pending contents change goes with it.
     #[test]
     fn a_removed_basin_stops_the_mixer_over_it() {
-        use crate::basin_operator::Operator;
         let mut w = basin_world();
         let (basin, at) = ([0, 8, 0], [0, 10, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
         w.block_changed(0, at, 0, MIXER);
-        w.dims[0].operators.insert(at, Operator::default());
         w.dims[0].basin_contents.clear();
         w.dims[0].mixers.get_mut(&at).unwrap().running = true;
         w.dims[0].basin_contents.insert(basin);
@@ -12128,7 +12286,7 @@ mod tests {
         w.block_changed(0, basin, 0, BASIN[0]);
         w.dims[0].basin_contents.clear();
         w.block_changed(0, basin, BASIN[0], BASIN[1]);
-        assert!(!w.dims[0].operators[&at].removed);
+        assert!(!w.basin_operator(0, at).unwrap().removed);
     }
 
     /// `BlazeBurnerBlock.onPlace`: a burner placed, lit or changed under a basin tells the basin
@@ -12136,12 +12294,10 @@ mod tests {
     /// check; a burner with nothing above it, or another block under the basin, does not.
     #[test]
     fn a_burner_set_under_a_basin_wakes_its_operator() {
-        use crate::basin_operator::Operator;
         let mut w = basin_world();
         let (basin, at, burner) = ([0, 8, 0], [0, 10, 0], [0, 7, 0]);
         w.block_changed(0, basin, 0, BASIN[0]);
         w.block_changed(0, at, 0, MIXER);
-        w.dims[0].operators.insert(at, Operator::default());
         // The basin's first turn, and the mixer's behind it.
         operator_turns(&mut w);
         assert!(operator_turns(&mut w).is_empty());
@@ -12161,7 +12317,6 @@ mod tests {
     /// facing away is left alone.
     #[test]
     fn a_change_of_contents_reaches_the_basin_that_pours_into_it() {
-        use crate::basin_operator::Operator;
         let mut w = basin_world();
         let lower = [0, 8, 0];
         // East of it and up: facing west, it pours into the lower one. West of it, facing west,
@@ -12173,11 +12328,6 @@ mod tests {
         w.block_changed(0, away, 0, BASIN[1]);
         w.block_changed(0, pouring_at, 0, MIXER);
         w.block_changed(0, away_at, 0, MIXER);
-        // The pouring basin was registered after the lower one: it is told, and tells its mixer,
-        // in the same walk.
-        for p in [pouring_at, away_at] {
-            w.dims[0].operators.insert(p, Operator::default());
-        }
         w.dims[0].basin_contents.clear();
         w.dims[0].notify_basin_contents(lower);
         assert_eq!(operator_turns(&mut w), [(pouring_at, false, true)]);
@@ -12185,21 +12335,52 @@ mod tests {
     }
 
     /// After `onBasinRemoved` returns early on a running mixer (`running = false`,
-    /// `running_ticks = 40`), the next transport walk must still give the mixer a turn so
+    /// `runningTicks = 40`), the next transport walk must still give the mixer a turn so
     /// `Mixer::tick` resets `running_ticks` to 0 and reschedules the basin check.
     #[test]
     fn mixer_with_running_ticks_at_forty_still_gets_a_turn_after_removal() {
-        use crate::basin_operator::Operator;
         let mut w = basin_world();
         let at = [0, 10, 0];
         w.block_changed(0, at, 0, MIXER);
-        w.dims[0].operators.insert(at, Operator::default());
         {
             let m = w.dims[0].mixers.get_mut(&at).unwrap();
             m.running = false;
             m.running_ticks = 40;
         }
         assert_eq!(operator_turns(&mut w), [(at, false, false)]);
+    }
+
+    /// A block entity's state is gone with it: a column that leaves takes the mixer and the
+    /// press with what was not saved (`currentRecipe`, `basinRemoved`), and a block replaced by
+    /// another of Create's blocks leaves a new block entity behind it.
+    #[test]
+    fn an_operator_s_state_does_not_outlive_its_block_entity() {
+        let (at, press_at) = ([0, 10, 0], [4, 10, 0]);
+        let mut w = basin_world();
+        w.block_changed(0, at, 0, MIXER);
+        w.block_changed(0, press_at, 0, PRESS);
+        {
+            let m = w.dims[0].mixers.get_mut(&at).unwrap();
+            m.start(4);
+            m.operator.removed = true;
+            w.dims[0]
+                .presses
+                .get_mut(&press_at)
+                .unwrap()
+                .start_in_basin(3);
+        }
+        w.column_unloaded(0, 0, 0);
+        assert!(w.basin_operator(0, at).is_none());
+        assert!(w.basin_operator(0, press_at).is_none());
+        w.block_loaded(0, at, MIXER);
+        w.block_loaded(0, press_at, PRESS);
+        assert_eq!(w.dims[0].mixers[&at], crate::basin::Mixer::default());
+        assert_eq!(w.dims[0].presses[&press_at], crate::press::Press::default());
+        w.dims[0].mixers.get_mut(&at).unwrap().start(4);
+        w.block_changed(0, at, MIXER, BASIN[0]);
+        assert!(!w.dims[0].mixers.contains_key(&at));
+        w.block_changed(0, at, BASIN[0], MIXER);
+        assert_eq!(w.dims[0].mixers[&at], crate::basin::Mixer::default());
     }
 
     /// The states the carried-data tests place, ids from 10, in this order.

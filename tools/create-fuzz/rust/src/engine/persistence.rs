@@ -232,6 +232,7 @@ impl Run {
     /// this very tick (a wrench turning a water wheel) is lost.
     pub(super) fn reload(&mut self) {
         self.publish_entities();
+        self.flush_persistence();
         let now = u64::from(self.now);
         let mut at: Vec<Pos> = self.persisted.records.keys().copied().collect();
         at.extend(self.w.dims[0].funnels.keys().copied());
@@ -391,6 +392,9 @@ impl Run {
         for &(cx, cz) in &columns {
             self.w.column_unloaded(0, cx, cz);
         }
+        // glue `Processing::chunk_unload`: the column's basins take their `recipeBackupCheck`
+        // with them (a block entity that loads starts at 20 again).
+        self.forget_backups();
         self.w.dims[0].ejector_saved.extend(ejectors);
         // The Java adapter recreates the isolated case's network namespace too.
         self.w.dims[0].kinetics = create_engine::kinetics::Kinetics::new();

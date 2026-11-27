@@ -4,6 +4,7 @@
 //! compacting at their own turns in the transport walk, and each basin's spout at its own turn (lazy tick every 11 ticks).
 use super::*;
 use crate::transport::Stack;
+use create_engine::basin_operator::CRAFTED;
 use create_engine::{
     Block,
     basin::{self, MixStep},
@@ -345,8 +346,9 @@ impl Run {
         true
     }
 
-    /// `forget_backups`: a basin that is gone forgets its `recipeBackupCheck` count.
-    fn forget_backups(&mut self) {
+    /// `forget_backups`: a basin that is gone forgets its `recipeBackupCheck` count, a column
+    /// that left too (`Processing::chunk_unload`).
+    pub(super) fn forget_backups(&mut self) {
         let basins = &self.w.dims[0].basins;
         self.backup_checks.retain(|p, _| basins.contains_key(p));
     }
@@ -376,14 +378,9 @@ impl Run {
         let Some(mut m) = self.w.dims[0].mixers.get(&pos).copied() else {
             return;
         };
-        let (removed, look) = match self.w.dims[0].operators.get_mut(&pos) {
-            // A removed basin ends the turn's behaviours: the checker does not tick.
-            Some(o) => {
-                let removed = o.take_removed();
-                (removed, !removed && o.checker.take())
-            }
-            None => (false, false),
-        };
+        // A removed basin ends the turn's behaviours: the checker does not tick.
+        let removed = m.operator.take_removed();
+        let look = !removed && m.operator.checker.take();
         if removed {
             // `onBasinRemoved`: the head goes back up, and the turn goes on: `running_ticks`
             // is reset below.
@@ -393,12 +390,15 @@ impl Run {
             self.update_mixer_basin(pos, &mut m);
         }
         let speed = self.w.speed(0, pos).unwrap_or(0.);
-        let recipe = m.recipe.and_then(|i| self.basin_books.mixing.get(i));
+        let recipe = m
+            .operator
+            .recipe
+            .and_then(|i| self.basin_books.mixing.get(i));
         let time = recipe.map_or(0, |x| x.time);
         let at = below(pos, 2);
         match m.tick(speed, time) {
             MixStep::None => {}
-            MixStep::Done => self.w.dims[0].schedule_basin_check(pos),
+            MixStep::Done => m.operator.checker.schedule(),
             MixStep::Apply => {
                 let heat = self.basin_heat(at);
                 let mut rng = Rng::new(self.seed_at(pos));
@@ -554,20 +554,24 @@ impl Run {
                 self.press_crafted.remove(&pos);
             }
         }
-        let found = found.map(|f| f.0).or(crafted.as_ref().map(|_| usize::MAX));
+        let found = found.map(|f| f.0).or(crafted.as_ref().map(|_| CRAFTED));
         if let Some(i) = found {
-            if let Some(p) = self.w.dims[0].presses.get_mut(&pos) {
-                p.start(press::Mode::Basin);
-            }
             let d = &mut self.w.dims[0];
-            d.press_basin.insert(pos, i);
-            d.press_changes.push(pos);
+            if let Some(p) = d.presses.get_mut(&pos) {
+                p.start_in_basin(i);
+                d.press_changes.push(pos);
+            }
         }
+    }
+
+    /// `press_recipe`: the press's `currentRecipe`, by index.
+    fn press_recipe(&self, pos: Pos) -> Option<usize> {
+        self.w.basin_operator(0, pos).and_then(|o| o.recipe)
     }
 
     /// `tryProcessInBasin` at the head's lowest point: the press's compacting recipe on the basin.
     fn compact_in_basin(&mut self, pos: Pos) {
-        let Some(i) = self.w.dims[0].press_basin.get(&pos).copied() else {
+        let Some(i) = self.press_recipe(pos) else {
             return;
         };
         let at = below(pos, 2);
@@ -585,7 +589,7 @@ impl Run {
         let mut tanks = fluids_before;
         let crafted = self.press_crafted.get(&pos).cloned();
         let cx = context(heat, self.basin_facing(at) != Dir::Down);
-        let made = match crafted.filter(|_| i == usize::MAX) {
+        let made = match crafted.filter(|_| i == CRAFTED) {
             Some(recipe) => basin::apply(&mut slots, &mut tanks, &recipe, &cx, &mut rng, false),
             None => self.basin_books.compacting.get(i).and_then(|recipe| {
                 basin::apply(&mut slots, &mut tanks, recipe, &cx, &mut rng, false)
@@ -610,13 +614,14 @@ impl Run {
     /// head's lowest point, and a finished cycle goes on at once or looks again
     /// (`onPressingCompleted`).
     pub(super) fn press_turn(&mut self, at: Pos) {
-        let (removed, look) = match self.w.dims[0].operators.get_mut(&at) {
-            Some(o) => {
+        // A removed basin ends the turn's behaviours: the checker does not tick.
+        let (removed, look) = self.w.dims[0]
+            .operator_mut(at)
+            .map(|o| {
                 let removed = o.take_removed();
                 (removed, !removed && o.checker.take())
-            }
-            None => (false, false),
-        };
+            })
+            .unwrap_or_default();
         if removed {
             // `onBasinRemoved`: the cycle stops.
             if let Some(p) = self.w.dims[0].presses.get_mut(&at) {
@@ -654,7 +659,7 @@ impl Run {
     /// `MechanicalPressBlockEntity.onPressingCompleted`'s test: the press's `currentRecipe`
     /// still fits the basin below and nothing waits at its spout.
     fn press_recipe_fits(&self, pos: Pos) -> bool {
-        let Some(i) = self.w.dims[0].press_basin.get(&pos).copied() else {
+        let Some(i) = self.press_recipe(pos) else {
             return false;
         };
         let at = below(pos, 2);
@@ -678,7 +683,7 @@ impl Run {
             )
             .is_some()
         };
-        match crafted.filter(|_| i == usize::MAX) {
+        match crafted.filter(|_| i == CRAFTED) {
             Some(recipe) => fits(&recipe),
             None => self.basin_books.compacting.get(i).is_some_and(fits),
         }

@@ -339,6 +339,12 @@ impl Subsystem for Processing {
         persist::load(lv.dim, data);
     }
 
+    /// A column's basins take their `recipeBackupCheck` with them: it is not saved, so a block
+    /// entity that loads starts at 20 again.
+    fn chunk_unload(&self, dim: usize, _chunk: [i32; 2]) {
+        basin::forget_backups(dim);
+    }
+
     fn save_entities(
         &self,
         lv: &ServerLevel<'_>,
