@@ -15,15 +15,15 @@ use create_engine::kinetics::{Axis, Dir};
 use create_engine::schedule::Runtime;
 use create_engine::track::TrackShape;
 use create_engine::trains::{
-    AssemblyError, BogeySize, MAX_ASSEMBLY_LENGTH, MAX_BOGEY_COUNT, Structure, Train, TrainOnTrack,
-    layout,
+    AssemblyError, BogeySize, Layout, MAX_ASSEMBLY_LENGTH, MAX_BOGEY_COUNT, Structure, Train,
+    TrainOnTrack, layout,
 };
 use mod_api::{
-    BlockClick, BlockPart, HostBlockStates, InteractionResult, PlayerRef, ServerHost, Text,
-    UseItemOnEvent, UseWithoutItemEvent,
+    BlockClick, BlockPart, BlockState, HostBlockStates, InteractionResult, PlayerRef, ServerHost,
+    Text, UseItemOnEvent, UseWithoutItemEvent,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// The station block's part: its click.
 pub struct Station;
@@ -315,7 +315,6 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
                 (pivot[2] + f64::from(r[2])).floor() as i32,
             ]
         };
-        super::cargo::expect(lv, t.id, c, place);
         // Each block's centre from the pivot (the middle of the track under the carriage's
         // leading bogey), turned about it; its height from the track.
         let blocks: Vec<([i32; 3], u32)> = car
@@ -325,6 +324,8 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
                 Some((place(*o), crate::glue::contraptions::num(state)))
             })
             .collect();
+        let planned: HashSet<[i32; 3]> = blocks.iter().map(|&(p, _)| p).collect();
+        super::cargo::expect(lv, t.id, c, place, |p| planned.contains(&p));
         // `Train.disassemble` -> `CarriageContraptionEntity.disassemble` -> `Contraption.
         // addBlocksToWorld` (`Train.java:757-777`, `Contraption.java:1104-1206`): sturdy blocks
         // first, one that can't be broken or won't be placed drops, the rest break what stands
@@ -521,6 +522,45 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
             return false;
         }
     };
+    let cars = laid
+        .carriages
+        .iter()
+        .map(|c| gathered.remove(&c.first).unwrap_or_default())
+        .collect();
+    commit_assembly(
+        lv,
+        AssemblyTarget {
+            station: pos,
+            track: target,
+            direction,
+        },
+        &laid,
+        &bogeys,
+        cars,
+    )
+}
+
+struct AssemblyTarget {
+    station: [i32; 3],
+    track: [i32; 3],
+    direction: [i32; 3],
+}
+
+/// Validates every carriage's removals before taking any cargo, then publishes only the blocks
+/// the world cleared.
+fn commit_assembly(
+    lv: &mut ServerLevel<'_>,
+    at: AssemblyTarget,
+    laid: &Layout,
+    bogeys: &[Bogey],
+    mut cars: Vec<Vec<([i32; 3], u32)>>,
+) -> bool {
+    let AssemblyTarget {
+        station: pos,
+        track: target,
+        direction,
+    } = at;
+    let dim = lv.dim;
     let sizes: Vec<_> = bogeys.iter().map(|b| b.2).collect();
     let dir = [f64::from(direction[0]), 0.0, f64::from(direction[2])];
     // The end of the station's track block toward the assembly direction.
@@ -529,18 +569,74 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
         f64::from(target[1]),
         f64::from(target[2]) + 0.5 + dir[2] * 0.5,
     ];
-    let cars: Vec<Vec<([i32; 3], u32)>> = laid
-        .carriages
-        .iter()
-        .map(|c| gathered.remove(&c.first).unwrap_or_default())
-        .collect();
     let heading = [-direction[0], -direction[2]];
     let origin_block = bogeys.first().map_or(target, |f| f.1);
-    let made = with_world(|w| {
+    let Some(mut train) =
+        with_world(|w| Train::assembled(&w.dims[dim].railway.net, origin, dir, laid, &sizes))
+            .flatten()
+    else {
+        assembly_failed(lv, pos, AssemblyError::NoBogeys);
+        return false;
+    };
+    if cars.iter().all(Vec::is_empty) {
+        return false;
+    }
+    // `removeBlocksFromWorld` runs only once every carriage's cells can be cleared: nothing is
+    // carried, taken or published for a train that can't leave the world.
+    let Some(air) = crate::glue::contraptions::preflight_cells(
+        lv,
+        laid.carriages.iter().zip(&cars).flat_map(|(shape, car)| {
+            let b = bogeys[shape.first].1;
+            car.iter()
+                .map(move |(o, _)| [b[0] + o[0], b[1] + o[1], b[2] + o[2]])
+        }),
+    ) else {
+        return false;
+    };
+    // `Contraption.addPassengersToWorld`: mobs sitting on the carriages' seats ride along.
+    let mut riders = Vec::new();
+    for (c, (shape, car)) in laid.carriages.iter().zip(&cars).enumerate() {
+        let b = bogeys[shape.first].1;
+        for (o, s) in car {
+            let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
+            if super::car_state(*s).is_some_and(|st| super::riding::is_seat(&*lv.host, st))
+                && let Some(mob) = crate::glue::contraptions::seats::seated_mob(lv, p)
+            {
+                riders.push((c, *o, mob));
+            }
+        }
+    }
+    let Some(id) = with_world(|w| w.dims[dim].railway.next_id()) else {
+        return false;
+    };
+    // `MountedStorageManager`: the storage blocks' items ride with their carriage.
+    for (c, (shape, car)) in laid.carriages.iter().zip(&cars).enumerate() {
+        super::cargo::carry(lv, id, c, bogeys[shape.first].1, car);
+    }
+    for (c, (shape, car)) in laid.carriages.iter().zip(cars.iter_mut()).enumerate() {
+        let b = bogeys[shape.first].1;
+        let refused = remove_carriage_blocks(lv, b, car, air);
+        if !refused.is_empty() {
+            super::cargo::drop_refused(dim, id, c, b, &refused, car);
+            prune_refused_riders(b, &refused, &mut riders, c);
+        }
+    }
+    if cars.iter().all(Vec::is_empty) {
+        for (c, shape) in laid.carriages.iter().enumerate() {
+            let b = bogeys[shape.first].1;
+            super::cargo::release(
+                lv,
+                id,
+                c,
+                |o| [b[0] + o[0], b[1] + o[1], b[2] + o[2]],
+                |_| false,
+            );
+        }
+        return false;
+    }
+    train.at_station = Some(pos);
+    let Some(col) = with_world(|w| {
         let r = &mut w.dims[dim].railway;
-        let mut train = Train::assembled(&r.net, origin, dir, &laid, &sizes)?;
-        train.at_station = Some(pos);
-        let id = r.next_id();
         // `lastDisassembledTrainName`.
         let name = r.prev_train_names.remove(&pos).unwrap_or_default();
         let mut t = TrainOnTrack {
@@ -561,53 +657,18 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
             probes: Default::default(),
         };
         t.column = t.column_on(&r.net);
+        let column = t.column;
         r.trains.push(t);
-        Some(id)
-    })
-    .flatten();
-    let Some(id) = made else {
-        assembly_failed(lv, pos, AssemblyError::NoBogeys);
+        column
+    }) else {
         return false;
     };
+    super::super::persist::mark_unsaved(dim, [col.0, col.1]);
     clear_failure(dim, pos);
     crate::glue::advancements::train_assembled(lv, pos, &cars);
     // A train assembled here: its comparators read `trainPresent` again.
     crate::glue::redstone::analog_touched(dim, pos);
     super::super::persist::mark_pos_unsaved(dim, pos);
-    // `Contraption.addPassengersToWorld`: mobs sitting on the carriages' seats ride along.
-    let mut riders = Vec::new();
-    for (c, (shape, car)) in laid.carriages.iter().zip(&cars).enumerate() {
-        let b = bogeys[shape.first].1;
-        for (o, s) in car {
-            let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
-            if super::car_state(*s).is_some_and(|st| super::riding::is_seat(&*lv.host, st))
-                && let Some(mob) = crate::glue::contraptions::seats::seated_mob(lv, p)
-            {
-                riders.push((c, *o, mob));
-            }
-        }
-    }
-    // `MountedStorageManager`: the storage blocks' items ride with their carriage.
-    for (c, (shape, car)) in laid.carriages.iter().zip(&cars).enumerate() {
-        super::cargo::carry(lv, id, c, bogeys[shape.first].1, car);
-    }
-    let Some(air) = super::default_state(&*lv.host, "minecraft:air") else {
-        return true;
-    };
-    for (c, car) in laid.carriages.iter().zip(&cars) {
-        let b = bogeys[c.first].1;
-        for (o, _) in car {
-            let p = [b[0] + o[0], b[1] + o[1], b[2] + o[2]];
-            // `removeBlocksFromWorld`: no drops and no shape updates, so the other half of a
-            // door taken along doesn't break and drop.
-            let flags = update_all()
-                | mod_api::BlockUpdateFlags::KNOWN_SHAPE
-                | mod_api::BlockUpdateFlags::SUPPRESS_DROPS
-                | mod_api::BlockUpdateFlags::MOVE_BY_PISTON;
-            lv.set_state(p, air, flags);
-            super::super::persist::mark_pos_unsaved(dim, p);
-        }
-    }
     send_trains(lv, &[id], true);
     for (c, local, mob) in riders {
         let at = create_engine::train_controls::Target {
@@ -618,6 +679,59 @@ pub fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> bool {
         super::riding::sit_entity(lv.host, dim, mob, at);
     }
     true
+}
+
+/// `Contraption.removeBlocksFromWorld` for a carriage whose blocks (offsets from `origin`) stand
+/// in the world: brittle ones first, each left as air with no drops and no shape updates, so the
+/// other half of a door taken along doesn't break and drop. The cells the world refused.
+fn remove_carriage_blocks(
+    lv: &mut ServerLevel<'_>,
+    origin: [i32; 3],
+    car: &[([i32; 3], u32)],
+    air: BlockState,
+) -> HashSet<[i32; 3]> {
+    let brittle: Vec<bool> = car
+        .iter()
+        .map(|&(_, s)| {
+            super::car_state(s)
+                .and_then(|st| super::state_parts(&*lv.host, st))
+                .is_some_and(|(name, props)| crate::glue::contraptions::brittle(&name, &props))
+        })
+        .collect();
+    let flags = update_all()
+        | mod_api::BlockUpdateFlags::KNOWN_SHAPE
+        | mod_api::BlockUpdateFlags::SUPPRESS_DROPS
+        | mod_api::BlockUpdateFlags::MOVE_BY_PISTON;
+    let mut refused = HashSet::new();
+    for brittles in [true, false] {
+        for ((o, _), &is_brittle) in car.iter().zip(&brittle) {
+            if is_brittle != brittles {
+                continue;
+            }
+            let p = [origin[0] + o[0], origin[1] + o[1], origin[2] + o[2]];
+            if lv.set_state(p, air, flags) {
+                super::super::persist::mark_pos_unsaved(lv.dim, p);
+            } else {
+                crate::create_log!(
+                    "[create] refused removing block at {p:?} during train assembly"
+                );
+                refused.insert(p);
+            }
+        }
+    }
+    refused
+}
+
+/// Drops the riders of carriage `car` on seats whose cells the world refused to clear.
+fn prune_refused_riders<T>(
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+    riders: &mut Vec<(usize, [i32; 3], T)>,
+    car: usize,
+) {
+    riders.retain(|(c, o, _)| {
+        *c != car || !refused.contains(&[origin[0] + o[0], origin[1] + o[1], origin[2] + o[2]])
+    });
 }
 
 /// The track blocks' part: a click on a station's assembly track (`TrackBlock.useItemOn`).
@@ -797,4 +911,480 @@ fn bogey_clicked(
         crate::glue::items::shrink_held(lv.host, player, hand, 1);
     }
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::super::{car_id, cargo};
+    use super::*;
+    use crate::glue::{persist, world::with_test_world};
+    use create_engine::glue::Glue;
+    use create_engine::world::{CreateWorld, StateTable};
+    use mod_api::__private::game::{BackendMutRefOf, BackendRefOf};
+    use mod_api::prelude::*;
+    use mod_api::testing::FakeHost;
+    use mod_api::{
+        BackendMutRef, BackendRef, BlockEntityRef, BlockUpdateFlags, Host, LevelReadError,
+        LevelRef, LevelWriteError,
+    };
+
+    const MIN_Y: i32 = -64;
+    const HEIGHT: i32 = 384;
+
+    struct TestServer {
+        level: LevelRef,
+        names: Vec<(&'static str, BlockState)>,
+        blocks: HashMap<[i32; 3], BlockState>,
+        unloaded: HashSet<[i32; 2]>,
+        refuse: HashSet<[i32; 3]>,
+        writes: Vec<([i32; 3], BlockState, BlockUpdateFlags)>,
+    }
+
+    mod_api::__mod_api_impl_host_areas!(TestServer, except(block_entities, block_states));
+    mod_api::__mod_api_impl_server_host_areas!(TestServer);
+    mod_api::__mod_api_impl_backend_areas!(
+        TestServer,
+        except(level_blocks, level_chunks, level_dimension, level_entities)
+    );
+    mod_api::__mod_api_impl_backend_mut_areas!(TestServer, except(level_blocks));
+    impl Host for TestServer {
+        fn backend(&self) -> Option<BackendRef<'_>> {
+            Some(BackendRef::of(self))
+        }
+    }
+    impl ServerHost for TestServer {
+        fn backend_mut(&mut self) -> Option<BackendMutRef<'_>> {
+            Some(BackendMutRef::of(self))
+        }
+    }
+    impl mod_api::Backend for TestServer {}
+    impl mod_api::BackendMut for TestServer {}
+    impl BlockStatesHost for TestServer {
+        fn block_state_id(&self, name: &str) -> Option<BlockState> {
+            self.names.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
+        }
+        fn block_state_string(&self, state: BlockState) -> Option<String> {
+            self.names
+                .iter()
+                .find(|(_, s)| *s == state)
+                .map(|(n, _)| (*n).to_owned())
+        }
+    }
+    impl BlockEntitiesHost for TestServer {
+        fn block_entity(&self, _: LevelRef, _: [i32; 3]) -> Option<BlockEntityRef> {
+            None
+        }
+    }
+    impl LevelEntitiesBackend for TestServer {
+        fn level_visit_online_players(
+            &self,
+            _: LevelRef,
+            _: &mut dyn FnMut(PlayerRef) -> std::ops::ControlFlow<()>,
+        ) -> Result<std::ops::ControlFlow<()>, LevelReadError> {
+            Ok(std::ops::ControlFlow::Continue(()))
+        }
+    }
+    impl LevelDimensionBackend for TestServer {
+        fn level_height(&self, _: LevelRef) -> Option<(i32, i32)> {
+            Some((MIN_Y, HEIGHT))
+        }
+    }
+    impl LevelChunksBackend for TestServer {
+        fn level_is_loaded(&self, _: LevelRef, pos: [i32; 3]) -> bool {
+            (MIN_Y..MIN_Y + HEIGHT).contains(&pos[1])
+                && !self.unloaded.contains(&[pos[0] >> 4, pos[2] >> 4])
+        }
+    }
+    impl LevelBlocksBackend for TestServer {
+        fn level_block_state(&self, _: LevelRef, pos: [i32; 3]) -> Option<BlockState> {
+            self.blocks.get(&pos).copied()
+        }
+    }
+    impl LevelBlocksBackendMut for TestServer {
+        fn level_set_block(
+            &mut self,
+            _: LevelRef,
+            pos: [i32; 3],
+            state: BlockState,
+            flags: BlockUpdateFlags,
+        ) -> Result<bool, LevelWriteError> {
+            self.writes.push((pos, state, flags));
+            if self.refuse.contains(&pos) {
+                return Ok(false);
+            }
+            self.blocks.insert(pos, state);
+            Ok(true)
+        }
+    }
+
+    /// A server whose block states are `table`: a name and its ordinal each.
+    fn server(table: &[(&'static str, u16)]) -> TestServer {
+        let fake = FakeHost::new();
+        let key = mod_api::LevelHost::block_state(&fake, [0, 0, 0])
+            .unwrap()
+            .block();
+        TestServer {
+            level: fake.level.level(),
+            names: table
+                .iter()
+                .map(|&(n, ord)| (n, mod_api::__private::block_state_from_ordinal(key, ord)))
+                .collect(),
+            blocks: HashMap::new(),
+            unloaded: HashSet::new(),
+            refuse: HashSet::new(),
+            writes: Vec::new(),
+        }
+    }
+
+    const ALL: [(&str, u16); 4] = [
+        ("minecraft:air", 0),
+        ("minecraft:stone", 1),
+        ("minecraft:torch", 2),
+        ("create:small_bogey", 3),
+    ];
+
+    fn state(server: &TestServer, name: &str) -> BlockState {
+        server.block_state_id(name).unwrap()
+    }
+
+    fn level(server: &mut TestServer) -> ServerLevel<'_> {
+        let level = server.level;
+        ServerLevel {
+            host: server,
+            level,
+            dim: 0,
+            dimension: "minecraft:overworld",
+        }
+    }
+
+    const TARGET: AssemblyTarget = AssemblyTarget {
+        station: [14, 64, 1],
+        track: [14, 64, 0],
+        direction: [1, 0, 0],
+    };
+    const BOGEYS: [Bogey; 2] = [
+        (0, [15, 65, 0], BogeySize::Small),
+        (4, [19, 65, 0], BogeySize::Small),
+    ];
+
+    struct AssemblyState;
+
+    impl AssemblyState {
+        fn new() -> Self {
+            Self::clear();
+            Self
+        }
+
+        fn clear() {
+            forget();
+            cargo::forget();
+            persist::clear();
+        }
+    }
+
+    impl Drop for AssemblyState {
+        fn drop(&mut self) {
+            Self::clear();
+        }
+    }
+
+    struct AssemblyFixture {
+        world: CreateWorld,
+        server: TestServer,
+        laid: Layout,
+        cars: Vec<Vec<([i32; 3], u32)>>,
+        car0_glue: Glue,
+    }
+
+    fn assembly_fixture() -> AssemblyFixture {
+        let mut world = CreateWorld::new(StateTable::new(
+            states::FIRST,
+            std::iter::empty::<(&str, std::iter::Empty<(&str, &str)>)>(),
+        ));
+        let d = &mut world.dims[0];
+        for x in 10..=26 {
+            d.railway.set_track([x, 64, 0], TrackShape::Xo);
+        }
+        d.railway.add_station(TARGET.station);
+        d.railway
+            .prev_train_names
+            .insert(TARGET.station, "Express".to_owned());
+        d.railway.ensure(&d.track_curves);
+        let car0_glue = Glue::span([14, 65, 0], [15, 65, 0]);
+        d.glue.push(car0_glue);
+
+        let laid = layout(&[0, 4], |i| Structure {
+            blocks: 2,
+            bogeys: vec![[0, 4][i]],
+            forward: i == 0,
+            backward: false,
+            sideways: false,
+        })
+        .unwrap();
+        let mut s = server(&ALL);
+        let stone = state(&s, "minecraft:stone");
+        let torch = state(&s, "minecraft:torch");
+        let (stone_id, torch_id) = (car_id(stone), car_id(torch));
+        let cars = vec![
+            vec![([-1, 0, 0], stone_id), ([0, 0, 0], torch_id)],
+            vec![([0, 0, 0], stone_id), ([1, 0, 0], stone_id)],
+        ];
+        s.blocks.extend([
+            ([14, 65, 0], stone),
+            ([15, 65, 0], torch),
+            ([19, 65, 0], stone),
+            ([20, 65, 0], stone),
+        ]);
+        assembly_failed(&level(&mut s), TARGET.station, AssemblyError::NoControls);
+        AssemblyFixture {
+            world,
+            server: s,
+            laid,
+            cars,
+            car0_glue,
+        }
+    }
+
+    #[test]
+    fn commit_assembly_refuses_second_carriage_unloaded_without_carry_or_publish() {
+        let _state = AssemblyState::new();
+        let AssemblyFixture {
+            world,
+            server: mut s,
+            laid,
+            cars,
+            car0_glue,
+        } = assembly_fixture();
+        let standing = s.blocks.clone();
+        let station = TARGET.station;
+        let prior_failure = failure(0, station).unwrap();
+        s.unloaded.insert([1, 0]);
+
+        with_test_world(world, || {
+            assert!(!commit_assembly(
+                &mut level(&mut s),
+                TARGET,
+                &laid,
+                &BOGEYS,
+                cars
+            ));
+            assert!(s.writes.is_empty());
+            assert_eq!(
+                with_world(|w| w.dims[0].glue.clone()),
+                Some(vec![car0_glue])
+            );
+            assert_eq!(
+                with_world(|w| w.dims[0].railway.trains.is_empty()),
+                Some(true)
+            );
+            assert_eq!(
+                with_world(|w| w.dims[0].railway.prev_train_names.get(&station).cloned()),
+                Some(Some("Express".to_owned()))
+            );
+            assert_eq!(failure(0, station), Some(prior_failure));
+            assert_eq!(s.blocks, standing);
+        });
+    }
+
+    #[test]
+    fn commit_assembly_zero_cleared_bails_out_and_releases_carried_cargo() {
+        let _state = AssemblyState::new();
+        let AssemblyFixture {
+            world,
+            server: mut s,
+            laid,
+            cars,
+            car0_glue,
+        } = assembly_fixture();
+        let standing = s.blocks.clone();
+        let station = TARGET.station;
+        let prior_failure = failure(0, station).unwrap();
+        s.refuse.extend(standing.keys().copied());
+
+        with_test_world(world, || {
+            assert!(!commit_assembly(
+                &mut level(&mut s),
+                TARGET,
+                &laid,
+                &BOGEYS,
+                cars
+            ));
+            assert_eq!(s.writes.len(), 4);
+            assert_eq!(s.writes[0].0, [15, 65, 0]);
+            assert_eq!(
+                with_world(|w| w.dims[0].railway.trains.is_empty()),
+                Some(true)
+            );
+            assert_eq!(
+                with_world(|w| w.dims[0].railway.prev_train_names.get(&station).cloned()),
+                Some(Some("Express".to_owned()))
+            );
+            assert_eq!(failure(0, station), Some(prior_failure));
+            assert_eq!(
+                with_world(|w| w.dims[0].glue.clone()),
+                Some(vec![car0_glue])
+            );
+            assert_eq!(s.blocks, standing);
+        });
+    }
+
+    #[test]
+    fn commit_assembly_partial_refusal_publishes_only_cleared_blocks() {
+        let _state = AssemblyState::new();
+        let AssemblyFixture {
+            world,
+            server: mut s,
+            laid,
+            cars,
+            ..
+        } = assembly_fixture();
+        let air = state(&s, "minecraft:air");
+        let stone = state(&s, "minecraft:stone");
+        let (stone_id, torch_id) = (car_id(stone), car_id(state(&s, "minecraft:torch")));
+        let station = TARGET.station;
+        assert!(failure(0, station).is_some());
+        s.refuse.insert([20, 65, 0]);
+
+        with_test_world(world, || {
+            assert!(commit_assembly(
+                &mut level(&mut s),
+                TARGET,
+                &laid,
+                &BOGEYS,
+                cars
+            ));
+            with_world(|w| {
+                let d = &w.dims[0];
+                let r = &d.railway;
+                assert_eq!(r.trains.len(), 1);
+                let t = &r.trains[0];
+                assert_eq!(t.name, "Express");
+                assert!(!r.prev_train_names.contains_key(&station));
+                assert_eq!(t.train.at_station, Some(station));
+                assert_eq!(
+                    t.cars,
+                    vec![
+                        vec![([-1, 0, 0], stone_id), ([0, 0, 0], torch_id)],
+                        vec![([0, 0, 0], stone_id)],
+                    ]
+                );
+                assert!(d.glue.is_empty());
+            })
+            .unwrap();
+            assert!(failure(0, station).is_none());
+            assert_eq!(s.blocks[&[14, 65, 0]], air);
+            assert_eq!(s.blocks[&[15, 65, 0]], air);
+            assert_eq!(s.blocks[&[19, 65, 0]], air);
+            assert_eq!(s.blocks[&[20, 65, 0]], stone);
+        });
+    }
+
+    fn preflight(server: &mut TestServer, cells: &[[i32; 3]]) -> Option<BlockState> {
+        let lv = level(server);
+        crate::glue::contraptions::preflight_cells(&lv, cells.iter().copied())
+    }
+
+    #[test]
+    fn preflight_checks_all_carriages_through_server_level() {
+        let mut s = server(&ALL);
+        let (air, stone, torch) = (
+            state(&s, "minecraft:air"),
+            state(&s, "minecraft:stone"),
+            state(&s, "minecraft:torch"),
+        );
+        let front = [[0, 64, 0], [1, 64, 0]];
+        let back = [[10, 64, 0], [11, 64, 0]];
+        for (p, st) in front
+            .iter()
+            .zip([stone, torch])
+            .chain(back.iter().zip([stone, stone]))
+        {
+            s.blocks.insert(*p, st);
+        }
+        let cells: Vec<[i32; 3]> = front.into_iter().chain(back).collect();
+        assert_eq!(preflight(&mut s, &cells), Some(air));
+
+        let twice: Vec<[i32; 3]> = cells.iter().copied().chain([front[0]]).collect();
+        assert_eq!(preflight(&mut s, &twice), None);
+
+        for y in [MIN_Y - 1, MIN_Y + HEIGHT] {
+            s.blocks.insert([20, y, 0], stone);
+            assert_eq!(preflight(&mut s, &[[20, y, 0]]), None, "y = {y}");
+        }
+        s.blocks.insert([20, MIN_Y, 0], stone);
+        assert_eq!(preflight(&mut s, &[[20, MIN_Y, 0]]), Some(air));
+
+        s.blocks.insert([100, 64, 100], stone);
+        s.unloaded.insert([6, 6]);
+        assert_eq!(preflight(&mut s, &[[100, 64, 100]]), None);
+
+        s.blocks.insert([30, 64, 0], air);
+        assert_eq!(preflight(&mut s, &[[30, 64, 0]]), None);
+
+        let mut missing = server(&ALL[1..]);
+        let stone = state(&missing, "minecraft:stone");
+        missing.blocks.insert([0, 64, 0], stone);
+        assert_eq!(preflight(&mut missing, &[[0, 64, 0]]), None);
+    }
+
+    #[test]
+    fn remove_carriage_blocks_clears_brittle_first_and_records_refusals() {
+        let mut s = server(&ALL);
+        let (air, stone, torch) = (
+            state(&s, "minecraft:air"),
+            state(&s, "minecraft:stone"),
+            state(&s, "minecraft:torch"),
+        );
+        let (stone_id, torch_id) = (car_id(stone), car_id(torch));
+        let origin = [10, 64, 10];
+        let car = vec![
+            ([0, 0, 0], stone_id),
+            ([1, 0, 0], torch_id),
+            ([2, 0, 0], stone_id),
+        ];
+        for (o, id) in &car {
+            let st = if *id == torch_id { torch } else { stone };
+            s.blocks
+                .insert([origin[0] + o[0], origin[1], origin[2]], st);
+        }
+        s.refuse.insert([12, 64, 10]);
+
+        let refused = remove_carriage_blocks(&mut level(&mut s), origin, &car, air);
+
+        let flags = update_all()
+            | BlockUpdateFlags::KNOWN_SHAPE
+            | BlockUpdateFlags::SUPPRESS_DROPS
+            | BlockUpdateFlags::MOVE_BY_PISTON;
+        assert_eq!(
+            s.writes,
+            vec![
+                ([11, 64, 10], air, flags),
+                ([10, 64, 10], air, flags),
+                ([12, 64, 10], air, flags),
+            ]
+        );
+        assert_eq!(refused, HashSet::from([[12, 64, 10]]));
+        assert_eq!(s.blocks[&[10, 64, 10]], air);
+        assert_eq!(s.blocks[&[11, 64, 10]], air);
+        assert_eq!(s.blocks[&[12, 64, 10]], stone);
+        super::super::super::persist::clear();
+    }
+
+    #[test]
+    fn prune_refused_riders_drops_only_matching_carriage_refused_seats() {
+        let origin = [10, 64, 10];
+        let mut riders = vec![
+            (0, [0, 0, 0], "refused seat"),
+            (0, [1, 0, 0], "kept seat"),
+            (1, [0, 0, 0], "same offset, other carriage"),
+        ];
+        prune_refused_riders(origin, &HashSet::from([[10, 64, 10]]), &mut riders, 0);
+        assert_eq!(
+            riders,
+            vec![
+                (0, [1, 0, 0], "kept seat"),
+                (1, [0, 0, 0], "same offset, other carriage"),
+            ]
+        );
+    }
 }
