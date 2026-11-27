@@ -31,8 +31,7 @@ impl Run {
         hit: [f64; 3],
         sneaking: bool,
     ) -> bool {
-        let seg = self.w.table.get(self.at(p)).and_then(|(_, i)| i.belt);
-        if let Some(seg) = seg {
+        if let Some(seg) = self.segment(p) {
             if sneaking {
                 return false;
             }
@@ -116,10 +115,7 @@ impl Run {
 impl Run {
     /// The segment at `p` is cased (its `casing` property).
     pub(super) fn belt_cased(&self, p: Pos) -> bool {
-        self.w
-            .table
-            .get(self.at(p))
-            .is_some_and(|(b, _)| b == Block::Belt)
+        self.segment(p).is_some()
             && parse_state(&self.name(self.at(p)))
                 .1
                 .iter()
@@ -220,8 +216,7 @@ impl Run {
         }
     }
     pub(super) fn belt_observation(&self, p: Pos) -> Option<crate::belts::Observation> {
-        let seg = self.w.table.get(self.at(p))?.1.belt?;
-        let _ = seg;
+        self.segment(p)?;
         let c = self.w.dims[0].belt_of.get(&p).copied().unwrap_or(p);
         let b = self.w.dims[0].belts.get(&c);
         Some(crate::belts::Observation {
@@ -238,7 +233,7 @@ impl Run {
 }
 impl Run {
     fn segment(&self, p: Pos) -> Option<belt::Segment> {
-        self.w.table.get(self.at(p))?.1.belt
+        self.w.table.belt_segment(self.at(p))
     }
     fn segment_state(&self, seg: belt::Segment, cased: bool) -> u32 {
         let s = format!(
@@ -521,8 +516,11 @@ impl Run {
 }
 
 impl belt::BreakWorld for Run {
-    fn take_breaks(&mut self) -> Vec<create_engine::world::BeltBreak> {
+    fn take_breaks(&mut self) -> Vec<[i32; 3]> {
         std::mem::take(&mut self.w.dims[0].belt_breaks)
+    }
+    fn segment(&self, pos: [i32; 3]) -> Option<belt::Segment> {
+        Run::segment(self, pos)
     }
     fn replace(&mut self, b: create_engine::world::BeltBreak) {
         let s = b.shaft.map(|axis| {

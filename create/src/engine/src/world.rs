@@ -116,14 +116,18 @@ impl StateTable {
             // TrackBlock requires HAS_BE; SlidingDoorBlock excludes the upper half.
             let mut track_entity = false;
             let mut upper = false;
-            t.info.push(StateInfo::read(props.inspect(|&(key, value)| {
+            let mut info = StateInfo::read(props.inspect(|&(key, value)| {
                 if key == "has_be" {
                     track_entity = value == "true";
                 }
                 if key == "half" {
                     upper = value == "upper";
                 }
-            })));
+            }));
+            if block != Block::Belt {
+                info.belt = None;
+            }
+            t.info.push(info);
             t.entity.push(
                 block.has_block_entity()
                     && (block != Block::Track || track_entity)
@@ -143,6 +147,12 @@ impl StateTable {
     pub fn get(&self, state: u32) -> Option<(Block, &StateInfo)> {
         let i = self.offset(state);
         Some((*self.block.get(i)?, self.info.get(i)?))
+    }
+
+    /// The belt segment of a state id, if it is a `create:belt` (guaranteed by `StateTable::new`).
+    #[inline]
+    pub fn belt_segment(&self, state: u32) -> Option<crate::belt::Segment> {
+        self.get(state)?.1.belt
     }
 
     /// Whether a state is a Create block this keeps (kinetic, or with state of its own like a
@@ -261,7 +271,7 @@ pub struct Dimension {
     belt_saved_changes: std::collections::HashSet<[i32; 3]>,
     /// Segments to replace because their neighbour broke, and items a broken belt drops (with
     /// the controller and segment they were on).
-    pub belt_breaks: Vec<BeltBreak>,
+    pub belt_breaks: Vec<[i32; 3]>,
     pub belt_drops: Vec<([i32; 3], crate::belt::Segment, i32, crate::belt::Item)>,
     /// Items saved with a belt, kept until its chain is whole again after loading.
     belt_saved: HashMap<[i32; 3], crate::belt::Inventory>,
@@ -2196,7 +2206,7 @@ impl CreateWorld {
         }
         // `BeltBlock.onRemove` tests block identity, not whether the replacement is
         // kinetic. A pulley becomes a shaft and still removes its next belt segments.
-        if let Some(seg) = self.table.get(old).and_then(|(_, i)| i.belt)
+        if let Some(seg) = self.table.belt_segment(old)
             && self.table.get(new).map(|(b, _)| b) != Some(Block::Belt)
         {
             self.belt_removed(dim, pos, seg);
@@ -3724,18 +3734,13 @@ impl CreateWorld {
             let Some(next) = seg.next(pos, forward) else {
                 continue;
             };
-            let Some(n) = d
-                .states
+            if d.states
                 .get(&next)
-                .and_then(|s| self.table.get(*s))
-                .and_then(|(_, i)| i.belt)
-            else {
-                continue;
-            };
-            d.belt_breaks.push(BeltBreak {
-                pos: next,
-                shaft: n.has_pulley().then(|| n.rotation_axis()),
-            });
+                .and_then(|s| self.table.belt_segment(*s))
+                .is_some()
+            {
+                d.belt_breaks.push(next);
+            }
         }
     }
 
@@ -3748,12 +3753,7 @@ impl CreateWorld {
         }
         let table = &self.table;
         let states = &self.dims[dim].states;
-        let segment_at = |p: [i32; 3]| {
-            states
-                .get(&p)
-                .and_then(|s| table.get(*s))
-                .and_then(|(b, i)| (b == Block::Belt).then_some(i.belt).flatten())
-        };
+        let segment_at = |p: [i32; 3]| states.get(&p).and_then(|s| table.belt_segment(*s));
         let Some(controller) = crate::belt::controller_of(pos, segment_at) else {
             return;
         };
@@ -3952,7 +3952,7 @@ impl CreateWorld {
         let Some(state) = self.dims[dim].states.get(&pos).copied() else {
             return;
         };
-        let Some(mut segment) = self.table.get(state).and_then(|(_, i)| i.belt) else {
+        let Some(mut segment) = self.table.belt_segment(state) else {
             return;
         };
         let d = &mut self.dims[dim];
@@ -8375,6 +8375,22 @@ mod tests {
         assert!(w.dims[0].depots.is_empty());
     }
 
+    struct BeltBreakGround<'a, F>(&'a mut CreateWorld, F);
+
+    impl<F: FnMut(&mut CreateWorld, BeltBreak)> crate::belt::BreakWorld for BeltBreakGround<'_, F> {
+        fn take_breaks(&mut self) -> Vec<[i32; 3]> {
+            std::mem::take(&mut self.0.dims[0].belt_breaks)
+        }
+        fn segment(&self, pos: [i32; 3]) -> Option<crate::belt::Segment> {
+            self.0
+                .state_at(0, pos)
+                .and_then(|s| self.0.table.belt_segment(s))
+        }
+        fn replace(&mut self, b: BeltBreak) {
+            (self.1)(self.0, b);
+        }
+    }
+
     #[test]
     fn a_belt_turns_as_one_and_breaks_as_create_s_does() {
         let belt = |part: &'static str| {
@@ -8422,7 +8438,15 @@ mod tests {
         // Breaking the middle: the start and end become shafts (they are pulleys).
         w.block_changed(0, [1, 0, 0], 11, 0);
         assert!(w.dims[0].belts.is_empty());
-        let breaks = std::mem::take(&mut w.dims[0].belt_breaks);
+        let mut breaks = Vec::new();
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                breaks.push(b);
+                let old = w.dims[0].states[&b.pos];
+                w.block_changed(0, b.pos, old, 0);
+            },
+        ));
         assert_eq!(breaks.len(), 2);
         assert!(
             breaks
@@ -8460,19 +8484,14 @@ mod tests {
         }
         transport_walk(&mut w);
         w.block_changed(0, [0, 8, 0], 10, 0);
-        struct Ground<'a>(&'a mut CreateWorld);
-        impl crate::belt::BreakWorld for Ground<'_> {
-            fn take_breaks(&mut self) -> Vec<BeltBreak> {
-                std::mem::take(&mut self.0.dims[0].belt_breaks)
-            }
-            fn replace(&mut self, b: BeltBreak) {
-                let old = self.0.dims[0].states[&b.pos];
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                let old = w.dims[0].states[&b.pos];
                 assert_eq!(b.shaft, (b.pos[2] == 2).then_some(crate::kinetics::Axis::X));
-                self.0
-                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 13 } else { 0 });
-            }
-        }
-        crate::belt::break_cascade(&mut Ground(&mut w));
+                w.block_changed(0, b.pos, old, if b.shaft.is_some() { 13 } else { 0 });
+            },
+        ));
         // Java cascade.min.json: tick 101 has air at z=1, shaft(axis=x) at z=2.
         assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 2]), Some(&13));
@@ -8518,28 +8537,83 @@ mod tests {
         w.block_changed(0, [0, 8, 1], 12, 11);
         assert!(w.dims[0].belt_breaks.is_empty());
         w.block_changed(0, [0, 8, 0], 10, 0);
-        struct Ground<'a>(&'a mut CreateWorld);
-        impl crate::belt::BreakWorld for Ground<'_> {
-            fn take_breaks(&mut self) -> Vec<BeltBreak> {
-                std::mem::take(&mut self.0.dims[0].belt_breaks)
-            }
-            fn replace(&mut self, b: BeltBreak) {
-                let old = self.0.dims[0].states[&b.pos];
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                let old = w.dims[0].states[&b.pos];
                 assert_eq!(
                     b.shaft,
                     matches!(b.pos[2], 1 | 3).then_some(crate::kinetics::Axis::X)
                 );
-                self.0
-                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
-            }
-        }
-        crate::belt::break_cascade(&mut Ground(&mut w));
+                w.block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
+            },
+        ));
         // Java c23pulley.json, tick 101: air, shaft(axis=x), air, shaft(axis=x).
         assert!(!w.dims[0].states.contains_key(&[0, 8, 0]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 1]), Some(&14));
         assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&14));
         assert!(w.dims[0].belt_breaks.is_empty());
+    }
+
+    #[test]
+    fn belt_break_cascade_skips_segments_already_removed_in_same_tick() {
+        let names = ["start", "middle", "pulley", "end"].map(|part| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        });
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|(n, p)| (*n, p.iter().copied()))
+                .chain(std::iter::once((
+                    "create:shaft",
+                    [("axis", "x")].iter().copied(),
+                )))
+                .chain(std::iter::once((
+                    "create:creative_motor",
+                    [
+                        ("facing", "south"),
+                        ("slope", "horizontal"),
+                        ("part", "start"),
+                    ]
+                    .iter()
+                    .copied(),
+                ))),
+        ));
+        let (start, middle, pulley, end, shaft, motor) = (10, 11, 12, 13, 14, 15);
+        for (z, state) in [start, middle, pulley, pulley, end].into_iter().enumerate() {
+            w.block_changed(0, [0, 8, z as i32], 0, state);
+        }
+        transport_walk(&mut w);
+        w.block_changed(0, [0, 8, 1], middle, 0);
+        w.block_changed(0, [0, 8, 2], pulley, 0);
+        w.block_changed(0, [0, 8, 0], start, motor);
+        w.switching_block_state(0, [0, 8, 3], middle);
+        w.block_changed(0, [0, 8, 3], pulley, middle);
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                let old = w.dims[0].states.get(&b.pos).copied().unwrap_or(0);
+                w.block_changed(0, b.pos, old, if b.shaft.is_some() { shaft } else { 0 });
+            },
+        ));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 0]), Some(&motor));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 3]));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 4]), Some(&shaft));
+        assert!(w.dims[0].belt_breaks.is_empty());
+        assert!(w.table.belt_segment(motor).is_none());
     }
 
     #[test]
