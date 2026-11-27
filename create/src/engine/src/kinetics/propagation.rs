@@ -107,6 +107,11 @@ impl Kinetics {
     /// `setSpeed` followed by `onSpeedChanged`, as the propagator calls them in a row.
     pub(super) fn change_speed(&mut self, id: u32, speed: f32) {
         let before = self.nodes[id as usize].state.speed;
+        self.change_speed_from(id, before, speed);
+    }
+
+    /// `change_speed` for a caller that read `getSpeed()` (`before`) earlier than this call.
+    pub(super) fn change_speed_from(&mut self, id: u32, before: f32, speed: f32) {
         let changed = self.set_speed(id, speed);
         self.speed_changed(id, before, changed);
     }
@@ -260,16 +265,13 @@ impl Kinetics {
                 potential.extend(pair.iter().copied().filter(|&m| m != NONE));
             }
         }
-        let dependents = potential
-            .into_iter()
-            .filter(|&m| {
-                self.nodes[m as usize].live
-                    && self.nodes[m as usize].state.source
-                        == Some(self_location(&self.nodes[id as usize]))
-            })
-            .collect::<Vec<_>>();
-        for m in dependents {
-            self.propagate_missing_source(m, events);
+        let removed = self_location(n);
+        // Java collects the positions once and reads each entity's source at its own turn,
+        // after the earlier dependents' propagateMissingSource calls.
+        for m in potential {
+            if self.nodes[m as usize].live && self.nodes[m as usize].state.source == Some(removed) {
+                self.propagate_missing_source(m, events);
+            }
         }
     }
 
@@ -305,9 +307,12 @@ impl Kinetics {
                 continue;
             }
             if opposite.abs() > current.abs() {
+                // `prevSpeed = getSpeed()` is read before setSource, which may leave an
+                // overstressed network and so change the speed it shows.
+                let before = self.nodes[cur as usize].state.speed;
                 self.set_source(cur, m);
                 let conveyed = self.get_conveyed_speed(m, cur);
-                self.change_speed(cur, conveyed);
+                self.change_speed_from(cur, before, conveyed);
                 *stack.last_mut().unwrap() = (cur, self.get_connected_neighbours(cur), 0);
                 continue;
             }
@@ -333,15 +338,24 @@ impl Kinetics {
                 continue;
             }
             if new.abs() >= other.abs() {
+                let before = self.nodes[m as usize].state.speed;
                 self.set_source(m, cur);
                 let conveyed = self.get_conveyed_speed(cur, m);
-                self.change_speed(m, conveyed);
+                self.change_speed_from(m, before, conveyed);
             } else {
                 self.change_speed(m, new);
                 self.set_source(m, cur);
             }
             stack.push((m, self.get_connected_neighbours(m), 0));
         }
+    }
+
+    /// KineticBlockEntity.attachKinetics: `updateSpeed` is cleared, then handleAdded propagates.
+    pub(super) fn attach_kinetics(&mut self, id: u32, events: &mut Vec<Event>) {
+        self.nodes[id as usize].state.update_speed = false;
+        // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
+        self.saved_dirty.insert(self.nodes[id as usize].pos);
+        self.propagate_new_source(id, events);
     }
 
     /// GeneratingKineticBlockEntity.updateGeneratedRotation / applyNewSpeed.
@@ -405,7 +419,7 @@ impl Kinetics {
         } else if prev == 0.0 {
             self.set_speed(id, generated);
             self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
-            self.propagate_new_source(id, events);
+            self.attach_kinetics(id, events);
         } else if source.is_some() && prev.abs() >= generated.abs() {
             if prev.signum() != generated.signum() {
                 let pos = self.nodes[id as usize].pos;
@@ -421,7 +435,7 @@ impl Kinetics {
                 self.nodes[id as usize].state.source = None;
                 self.set_network(id, Some(network_id(self.nodes[id as usize].pos)));
             }
-            self.propagate_new_source(id, events);
+            self.attach_kinetics(id, events);
         }
     }
 }
