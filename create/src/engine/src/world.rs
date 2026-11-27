@@ -3073,6 +3073,23 @@ impl CreateWorld {
         }
     }
 
+    /// A creative motor's or speed controller's speed setting landing from a moving structure
+    /// (`ScrollValueBehaviour.read`): a placed block takes it at once, its other settings kept
+    /// and its part turned to it; one not found yet takes it when it is.
+    pub fn read_motor_setting(&mut self, dim: usize, pos: [i32; 3], rpm: i32) {
+        let mut settings = self.dims[dim]
+            .settings
+            .get(&pos)
+            .copied()
+            .unwrap_or_default();
+        settings.motor_rpm = rpm as f32;
+        if let Some(&state) = self.dims[dim].states.get(&pos) {
+            self.set_settings(dim, pos, state, settings);
+        } else {
+            self.dims[dim].settings.insert(pos, settings);
+        }
+    }
+
     /// A neighbour of the block `state` at `pos` changed: a block that follows redstone is
     /// checked after the tick. The first line is the hot path for every other block.
     #[inline]
@@ -3757,16 +3774,7 @@ impl CreateWorld {
         let Some(controller) = crate::belt::controller_of(pos, segment_at) else {
             return;
         };
-        let chain = crate::belt::chain(controller, segment_at);
-        let whole = chain.len() >= 2
-            && chain
-                .last()
-                .and_then(|p| segment_at(*p))
-                .is_some_and(|s| s.part == crate::belt::Part::End);
-        if !whole {
-            return;
-        }
-        let Some(segment) = segment_at(controller) else {
+        let Some((segment, chain)) = crate::belt::whole_chain(controller, segment_at) else {
             return;
         };
         self.kinetic_base_ticks_before(dim, pos);
@@ -4102,12 +4110,12 @@ impl CreateWorld {
             }
             return;
         }
+        if d.creative_tanks.multis.contains_key(&pos) {
+            self.set_creative_fluid(dim, pos, fluid);
+            return;
+        }
         d.plumbing.creative.insert(pos, fluid);
         d.plumbing.creative_changes.push(pos);
-        if let Some(m) = d.creative_tanks.multis.get_mut(&pos) {
-            m.tank.fluid = fluid;
-            self.creative_tanks_touched(dim, true);
-        }
     }
 
     /// `DeployerBlockEntity.read`: a placed deployer's state at once.
@@ -4580,6 +4588,10 @@ impl CreateWorld {
         };
         x.set_delay(max);
         x.state = state.clamp(0, x.max);
+        if !x.running && !x.idle() {
+            x.running = true;
+            d.diode_running.push(pos);
+        }
         d.diode_checks.push((pos, crate::diode::PLACED_DELAY));
     }
 
@@ -11977,5 +11989,356 @@ mod tests {
             m.running_ticks = 40;
         }
         assert_eq!(operator_turns(&mut w), [(at, false, false)]);
+    }
+
+    /// The states the carried-data tests place, ids from 10, in this order.
+    const CARRIED: [u32; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+    const CARRIED_TANK: u32 = CARRIED[0];
+    const CARRIED_BRASS: u32 = CARRIED[1];
+    const CARRIED_ARM: u32 = CARRIED[2];
+    const CARRIED_EJECTOR: u32 = CARRIED[3];
+    const CARRIED_LINK: u32 = CARRIED[4];
+    const CARRIED_DIODE: u32 = CARRIED[5];
+    const CARRIED_LEVER: u32 = CARRIED[6];
+    const CARRIED_OBSERVER: u32 = CARRIED[7];
+    const CARRIED_SWITCH: u32 = CARRIED[8];
+    const CARRIED_BURNER: u32 = CARRIED[9];
+    const CARRIED_MOTOR: u32 = CARRIED[10];
+    const CARRIED_SHAFT: u32 = CARRIED[11];
+    const CARRIED_EXTENDER: u32 = CARRIED[12];
+
+    fn carried_world() -> CreateWorld {
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_fluid_tank", vec![]),
+            (
+                "create:brass_tunnel",
+                vec![("axis", "z"), ("shape", "straight")],
+            ),
+            ("create:mechanical_arm", vec![]),
+            ("create:weighted_ejector", vec![("facing", "north")]),
+            ("create:redstone_link", vec![("receiver", "false")]),
+            ("create:pulse_repeater", vec![("facing", "north")]),
+            (
+                "create:analog_lever",
+                vec![("face", "floor"), ("facing", "north")],
+            ),
+            (
+                "create:content_observer",
+                vec![("facing", "east"), ("powered", "false"), ("target", "wall")],
+            ),
+            (
+                "create:stockpile_switch",
+                vec![("facing", "north"), ("level", "0"), ("target", "floor")],
+            ),
+            ("create:blaze_burner", vec![("blaze", "smouldering")]),
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:shaft", vec![("axis", "x")]),
+            (
+                "create:pulse_extender",
+                vec![
+                    ("facing", "north"),
+                    ("powered", "false"),
+                    ("powering", "true"),
+                ],
+            ),
+        ];
+        CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ))
+    }
+
+    /// `Subsystem::carry_in` lands saved data after its block is placed (a contraption
+    /// disassembling writes the block first), so the readers update live entries; before the
+    /// block is found they stage it, as a column load does.
+    #[test]
+    fn a_carried_creative_tank_fluid_reaches_a_placed_tank_and_a_pending_one() {
+        let mut w = carried_world();
+        let water = Some(crate::tank::Fluid::Water);
+        let (placed, pending) = ([1, 8, 1], [5, 8, 1]);
+        w.block_changed(0, placed, 0, CARRIED_TANK);
+        assert_eq!(w.dims[0].plumbing.creative.get(&placed), Some(&None));
+        // A second block joins it: the controller's fluid reaches both.
+        let sibling = [1, 9, 1];
+        w.block_changed(0, sibling, 0, CARRIED_TANK);
+        w.tick_fluid_entities(0, |_| None);
+        w.dims[0].plumbing.creative_changes.clear();
+        w.dims[0].analog_checks.clear();
+        w.dims[0].unsaved.clear();
+        w.read_creative_tank(0, placed, water, None);
+        for p in [placed, sibling] {
+            assert_eq!(w.dims[0].plumbing.creative.get(&p), Some(&water));
+            assert!(w.dims[0].plumbing.creative_changes.contains(&p));
+            assert!(w.dims[0].analog_checks.contains(&p));
+        }
+        assert!(w.dims[0].unsaved.contains(&(0, 0)));
+        assert!(w.dims[0].plumbing.creative_saved.is_empty());
+        assert_eq!(
+            w.dims[0]
+                .creative_tanks
+                .multis
+                .get(&placed)
+                .map(|m| m.tank.fluid),
+            Some(water)
+        );
+        w.read_creative_tank(0, pending, water, None);
+        assert_eq!(
+            w.dims[0].plumbing.creative_saved.get(&pending),
+            Some(&water)
+        );
+        w.block_loaded(0, pending, CARRIED_TANK);
+        assert_eq!(w.dims[0].plumbing.creative.get(&pending), Some(&water));
+        assert_eq!(
+            w.dims[0]
+                .creative_tanks
+                .multis
+                .get(&pending)
+                .map(|m| m.tank.fluid),
+            Some(water)
+        );
+    }
+
+    #[test]
+    fn a_carried_brass_tunnel_reaches_a_placed_tunnel_and_a_pending_one() {
+        let mut w = carried_world();
+        let saved = crate::tunnel::SavedBrass {
+            stack: Some(("minecraft:iron_ingot".to_string(), 3)),
+            mode: crate::tunnel::Mode::Randomize,
+            ..Default::default()
+        };
+        let (placed, pending) = ([1, 9, 1], [5, 9, 1]);
+        w.block_changed(0, placed, 0, CARRIED_BRASS);
+        assert_eq!(w.dims[0].brass[&placed].stack, None);
+        w.read_brass(0, placed, saved.clone());
+        assert_eq!(w.dims[0].brass[&placed].stack, saved.stack);
+        assert_eq!(w.dims[0].brass[&placed].mode, saved.mode);
+        assert!(w.dims[0].brass_saved.is_empty());
+        w.read_brass(0, pending, saved.clone());
+        assert!(w.dims[0].brass_saved.contains_key(&pending));
+        w.block_changed(0, pending, 0, CARRIED_BRASS);
+        assert_eq!(w.dims[0].brass[&pending].stack, saved.stack);
+    }
+
+    #[test]
+    fn a_carried_arm_and_ejector_reach_placed_blocks_and_pending_ones() {
+        let mut w = carried_world();
+        let (placed_arm, pending_arm) = ([1, 8, 1], [5, 8, 1]);
+        let (placed_ejector, pending_ejector) = ([1, 8, 5], [5, 8, 5]);
+        let mut arm = crate::arm::Arm::new(false);
+        arm.held = Some(("minecraft:iron_ingot".to_string(), 2));
+        let ejector = crate::ejector::Ejector {
+            max_stack: 3,
+            ..Default::default()
+        };
+        w.block_changed(0, placed_arm, 0, CARRIED_ARM);
+        w.block_changed(0, placed_ejector, 0, CARRIED_EJECTOR);
+        assert_eq!(w.dims[0].arms.arms[&placed_arm].held, None);
+        let target = [1, 8, 3];
+        arm.inputs.push(crate::arm::Point {
+            pos: target,
+            kind: crate::arm::Kind::Depot,
+            facing: None,
+        });
+        w.dims[0].arms.running.clear();
+        w.dims[0].arms.changes.clear();
+        w.dims[0].ejector_changes.clear();
+        w.dims[0].arms.read(placed_arm, arm.clone());
+        w.read_ejector(0, placed_ejector, ejector.clone());
+        assert_eq!(w.dims[0].arms.watch[&target], [placed_arm]);
+        assert_eq!(w.dims[0].arms.running, [placed_arm]);
+        assert!(w.dims[0].arms.changes.contains(&placed_arm));
+        assert!(w.dims[0].ejector_changes.contains(&placed_ejector));
+        assert_eq!(w.dims[0].arms.arms[&placed_arm].held, arm.held);
+        assert!(w.dims[0].arms.saved.is_empty());
+        assert_eq!(w.dims[0].ejectors[&placed_ejector].max_stack, 3);
+        assert!(w.dims[0].ejector_saved.is_empty());
+        w.dims[0].arms.read(pending_arm, arm.clone());
+        w.read_ejector(0, pending_ejector, ejector);
+        assert!(w.dims[0].arms.saved.contains_key(&pending_arm));
+        assert!(w.dims[0].ejector_saved.contains_key(&pending_ejector));
+        w.block_changed(0, pending_arm, 0, CARRIED_ARM);
+        w.block_changed(0, pending_ejector, 0, CARRIED_EJECTOR);
+        assert_eq!(w.dims[0].arms.arms[&pending_arm].held, arm.held);
+        assert_eq!(w.dims[0].ejectors[&pending_ejector].max_stack, 3);
+    }
+
+    #[test]
+    fn carried_redstone_blocks_reach_placed_blocks_and_pending_ones() {
+        use crate::filter::Filter;
+        use crate::lever::Lever;
+        use crate::observe::{Observer, Switch};
+        let mut w = carried_world();
+        let key = ("first".to_string(), "second".to_string());
+        let filter = Filter::item("minecraft:iron_ingot");
+        let observer = Observer {
+            filter: Some(filter.clone()),
+            off_at: Some(25),
+            ..Observer::default()
+        };
+        let switch = Switch {
+            on_above: 200,
+            off_below: 30,
+            ..Switch::default()
+        };
+        let lever = Lever {
+            state: 5,
+            due: Some(40),
+        };
+        // Placed first: each carried value replaces the placed block's own.
+        let (link, diode, lev, obs, sw) = ([1, 8, 1], [3, 8, 1], [5, 8, 1], [7, 8, 1], [9, 8, 1]);
+        w.block_changed(0, link, 0, CARRIED_LINK);
+        w.block_changed(0, diode, 0, CARRIED_DIODE);
+        w.block_changed(0, lev, 0, CARRIED_LEVER);
+        w.block_changed(0, obs, 0, CARRIED_OBSERVER);
+        w.block_changed(0, sw, 0, CARRIED_SWITCH);
+        // A receiver on the carried frequencies hears the placed link at once.
+        let rx = [2, 8, 1];
+        let receiver = crate::link::Link {
+            key: key.clone(),
+            receiver: true,
+            ..Default::default()
+        };
+        w.dims[0].links.add(rx, receiver);
+        w.dims[0].detectors.checks.clear();
+        w.read_link(0, link, key.clone(), 7);
+        w.read_diode(0, diode, 1, 9);
+        w.dims[0].levers.read(lev, lever);
+        w.dims[0].detectors.read_observer(obs, observer.clone());
+        w.dims[0].detectors.read_switch(sw, switch.clone());
+        assert_eq!(w.dims[0].links.links[&link].key, key);
+        assert_eq!(w.dims[0].links.links[&link].transmit, 7);
+        assert_eq!(w.dims[0].links.received(rx), 7);
+        assert!(w.dims[0].link_changes.contains(&rx));
+        assert!(w.dims[0].link_shown.contains(&link));
+        assert!(w.dims[0].link_saved.is_empty());
+        assert!(w.dims[0].detectors.checks.contains(&obs));
+        assert!(w.dims[0].detectors.checks.contains(&sw));
+        assert_eq!(w.dims[0].detectors.take_offs(25), [obs]);
+        assert_eq!(
+            (w.dims[0].diodes[&diode].max, w.dims[0].diodes[&diode].state),
+            (9, 1)
+        );
+        assert!(w.dims[0].diode_saved.is_empty());
+        assert_eq!(w.dims[0].levers.state(lev), 5);
+        assert!(w.dims[0].levers.due.contains(&(40, lev)));
+        assert_eq!(w.dims[0].detectors.filter(obs), Some(&filter));
+        assert_eq!(w.dims[0].detectors.switches[&sw], switch);
+        // A settled restore with a new state tells the lever's neighbours once, at once.
+        w.dims[0].levers.read(
+            lev,
+            Lever {
+                state: 6,
+                due: None,
+            },
+        );
+        assert!(w.dims[0].levers.due.is_empty());
+        assert_eq!(w.dims[0].levers.take_due(0), [lev]);
+        // Not placed yet: staged, taken when the block is found.
+        let (link, diode, lev, obs, sw) = ([1, 8, 5], [3, 8, 5], [5, 8, 5], [7, 8, 5], [9, 8, 5]);
+        w.read_link(0, link, key.clone(), 7);
+        w.read_diode(0, diode, 1, 9);
+        w.dims[0].levers.read(lev, lever);
+        w.dims[0].detectors.read_observer(obs, observer);
+        w.dims[0].detectors.read_switch(sw, switch.clone());
+        assert!(w.dims[0].link_saved.contains_key(&link));
+        assert!(w.dims[0].diode_saved.contains_key(&diode));
+        w.block_changed(0, link, 0, CARRIED_LINK);
+        w.block_changed(0, diode, 0, CARRIED_DIODE);
+        w.block_changed(0, lev, 0, CARRIED_LEVER);
+        w.block_changed(0, obs, 0, CARRIED_OBSERVER);
+        w.block_changed(0, sw, 0, CARRIED_SWITCH);
+        assert_eq!(w.dims[0].links.links[&link].key, key);
+        assert_eq!(w.dims[0].links.links[&link].transmit, 7);
+        assert_eq!(
+            (w.dims[0].diodes[&diode].max, w.dims[0].diodes[&diode].state),
+            (9, 1)
+        );
+        assert_eq!(w.dims[0].levers.state(lev), 5);
+        assert!(w.dims[0].levers.due.contains(&(40, lev)));
+        assert_eq!(w.dims[0].detectors.filter(obs), Some(&filter));
+        assert_eq!(w.dims[0].detectors.switches[&sw], switch);
+    }
+
+    #[test]
+    fn a_carried_pulse_extender_counts_down_and_turns_off() {
+        let mut w = carried_world();
+        let ext = [1, 8, 1];
+        // Unpowered and giving a signal, at rest: nothing to run until its saved count lands.
+        w.block_changed(0, ext, 0, CARRIED_EXTENDER);
+        assert!(w.dims[0].diode_running.is_empty());
+        w.read_diode(0, ext, 2, 10);
+        assert_eq!(w.dims[0].diode_running, [ext]);
+        assert!(w.tick_diodes(0).is_empty());
+        assert_eq!(w.tick_diodes(0), [(ext, false)]);
+        assert!(w.dims[0].diode_running.is_empty());
+    }
+
+    #[test]
+    fn a_carried_blaze_burner_reaches_a_placed_burner_and_a_pending_one() {
+        let mut w = carried_world();
+        let fed = crate::burner::Burner {
+            fuel: crate::burner::Fuel::from_index(1),
+            remaining: 400,
+            ..crate::burner::Burner::default()
+        };
+        let (placed, pending) = ([1, 8, 1], [5, 8, 1]);
+        w.block_changed(0, placed, 0, CARRIED_BURNER);
+        assert_eq!(w.dims[0].burners[&placed].remaining, 0);
+        w.dims[0].burner_checks.clear();
+        w.read_burner(0, placed, fed);
+        assert_eq!(w.dims[0].burners[&placed].remaining, 400);
+        assert!(w.dims[0].burning.contains(&placed));
+        assert!(w.dims[0].burner_checks.contains(&placed));
+        w.tick_burners(0);
+        assert_eq!(w.dims[0].burners[&placed].remaining, 399);
+        assert!(w.dims[0].burner_saved.is_empty());
+        w.read_burner(0, pending, fed);
+        assert!(w.dims[0].burner_saved.contains_key(&pending));
+        w.block_changed(0, pending, 0, CARRIED_BURNER);
+        assert_eq!(w.dims[0].burners[&pending].remaining, 400);
+        assert!(w.dims[0].burning.contains(&pending));
+    }
+
+    #[test]
+    fn a_carried_motor_speed_turns_a_placed_motor_and_waits_for_a_pending_one() {
+        let mut w = carried_world();
+        // Each motor faces east into a shaft, which turns at the motor's speed.
+        let (placed, pending) = ([1, 64, 1], [5, 64, 1]);
+        let shaft = |motor: [i32; 3]| [motor[0] + 1, motor[1], motor[2]];
+        w.block_changed(0, placed, 0, CARRIED_MOTOR);
+        w.block_changed(0, shaft(placed), 0, CARRIED_SHAFT);
+        w.dims[0].settings.insert(
+            placed,
+            Settings {
+                signal: 3,
+                ..Settings::default()
+            },
+        );
+        w.dims[0].generator_changes.clear();
+        w.read_motor_setting(0, placed, 64);
+        assert!(w.dims[0].generator_changes.contains(&placed));
+        assert_eq!(w.motor_setting(0, placed), Some(64.0));
+        // Its other settings are kept.
+        assert_eq!(w.dims[0].settings[&placed].signal, 3);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft(placed)), Some(64.0));
+        w.read_motor_setting(0, placed, -32);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft(placed)), Some(-32.0));
+        // Not placed yet: staged with the other settings, the part made from it when placed.
+        w.dims[0].settings.insert(
+            pending,
+            Settings {
+                signal: 3,
+                ..Settings::default()
+            },
+        );
+        w.read_motor_setting(0, pending, 128);
+        assert_eq!(w.dims[0].settings[&pending].motor_rpm, 128.0);
+        assert_eq!(w.dims[0].settings[&pending].signal, 3);
+        w.block_changed(0, pending, 0, CARRIED_MOTOR);
+        w.block_changed(0, shaft(pending), 0, CARRIED_SHAFT);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft(pending)), Some(128.0));
     }
 }

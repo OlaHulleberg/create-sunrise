@@ -123,7 +123,6 @@ fn lift_put_back(
     let place = |o| add(origin, o);
     actors::expect_back(lv, key, place);
     let written = super::put_back_blocks(lv, blocks);
-    actors::restore_landed_belts(lv, key, place, |p| written.contains(&p));
     // A clock's hour and minute hands are two structures.
     let placed = Pose::translated(origin.map(f64::from));
     for n in 0..2 {
@@ -407,7 +406,7 @@ fn disassemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     actors::release_storage(lv, pos, |o| add(pos, o), |p| written.contains(&p));
     // The hands turned back to 0: their glue and controls go back where they were.
     if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
-        actors::release_extras(lv, &mut carried, |o| add(pos, o));
+        actors::release_extras(lv, &mut carried, |o| add(pos, o), |p| written.contains(&p));
     }
     draw::hide(lv, pos);
     mark_unsaved(lv, pos);
@@ -1401,9 +1400,12 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     ELEVATOR_MOVED.with_borrow_mut(|m| m.remove(&(dim, pos)));
     let held = Held::Elevator(e);
     let written = lift_put_back(lv, pos, origin, &held.put_back(pos));
-    if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
-        actors::release(lv, pos, origin, &mut carried, |p| written.contains(&p));
-    }
+    // Whatever it carried goes back, even a structure with no actors, controls or glue: its
+    // storage and what the engine kept for its blocks always ride (`release`).
+    let mut carried = PULLEY_CARRIED
+        .with_borrow_mut(|c| c.remove(&(dim, pos)))
+        .unwrap_or_default();
+    actors::release(lv, pos, origin, &mut carried, |p| written.contains(&p));
     draw::hide(lv, pos);
     draw::set_pulley_rest(lv, pos, -1);
     // Its floors go with the contraption (a new one is told them again).

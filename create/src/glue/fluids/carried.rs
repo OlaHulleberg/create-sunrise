@@ -162,7 +162,7 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
         Block::CreativeFluidTank => {
             if let Some(Tag::Int(f)) = data.get(&CREATIVE.into()) {
                 let fluid = Codes::fluid(&super::fluid_keys(data, CREATIVE), *f);
-                with_world(|w| w.dims[dim].plumbing.creative_saved.insert(pos, fluid));
+                with_world(|w| w.read_creative_tank(dim, pos, fluid, None));
             }
         }
         _ => {}

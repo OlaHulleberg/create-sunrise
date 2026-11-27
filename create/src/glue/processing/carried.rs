@@ -139,7 +139,7 @@ pub(super) fn carry_in(
                     ..burner::Burner::default()
                 }
             };
-            with_world(|w| w.load_burners(dim, std::iter::once((pos, b))));
+            with_world(|w| w.read_burner(dim, pos, b));
         }
         Block::Basin => {
             let Some(v) = ints(BASIN).filter(|v| v.len() == 8) else {

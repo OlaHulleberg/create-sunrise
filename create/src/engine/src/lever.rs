@@ -86,6 +86,10 @@ pub struct Levers {
     saved: HashMap<[i32; 3], Lever>,
     pub due: BTreeSet<(i64, [i32; 3])>,
     pub shown: Vec<[i32; 3]>,
+    /// Levers restored settled (no change pending) with a different state: their neighbours are
+    /// told with the next [`take_due`](Self::take_due). Only `column_unloaded` clears it: an extra
+    /// idempotent neighbour update after a same-tick click, timed read or removal is harmless.
+    notify: BTreeSet<[i32; 3]>,
     /// Levers broken while giving a signal (`onRemove`: `updateNeighbors`).
     pub removed: Vec<[i32; 3]>,
 }
@@ -136,9 +140,11 @@ impl Levers {
         Some(state)
     }
 
-    /// The levers whose neighbours are told now (`tick`: `lastChange` reached 0).
+    /// The levers whose neighbours are told now (`tick`: `lastChange` reached 0), and those
+    /// restored settled with a new state.
     pub fn take_due(&mut self, now: i64) -> Vec<[i32; 3]> {
-        let mut out = Vec::new();
+        let settled = std::mem::take(&mut self.notify);
+        let mut out: Vec<[i32; 3]> = settled.iter().copied().collect();
         while let Some(&(t, pos)) = self.due.first() {
             if t > now {
                 break;
@@ -147,7 +153,9 @@ impl Levers {
             if let Some(l) = self.levers.get_mut(&pos) {
                 l.due = None;
             }
-            out.push(pos);
+            if !settled.contains(&pos) {
+                out.push(pos);
+            }
         }
         out
     }
@@ -172,9 +180,12 @@ impl Levers {
         if let Some(t) = live.due {
             self.due.remove(&(t, pos));
         }
+        let changed = live.state != l.state;
         *live = l;
         if let Some(t) = l.due {
             self.due.insert((t, pos));
+        } else if changed {
+            self.notify.insert(pos);
         }
         self.shown.push(pos);
     }
@@ -196,6 +207,7 @@ impl Levers {
         self.levers.retain(|p, _| !inside(p));
         self.saved.retain(|p, _| !inside(p));
         self.due.retain(|(_, p)| !inside(p));
+        self.notify.retain(|p| !inside(p));
         self.shown.retain(|p| !inside(p));
         self.removed.retain(|p| !inside(p));
     }
@@ -253,6 +265,11 @@ mod tests {
         );
         assert_eq!(l.state(p), 9);
         assert!(l.due.is_empty());
+        assert_eq!(l.levers[&p].due, None);
+        // Settled with a new state: its neighbours are told once; an unchanged restore tells none.
+        assert_eq!(l.take_due(0), [p]);
+        l.read(p, l.levers[&p]);
+        assert!(l.take_due(0).is_empty());
         let q = [4, 64, 2];
         l.read(
             q,
@@ -265,6 +282,14 @@ mod tests {
         l.placed(q);
         assert_eq!(l.state(q), 3);
         assert!(l.due.contains(&(20, q)));
+        // A timed read moves the due time and tells its neighbours then.
+        let timed = Lever {
+            state: 4,
+            due: Some(40),
+        };
+        l.read(q, timed);
+        assert!(l.take_due(39).is_empty());
+        assert_eq!(l.take_due(40), [q]);
     }
 
     #[test]

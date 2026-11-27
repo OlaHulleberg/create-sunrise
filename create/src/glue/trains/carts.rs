@@ -1728,11 +1728,8 @@ fn put_back(lv: &mut ServerLevel<'_>, rider: EntityRef, at: [f64; 3], on: OnCart
         }
     }
     let mut carried = on.carried;
-    carried
-        .controls
-        .retain(|(o, _)| placed.contains_key(&place(*o)));
     carried.glue = on.glue;
-    actors::release_extras(lv, &mut carried, place);
+    actors::release_extras(lv, &mut carried, place, |p| placed.contains_key(&p));
     let drops: Vec<_> = drops
         .into_iter()
         .filter_map(|(pos, stack)| {
