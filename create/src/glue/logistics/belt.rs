@@ -19,10 +19,14 @@ use create_engine::belt;
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{BlockFace, HostBlockStates, ItemStack, PlayerRef, StateConstraint, SupportType};
 
+/// The segment state of the belt block at `pos`.
+pub(super) fn segment_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<belt::Segment> {
+    super::info_at(lv, pos).and_then(|(_, i)| i.belt)
+}
+
 /// The belt segment at `pos`: its controller, its index along the chain, and its state.
 pub fn belt_segment(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<([i32; 3], i32, belt::Segment)> {
-    let (_, info) = super::info_at(lv, pos)?;
-    let seg = info.belt?;
+    let seg = segment_at(lv, pos)?;
     let dim = lv.dim;
     let (c, index) = with_world(|w| {
         let d = &w.dims[dim];
@@ -192,7 +196,7 @@ pub fn set_casing(lv: &mut ServerLevel<'_>, pos: [i32; 3], kind: Option<&str>) {
 /// stands on it whose collision box (`isBlockCoveringBelt`) is at least half a block wide each
 /// way and starts at its bottom, but for funnels not facing up and tunnels.
 pub fn update_cover(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let Some(seg) = super::info_at(lv, pos).and_then(|(_, i)| i.belt) else {
+    let Some(seg) = segment_at(lv, pos) else {
         return;
     };
     let cased = lv.block_state(pos).is_some_and(|s| {
@@ -687,8 +691,12 @@ pub(super) fn eject_item(
 struct BeltBreakWorld<'a, 'l>(&'a mut ServerLevel<'l>);
 
 impl belt::BreakWorld for BeltBreakWorld<'_, '_> {
-    fn take_breaks(&mut self) -> Vec<create_engine::world::BeltBreak> {
+    fn take_breaks(&mut self) -> Vec<[i32; 3]> {
         with_world(|w| std::mem::take(&mut w.dims[self.0.dim].belt_breaks)).unwrap_or_default()
+    }
+
+    fn segment(&self, pos: [i32; 3]) -> Option<belt::Segment> {
+        segment_at(self.0, pos)
     }
 
     fn replace(&mut self, b: create_engine::world::BeltBreak) {

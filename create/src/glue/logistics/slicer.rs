@@ -6,7 +6,7 @@
 use super::super::server::{ServerLevel, update_all};
 use super::super::states;
 use super::super::world::with_world;
-use super::belt::{belt_color, belt_segment, eject_item};
+use super::belt::{belt_color, belt_segment, eject_item, segment_at};
 use super::items;
 use crate::glue::owned::OwnedInventory as _;
 use create_engine::Block;
@@ -88,11 +88,6 @@ fn sound(lv: &mut ServerLevel<'_>, pos: [i32; 3], sound: &str, volume: f32, pitc
         pitch,
         None,
     );
-}
-
-/// The segment state of the belt block at `pos`.
-fn segment_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<Segment> {
-    super::info_at(lv, pos).and_then(|(b, i)| (b == Block::Belt).then_some(i.belt).flatten())
 }
 
 /// Takes one belt connector and `shafts` shafts from a survival player's inventory
