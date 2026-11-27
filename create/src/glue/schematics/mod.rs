@@ -1604,21 +1604,45 @@ impl BlockEntityPart for SchematicEntity {
                 return None;
             }
             let held = v.item_slot(to as u32).and_then(|s| s.to_owned());
-            let n = room(&held).min(stack.count());
-            if n == 0 {
-                return None;
-            }
             let there = held.as_ref().map_or(0, ItemStack::count);
-            v.set_item_slot(to as u32, packages::body::with_count(&stack, there + n))
-                .ok()
-                .filter(|set| *set)
-                .map(|_| n)
+            quick_move_slot(
+                stack.count(),
+                there,
+                room(&held),
+                |count| packages::body::with_count(&stack, count),
+                |dest| v.set_item_slot(to as u32, Some(dest)),
+            )
         });
-        if let Some(Some(n)) = moved {
-            *event.stack = packages::body::with_count(&stack, stack.count() - n);
+        if let Some(Some(remainder)) = moved {
+            *event.stack = remainder;
         }
         Flow::Cancel
     }
+}
+
+/// Move `room.min(stack_count)` items (`n`) from a source stack of `stack_count` into a
+/// destination holding `there` with space for `room` more. Builds both the destination stack
+/// (`there + n`) and any positive remainder (`stack_count - n`) before writing; if either count cannot be built, nothing is written
+/// and nothing is debited. `write` receives the built destination stack (never `None`), and
+/// accepts both `Ok(true)` and `Ok(false)`, refusing only `Err(_)`. Returns `Some(remainder)`
+/// when the move succeeded (`None` only for a computed zero remainder), or `None` when
+/// nothing moved.
+fn quick_move_slot<T, E>(
+    stack_count: u32,
+    there: u32,
+    room: u32,
+    mut make: impl FnMut(u32) -> Option<T>,
+    write: impl FnOnce(T) -> Result<bool, E>,
+) -> Option<Option<T>> {
+    let n = room.min(stack_count);
+    if n == 0 {
+        return None;
+    }
+    let dest = make(there.checked_add(n)?)?;
+    let left = stack_count - n;
+    let remainder = if left == 0 { None } else { Some(make(left)?) };
+    write(dest).ok()?;
+    Some(remainder)
 }
 
 /// The cannon's screen (`SchematicannonScreen`), over its menu's data slots.
@@ -2801,5 +2825,71 @@ mod menu_tests {
         assert_eq!(select(screens::UPLOAD, vec![]), None);
         assert_eq!(select(screens::UPLOAD - 1, vec![root()]), None);
         assert_eq!(select(i32::MAX, vec![root(), saved()]), None);
+    }
+
+    #[test]
+    fn quick_move_accepts_changed_and_unchanged_writes_and_refuses_only_errors() {
+        for accepted in [Ok::<bool, ()>(true), Ok(false)] {
+            let mut written = None;
+            let moved = quick_move_slot(10, 3, 4, Some, |dest| {
+                written = Some(dest);
+                accepted
+            });
+            assert_eq!(moved, Some(Some(6)));
+            assert_eq!(written, Some(7));
+
+            let mut made = Vec::new();
+            let moved = quick_move_slot(
+                4,
+                3,
+                10,
+                |count| {
+                    made.push(count);
+                    Some(count)
+                },
+                |_| accepted,
+            );
+            assert_eq!(moved, Some(None));
+            assert_eq!(made, [7]);
+        }
+        let mut written = false;
+        let moved = quick_move_slot(10, 3, 4, Some, |_| {
+            written = true;
+            Err::<bool, ()>(())
+        });
+        assert_eq!(moved, None);
+        assert!(written);
+    }
+
+    #[test]
+    fn quick_move_builds_every_count_before_writing() {
+        // The destination count cannot be built: no write, so no clear and no debit.
+        let mut written = false;
+        let moved = quick_move_slot(
+            10,
+            3,
+            4,
+            |count| (count != 7).then_some(count),
+            |_| {
+                written = true;
+                Ok::<bool, ()>(true)
+            },
+        );
+        assert_eq!(moved, None);
+        assert!(!written);
+
+        // The positive remainder cannot be built: the destination is not touched either.
+        let moved = quick_move_slot(
+            10,
+            3,
+            4,
+            |count| (count != 6).then_some(count),
+            |_| {
+                written = true;
+                Ok::<bool, ()>(true)
+            },
+        );
+        assert_eq!(moved, None);
+        assert!(!written);
     }
 }
