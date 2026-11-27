@@ -232,24 +232,26 @@ fn put_slots(
     lv.host
         .transaction(|host, tx| {
             Ok::<_, ()>(rejected_slots(&stored, size, |i, stack| {
-                e.set_item_slot(host, tx, i as u32, Some(stack.clone())) == Ok(true)
+                e.set_item_slot(host, tx, i as u32, Some(stack.clone()))
             }))
         })
         .unwrap_or_else(|_| stored.into_iter().flatten().collect())
 }
 
-/// Transfer stacks back to their exact slot; preserve those not accepted by the destination.
-fn rejected_slots<T: Clone>(
+/// Transfer stacks back to their exact slot; preserve those the destination refused. `put` is
+/// the slot write's own result: `Ok(false)` is a valid write of a stack the slot already held,
+/// so only `Err` is a refusal.
+fn rejected_slots<T: Clone, E>(
     stored: &[Option<T>],
     size: usize,
-    mut put: impl FnMut(usize, &T) -> bool,
+    mut put: impl FnMut(usize, &T) -> Result<bool, E>,
 ) -> Vec<T> {
     stored
         .iter()
         .enumerate()
         .filter_map(|(i, stack)| {
             let stack = stack.as_ref()?;
-            (i >= size || !put(i, stack)).then(|| stack.clone())
+            (i >= size || put(i, stack).is_err()).then(|| stack.clone())
         })
         .collect()
 }
@@ -1278,24 +1280,17 @@ fn release_held_items(
         if data.slots.is_empty() {
             continue;
         }
-        let mut left = Vec::new();
-        match entity.filter(|e| create_entity(lv, *e)) {
+        let left = match entity.filter(|e| create_entity(lv, *e)) {
             Some(e) => {
                 let restored = lv.host.transaction(|host, tx| {
-                    for (i, s) in data.slots.iter().enumerate() {
-                        let Some(stack) = s else { continue };
-                        if e.set_item_slot(host, tx, i as u32, Some(stack.clone())) != Ok(true) {
-                            left.push(stack.clone());
-                        }
-                    }
-                    Ok::<(), ()>(())
+                    Ok::<_, ()>(rejected_slots(&data.slots, data.slots.len(), |i, stack| {
+                        e.set_item_slot(host, tx, i as u32, Some(stack.clone()))
+                    }))
                 });
-                if restored.is_err() {
-                    left = data.slots.into_iter().flatten().collect();
-                }
+                restored.unwrap_or_else(|_| data.slots.into_iter().flatten().collect())
             }
-            None => left.extend(data.slots.into_iter().flatten()),
-        }
+            None => data.slots.into_iter().flatten().collect(),
+        };
         drops.extend(left.into_iter().map(|stack| (p, stack)));
     }
     drops
@@ -3775,10 +3770,36 @@ mod tests {
             3,
             |i, stack| {
                 calls.push((i, *stack));
-                i == 0
+                if i == 0 { Ok(true) } else { Err("refused") }
             },
         );
         assert_eq!(calls, vec![(0, ("iron", 4)), (2, ("gold", 7))]);
         assert_eq!(left, vec![("gold", 7), ("diamond", 2)]);
+    }
+
+    #[test]
+    fn a_slot_that_already_holds_the_stack_is_not_rejected() {
+        let stored = [
+            Some(("iron", 4)),
+            Some(("gold", 7)),
+            None,
+            Some(("diamond", 2)),
+        ];
+        let mut kept = Vec::new();
+        let left = rejected_slots(&stored, 4, |i, stack| {
+            let put = match i {
+                0 => Ok(true),
+                1 => Ok(false),
+                _ => Err("refused"),
+            };
+            if put.is_ok() {
+                kept.push(*stack);
+            }
+            put
+        });
+        assert_eq!(kept, vec![("iron", 4), ("gold", 7)]);
+        assert_eq!(left, vec![("diamond", 2)]);
+        let count = |it: &[(&str, u32)]| it.iter().map(|s| s.1).sum::<u32>();
+        assert_eq!(count(&kept) + count(&left), 13);
     }
 }
