@@ -610,7 +610,7 @@ impl Run {
         self.w
             .apply_block_change(0, p, old, new, skip_shape_updates);
         if old_block == Some(create_engine::Block::Deployer) && old_block != new_block {
-            self.deployer_removed(p);
+            self.deployer_removed(p, old);
         }
         // `CrushingWheelControllerBlock.onRemove`, `SawBlockEntity.destroy`.
         let removed = self.w.dims[0].removed_inventories.remove(&p);

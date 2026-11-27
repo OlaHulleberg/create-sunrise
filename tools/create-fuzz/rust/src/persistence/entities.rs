@@ -141,6 +141,7 @@ pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
         held_damage: at(6).max(0) as u32,
         held_components: Vec::new(),
         fist_bump: false,
+        activated: false,
         inventory: match c.get("Inventory") {
             Some(Tag::List(l)) => l
                 .iter()

@@ -91,6 +91,9 @@ pub struct Deployer {
     /// The fake player's inventory past its hand (`Inventory` slot 0, the selected one), by slot:
     /// what a punch broke, what a use left over, until `tick` puts it in the overflow.
     pub inventory: Vec<(u32, Stack)>,
+    /// Its fake player stands at `activateInner`'s ray origin: it activated since it was loaded
+    /// (not saved).
+    pub activated: bool,
 }
 
 /// `Inventory.items`' size: the fake player's main slots, the hand's among them.
@@ -524,6 +527,30 @@ pub fn start_ray(pos: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
     };
     (at(1.5), at(2.5))
 }
+
+/// Where the fake player of the deployer at `pos` facing `facing` stands, its eyes at its feet:
+/// in the middle of the block ahead (`initHandler`), or once it `activated`, at `activateInner`'s
+/// ray origin.
+pub fn fake_position(pos: [i32; 3], facing: Dir, activated: bool) -> [f64; 3] {
+    if activated {
+        return ray(pos, facing).0;
+    }
+    let o = facing.offset();
+    std::array::from_fn(|i| f64::from(pos[i]) + 0.5 + f64::from(o[i]))
+}
+
+/// `DeployerBlockEntity.discardPlayer` of a removed deployer: what its fake player drops, its
+/// inventory (`dropAll`: the hand, then each slot) and then its overflow, each from 0.3 below its
+/// eyes (`Player.drop`).
+pub fn discarded(d: &Deployer, overflow: Vec<Stack>) -> Vec<Stack> {
+    let mut out: Vec<Stack> = d.held_stack().into_iter().collect();
+    out.extend(d.inventory.iter().map(|(_, s)| s.clone()));
+    out.extend(overflow);
+    out
+}
+
+/// How far below the fake player's eyes a stack it drops starts (`Player.drop`).
+pub const DROP_BELOW_EYES: f64 = 0.3;
 
 /// The block the fake player reaches (`activate`'s `clickedPos`): two ahead of the deployer.
 pub fn clicked(pos: [i32; 3], facing: Dir) -> [i32; 3] {

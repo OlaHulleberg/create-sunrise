@@ -370,8 +370,8 @@ pub struct Dimension {
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
     brass_saved: HashMap<[i32; 3], crate::tunnel::SavedBrass>,
     pub deployer_changes: Vec<[i32; 3]>,
-    /// Removed deployers that were holding a stack, for their block entity's removal to spill
-    /// with its components and wear (`DeployerBlockEntity.discardPlayer`).
+    /// Removed deployers, for their block entity's removal to spill their fake player's stacks
+    /// with their components and wear (`DeployerBlockEntity.discardPlayer`).
     pub removed_deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
     pub deployer_cracks: Vec<([i32; 3], [i32; 3])>,
     /// Gantry shafts whose place in their line may have changed (`updateShape`), carriages to try
@@ -2156,11 +2156,9 @@ impl CreateWorld {
                 if let Some((at, _)) = dp.breaking {
                     d.deployer_cracks.push((pos, at));
                 }
-                if dp.held.is_some() || !dp.inventory.is_empty() {
-                    // `DeployerBlockEntity.discardPlayer`: its fake player's stacks drop with
-                    // their components and wear.
-                    d.removed_deployers.insert(pos, dp);
-                }
+                // `DeployerBlockEntity.discardPlayer`: its fake player's stacks drop where it
+                // stands, with their components and wear.
+                d.removed_deployers.insert(pos, dp);
             }
             if d.burners.remove(&pos).is_some() {
                 d.burning.retain(|p| *p != pos);
@@ -8048,8 +8046,8 @@ mod tests {
         assert_eq!(w.dims[0].drills[&[1, 64, 0]].progress, 2);
     }
 
-    /// Create: a broken deployer leaves its held stack, with its damage and components, for its
-    /// removal to spill (`DeployerBlockEntity.discardPlayer`).
+    /// Create: a broken deployer leaves its state, its held stack with its damage and components
+    /// among it, for its removal to spill (`DeployerBlockEntity.discardPlayer`).
     #[test]
     fn a_removed_deployer_preserves_its_held_stack_for_removal() {
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
@@ -8069,10 +8067,10 @@ mod tests {
         w.set_deployer(0, pos, d.clone());
         w.block_changed(0, pos, 10, 0);
         assert_eq!(w.dims[0].removed_deployers.remove(&pos), Some(d));
-        // An empty deployer leaves no entry.
+        // An empty one too: where its fake player stood.
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
-        assert!(w.dims[0].removed_deployers.is_empty());
+        assert!(w.dims[0].removed_deployers.contains_key(&pos));
     }
 
     #[test]
