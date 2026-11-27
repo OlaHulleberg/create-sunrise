@@ -687,8 +687,12 @@ pub(super) fn eject_item(
 struct BeltBreakWorld<'a, 'l>(&'a mut ServerLevel<'l>);
 
 impl belt::BreakWorld for BeltBreakWorld<'_, '_> {
-    fn take_breaks(&mut self) -> Vec<create_engine::world::BeltBreak> {
+    fn take_breaks(&mut self) -> Vec<[i32; 3]> {
         with_world(|w| std::mem::take(&mut w.dims[self.0.dim].belt_breaks)).unwrap_or_default()
+    }
+
+    fn segment(&self, pos: [i32; 3]) -> Option<belt::Segment> {
+        super::info_at(self.0, pos).and_then(|(_, i)| i.belt)
     }
 
     fn replace(&mut self, b: create_engine::world::BeltBreak) {
