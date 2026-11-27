@@ -409,9 +409,8 @@ impl Run {
         }
     }
 
-    /// `deployer_turn`: the kinetic base tick, then [`Deployer::turn`].
+    /// `deployer_turn`: [`Deployer::turn`], after the walk's kinetic base tick.
     pub(super) fn deployer_turn(&mut self, pos: Pos) {
-        self.w.kinetic_base_ticks_through(0, pos);
         let Some(facing) = self.deployer_facing(pos) else {
             return;
         };

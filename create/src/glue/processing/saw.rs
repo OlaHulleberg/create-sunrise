@@ -31,14 +31,8 @@ pub fn clear() {
     SAW_DURATION.with_borrow_mut(HashMap::clear);
 }
 
-/// The drills and the saws (`BlockBreakingKineticBlockEntity.tick`), each on its turn among the
-/// block entities: `KineticBlockEntity.tick` first, then the breaker's own, which looks at the
-/// block in front in steps (`isBreakable`: not air, a fluid, unbreakable or
-/// `create:non_breakable`; for a saw also `isSawable`), its cracks showing
-/// (`destroyBlockProgress`), its drops left in its middle; a saw fells what stood on it
-/// (`TreeCutter`) and breaks only facing sideways (`shouldRun`). A breaker that went since the
-/// last tick takes its cracks along (`invalidate`).
-pub fn tick_drills(lv: &mut ServerLevel<'_>) {
+/// The cracks of the breakers that went since the last tick (`invalidate`).
+pub fn clear_cracks(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let cracks =
         with_world(|w| std::mem::take(&mut w.dims[dim].breaker_cracks)).unwrap_or_default();
@@ -46,64 +40,76 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
         lv.level
             .set_break_progress(&mut *lv.host, breaker_id(breaker), at, -1);
     }
-    for pos in with_world(|w| w.breakers(dim)).unwrap_or_default() {
-        let Some((block, facing)) = lv.info(pos).and_then(|(b, i)| Some((b, i.facing?))) else {
-            continue;
-        };
-        let saw = block == Block::MechanicalSaw;
-        let should_run = !saw || facing.axis() != Axis::Y;
-        with_world(|w| w.kinetic_base_ticks_through(dim, pos));
-        let speed = lv.speed(pos);
-        let at = super::step(pos, facing, 1);
-        let looks = with_world(|w| {
-            w.dims[dim].drills.get_mut(&pos).map(|d| {
-                if saw {
-                    d.rearm(should_run);
-                }
-                d.tick(speed, should_run, at)
-            })
+}
+
+/// `DrillBlockEntity.tick` at the drill's turn in the level's block-entity order.
+pub(crate) fn drill_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    breaker_turn(lv, pos);
+}
+
+/// `BlockBreakingKineticBlockEntity.tick`, after the walk's `KineticBlockEntity.tick`: it looks
+/// at the block in front in steps (`isBreakable`: not air, a fluid, unbreakable or
+/// `create:non_breakable`; for a saw also `isSawable`), its cracks showing
+/// (`destroyBlockProgress`), its drops left in its middle; a saw fells what stood on it
+/// (`TreeCutter`) and breaks only facing sideways (`shouldRun`).
+fn breaker_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some((block, facing)) = lv.info(pos).and_then(|(b, i)| Some((b, i.facing?))) else {
+        return;
+    };
+    let saw = block == Block::MechanicalSaw;
+    let should_run = !saw || facing.axis() != Axis::Y;
+    let speed = lv.speed(pos);
+    let at = super::step(pos, facing, 1);
+    let looks = with_world(|w| {
+        w.dims[dim].drills.get_mut(&pos).map(|d| {
+            // `SawBlockEntity.tick` re-arms before its `super.tick()`, which cannot see it.
+            if saw {
+                d.rearm(should_run);
+            }
+            d.tick(speed, should_run, at)
         })
-        .flatten();
-        if looks != Some(true) {
-            continue;
+    })
+    .flatten();
+    if looks != Some(true) {
+        return;
+    }
+    let hardness = target(lv, at, saw);
+    let step = with_world(|w| {
+        w.dims[dim]
+            .drills
+            .get_mut(&pos)
+            .map(|d| d.look(speed, hardness))
+    })
+    .flatten();
+    let breaker = breaker_id(pos);
+    match step {
+        None | Some(drill::Step::Wait) => {}
+        Some(drill::Step::Progress(stage)) => {
+            lv.level
+                .set_break_progress(&mut *lv.host, breaker, at, stage);
         }
-        let hardness = target(lv, at, saw);
-        let step = with_world(|w| {
-            w.dims[dim]
-                .drills
-                .get_mut(&pos)
-                .map(|d| d.look(speed, hardness))
-        })
-        .flatten();
-        let breaker = breaker_id(pos);
-        match step {
-            None | Some(drill::Step::Wait) => {}
-            Some(drill::Step::Progress(stage)) => {
-                lv.level
-                    .set_break_progress(&mut *lv.host, breaker, at, stage);
+        Some(drill::Step::Reset) => {
+            lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
+        }
+        Some(drill::Step::Broken) => {
+            let broken = cell(lv, at);
+            // `onBlockBroken`: the drops left at the block's middle, standing still.
+            let centre = at.map(|v| f64::from(v) + 0.5);
+            for s in destroy_collect(lv, at) {
+                lv.spawn_stack(centre, s, [0.0; 3]);
             }
-            Some(drill::Step::Reset) => {
-                lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
+            if saw {
+                fell(lv, pos, at, broken);
             }
-            Some(drill::Step::Broken) => {
-                let broken = cell(lv, at);
-                // `onBlockBroken`: the drops left at the block's middle, standing still.
-                let centre = at.map(|v| f64::from(v) + 0.5);
-                for s in destroy_collect(lv, at) {
-                    lv.spawn_stack(centre, s, [0.0; 3]);
+            // The blocks that went arm this drill too (`DrillBlock.neighborChanged`): its
+            // rest comes after them.
+            with_world(|w| {
+                if let Some(d) = w.dims[dim].drills.get_mut(&pos) {
+                    d.rest();
                 }
-                if saw {
-                    fell(lv, pos, at, broken);
-                }
-                // The blocks that went arm this drill too (`DrillBlock.neighborChanged`): its
-                // rest comes after them.
-                with_world(|w| {
-                    if let Some(d) = w.dims[dim].drills.get_mut(&pos) {
-                        d.rest();
-                    }
-                });
-                lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
-            }
+            });
+            lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
         }
     }
 }
@@ -387,9 +393,11 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for SawItems {
     }
 }
 
-/// The saw at `pos` holding items, at its turn in logistics' transport walk.
+/// `SawBlockEntity.tick` at the saw's turn in the level's block-entity order: its breaking
+/// (`BlockBreakingKineticBlockEntity.tick`), then the items it holds.
 pub fn saw_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    if !recipes::ready() {
+    breaker_turn(lv, pos);
+    if !recipes::ready() || with_world(|w| w.dims[lv.dim].saws.contains_key(&pos)) != Some(true) {
         return;
     }
     if tick_saw(lv, pos).is_some_and(|s| s != Step::Wait) {

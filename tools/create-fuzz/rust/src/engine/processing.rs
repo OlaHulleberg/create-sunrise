@@ -64,48 +64,48 @@ impl Run {
         self.millstone_slots.entry(pos).or_default()
     }
 
-    /// `tick_millstones`.
-    pub(super) fn tick_millstones(&mut self) {
-        let mut turning = self.w.turning_millstones(0);
-        turning.sort_by_key(|(p, _)| *p);
-        for (pos, speed) in turning {
-            let Some(mut state) = self.w.dims[0].millstones.get(&pos).copied() else {
-                continue;
-            };
-            let slots = self.mill_slots(pos).clone();
-            let input = slots[0].as_ref().map(|s| s.item.clone());
-            let mut outputs: Vec<engine_processing::Slot> = slots[1..]
-                .iter()
-                .map(|s| s.as_ref().map(|s| (s.item.clone(), s.count)))
-                .collect();
-            let outputs_full = outputs.iter().flatten().any(|(i, n)| *n >= limit(i));
-            let done = engine_processing::tick_millstone(
-                &mut state,
-                speed,
-                input.as_deref(),
-                outputs_full,
-                &self.books.milling,
-            )
-            .map(|r| self.books.milling.get(r).clone());
-            if let Some(m) = self.w.dims[0].millstones.get_mut(&pos) {
-                *m = state;
-            }
-            let Some(recipe) = done else {
-                continue;
-            };
-            let mut rng = engine_processing::Rng::new(self.seed_at(pos));
-            for (item, n) in engine_processing::roll(&recipe, &mut rng) {
-                let max = limit(&item);
-                engine_processing::insert_stacked(&mut outputs, &item, n, max);
-            }
-            let s = self.mill_slots(pos);
-            s[0] = s[0].take().and_then(|mut x| {
-                x.count -= 1;
-                (x.count > 0).then_some(x)
-            });
-            for (i, o) in outputs.into_iter().enumerate() {
-                s[i + 1] = o.map(|(item, count)| Stack { item, count });
-            }
+    /// `millstone_turn`.
+    pub(super) fn millstone_turn(&mut self, pos: Pos) {
+        let speed = self.w.speed(0, pos).unwrap_or(0.0);
+        if speed == 0.0 {
+            return;
+        }
+        let Some(mut state) = self.w.dims[0].millstones.get(&pos).copied() else {
+            return;
+        };
+        let slots = self.mill_slots(pos).clone();
+        let input = slots[0].as_ref().map(|s| s.item.clone());
+        let mut outputs: Vec<engine_processing::Slot> = slots[1..]
+            .iter()
+            .map(|s| s.as_ref().map(|s| (s.item.clone(), s.count)))
+            .collect();
+        let outputs_full = outputs.iter().flatten().any(|(i, n)| *n >= limit(i));
+        let done = engine_processing::tick_millstone(
+            &mut state,
+            speed,
+            input.as_deref(),
+            outputs_full,
+            &self.books.milling,
+        )
+        .map(|r| self.books.milling.get(r).clone());
+        if let Some(m) = self.w.dims[0].millstones.get_mut(&pos) {
+            *m = state;
+        }
+        let Some(recipe) = done else {
+            return;
+        };
+        let mut rng = engine_processing::Rng::new(self.seed_at(pos));
+        for (item, n) in engine_processing::roll(&recipe, &mut rng) {
+            let max = limit(&item);
+            engine_processing::insert_stacked(&mut outputs, &item, n, max);
+        }
+        let s = self.mill_slots(pos);
+        s[0] = s[0].take().and_then(|mut x| {
+            x.count -= 1;
+            (x.count > 0).then_some(x)
+        });
+        for (i, o) in outputs.into_iter().enumerate() {
+            s[i + 1] = o.map(|(item, count)| Stack { item, count });
         }
     }
 
@@ -173,17 +173,16 @@ impl Run {
         }
     }
 
-    /// `tick_crushers`: the controllers wheels asked for, then the turning controllers.
-    pub(super) fn tick_crushers(&mut self) {
+    /// `crusher::fix_pending`: the controllers wheels asked for.
+    pub(super) fn fix_crushers(&mut self) {
+        if self.w.dims[0].crusher_checks.is_empty() {
+            return;
+        }
         let mut checks = std::mem::take(&mut self.w.dims[0].crusher_checks);
         checks.sort();
         checks.dedup();
         for pos in checks {
             self.fix_controllers(pos);
-        }
-        let running = self.w.dims[0].running_crushers.clone();
-        for pos in running {
-            self.tick_crusher(pos);
         }
     }
 
@@ -239,8 +238,8 @@ impl Run {
         }
     }
 
-    /// `tick_crusher`, for a controller that holds no entity.
-    fn tick_crusher(&mut self, pos: Pos) {
+    /// `crusher_turn`, for a controller that holds no entity.
+    pub(super) fn crusher_turn(&mut self, pos: Pos) {
         let Some(facing) = self
             .w
             .table

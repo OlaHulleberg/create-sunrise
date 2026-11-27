@@ -744,72 +744,101 @@ pub fn break_pass(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// The level's block entities in `Level.blockEntityTickers` order, each at its turn after its
+/// `KineticBlockEntity.tick` ([`create_engine::world::BlockEntityTicks`]): pipes, tanks, spouts,
+/// drains, depots, ejectors, tunnels, funnels, belts and the processing machines, each applied
+/// before the next entity's turn.
 pub fn tick_transport(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     crate::glue::fluids::pipes::tick_pipes(lv);
     let now = lv.game_time().max(0) as u64;
-    let Some(mut phase) = with_world(|w| w.transport_ticks(dim, now)) else {
+    crate::glue::kinetics::refresh_sequencer_signals(lv);
+    let Some(mut phase) = with_world(|w| w.block_entity_ticks(dim, now)) else {
         return;
     };
     while let Some(turn) = with_world(|w| phase.next(w)).flatten() {
         let c = match turn {
-            create_engine::world::TransportTick::Fluid(p) => {
+            create_engine::world::EntityTurn::Wheels => {
+                crate::glue::processing::fix_crushers(lv);
+                continue;
+            }
+            create_engine::world::EntityTurn::Fluid(p) => {
                 crate::glue::fluids::pipes::tick_transport_pipe(lv, p);
                 crate::glue::fluids::plumbing::tick_entity(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Spout(p) => {
+            create_engine::world::EntityTurn::Spout(p) => {
                 with_world(|w| w.tick_spout(dim, p));
                 continue;
             }
-            create_engine::world::TransportTick::Drain(p) => {
+            create_engine::world::EntityTurn::Drain(p) => {
                 crate::glue::fluids::machines::tick_drain(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Pump(p)
-            | create_engine::world::TransportTick::Pipe(p) => {
+            create_engine::world::EntityTurn::Pump(p)
+            | create_engine::world::EntityTurn::Pipe(p) => {
                 crate::glue::fluids::pipes::tick_transport_pipe(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Depot(p) => {
+            create_engine::world::EntityTurn::Depot(p) => {
                 super::depot::tick_depot(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Brass(p) => {
+            create_engine::world::EntityTurn::Brass(p) => {
                 super::tunnel::tick_brass(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Funnel(p) => {
+            create_engine::world::EntityTurn::Funnel(p) => {
                 super::funnel::tick_funnel(lv, p);
                 continue;
             }
             // A weighted ejector is the depot behaviour it extends, ticked with its block
             // entity by this walk.
-            create_engine::world::TransportTick::Ejector(p) => {
+            create_engine::world::EntityTurn::Ejector(p) => {
                 super::arms::tick_ejector(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Press(p) => {
+            create_engine::world::EntityTurn::Press(p) => {
                 crate::glue::processing::press_turn(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Mixer(p) => {
+            create_engine::world::EntityTurn::Mixer(p) => {
                 crate::glue::processing::mixer_turn(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Saw(p) => {
+            create_engine::world::EntityTurn::Saw(p) => {
                 crate::glue::processing::saw_turn(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Basin(p) => {
+            create_engine::world::EntityTurn::Basin(p) => {
                 crate::glue::processing::basin_turn(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Deployer(p) => {
+            create_engine::world::EntityTurn::Deployer(p) => {
                 crate::glue::processing::deployer_turn(lv, p);
                 continue;
             }
-            create_engine::world::TransportTick::Belt(c) => c,
+            create_engine::world::EntityTurn::Drill(p) => {
+                crate::glue::processing::drill_turn(lv, p);
+                continue;
+            }
+            create_engine::world::EntityTurn::Millstone(p) => {
+                crate::glue::processing::millstone_turn(lv, p);
+                continue;
+            }
+            create_engine::world::EntityTurn::Fan(p) => {
+                crate::glue::processing::fan_turn(lv, p);
+                continue;
+            }
+            create_engine::world::EntityTurn::Crusher(p) => {
+                crate::glue::processing::crusher_turn(lv, p);
+                continue;
+            }
+            create_engine::world::EntityTurn::Crafter(p) => {
+                crate::glue::processing::crafter_turn(lv, p);
+                continue;
+            }
+            create_engine::world::EntityTurn::Belt(c) => c,
         };
         let Some((seg, length, mut belt_items)) = with_world(|w| {
             let b = w.dims[dim].belts.get_mut(&c)?;

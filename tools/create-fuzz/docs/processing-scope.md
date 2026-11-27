@@ -367,7 +367,7 @@ Three more differences show in the sweeps alone, none with a case here (against 
 - A spout's results reached what takes them a tick later than in Java whenever the basin's turn
   followed its operator's (fixed, #346): the basin's own `tick` puts them out
   (`BasinBlockEntity.java:355`), and the port now does it at the basin's turn in the walk
-  (`TransportTick::Basin`, `spoutput::turn`).
+  (`EntityTurn::Basin`, `spoutput::turn`).
 - The mixer's rest of `processing-basin-emptied` after its basin was taken away rather than
   emptied (`BasinBlockEntity.java:232`): 39 seeds of the first sweep, beside the 40 that empty it.
 - The backup check, in 4 seeds of the second sweep where an empty hand leaves a press's basin
@@ -408,6 +408,43 @@ leaves: at tick 12 `3,14,-1` is 6 on Java and was 7 on the driver). Since the mo
 (#448), `breaking/saw` matches 1280 of 1280 as `breaking/drill` does, and so do every case in
 `cases/` and `fuzz 0 4000`. A wrench on a drill does not arm it: `IWrenchable.onWrenched` runs the
 drill's own `updateShape` and its neighbours' `neighborChanged`, never the drill's own.
+
+## Each machine at its own turn
+
+Every block entity ticks in `Level.blockEntityTickers` order, its `KineticBlockEntity.tick`
+(`super.tick()`, `KineticBlockEntity.java:97-125`) and its subclass's tick together, so a machine
+placed beside a turning shaft attaches and works in its first tick. The port walks the level's
+block entities once a tick (`world::BlockEntityTicks`): each one's base tick, the `onSpeedChanged`
+callbacks it caused (a fan's `updateAirFlow`, a basin operator's check, a crushing wheel's
+`fixControllers`), then its own turn; the solve ticks only what was placed after the walk began
+(#370). The cases place each machine beside a running shaft and compare it on every tick after:
+
+| Case | Java | Port before | Deciding Java |
+| --- | --- | --- | --- |
+| `turn-millstone-beside-shaft` | The timer starts (250) in the tick the millstone is placed, 16 down a tick at 256 rpm | A tick later: its pass ran before the solve gave it its speed | `MillstoneBlockEntity.java:87-90` |
+| `turn-saw-cutting-beside-shaft` | The log's time goes down from the saw's first tick; the cut log leaves at tick 43 | From the second; it left at 44 | `SawBlockEntity.java:170-187` |
+| `turn-mixer-beside-shaft` | The mixer starts on its basin in its first tick | A tick later (`runningTicks` one behind) | `MechanicalMixerBlockEntity.java:126-127`, `BasinOperatingBlockEntity.java:49-55` |
+| `turn-crusher-beside-shaft` | The second wheel's first tick makes the controller valid, facing up, at its crushing speed | Still invalid and facing down for a tick: the wheel's `onSpeedChanged` came after the solve | `CrushingWheelBlockEntity.java:38-41`, `CrushingWheelControllerBlockEntity.java:98-99` |
+| `turn-fan-beside-shaft` | The current over the depot forms in the fan's first tick, and the bottle on it is gone at tick 183 | Still there at 183: the fan heard of its speed (`onSpeedChanged`) after the solve, so its current formed a tick later | `EncasedFanBlockEntity.java:100-104`, `:125-141` |
+| `turn-press-beside-shaft`, `turn-drill-beside-shaft`, `turn-saw-breaking-beside-shaft`, `turn-deployer-beside-shaft` | The press, the breakers and the deployer from their first tick | Matched already: their base tick was pulled forward at their turn (#447, #529), which the walk now does for every entity | `KineticBlockEntity.java:97-102` |
+
+A sideways saw breaks and an upward one cuts in one `SawBlockEntity.tick` (`:170-175`), so the
+saw's breaking and its items share its turn. A belt finds its chain (`initBelt`) before its own
+`super.tick()` (`BeltBlockEntity.java:111-116`). A press or mixer that hears its basin went returns
+before its `super.tick()` (`BasinOperatingBlockEntity.java:58-65`) and skips its base tick in that
+turn. The sequenced gearshift's instruction and a crank's turning down follow their own base tick
+(`SequencedGearshiftBlockEntity.java:94-108`, `HandCrankBlockEntity.java:86-87`). Mechanical
+crafters (`MechanicalCrafterBlockEntity.java:255-271`) take their turn too, without a family of
+their own: an engine test (`a_machine_placed_beside_a_turning_shaft_turns_at_its_first_turn`)
+checks that one placed beside a turning cog has its speed at its first turn.
+
+After the change (`fuzz-lane 0 327680 <residue> 256`, or `163840 <residue> 128`): millstone 205
+1279 of 1280, crushing 221, saw 128, mixing 77, compacting 93, `breaking/drill` 64, deployers 125
+and 253, `press_processing` 78, `depot_outputs` 55 and `chute_columns` 35 all 1280; `breaking/saw`
+192 1267 (the 13 leaf `distance` seeds above); `flicker` 2 320 of 320 and
+`sequenced_gearshift` 173 315 of 320; `fuzz 0 4000` 4000. The millstone seed (40653: Java drops
+two gravel where the port drops one when the millstone is broken) and the five gearshift seeds
+(the gearshift drops two ticks early) differ the same way on `main`.
 
 ## Deployers
 

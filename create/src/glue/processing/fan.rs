@@ -158,81 +158,109 @@ fn processing_particles(lv: &mut ServerLevel<'_>, kind: Kind, at: [f64; 3]) {
     }
 }
 
-/// Encased fans that turn (`EncasedFanBlockEntity.tick`): the current looked at again when due
-/// (`AirCurrent.rebuild`), then the depots and belts in it processed (`tickAffectedHandlers`).
-/// Stopped fans cost nothing.
-pub fn tick_fans(lv: &mut ServerLevel<'_>) {
-    let dim = lv.dim;
+thread_local! {
+    /// The item entities' fan progress at the start of each level's tick, and what the fans
+    /// that ticked since kept of it (those still in a current).
+    static ITEM_PROGRESS: RefCell<HashMap<usize, (Progresses, Progresses)>> =
+        RefCell::new(HashMap::new());
+}
+
+type Progresses = HashMap<u32, fan::Progress>;
+
+/// Before the level's block entities tick: nozzles whose fan went break.
+pub fn begin_tick(lv: &mut ServerLevel<'_>) {
     check_nozzles(lv);
-    let fans = with_world(|w| w.fans_to_tick(dim)).unwrap_or_default();
-    if fans.is_empty() {
-        tell_currents(lv);
+}
+
+/// `EncasedFanBlockEntity.tick` at the fan's turn in the level's block-entity order: the
+/// current looked at again when due (`AirCurrent.rebuild`), then the depots and belts in it
+/// processed (`tickAffectedHandlers`).
+pub(crate) fn fan_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let Some((rebuild, speed, facing)) = with_world(|w| {
+        let f = w.dims[dim].fans.get(&pos)?;
+        Some((f.rebuild, f.speed, f.facing))
+    })
+    .flatten() else {
+        return;
+    };
+    if rebuild {
+        let (current, handlers) = match facing {
+            Some(facing) if speed != 0.0 => fan_current(lv, pos, facing, speed),
+            _ => Default::default(),
+        };
+        if current.max > 0.0 {
+            crate::glue::advancements::award_placer(lv, pos, "encased_fan");
+        }
+        with_world(|w| {
+            if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
+                f.rebuild = false;
+                f.changed |= f.current != current;
+                f.current = current;
+                f.handlers = handlers;
+            }
+        });
+    }
+    // The nozzle on its front (`NozzleBlockEntity.tick`): it does something only while its
+    // fan turns, so it ticks with it (and once more when it stops, to let go).
+    if let Some(f) = facing {
+        tick_nozzle(lv, super::step(pos, f, 1), (speed, f));
+    }
+    let (mut old, mut kept) = ITEM_PROGRESS
+        .with_borrow_mut(|p| p.remove(&dim))
+        .unwrap_or_else(|| {
+            let old = with_world(|w| std::mem::take(&mut w.dims[dim].item_fan));
+            (old.unwrap_or_default(), HashMap::new())
+        });
+    fan_tick(lv, pos, speed, &mut old, &mut kept);
+    ITEM_PROGRESS.with_borrow_mut(|p| p.insert(dim, (old, kept)));
+}
+
+fn fan_tick(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    speed: f32,
+    old: &mut Progresses,
+    kept: &mut Progresses,
+) {
+    let dim = lv.dim;
+    if speed == 0.0 {
         return;
     }
-    let recipes = recipes::ready();
-    // Item entities' progress, kept for those still in a current this tick.
-    let mut kept = HashMap::new();
-    let mut old = with_world(|w| std::mem::take(&mut w.dims[dim].item_fan)).unwrap_or_default();
-    for pos in fans {
-        let Some((rebuild, speed, facing)) = with_world(|w| {
-            let f = w.dims[dim].fans.get(&pos)?;
-            Some((f.rebuild, f.speed, f.facing))
-        })
-        .flatten() else {
+    // `entitySearchCooldown`: the entities in the current are looked for every 6th tick.
+    let search = with_world(|w| {
+        let f = w.dims[dim].fans.get_mut(&pos)?;
+        let search = f.search_cooldown == 0;
+        f.search_cooldown = if search { 5 } else { f.search_cooldown - 1 };
+        Some(search)
+    })
+    .flatten()
+    .unwrap_or(false);
+    fan_on_entities(lv, pos, search);
+    if !recipes::ready() {
+        return;
+    }
+    fan_on_items(lv, pos, search, old, kept);
+    let handlers = with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.handlers.clone()))
+        .flatten()
+        .unwrap_or_default();
+    for (at, kind) in handlers {
+        let Some(kind) = kind else {
             continue;
         };
-        if rebuild {
-            let (current, handlers) = match facing {
-                Some(facing) if speed != 0.0 => fan_current(lv, pos, facing, speed),
-                _ => Default::default(),
-            };
-            if current.max > 0.0 {
-                crate::glue::advancements::award_placer(lv, pos, "encased_fan");
-            }
-            with_world(|w| {
-                if let Some(f) = w.dims[dim].fans.get_mut(&pos) {
-                    f.rebuild = false;
-                    f.changed |= f.current != current;
-                    f.current = current;
-                    f.handlers = handlers;
-                }
-            });
-        }
-        // The nozzle on its front (`NozzleBlockEntity.tick`): it does something only while its
-        // fan turns, so it ticks with it (and once more when it stops, to let go).
-        if let Some(f) = facing {
-            tick_nozzle(lv, super::step(pos, f, 1), (speed, f));
-        }
-        if speed == 0.0 {
-            continue;
-        }
-        // `entitySearchCooldown`: the entities in the current are looked for every 6th tick.
-        let search = with_world(|w| {
-            let f = w.dims[dim].fans.get_mut(&pos)?;
-            let search = f.search_cooldown == 0;
-            f.search_cooldown = if search { 5 } else { f.search_cooldown - 1 };
-            Some(search)
-        })
-        .flatten()
-        .unwrap_or(false);
-        fan_on_entities(lv, pos, search);
-        if !recipes {
-            continue;
-        }
-        fan_on_items(lv, pos, search, &mut old, &mut kept);
-        let handlers = with_world(|w| w.dims[dim].fans.get(&pos).map(|f| f.handlers.clone()))
-            .flatten()
-            .unwrap_or_default();
-        for (at, kind) in handlers {
-            let Some(kind) = kind else {
-                continue;
-            };
-            if fan_on_depot(lv, at, kind) | fan_on_belt(lv, at, kind) {
-                crate::glue::advancements::award_placer(lv, pos, "fan_processing");
-            }
+        if fan_on_depot(lv, at, kind) | fan_on_belt(lv, at, kind) {
+            crate::glue::advancements::award_placer(lv, pos, "fan_processing");
         }
     }
-    with_world(|w| w.dims[dim].item_fan = kept);
+}
+
+/// After the level's block entities ticked: the item progress the fans kept, and the currents
+/// clients must see again.
+pub fn end_tick(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    if let Some((_, kept)) = ITEM_PROGRESS.with_borrow_mut(|p| p.remove(&dim)) {
+        with_world(|w| w.dims[dim].item_fan = kept);
+    }
     tell_currents(lv);
 }
 
@@ -437,8 +465,8 @@ fn fan_on_items(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     search: bool,
-    old: &mut HashMap<u32, fan::Progress>,
-    kept: &mut HashMap<u32, fan::Progress>,
+    old: &mut Progresses,
+    kept: &mut Progresses,
 ) {
     let dim = lv.dim;
     let Some((facing, speed, current)) = with_world(|w| {

@@ -90,18 +90,23 @@ pub(crate) fn item_name_message(
 /// - `Controller` (linked controllers), `Display` (display links), `Contraptions` (bearings,
 ///   their actors, gantries, windmills, stickers, pistons, mounted interfaces, lifts) and its
 ///   `Drawing`.
-/// - `Processing`: crafters, millstones, fans, crushers, blaze burners, mixers.
+/// - `Processing`: what comes before the machines' turns (deployers' redstone, nozzles, crushing
+///   wheel controllers, blaze burners).
 /// - `Fluids`: pipes and pumps, boilers, valves and hoses, tank states, spouts, drains.
 /// - `Carts`, then `Trains` (the controls, the trains, the HUD, curves) and `TrainControls`.
-/// - `Logistics`: vaults, chutes, funnels, tunnels, brass tunnels, depots, belts (whose
-///   machines answer `belt_process`), and `Entities`, its part of the kinetic type.
-/// - `processing::Tools`: the drills' and saws' breaking, each at its turn among the block
-///   entities, then presses and deployers on what the depots and belts did this tick (saws
-///   holding items tick in logistics' walk).
+/// - `Logistics`: vaults, chutes, then the level's block-entity walk: every block entity in
+///   `Level.blockEntityTickers` order, its `KineticBlockEntity.tick` first, then its own turn
+///   (pipes, tanks, spouts, drains, funnels, tunnels, depots, belts whose machines answer
+///   `belt_process`, presses, mixers, basins, saws, drills, deployers, millstones, fans,
+///   crushers, crafters, sequenced gearshifts and cranks); and `Entities`, its part of the
+///   kinetic type.
+/// - `processing::Tools`: what the machines' turns leave for clients, and the entities inside
+///   turning saws and drills.
 /// - `Arms`: mechanical arms, weighted ejectors.
 /// - `redstone::Detectors`: smart observers and threshold switches, reading this tick's tank
 ///   changes before `fluids::Tanks` hands them on (and drains them).
-/// - `kinetics::Solve`: belts settle, the network is solved, speeds go to clients.
+/// - `kinetics::Solve`: the base ticks of block entities placed since the walk, the network
+///   is solved, speeds go to clients.
 ///
 /// After the solve:
 /// - `Gauges`: dials the solve moved.

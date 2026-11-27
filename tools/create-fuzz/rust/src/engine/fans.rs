@@ -1,5 +1,5 @@
 //! glue/processing/fan.rs for what the transport families can put in a current: the currents
-//! (`tick_fans`, `fan_current`, `catalyst_at`) and a depot's held stack in them
+//! (`fan_turn`, `fan_current`, `catalyst_at`) and a depot's held stack in them
 //! (`fan_on_depot`). The admitted items have no splashing, smoking, smelting or blasting
 //! recipe and resist no fire, so the recipe books are empty.
 use super::*;
@@ -35,38 +35,36 @@ fn fan_transparent(name: &str) -> bool {
 }
 
 impl Run {
-    /// `tick_fans`, without nozzles and entities (none in the admitted worlds).
-    pub(super) fn tick_fans(&mut self) {
-        for pos in self.w.fans_to_tick(0) {
-            let Some(f) = self.w.dims[0].fans.get(&pos) else {
+    /// `fan_turn`, without nozzles and entities (none in the admitted worlds).
+    pub(super) fn fan_turn(&mut self, pos: Pos) {
+        let Some(f) = self.w.dims[0].fans.get(&pos) else {
+            return;
+        };
+        let (rebuild, speed, facing) = (f.rebuild, f.speed, f.facing);
+        if rebuild {
+            let (current, handlers) = match facing {
+                Some(facing) if speed != 0.0 => self.fan_current(pos, facing, speed),
+                _ => Default::default(),
+            };
+            if let Some(f) = self.w.dims[0].fans.get_mut(&pos) {
+                f.rebuild = false;
+                f.changed |= f.current != current;
+                f.current = current;
+                f.handlers = handlers;
+            }
+        }
+        if speed == 0.0 {
+            return;
+        }
+        let handlers = self.w.dims[0].fans[&pos].handlers.clone();
+        for (at, kind) in handlers {
+            let Some(kind) = kind else {
                 continue;
             };
-            let (rebuild, speed, facing) = (f.rebuild, f.speed, f.facing);
-            if rebuild {
-                let (current, handlers) = match facing {
-                    Some(facing) if speed != 0.0 => self.fan_current(pos, facing, speed),
-                    _ => Default::default(),
-                };
-                if let Some(f) = self.w.dims[0].fans.get_mut(&pos) {
-                    f.rebuild = false;
-                    f.changed |= f.current != current;
-                    f.current = current;
-                    f.handlers = handlers;
-                }
-            }
-            if speed == 0.0 {
-                continue;
-            }
-            let handlers = self.w.dims[0].fans[&pos].handlers.clone();
-            for (at, kind) in handlers {
-                let Some(kind) = kind else {
-                    continue;
-                };
-                self.fan_on_depot(at, kind);
-                if self.w.dims[0].belt_of.contains_key(&at) {
-                    self.notes
-                        .push(format!("adapter gap: fan processing on the belt at {at:?}"));
-                }
+            self.fan_on_depot(at, kind);
+            if self.w.dims[0].belt_of.contains_key(&at) {
+                self.notes
+                    .push(format!("adapter gap: fan processing on the belt at {at:?}"));
             }
         }
     }

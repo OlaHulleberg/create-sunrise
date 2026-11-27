@@ -74,13 +74,11 @@ impl Run {
         }
         self.show_sequencer_writes();
         let mut events = Vec::new();
-        // `Processing::level_tick`: crafters, millstones, fans, crushers, burners, the
-        // leftovers of gone basins (`spoutput::forget_gone`). The basins (lazy tick, spout, backup
-        // check), the mixers and the presses over basins take their turns in the transport walk.
+        // `Processing::level_tick`: the deployers' redstone, the controllers of crushing wheels
+        // placed or removed, burners, the leftovers of gone basins (`spoutput::forget_gone`).
+        // The machines take their turns in the transport walk.
         self.deployer_redstone_updates();
-        self.tick_millstones();
-        self.tick_fans();
-        self.tick_crushers();
+        self.fix_crushers();
         self.tick_tank_layers();
         self.tick_fluids();
         self.tick_boilers();
@@ -90,9 +88,9 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: the drills and saws, then the cracks of removed deployers
+        // `processing::Tools`: the cracks of gone breakers and removed deployers
         // (`send_deployer_changes`).
-        self.tick_drills();
+        self.clear_cracks();
         self.w.dims[0].deployer_cracks.clear();
         self.ejectors_ticked();
         self.save_fluid_entities();

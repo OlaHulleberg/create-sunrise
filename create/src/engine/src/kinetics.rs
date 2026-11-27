@@ -511,6 +511,9 @@ pub struct Kinetics {
     at: HashMap<[i32; 3], [u32; 2]>,
     /// Kinetic entities in level registration order, indexed independently of recycled ports.
     order: BlockEntityOrder,
+    /// While the level walks its block entities ([`Kinetics::level_walks`]): those registered
+    /// since it began, the only ones the solve still ticks.
+    late: Option<Vec<[i32; 3]>>,
     /// Parts joined to parts beyond their neighbours at ratio 1 (chain conveyors' chains,
     /// `ChainConveyorBlockEntity.propagateRotationTo`): both sides list each other.
     far: HashMap<[i32; 3], Vec<[i32; 3]>>,
@@ -864,6 +867,11 @@ impl Kinetics {
             }
         };
         slot[sub as usize] = id;
+        if let Some(late) = &mut self.late
+            && self.order.registration_order(pos).is_none()
+        {
+            late.push(pos);
+        }
         self.order.register(pos, None);
         self.mark_changed(id);
         self.dirty.push(id);
@@ -1010,6 +1018,13 @@ impl Kinetics {
             self.dirty.push(id);
         }
         self.pending_events.extend(events);
+    }
+
+    /// The entities in the order their base ticks run.
+    #[cfg(test)]
+    pub(crate) fn order(&self) -> Vec<[i32; 3]> {
+        let mut walk = self.order.walk(View::All);
+        std::iter::from_fn(|| walk.next(&self.order)).collect()
     }
 
     /// Whether a part is at `pos` (`sub` 1: a split shaft's second half).
@@ -1441,34 +1456,54 @@ impl Kinetics {
         while let Some(pos) = pending.next(&self.order) {
             for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
                 if self.nodes[id as usize].state.lifecycle.is_new() {
-                    self.tick_base(id, self.now + 1, &mut events);
+                    self.tick_base(id, self.now, &mut events);
                 }
             }
         }
         self.pending_events.extend(events);
     }
 
-    /// KineticBlockEntity.tick on this live entity's registration turn. The
-    /// world supplies the shared entity order, including non-kinetic pipes.
-    pub fn tick_registered_base(&mut self, pos: [i32; 3]) {
+    /// KineticBlockEntity.tick on this live entity's registration turn, after
+    /// [`Kinetics::advance`] began the tick. The world supplies the shared entity order,
+    /// including non-kinetic pipes. Whether it ran now (not already in this pass).
+    pub fn tick_registered_base(&mut self, pos: [i32; 3]) -> bool {
         let mut events = Vec::new();
+        let mut ran = false;
         for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
-            self.tick_base(id, self.now + 1, &mut events);
+            ran |= self.tick_base(id, self.now, &mut events);
         }
         self.pending_events.extend(events);
+        ran
     }
 
-    fn tick_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) {
+    /// The level walks its block entities in this pass, each with its base tick
+    /// ([`Kinetics::tick_registered_base`]): the solve then ticks only those registered after.
+    pub fn level_walks(&mut self) {
+        self.late.get_or_insert_with(Vec::new);
+    }
+
+    /// A turn whose `KineticBlockEntity.tick` does not run: the entity's subclass returned
+    /// before its `super.tick()`. It ticks again in the next pass.
+    pub fn skip_registered_base(&mut self, pos: [i32; 3]) {
+        for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+            let n = &mut self.nodes[id as usize];
+            if n.live && !n.state.lifecycle.is_new() {
+                n.state.lifecycle = state::Lifecycle::Ticked(self.base_pass + 1);
+            }
+        }
+    }
+
+    fn tick_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) -> bool {
         if !self.nodes[id as usize].live
             || self.nodes[id as usize]
                 .state
                 .lifecycle
                 .ran(self.base_pass + 1)
         {
-            return;
+            return false;
         }
         if self.nodes[id as usize].load_origin == LoadOrigin::Legacy {
-            return;
+            return false;
         }
         if self.nodes[id as usize].state.update_speed {
             self.attach_kinetics(id, events);
@@ -1506,7 +1541,7 @@ impl Kinetics {
                 .validate_later(tick, id, self.nodes[id as usize].stamp);
         }
         self.nodes[id as usize].state.lifecycle = state::Lifecycle::Ticked(self.base_pass + 1);
-        if self.networks.take_entity_dirty(id, &self.nodes) {
+        if self.networks.has_dirty() && self.networks.take_entity_dirty(id, &self.nodes) {
             let net = self.nodes[id as usize].state.net;
             let sync = self.networks.update_network(net, &self.nodes);
             if let Some(ref sync) = sync {
@@ -1535,6 +1570,7 @@ impl Kinetics {
             }
             self.propagate_new_source(id, events);
         }
+        true
     }
 
     /// BeltBlock.initBelt invokes attachKinetics immediately for each chain member.
@@ -1553,8 +1589,9 @@ impl Kinetics {
         self.solve_with(events, false, |_, _, _| {})
     }
 
-    /// KineticBlockEntity.tick for every registered entity in level order, with `subclass_tick`
-    /// between two entities: after the earlier one's base tick and before the later one's. A
+    /// KineticBlockEntity.tick for every registered entity in level order that has not ticked in
+    /// this pass, with `subclass_tick` between two entities: after the earlier one's base tick
+    /// and before the later one's. A
     /// block entity ticks as one, so a sequenced gearshift's instruction
     /// (`SequencedGearshiftBlockEntity.tick`) runs right after its own `super.tick()` and before
     /// any entity registered after it has ticked, while its `attachKinetics` still runs first.
@@ -1567,6 +1604,7 @@ impl Kinetics {
         mut subclass_tick: impl FnMut(&mut Self, [i32; 3], &mut Vec<Event>),
     ) -> SolveStats {
         if !ticking && !self.has_dirty() {
+            self.late = None;
             self.base_pass += 1;
             return SolveStats::default();
         }
@@ -1576,12 +1614,24 @@ impl Kinetics {
         // KineticBlockEntity.tick runs for registered entities in level order. The
         // indexed walk allocates nothing, excludes later registrations and skips removals.
         // Dirtied members earlier in this order wait until their next base tick.
-        let mut pending = self.order.walk(View::All);
-        while let Some(pos) = pending.next(&self.order) {
-            for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
-                self.tick_base(id, self.now, events);
+        let mut turn = |k: &mut Self, pos: [i32; 3], events: &mut Vec<Event>| {
+            let mut ran = false;
+            for id in k.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+                ran |= k.tick_base(id, k.now, events);
             }
-            subclass_tick(self, pos, events);
+            if ran {
+                subclass_tick(k, pos, events);
+            }
+        };
+        if let Some(late) = self.late.take() {
+            for pos in late {
+                turn(self, pos, events);
+            }
+        } else {
+            let mut pending = self.order.walk(View::All);
+            while let Some(pos) = pending.next(&self.order) {
+                turn(self, pos, events);
+            }
         }
         // Keep only outstanding tickets, without allocating or visiting other nodes.
         // A source dirtied after tick_base_through must keep the next pass active:

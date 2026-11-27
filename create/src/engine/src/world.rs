@@ -1,6 +1,7 @@
 //! Create's state for one open world: what each Create block state is (decoded once), and each
-//! dimension's kinetic network. The game glue feeds it block changes and chunk loads; nothing here
-//! runs per tick unless something changed.
+//! dimension's kinetic network. The game glue feeds it block changes and chunk loads, and walks
+//! the level's block entities once a tick ([`BlockEntityTicks`]); the solve does nothing unless
+//! something changed.
 
 use crate::Block;
 use crate::block_entity_order::{BlockEntityOrder, View, Walk};
@@ -9,41 +10,7 @@ use crate::parts::{Settings, StateInfo, is_generating, is_kinetic, parts};
 use std::collections::{HashMap, HashSet};
 
 fn entity_view(block: Block) -> Option<View> {
-    match block {
-        Block::Depot
-        | Block::WeightedEjector
-        | Block::Belt
-        | Block::Spout
-        | Block::ItemDrain
-        | Block::MechanicalPump
-        | Block::FluidPipe
-        | Block::GlassFluidPipe
-        | Block::EncasedFluidPipe
-        | Block::SmartFluidPipe => Some(View::Transport),
-        Block::Chute | Block::SmartChute => Some(View::Chute),
-        Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => Some(View::Transport),
-        // `BrassTunnelBlockEntity.tick` and `FunnelBlockEntity.tick` hand stacks to the belts and
-        // depots around them at their own turn.
-        Block::BrassTunnel
-        | Block::AndesiteFunnel
-        | Block::BrassFunnel
-        | Block::AndesiteBeltFunnel
-        | Block::BrassBeltFunnel => Some(View::Transport),
-        // `PressingBehaviour.tick` moves a running press's head at its own turn: a press after
-        // the depot or belt that started it moves in that tick.
-        Block::MechanicalPress => Some(View::Transport),
-        // `BasinOperatingBlockEntity.tick` starts, stops and moves a mixer at its own turn, and
-        // `BasinBlockEntity.tick` tells the operator above of a change of contents at the
-        // basin's: which of the two is registered first decides the tick the operator looks.
-        Block::MechanicalMixer | Block::Basin => Some(View::Transport),
-        // `SawBlockEntity.tick` hands an upward saw's results to the belt or depot beside it at
-        // its own turn: one after the saw moves them in that tick.
-        Block::MechanicalSaw => Some(View::Transport),
-        // `DeployerBlockEntity.tick` runs its stroke at its own turn, and the depot or belt
-        // under it asks it at theirs.
-        Block::Deployer => Some(View::Transport),
-        _ => None,
-    }
+    matches!(block, Block::Chute | Block::SmartChute).then_some(View::Chute)
 }
 
 /// Whether Create keeps the block entity when `old` is replaced by `new`: the same block, or one
@@ -216,6 +183,10 @@ pub struct Dimension {
     handle_changes: HashSet<[i32; 3]>,
     /// The cranks' tick is due in this tick's block-entity pass (`tick_cranks`).
     cranks_due: bool,
+    /// The level's block entities are ticking ([`CreateWorld::begin_block_entities`]), and
+    /// whether the cranks tick among them.
+    entities_ticking: bool,
+    cranks_ticking: bool,
     /// Sliding doors whose `open` changed (position, open before), for the glue to apply
     /// Create's rules after the tick; and the lower halves whose panel still slides
     /// (`SlidingDoorBlockEntity.animation`), the only doors that tick.
@@ -328,7 +299,7 @@ pub struct Dimension {
     pub windmill_orphans: Vec<([i32; 3], Option<crate::kinetics::Dir>, Windmill)>,
     /// Encased fans, and the ones turning: only those tick.
     pub fans: HashMap<[i32; 3], Fan>,
-    pub running_fans: Vec<[i32; 3]>,
+    pub running_fans: HashSet<[i32; 3]>,
     /// Nozzles (`NozzleBlockEntity`): they act only while the fan behind them ticks; those whose
     /// neighbour changed look at their fan after the tick (`neighborChanged`, `canSurvive`).
     pub nozzles: HashMap<[i32; 3], crate::nozzle::Nozzle>,
@@ -511,7 +482,7 @@ pub struct Dimension {
     pub(crate) funnel_saved: HashMap<[i32; 3], u64>,
     /// Funnels whose `InvManipulationBehaviour.targetCapability` is still null: freshly placed or
     /// loaded (until `SmartBlockEntity.tick` -> `initialize` -> `findNewCapability` runs at the
-    /// funnel's turn in `TransportTicks`), or invalidated by a neighbour change behind the funnel
+    /// funnel's turn in `BlockEntityTicks`), or invalidated by a neighbour change behind the funnel
     /// (`AbstractFunnelBlock.neighborChanged` -> `CapManipulationBehaviourBase.onNeighborChanged`).
     pub(crate) funnel_inv_pending: HashSet<[i32; 3]>,
     /// Funnels whose block below changed (`updateShape`): a horizontal funnel over a belt becomes
@@ -589,6 +560,29 @@ impl Dimension {
             Some(m) => Some(&mut m.operator),
             None => self.presses.get_mut(&pos).map(|p| &mut p.operator),
         }
+    }
+
+    /// `EncasedFanBlockEntity.tick`'s `airCurrentUpdateCooldown` for the fan at `pos`, when it
+    /// turns or has just stopped (its current goes): true when it ticks. Its current is due to be
+    /// looked at again every `fanBlockCheckRate` ticks. Fans standing still cost nothing.
+    fn fan_turn(&mut self, pos: [i32; 3]) -> bool {
+        if !self.running_fans.contains(&pos) {
+            return false;
+        }
+        let Some(fan) = self.fans.get_mut(&pos) else {
+            self.running_fans.remove(&pos);
+            return false;
+        };
+        if fan.cooldown == 0 {
+            fan.cooldown = crate::fan::CHECK_RATE;
+            fan.rebuild = true;
+        } else {
+            fan.cooldown -= 1;
+        }
+        if fan.speed == 0.0 {
+            self.running_fans.remove(&pos);
+        }
+        true
     }
 
     /// `basinChecker.scheduleUpdate` of the operator two above a basin or at `pos`: it looks at
@@ -888,7 +882,7 @@ struct StagedBelt {
 
 /// Work at a level block entity's turn, rather than a subsystem phase.
 #[derive(Debug, PartialEq)]
-pub enum TransportTick {
+pub enum EntityTurn {
     Fluid([i32; 3]),
     Spout([i32; 3]),
     Drain([i32; 3]),
@@ -910,23 +904,43 @@ pub enum TransportTick {
     /// `MechanicalMixerBlockEntity.tick`: a running mixer, or one asked to look at its basin or
     /// told it was removed.
     Mixer([i32; 3]),
-    /// `SawBlockEntity.tick` of a saw holding items.
+    /// `SawBlockEntity.tick`: `BlockBreakingKineticBlockEntity.tick` (a sideways saw's
+    /// breaking), then the items it holds.
     Saw([i32; 3]),
+    /// `DrillBlockEntity.tick` (`BlockBreakingKineticBlockEntity.tick`).
+    Drill([i32; 3]),
     /// `DeployerBlockEntity.tick`.
     Deployer([i32; 3]),
+    /// `MillstoneBlockEntity.tick`.
+    Millstone([i32; 3]),
+    /// `EncasedFanBlockEntity.tick` of a turning fan, or one that just stopped.
+    Fan([i32; 3]),
+    /// `CrushingWheelControllerBlockEntity.tick` of a controller with a crushing speed.
+    Crusher([i32; 3]),
+    /// `MechanicalCrafterBlockEntity.tick`.
+    Crafter([i32; 3]),
+    /// `CrushingWheelBlockEntity.onSpeedChanged` of the wheels whose speed the last base tick
+    /// changed: their controllers are looked at (`fixControllers`) before anything else ticks.
+    Wheels,
     /// `BasinBlockEntity.tick`: the lazy tick (`updateSpoutput`, `recipeBackupCheck`), the spout's
     /// hand-off (`tryClearingSpoutputOverflow`), then the change of contents
     /// ([`CreateWorld::tick_basin`]), all at the basin's own turn.
     Basin([i32; 3]),
 }
 
-/// Resumable level transport walk; inventories are inspected at their turn.
-pub struct TransportTicks {
+/// The level's block entities in `Level.blockEntityTickers` order, each ticking as one: its
+/// `KineticBlockEntity.tick` (`super.tick()`) and the `onSpeedChanged` callbacks that ran, then
+/// its own work ([`EntityTurn`]). Inventories are inspected at their turn; the host applies
+/// each turn before asking for the next.
+pub struct BlockEntityTicks {
     dim: usize,
     now: u64,
     entities: Walk,
+    /// An entity whose base tick changed a crushing wheel's speed: its own turn follows the
+    /// wheels' [`EntityTurn::Wheels`].
+    after_wheels: Option<[i32; 3]>,
 }
-impl TransportTicks {
+impl BlockEntityTicks {
     fn controller_turn(world: &mut CreateWorld, dim: usize, c: [i32; 3]) -> bool {
         let rpm = world.speed(dim, c).unwrap_or(0.0);
         let Some(b) = world.dims[dim].belts.get_mut(&c) else {
@@ -941,80 +955,137 @@ impl TransportTicks {
         }
         false
     }
-    pub fn next(&mut self, world: &mut CreateWorld) -> Option<TransportTick> {
+    pub fn next(&mut self, world: &mut CreateWorld) -> Option<EntityTurn> {
+        if let Some(p) = self.after_wheels.take()
+            && let Some(turn) = world
+                .block_at(self.dim, p)
+                .and_then(|block| self.turn(world, p, block))
+        {
+            return Some(turn);
+        }
         while let Some(p) = self.entities.next(&world.dims[self.dim].block_entities) {
-            match world.block_at(self.dim, p) {
-                Some(Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank) => {
-                    return Some(TransportTick::Fluid(p));
-                }
-                Some(Block::Spout) => return Some(TransportTick::Spout(p)),
-                Some(Block::ItemDrain) => return Some(TransportTick::Drain(p)),
-                Some(Block::MechanicalPress) => {
-                    if world.dims[self.dim]
-                        .presses
-                        .get(&p)
-                        .is_some_and(|x| x.running || x.operator.wants_turn())
-                    {
-                        return Some(TransportTick::Press(p));
-                    }
-                    continue;
-                }
-                Some(Block::MechanicalMixer) => {
-                    if world.dims[self.dim].mixers.get(&p).is_some_and(|m| {
-                        m.running || m.running_ticks >= 40 || m.operator.wants_turn()
-                    }) {
-                        return Some(TransportTick::Mixer(p));
-                    }
-                    continue;
-                }
-                Some(Block::Basin) => return Some(TransportTick::Basin(p)),
-                Some(Block::MechanicalSaw) => {
-                    if world.dims[self.dim].saws.contains_key(&p) {
-                        return Some(TransportTick::Saw(p));
-                    }
-                    continue;
-                }
-                Some(Block::MechanicalPump) => return Some(TransportTick::Pump(p)),
-                Some(Block::Deployer) => return Some(TransportTick::Deployer(p)),
-                Some(
-                    Block::FluidPipe
-                    | Block::GlassFluidPipe
-                    | Block::EncasedFluidPipe
-                    | Block::SmartFluidPipe,
-                ) => return Some(TransportTick::Pipe(p)),
-                _ => {}
-            }
-            match world.block_at(self.dim, p) {
-                Some(Block::Depot) => return Some(TransportTick::Depot(p)),
-                // The ejector is the depot behaviour it extends (`addBehaviours`), ticked
-                // with its block entity.
-                Some(Block::WeightedEjector) => return Some(TransportTick::Ejector(p)),
-                _ => {}
-            }
-            let d = &world.dims[self.dim];
-            if d.brass
-                .get(&p)
-                .is_some_and(|b| b.is_running() || b.progress > 0)
-            {
-                return Some(TransportTick::Brass(p));
-            }
-            if let Some(&due) = world.dims[self.dim].funnels.get(&p) {
-                // `SmartBlockEntity.tick` -> `InvManipulationBehaviour.initialize` / `tick`:
-                // `findNewCapability` acquires the target inventory at the funnel's own turn,
-                // before `FunnelBlockEntity.tick` acts or counts down its cooldown.
-                world.dims[self.dim].funnel_inv_pending.remove(&p);
-                if due <= self.now {
-                    return Some(TransportTick::Funnel(p));
-                }
-            }
-            if world.block_at(self.dim, p) == Some(Block::Belt) {
+            let Some(&state) = world.dims[self.dim].states.get(&p) else {
+                continue;
+            };
+            let block = world.table.get(state).map(|(b, _)| b);
+            if block == Some(Block::Belt) {
+                // `BeltBlockEntity.tick` runs `initBelt` before its `super.tick()`.
                 world.initialize_belt(self.dim, p);
-                if Self::controller_turn(world, self.dim, p) {
-                    return Some(TransportTick::Belt(p));
-                }
+            }
+            if world.table.is_kinetic(state) {
+                world.kinetic_turn(self.dim, p, block);
+                world.flush_kinetic_callbacks(self.dim);
+            }
+            if !world.dims[self.dim].crusher_checks.is_empty() {
+                self.after_wheels = Some(p);
+                return Some(EntityTurn::Wheels);
+            }
+            if let Some(turn) = block.and_then(|block| self.turn(world, p, block)) {
+                return Some(turn);
             }
         }
         None
+    }
+
+    /// What the entity at `p` does at its turn, after its base tick; None when nothing.
+    fn turn(&mut self, world: &mut CreateWorld, p: [i32; 3], block: Block) -> Option<EntityTurn> {
+        let dim = self.dim;
+        let d = &mut world.dims[dim];
+        let turn = match block {
+            Block::FluidValve | Block::FluidTank | Block::CreativeFluidTank => EntityTurn::Fluid(p),
+            Block::Spout => EntityTurn::Spout(p),
+            Block::ItemDrain => EntityTurn::Drain(p),
+            Block::MechanicalPress => {
+                if !d
+                    .presses
+                    .get(&p)
+                    .is_some_and(|x| x.running || x.operator.wants_turn())
+                {
+                    return None;
+                }
+                EntityTurn::Press(p)
+            }
+            Block::MechanicalMixer => {
+                if !d
+                    .mixers
+                    .get(&p)
+                    .is_some_and(|m| m.running || m.running_ticks >= 40 || m.operator.wants_turn())
+                {
+                    return None;
+                }
+                EntityTurn::Mixer(p)
+            }
+            Block::Basin => EntityTurn::Basin(p),
+            Block::MechanicalSaw => {
+                if !d.saws.contains_key(&p) && !d.drills.contains_key(&p) {
+                    return None;
+                }
+                EntityTurn::Saw(p)
+            }
+            Block::MechanicalDrill => {
+                d.drills.get(&p)?;
+                EntityTurn::Drill(p)
+            }
+            Block::MechanicalPump => EntityTurn::Pump(p),
+            Block::Deployer => EntityTurn::Deployer(p),
+            Block::FluidPipe
+            | Block::GlassFluidPipe
+            | Block::EncasedFluidPipe
+            | Block::SmartFluidPipe => EntityTurn::Pipe(p),
+            Block::Depot => EntityTurn::Depot(p),
+            // The ejector is the depot behaviour it extends (`addBehaviours`), ticked with its
+            // block entity.
+            Block::WeightedEjector => EntityTurn::Ejector(p),
+            Block::Millstone => {
+                d.millstones.get(&p)?;
+                EntityTurn::Millstone(p)
+            }
+            Block::EncasedFan => {
+                if !d.fan_turn(p) {
+                    return None;
+                }
+                EntityTurn::Fan(p)
+            }
+            Block::CrushingWheelController => {
+                if !d.running_crushers.contains(&p) {
+                    return None;
+                }
+                EntityTurn::Crusher(p)
+            }
+            Block::MechanicalCrafter => EntityTurn::Crafter(p),
+            Block::Belt => {
+                if !Self::controller_turn(world, dim, p) {
+                    return None;
+                }
+                EntityTurn::Belt(p)
+            }
+            Block::BrassTunnel => {
+                if !d
+                    .brass
+                    .get(&p)
+                    .is_some_and(|b| b.is_running() || b.progress > 0)
+                {
+                    return None;
+                }
+                EntityTurn::Brass(p)
+            }
+            Block::AndesiteFunnel
+            | Block::BrassFunnel
+            | Block::AndesiteBeltFunnel
+            | Block::BrassBeltFunnel => {
+                let &due = d.funnels.get(&p)?;
+                // `SmartBlockEntity.tick` -> `InvManipulationBehaviour.initialize` / `tick`:
+                // `findNewCapability` acquires the target inventory at the funnel's own turn,
+                // before `FunnelBlockEntity.tick` acts or counts down its cooldown.
+                d.funnel_inv_pending.remove(&p);
+                if due > self.now {
+                    return None;
+                }
+                EntityTurn::Funnel(p)
+            }
+            _ => return None,
+        };
+        Some(turn)
     }
 }
 
@@ -1714,7 +1785,7 @@ impl CreateWorld {
 
     /// `AbstractFunnelBlock.neighborChanged` -> `CapManipulationBehaviourBase.onNeighborChanged`:
     /// changing the block behind a funnel invalidates its cached `targetCapability` until the
-    /// funnel's next turn in `TransportTicks`.
+    /// funnel's next turn in `BlockEntityTicks`.
     pub fn funnel_neighbour_changed(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].funnels.is_empty() {
             return;
@@ -2241,7 +2312,7 @@ impl CreateWorld {
                     .insert(pos, crate::processing::inventory_slots(c.slots, c.applied));
             }
             if d.fans.remove(&pos).is_some() {
-                d.running_fans.retain(|p| *p != pos);
+                d.running_fans.remove(&pos);
             }
             d.nozzles.remove(&pos);
             if let Some(m) = d.pistons.remove(&pos) {
@@ -2668,24 +2739,80 @@ impl CreateWorld {
         dim: usize,
         events: &mut Vec<Event>,
     ) -> (SolveStats, Vec<([i32; 3], u8)>) {
-        // Block entities tick now: the block-tick phase is over, so a block change from here on
-        // schedules the sequenced gearshift's next tick (`LevelTicks.tick` clears the ticks it
-        // ran and the set `willTickThisTick` reads before block entities tick).
-        self.dims[dim].block_ticks.phase_ended();
+        self.begin_block_entities(dim);
         let stats = self.solve(dim, events);
+        let d = &mut self.dims[dim];
+        d.entities_ticking = false;
+        d.cranks_ticking = false;
         (stats, self.take_sequencer_writes(dim))
+    }
+
+    /// The level's block entities begin to tick, once a tick, before the first base tick (the
+    /// level's walk, [`CreateWorld::block_entity_ticks`], or else the solve): the block-tick phase
+    /// is over, so a block change from here on schedules the sequenced gearshift's next tick
+    /// (`LevelTicks.tick` clears the ticks it ran and the set `willTickThisTick` reads before
+    /// block entities tick); the speed changes of the block-tick phase (a re-attach, a crank's
+    /// turn) run their `onSpeedChanged`; the kinetic clock moves on; and the cranks being
+    /// turned tick among the block entities.
+    fn begin_block_entities(&mut self, dim: usize) {
+        if self.dims[dim].entities_ticking {
+            return;
+        }
+        self.dims[dim].block_ticks.phase_ended();
+        self.flush_kinetic_callbacks(dim);
+        let d = &mut self.dims[dim];
+        d.entities_ticking = true;
+        d.kinetics.advance();
+        d.kinetics.migrate_saves_without_kinetic_state();
+        d.cranks_ticking = std::mem::take(&mut d.cranks_due);
+    }
+
+    /// A kinetic block entity's tick at its turn in the level's walk: `KineticBlockEntity.tick`,
+    /// then the subclass ticks the engine owns.
+    fn kinetic_turn(&mut self, dim: usize, pos: [i32; 3], block: Option<Block>) {
+        let table = &self.table;
+        let d = &mut self.dims[dim];
+        // `BasinOperatingBlockEntity.tick` returns before its `super.tick()` in the tick it
+        // hears its basin went.
+        if matches!(block, Some(Block::MechanicalPress | Block::MechanicalMixer))
+            && d.operator_mut(pos).is_some_and(|o| o.removed)
+        {
+            d.kinetics.skip_registered_base(pos);
+            return;
+        }
+        if !d.kinetics.tick_registered_base(pos) {
+            return;
+        }
+        let cranks = d.cranks_ticking;
+        let Dimension {
+            kinetics,
+            settings,
+            generator_changes,
+            states: block_states,
+            handles,
+            handle_changes,
+            ..
+        } = d;
+        engine_subclass_tick(
+            kinetics,
+            pos,
+            cranks.then_some(&mut HandleTick {
+                table,
+                block_states,
+                settings,
+                generator_changes,
+                handles,
+                changes: handle_changes,
+            }),
+        );
     }
 
     /// Re-solves what changed in a dimension: nothing at all when nothing did.
     #[inline]
     fn solve(&mut self, dim: usize, events: &mut Vec<Event>) -> SolveStats {
-        // Speed changes of the block-tick phase (a re-attach, a crank's turn) already ran their
-        // `onSpeedChanged`: it comes before any block entity's base tick, not after them all.
-        self.flush_kinetic_callbacks(dim);
         let d = &mut self.dims[dim];
-        d.kinetics.advance();
         let from = events.len();
-        let cranks = std::mem::take(&mut d.cranks_due);
+        let cranks = d.cranks_ticking;
         // A subclass tick that has work to do runs the walk even when the network is at rest:
         // a running instruction (`SequencedGearshiftBlockEntity.tick`) or a crank still turning
         // (`HandCrankBlockEntity.tick`).
@@ -2706,36 +2833,23 @@ impl CreateWorld {
                 ..
             } = d;
             kinetics.solve_with(events, ticking, |k, pos, _| {
-                // A block entity ticks as one: `super.tick()` (the kinetic base) has run for
-                // this entity, and its own tick follows before any entity registered after it
-                // has ticked.
-                k.tick_sequencer(pos);
-                if cranks {
-                    HandleTick {
+                engine_subclass_tick(
+                    k,
+                    pos,
+                    cranks.then_some(&mut HandleTick {
                         table,
                         block_states,
                         settings,
                         generator_changes,
                         handles,
                         changes: handle_changes,
-                    }
-                    .apply(k, pos);
-                }
+                    }),
+                );
             })
         };
         self.flush_kinetic_callbacks(dim);
         let d = &mut self.dims[dim];
-        // Fans follow their speed (`onSpeedChanged`: the current is rebuilt); crushing wheels
-        // look at their controllers again.
         for e in &events[from..] {
-            if let Event::Speed { pos, .. } = *e
-                && d.states
-                    .get(&pos)
-                    .and_then(|&s| self.table.get(s))
-                    .is_some_and(|(b, _)| b == Block::CrushingWheel)
-            {
-                d.crusher_checks.push(pos);
-            }
             if let Event::Speed { pos, .. } = *e
                 && d.states
                     .get(&pos)
@@ -2779,21 +2893,6 @@ impl CreateWorld {
             {
                 d.plumbing.hose_speeds.push((pos, speed));
             }
-            if let Event::Speed { pos, .. } = *e
-                && let Some(operator) = d.operator_mut(pos)
-            {
-                operator.on_speed_changed();
-            }
-            if let Event::Speed { pos, speed, .. } = *e
-                && let Some(fan) = d.fans.get_mut(&pos)
-                && fan.speed != speed
-            {
-                fan.speed = speed;
-                fan.rebuild = true;
-                if !d.running_fans.contains(&pos) {
-                    d.running_fans.push(pos);
-                }
-            }
         }
         // Gauges read their network after each solve of it (`onSpeedChanged`,
         // `updateFromNetwork`): a network's stress can change while their speed does not. Only
@@ -2836,32 +2935,9 @@ impl CreateWorld {
             && let Some(fan) = d.fans.get_mut(&pos)
         {
             fan.speed = speed;
-            if !d.running_fans.contains(&pos) {
-                d.running_fans.push(pos);
-            }
+            d.running_fans.insert(pos);
         }
         true
-    }
-
-    /// Fans to tick: each turning one, and one that just stopped (its current goes). Those whose
-    /// current is due to be looked at again (`fanBlockCheckRate`) are marked to rebuild.
-    pub fn fans_to_tick(&mut self, dim: usize) -> Vec<[i32; 3]> {
-        let d = &mut self.dims[dim];
-        let mut out = Vec::with_capacity(d.running_fans.len());
-        d.running_fans.retain(|pos| {
-            let Some(fan) = d.fans.get_mut(pos) else {
-                return false;
-            };
-            if fan.cooldown == 0 {
-                fan.cooldown = crate::fan::CHECK_RATE;
-                fan.rebuild = true;
-            } else {
-                fan.cooldown -= 1;
-            }
-            out.push(*pos);
-            fan.speed != 0.0
-        });
-        out
     }
 
     /// A player scrolls on the creative motor at `pos`: its speed moves by one per step, between
@@ -3390,27 +3466,6 @@ impl CreateWorld {
             .collect()
     }
 
-    /// Millstones that turn: the only ones that do anything this tick (Create's tick returns at
-    /// once without speed), with their speed.
-    pub fn turning_millstones(&self, dim: usize) -> Vec<([i32; 3], f32)> {
-        let d = &self.dims[dim];
-        d.millstones
-            .keys()
-            .filter_map(|p| Some((*p, d.kinetics.speed(*p, 0).filter(|s| *s != 0.0)?)))
-            .collect()
-    }
-
-    /// The drills and saws of `dim`, in their block entities' order (`Level.blockEntityTickers`).
-    pub fn breakers(&self, dim: usize) -> Vec<[i32; 3]> {
-        let d = &self.dims[dim];
-        if d.drills.is_empty() {
-            return Vec::new();
-        }
-        let mut out: Vec<[i32; 3]> = d.drills.keys().copied().collect();
-        out.sort_by_key(|p| d.block_entities.registration_order(*p));
-        out
-    }
-
     /// A water wheel's new flow score: it turns again when the score changed.
     pub fn set_wheel_flow(&mut self, dim: usize, pos: [i32; 3], score: i32) {
         let flow = score.clamp(-1, 1) as i8;
@@ -3859,8 +3914,8 @@ impl CreateWorld {
     }
 
     /// `BeltBlockEntity.tick` of a segment with `beltLength == 0`: `BeltBlock.initBelt` on its
-    /// own turn, after the base ticks of every entity registered before it, then its own
-    /// `super.tick()`.
+    /// own turn, after the base ticks of every entity registered before it and before its own
+    /// `super.tick()` ([`BlockEntityTicks`]).
     fn initialize_belt(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].belt_of.contains_key(&pos) {
             return;
@@ -3874,7 +3929,6 @@ impl CreateWorld {
         let Some((segment, chain)) = crate::belt::whole_chain(controller, segment_at) else {
             return;
         };
-        self.kinetic_base_ticks_before(dim, pos);
         let d = &mut self.dims[dim];
         for p in &chain {
             d.belt_of.insert(*p, controller);
@@ -3916,7 +3970,6 @@ impl CreateWorld {
             // BeltBlock.initBelt attaches each member before inventory.tick.
             self.dims[dim].kinetics.attach_belt(p);
         }
-        self.dims[dim].kinetics.tick_registered_base(pos);
     }
 
     /// `BeltBlock.getBeltChain` of the belt segment `pos` belongs to.
@@ -5738,16 +5791,17 @@ impl CreateWorld {
         self.dims[dim].unsaved.push((pos[0] >> 4, pos[2] >> 4));
     }
 
-    /// Level block-entity registration order shared by DepotBehaviour.tick,
-    /// BeltBlockEntity.tick, SpoutBlockEntity.tick, ItemDrainBlockEntity.tick,
-    /// PumpBlockEntity.tick, BrassTunnelBlockEntity.tick, FunnelBlockEntity.tick and a running
-    /// press's PressingBehaviour.tick at game tick `now`. Call next only after applying the
-    /// previous entity's transfers.
-    pub fn transport_ticks(&mut self, dim: usize, now: u64) -> TransportTicks {
-        TransportTicks {
+    /// The level's block entities at game tick `now`, in `Level.blockEntityTickers` order, each
+    /// with its base tick first ([`BlockEntityTicks`]); it begins the block-entity phase. Call
+    /// next only after applying the previous entity's turn.
+    pub fn block_entity_ticks(&mut self, dim: usize, now: u64) -> BlockEntityTicks {
+        self.begin_block_entities(dim);
+        self.dims[dim].kinetics.level_walks();
+        BlockEntityTicks {
             dim,
             now,
-            entities: self.dims[dim].block_entities.walk(View::Transport),
+            entities: self.dims[dim].block_entities.walk(View::All),
+            after_wheels: None,
         }
     }
 
@@ -5830,7 +5884,7 @@ impl CreateWorld {
         arrived
     }
 
-    /// Belts currently holding items, for observation only. Use `transport_ticks` to tick.
+    /// Belts currently holding items, for observation only. Use `block_entity_ticks` to tick.
     pub fn busy_belts(&self, dim: usize) -> Vec<[i32; 3]> {
         self.dims[dim]
             .belts
@@ -5991,6 +6045,16 @@ fn update_parts_in_place(
 
 /// `HandCrankBlockEntity.tick` and `ValveHandleBlockEntity.tick`: the use a turned handle
 /// counts down, and the crank it stops turning (`updateGeneratedRotation`).
+/// The subclass ticks the engine owns, after the entity's `super.tick()` (the kinetic base) and
+/// before any entity registered after it has ticked: `SequencedGearshiftBlockEntity.tick`, and
+/// `HandCrankBlockEntity.tick` when the cranks tick.
+fn engine_subclass_tick(k: &mut Kinetics, pos: [i32; 3], cranks: Option<&mut HandleTick<'_>>) {
+    k.tick_sequencer(pos);
+    if let Some(cranks) = cranks {
+        cranks.apply(k, pos);
+    }
+}
+
 struct HandleTick<'a> {
     table: &'a StateTable,
     block_states: &'a HashMap<[i32; 3], u32>,
@@ -6038,11 +6102,35 @@ impl CreateWorld {
     /// pointer.chase changes the saved target without advancing the pointer.
     pub fn flush_kinetic_callbacks(&mut self, dim: usize) {
         let notified = self.dims[dim].kinetics.take_speed_notifications();
+        if notified.is_empty() {
+            return;
+        }
         let d = &mut self.dims[dim];
         for (pos, speed) in notified {
             if let Some(pointer) = d.plumbing.valves.get_mut(&pos) {
                 pointer.speed_changed(speed);
                 d.kinetics.mark_saved_changed(pos);
+            }
+            // `BasinOperatingBlockEntity.onSpeedChanged`.
+            if let Some(operator) = d.operator_mut(pos) {
+                operator.on_speed_changed();
+            }
+            // `EncasedFanBlockEntity.onSpeedChanged`: `updateAirFlow`.
+            if let Some(fan) = d.fans.get_mut(&pos)
+                && fan.speed != speed
+            {
+                fan.speed = speed;
+                fan.rebuild = true;
+                d.running_fans.insert(pos);
+            }
+            // `CrushingWheelBlockEntity.onSpeedChanged`: `fixControllers`, which the host runs
+            // at [`EntityTurn::Wheels`].
+            if d.states
+                .get(&pos)
+                .and_then(|&s| self.table.get(s))
+                .is_some_and(|(b, _)| b == Block::CrushingWheel)
+            {
+                d.crusher_checks.push(pos);
             }
             // `MechanicalBearingBlockEntity.onSpeedChanged` (a windmill's too):
             // `assembleNextTick = true`, looked at in its next tick. A bearing loaded with its
@@ -6085,7 +6173,7 @@ impl CreateWorld {
         dim: usize,
         open: impl Fn([i32; 3]) -> Option<bool>,
     ) -> Vec<([i32; 3], bool)> {
-        let mut positions = self.dims[dim].block_entities.walk(View::Transport);
+        let mut positions = self.dims[dim].block_entities.walk(View::All);
         let mut out = Vec::new();
         while let Some(pos) = positions.next(&self.dims[dim].block_entities) {
             if matches!(
@@ -6127,28 +6215,6 @@ impl CreateWorld {
         self.tanks_touched(dim, true);
         self.creative_tanks_touched(dim, true);
         out
-    }
-
-    /// `KineticBlockEntity.tick` of a kinetic entity whose subclass ticks in a shared walk
-    /// (a fluid pipe's FluidTransportBehaviour, an ejector's DepotBehaviour), on its
-    /// registration turn. `Level.blockEntityTickers` ticks every entity registered before it
-    /// first, so their base ticks run before this one: after a reload, an ejector's
-    /// `attachKinetics` finds its source's network already restored by `initialize`
-    /// (`KineticNetwork.initFromTE`, `addSilently`), and the sync its `add` causes reaches them.
-    pub fn kinetic_base_ticks_through(&mut self, dim: usize, pos: [i32; 3]) {
-        self.kinetic_base_ticks_before(dim, pos);
-        self.dims[dim].kinetics.tick_registered_base(pos);
-    }
-
-    /// The base ticks of the entities registered before `pos`, which tick before it.
-    fn kinetic_base_ticks_before(&mut self, dim: usize, pos: [i32; 3]) {
-        let d = &mut self.dims[dim];
-        let mut prefix = d.block_entities.walk_through(View::All, pos);
-        while let Some(p) = prefix.next(&d.block_entities) {
-            if p != pos {
-                d.kinetics.tick_registered_base(p);
-            }
-        }
     }
 
     /// Pipe behaviours tick in Level.blockEntityTickers registration order.
@@ -6369,7 +6435,7 @@ mod tests {
     }
 
     fn transport_walk(w: &mut CreateWorld) {
-        let mut turns = w.transport_ticks(0, 0);
+        let mut turns = w.block_entity_ticks(0, 0);
         while turns.next(w).is_some() {}
     }
 
@@ -6424,7 +6490,7 @@ mod tests {
         // One removed leaves the walk; the transport walk never holds them.
         w.apply_block_change(0, [0, 8, 5], 10, 0, false);
         assert_eq!(order(w.chute_ticks(0), &w), vec![[0, 9, 5], [0, 8, 6]]);
-        let mut phase = w.transport_ticks(0, 0);
+        let mut phase = w.block_entity_ticks(0, 0);
         assert!(phase.next(&mut w).is_none());
     }
 
@@ -7193,7 +7259,7 @@ mod tests {
             w.dims[0].kinetics.remove([0, 8, i]);
         }
         w.take_belt(0, c);
-        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
+        assert_eq!(w.block_entity_ticks(0, 0).next(&mut w), None);
         assert!(
             w.column_belts(0, 0, 0)
                 .iter()
@@ -7235,14 +7301,14 @@ mod tests {
             );
             d.processing = 20;
             d.fluid = Some((crate::tank::Fluid::Water, 1000));
-            let mut turns = w.transport_ticks(0, 0);
+            let mut turns = w.block_entity_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 let d = w.dims[0].drains.get_mut(&drain).unwrap();
                 match turn {
-                    TransportTick::Drain(_) => {
+                    EntityTurn::Drain(_) => {
                         crate::drain::tick(d, &[]);
                     }
-                    TransportTick::Pump(_) => d.fluid = None,
+                    EntityTurn::Pump(_) => d.fluid = None,
                     _ => panic!("unexpected turn"),
                 }
             }
@@ -7282,13 +7348,13 @@ mod tests {
                 crate::tank::Fluid::Water,
                 1000,
             );
-            let mut turns = w.transport_ticks(0, 0);
+            let mut turns = w.block_entity_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 match turn {
-                    TransportTick::Spout(p) => {
+                    EntityTurn::Spout(p) => {
                         crate::spout::tick(w.dims[0].spouts.get_mut(&p).unwrap())
                     }
-                    TransportTick::Depot(p) => {
+                    EntityTurn::Depot(p) => {
                         assert!(w.tick_depot(0, p, false));
                         let d = &mut w.dims[0];
                         crate::spout::on_depot(
@@ -7325,13 +7391,13 @@ mod tests {
         for n in 0..6 {
             w.block_changed(0, [n, 8, 0], 0, 10 + n as u32);
         }
-        let mut turns = w.transport_ticks(0, 0);
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Spout([0, 8, 0])));
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Drain([1, 8, 0])));
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Pump([2, 8, 0])));
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Depot([3, 8, 0])));
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([4, 8, 0])));
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Fluid([5, 8, 0])));
+        let mut turns = w.block_entity_ticks(0, 0);
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Spout([0, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Drain([1, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Pump([2, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Depot([3, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Fluid([4, 8, 0])));
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Fluid([5, 8, 0])));
         assert_eq!(turns.next(&mut w), None);
     }
 
@@ -7477,11 +7543,11 @@ mod tests {
         let due = w.dims[0].funnels[&funnel];
         assert_eq!(crate::funnel::cooldown(due, 34), 7);
         let turns = |w: &mut CreateWorld, now| {
-            let mut phase = w.transport_ticks(0, now);
+            let mut phase = w.block_entity_ticks(0, now);
             std::iter::from_fn(|| phase.next(w)).collect::<Vec<_>>()
         };
         assert_eq!(turns(&mut w, 41), []);
-        assert_eq!(turns(&mut w, 42), [TransportTick::Funnel(funnel)]);
+        assert_eq!(turns(&mut w, 42), [EntityTurn::Funnel(funnel)]);
         w.column_unloaded(0, 0, 0);
         w.block_loaded(0, funnel, 10);
         assert_eq!(w.dims[0].funnels[&funnel], 0);
@@ -7526,10 +7592,10 @@ mod tests {
         w.block_changed(0, depot, 0, 10);
         w.block_changed(0, funnel, 0, 11);
         assert!(!w.funnel_inv_ready(0, funnel));
-        let mut phase = w.transport_ticks(0, 1);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Depot(depot)));
+        let mut phase = w.block_entity_ticks(0, 1);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Depot(depot)));
         assert!(!w.funnel_inv_ready(0, funnel));
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Funnel(funnel)));
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Funnel(funnel)));
         assert!(w.funnel_inv_ready(0, funnel));
         assert_eq!(phase.next(&mut w), None);
 
@@ -7549,13 +7615,13 @@ mod tests {
         assert!(w.funnel_inv_ready(0, funnel));
         w.block_changed(0, depot, 10, 0);
         assert!(!w.funnel_inv_ready(0, funnel));
-        let mut phase = w.transport_ticks(0, 2);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Funnel(funnel)));
+        let mut phase = w.block_entity_ticks(0, 2);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Funnel(funnel)));
         assert!(w.funnel_inv_ready(0, funnel));
         w.funnel_neighbour_changed(0, depot);
         assert!(!w.funnel_inv_ready(0, funnel));
-        let mut phase = w.transport_ticks(0, 3);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Funnel(funnel)));
+        let mut phase = w.block_entity_ticks(0, 3);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Funnel(funnel)));
         assert!(w.funnel_inv_ready(0, funnel));
 
         // Replacing a funnel directly with another Create block clears both funnel maps.
@@ -7574,8 +7640,8 @@ mod tests {
         w.block_loaded(0, depot, 10);
         assert!(!w.funnel_inv_ready(0, funnel));
         // Funnel loaded before depot: its turn resolves before depot ticks.
-        let mut phase = w.transport_ticks(0, 4);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Depot(depot)));
+        let mut phase = w.block_entity_ticks(0, 4);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Depot(depot)));
         assert!(w.funnel_inv_ready(0, funnel));
         assert_eq!(phase.next(&mut w), None);
     }
@@ -7611,16 +7677,16 @@ mod tests {
         w.block_changed(0, funnel, 0, 12);
         w.block_changed(0, last, 0, 10);
         let turns = |w: &mut CreateWorld, now| {
-            let mut phase = w.transport_ticks(0, now);
+            let mut phase = w.block_entity_ticks(0, now);
             std::iter::from_fn(|| phase.next(w)).collect::<Vec<_>>()
         };
         // An idle tunnel takes no turn; the funnel just placed is due at once.
         assert_eq!(
             turns(&mut w, 40),
             [
-                TransportTick::Depot(depot),
-                TransportTick::Funnel(funnel),
-                TransportTick::Depot(last)
+                EntityTurn::Depot(depot),
+                EntityTurn::Funnel(funnel),
+                EntityTurn::Depot(last)
             ]
         );
         // The tunnel holds a stack and the funnel waits out its cooldown.
@@ -7629,9 +7695,9 @@ mod tests {
         assert_eq!(
             turns(&mut w, 41),
             [
-                TransportTick::Depot(depot),
-                TransportTick::Brass(tunnel),
-                TransportTick::Depot(last)
+                EntityTurn::Depot(depot),
+                EntityTurn::Brass(tunnel),
+                EntityTurn::Depot(last)
             ]
         );
         // Emptied, it still counts `distributionProgress` down.
@@ -7640,10 +7706,10 @@ mod tests {
         assert_eq!(
             turns(&mut w, 49),
             [
-                TransportTick::Depot(depot),
-                TransportTick::Brass(tunnel),
-                TransportTick::Funnel(funnel),
-                TransportTick::Depot(last)
+                EntityTurn::Depot(depot),
+                EntityTurn::Brass(tunnel),
+                EntityTurn::Funnel(funnel),
+                EntityTurn::Depot(last)
             ]
         );
     }
@@ -7691,15 +7757,15 @@ mod tests {
                 .unwrap()
                 .items
                 .add(crate::belt::Item::new("minecraft:iron_ingot", 16, 0, false));
-            let mut turns = w.transport_ticks(0, 0);
+            let mut turns = w.block_entity_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 match turn {
-                    TransportTick::Belt(_) => {
+                    EntityTurn::Belt(_) => {
                         let mut h = crate::depot::Held::new(0, false);
                         h.position = 0.0;
                         w.depot_put(0, p, Some(h));
                     }
-                    TransportTick::Depot(p) => {
+                    EntityTurn::Depot(p) => {
                         w.tick_depot(0, p, false);
                     }
                     _ => panic!("unexpected machine"),
@@ -7735,20 +7801,20 @@ mod tests {
         let mut h = crate::depot::Held::new(0, false);
         h.position = 0.0;
         w.depot_put(0, e, Some(h));
-        let mut turns = w.transport_ticks(0, 0);
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Ejector(e)));
+        let mut turns = w.block_entity_ticks(0, 0);
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Ejector(e)));
         // `DepotBehaviour.tick` inside `EjectorBlockEntity.tick`'s `super.tick()`: the
         // stack slides a quarter of the way left (0.125 after one tick, as Java's tick 41).
         w.tick_depot(0, e, false);
         assert_eq!(w.dims[0].depots[&e].unwrap().position, 0.125);
-        assert_eq!(turns.next(&mut w), Some(TransportTick::Depot([0, 8, 1])));
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Depot([0, 8, 1])));
         assert_eq!(turns.next(&mut w), None);
         // e2-ejector-idle-wind-up: the walk reaches it every tick, idle or not — an ejector
         // that began retracting while its shaft stood still still ticks, so it winds down
         // once its shaft turns.
         assert_eq!(
-            w.transport_ticks(0, 0).next(&mut w),
-            Some(TransportTick::Ejector(e))
+            w.block_entity_ticks(0, 0).next(&mut w),
+            Some(EntityTurn::Ejector(e))
         );
     }
 
@@ -7783,15 +7849,20 @@ mod tests {
         }
     }
 
+    /// Every turn of one walk, in order.
+    fn walk_turns(w: &mut CreateWorld) -> Vec<EntityTurn> {
+        let mut turns = w.block_entity_ticks(0, 0);
+        std::iter::from_fn(|| turns.next(w)).collect()
+    }
+
     /// The shared walk for `ticks` entity turns, ticking each ejector as its block entity does:
-    /// its kinetic base, then the depot behaviour it extends, then its own tick.
+    /// its kinetic base (the walk's), then the depot behaviour it extends, then its own tick.
     fn walk_ejectors(w: &mut CreateWorld, ticks: usize) {
         for _ in 0..ticks {
-            let mut turns = w.transport_ticks(0, 0);
+            let mut turns = w.block_entity_ticks(0, 0);
             while let Some(turn) = turns.next(w) {
                 match turn {
-                    TransportTick::Ejector(p) => {
-                        w.kinetic_base_ticks_through(0, p);
+                    EntityTurn::Ejector(p) => {
                         w.tick_depot(0, p, false);
                         let speed = w.speed(0, p).unwrap_or(0.0);
                         let Some(mut e) = w.dims[0].ejectors.remove(&p) else {
@@ -7800,7 +7871,7 @@ mod tests {
                         e.tick(p, crate::kinetics::Dir::East, speed, &mut EmptyArc);
                         w.dims[0].ejectors.insert(p, e);
                     }
-                    TransportTick::Depot(p) => {
+                    EntityTurn::Depot(p) => {
                         w.tick_depot(0, p, false);
                     }
                     _ => {}
@@ -7936,7 +8007,7 @@ mod tests {
     #[test]
     fn empty_belt_inventory_direction_is_saved() {
         let mut w = item_belt_world(32.0);
-        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
+        assert_eq!(w.block_entity_ticks(0, 0).next(&mut w), None);
         let saved = w.column_belts(0, 0, 0);
         assert_eq!(saved.len(), 1);
         assert!(saved[0].1.positive);
@@ -7950,9 +8021,9 @@ mod tests {
             w.dims[0].belts.get_mut(&c).unwrap().items.positive = false;
         }
         w.take_belt_saved_changes(0);
-        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
+        assert_eq!(w.block_entity_ticks(0, 0).next(&mut w), None);
         assert_eq!(w.take_belt_saved_changes(0), [[0, 8, 0], [0, 8, -4]].into());
-        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
+        assert_eq!(w.block_entity_ticks(0, 0).next(&mut w), None);
         assert!(w.take_belt_saved_changes(0).is_empty());
     }
 
@@ -8027,8 +8098,8 @@ mod tests {
             assert!(w.dims[0].kinetics.restore_state(p, 0, kinetic));
         }
         assert_eq!(
-            w.transport_ticks(0, 0).next(&mut w),
-            Some(TransportTick::Belt(c))
+            w.block_entity_ticks(0, 0).next(&mut w),
+            Some(EntityTurn::Belt(c))
         );
         let rpm = w.speed(0, c).unwrap();
         assert_eq!(rpm, -32.0);
@@ -8046,13 +8117,13 @@ mod tests {
     #[test]
     fn empty_belt_tick_sets_first_stack_order() {
         let mut w = item_belt_world(32.0);
-        assert_eq!(w.transport_ticks(0, 0).next(&mut w), None);
+        assert_eq!(w.block_entity_ticks(0, 0).next(&mut w), None);
         let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
         item.position = 1.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
         b.items.add(item);
-        let mut phase = w.transport_ticks(0, 0);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Belt([0, 8, 0])));
+        let mut phase = w.block_entity_ticks(0, 0);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Belt([0, 8, 0])));
         let b = w.dims[0].belts.get_mut(&[0, 8, 0]).unwrap();
         b.items.tick(
             5,
@@ -8076,11 +8147,11 @@ mod tests {
             .unwrap()
             .items
             .add(item.clone());
-        let mut phase = w.transport_ticks(0, 0);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Belt(sender)));
+        let mut phase = w.block_entity_ticks(0, 0);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Belt(sender)));
         item.position = 4.26; // DirectBeltInputBehaviour's start at the receiving end.
         w.dims[0].belts.get_mut(&receiver).unwrap().items.add(item);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Belt(receiver)));
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Belt(receiver)));
         let b = w.dims[0].belts.get_mut(&receiver).unwrap();
         b.items.tick(
             4,
@@ -8102,7 +8173,7 @@ mod tests {
     fn belt_receiving_after_its_turn_waits_until_next_tick() {
         let mut w = item_belt_world(-32.0);
         let receiver = [0, 8, -4];
-        let mut phase = w.transport_ticks(0, 0);
+        let mut phase = w.block_entity_ticks(0, 0);
         // Both empty controllers already took their turns.
         assert_eq!(phase.next(&mut w), None);
         let mut item = crate::belt::Item::new("minecraft:iron_ingot", 16, 180, false);
@@ -8110,8 +8181,8 @@ mod tests {
         w.dims[0].belts.get_mut(&receiver).unwrap().items.add(item);
         assert_eq!(phase.next(&mut w), None);
         assert!(w.dims[0].belts[&receiver].items.items.is_empty());
-        let mut phase = w.transport_ticks(0, 0);
-        assert_eq!(phase.next(&mut w), Some(TransportTick::Belt(receiver)));
+        let mut phase = w.block_entity_ticks(0, 0);
+        assert_eq!(phase.next(&mut w), Some(EntityTurn::Belt(receiver)));
         let b = w.dims[0].belts.get_mut(&receiver).unwrap();
         b.items.tick(4, -32.0 / 480.0, true, &mut ItemBeltSide);
         assert!((b.items.items[0].position - 4.1933336).abs() < 1e-6);
@@ -8324,10 +8395,10 @@ mod tests {
         // and the running press's, in the walk's order. Whether the depot pressed.
         let level_tick = |w: &mut CreateWorld| {
             let mut pressed = false;
-            let mut turns = w.transport_ticks(0, 0);
+            let mut turns = w.block_entity_ticks(0, 0);
             while let Some(turn) = turns.next(w) {
                 match turn {
-                    TransportTick::Depot(p) if w.tick_depot(0, p, false) => {
+                    EntityTurn::Depot(p) if w.tick_depot(0, p, false) => {
                         let speed = w.speed(0, at).unwrap();
                         let p = w.dims[0].presses[&at];
                         let held = w.dims[0].depots.get_mut(&depot).unwrap().as_mut().unwrap();
@@ -8340,7 +8411,7 @@ mod tests {
                             Step::Wait => {}
                         }
                     }
-                    TransportTick::Press(p) => {
+                    EntityTurn::Press(p) => {
                         w.tick_press(0, p);
                     }
                     _ => {}
@@ -8382,19 +8453,10 @@ mod tests {
         let (saw, depot) = ([0, 8, 0], [1, 8, 0]);
         w.block_changed(0, saw, 0, 2);
         w.block_changed(0, depot, 0, 3);
-        let turns = |w: &mut CreateWorld| {
-            let mut out = Vec::new();
-            let mut walk = w.transport_ticks(0, 0);
-            while let Some(t) = walk.next(w) {
-                out.push(t);
-            }
-            out
-        };
-        assert!(!turns(&mut w).contains(&TransportTick::Saw(saw)));
         w.dims[0].saws.insert(saw, crate::saw::Saw::default());
         assert_eq!(
-            turns(&mut w),
-            [TransportTick::Saw(saw), TransportTick::Depot(depot)]
+            walk_turns(&mut w),
+            [EntityTurn::Saw(saw), EntityTurn::Depot(depot)]
         );
     }
 
@@ -8714,7 +8776,7 @@ mod tests {
         place(&mut w);
         w.block_changed(0, pos, 10, 0);
         assert_eq!(w.dims[0].breaker_cracks, [(pos, at)]);
-        assert!(w.breakers(0).is_empty());
+        assert!(w.dims[0].drills.is_empty());
         // Replaced by another of Create's blocks, which keeps the block entity type.
         w.dims[0].breaker_cracks.clear();
         place(&mut w);
@@ -8760,7 +8822,14 @@ mod tests {
         w.block_changed(0, [0, 64, 0], 0, 11);
         w.block_changed(0, [2, 64, 0], 0, 10);
         w.block_changed(0, [1, 64, 0], 0, 11);
-        assert_eq!(w.breakers(0), [[0, 64, 0], [2, 64, 0], [1, 64, 0]]);
+        assert_eq!(
+            walk_turns(&mut w),
+            [
+                EntityTurn::Saw([0, 64, 0]),
+                EntityTurn::Drill([2, 64, 0]),
+                EntityTurn::Saw([1, 64, 0]),
+            ]
+        );
         // A saw keeps its breaker through a change of its block state.
         w.dims[0].drills.get_mut(&[1, 64, 0]).unwrap().progress = 2;
         w.block_changed(0, [1, 64, 0], 11, 11);
@@ -8913,8 +8982,8 @@ mod tests {
             )),
         );
         for _ in 0..9 {
-            let mut turns = w.transport_ticks(0, 0);
-            while let Some(TransportTick::Depot(p)) = turns.next(&mut w) {
+            let mut turns = w.block_entity_ticks(0, 0);
+            while let Some(EntityTurn::Depot(p)) = turns.next(&mut w) {
                 w.tick_depot(0, p, false);
             }
         }
@@ -8924,8 +8993,8 @@ mod tests {
         w.restore_depot(0, pos, saved.clone());
         assert_eq!(w.saved_depot(0, pos), Some(saved));
         for expected in [0.48592162, 0.48944122, 0.49208093] {
-            let mut turns = w.transport_ticks(0, 0);
-            while let Some(TransportTick::Depot(p)) = turns.next(&mut w) {
+            let mut turns = w.block_entity_ticks(0, 0);
+            while let Some(EntityTurn::Depot(p)) = turns.next(&mut w) {
                 w.tick_depot(0, p, false);
             }
             assert!(
@@ -9065,8 +9134,8 @@ mod tests {
         assert_eq!(w.take_depot_changes(0), [[0, 0, 0]]);
         let mut ticks = 0;
         while !w.dims[0].sliding.is_empty() {
-            let mut turns = w.transport_ticks(0, 0);
-            while let Some(TransportTick::Depot(p)) = turns.next(&mut w) {
+            let mut turns = w.block_entity_ticks(0, 0);
+            while let Some(EntityTurn::Depot(p)) = turns.next(&mut w) {
                 w.tick_depot(0, p, false);
             }
             ticks += 1;
@@ -10160,7 +10229,8 @@ mod tests {
             false,
         );
         assert_eq!(w.speed(0, drive), Some(0.));
-        w.kinetic_base_ticks_through(0, pipe);
+        let mut turns = w.block_entity_ticks(0, 0);
+        assert_eq!(turns.next(&mut w), Some(EntityTurn::Pipe(pipe)));
         assert_eq!(w.speed(0, drive), Some(64.));
     }
 
@@ -10480,6 +10550,100 @@ mod tests {
         );
     }
 
+    /// #370: a machine placed beside a turning shaft has its speed at its first turn
+    /// (`KineticBlockEntity.tick`'s `attachKinetics` runs first in its own tick), and a fan has
+    /// had its `onSpeedChanged`.
+    #[test]
+    fn a_machine_placed_beside_a_turning_shaft_turns_at_its_first_turn() {
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "up")]),
+            ("create:millstone", vec![]),
+            ("create:creative_motor", vec![("facing", "west")]),
+            ("create:encased_fan", vec![("facing", "west")]),
+            ("create:creative_motor", vec![("facing", "south")]),
+            ("create:cogwheel", vec![("axis", "z")]),
+            (
+                "create:mechanical_crafter",
+                vec![("facing", "north"), ("pointing", "up")],
+            ),
+        ];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (millstone, fan, crafter) = ([0, 65, 0], [6, 64, 0], [11, 64, 0]);
+        for (p, state) in [([0, 64, 0], 10), ([7, 64, 0], 12), ([10, 64, -1], 14)] {
+            w.block_changed(0, p, 0, state);
+            w.set_motor(0, p, 64.0);
+        }
+        w.block_changed(0, [10, 64, 0], 0, 15);
+        for _ in 0..2 {
+            walk_turns(&mut w);
+            w.tick(0, &mut Vec::new());
+        }
+        w.block_changed(0, millstone, 0, 11);
+        w.block_changed(0, fan, 0, 13);
+        w.block_changed(0, crafter, 0, 16);
+        let mut turns = w.block_entity_ticks(0, 0);
+        let mut seen = Vec::new();
+        while let Some(turn) = turns.next(&mut w) {
+            if let EntityTurn::Millstone(p) | EntityTurn::Fan(p) | EntityTurn::Crafter(p) = turn {
+                assert_ne!(w.speed(0, p), Some(0.0), "{turn:?}");
+                seen.push(turn);
+            }
+        }
+        assert_eq!(
+            seen,
+            [
+                EntityTurn::Millstone(millstone),
+                EntityTurn::Fan(fan),
+                EntityTurn::Crafter(crafter),
+            ]
+        );
+        assert_eq!(w.dims[0].fans[&fan].speed, w.speed(0, fan).unwrap());
+    }
+
+    /// #370: the kinetic network ticks its entities (`Kinetics.order`) in the level's
+    /// block-entity order, through placements, a replacement by another block, a change of state
+    /// that keeps the block entity, and a column unloaded and loaded again in another order.
+    #[test]
+    fn the_kinetic_order_is_the_level_block_entity_order() {
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:shaft", vec![("axis", "z")]),
+            ("create:cogwheel", vec![("axis", "x")]),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let agree = |w: &CreateWorld| {
+            let d = &w.dims[0];
+            let mut walk = d.block_entities.walk(View::All);
+            let level: Vec<[i32; 3]> = std::iter::from_fn(|| walk.next(&d.block_entities))
+                .filter(|p| d.kinetics.has_part(*p, 0))
+                .collect();
+            assert_eq!(level, d.kinetics.order());
+            level
+        };
+        let (motor, a, b, c) = ([0, 64, 0], [1, 64, 0], [2, 64, 0], [3, 64, 0]);
+        w.block_changed(0, a, 0, 10);
+        w.block_changed(0, motor, 0, 13);
+        w.block_changed(0, b, 0, 12);
+        w.block_changed(0, c, 0, 10);
+        assert_eq!(agree(&w), [a, motor, b, c]);
+        w.block_changed(0, a, 10, 12);
+        assert_eq!(agree(&w), [motor, b, c, a]);
+        w.block_changed(0, c, 10, 11);
+        assert_eq!(agree(&w), [motor, b, c, a]);
+        w.column_unloaded(0, 0, 0);
+        for (p, state) in [(c, 11), (a, 12), (motor, 13), (b, 12)] {
+            w.block_loaded(0, p, state);
+        }
+        assert_eq!(agree(&w), [c, a, motor, b]);
+    }
+
     #[test]
     fn a_reloaded_fan_blows_from_its_first_tick() {
         // Seed 2487: a fan at -64 RPM blasting a honey bottle on a depot is saved with
@@ -10502,12 +10666,13 @@ mod tests {
         let saved = [motor, fan].map(|p| w.dims[0].kinetics.saved_state(p, 0).unwrap());
         w.column_unloaded(0, 0, 0);
         w.dims[0].kinetics = crate::kinetics::Kinetics::new();
+        w.load_settings(0, std::iter::once((motor, 64)));
         w.block_loaded(0, fan, 11);
         w.block_loaded(0, motor, 10);
         for (p, s) in [motor, fan].into_iter().zip(saved) {
             assert!(w.restore_kinetic_state(0, p, 0, s));
         }
-        assert_eq!(w.fans_to_tick(0), vec![fan]);
+        assert_eq!(walk_turns(&mut w), [EntityTurn::Fan(fan)]);
         assert_eq!(w.dims[0].fans[&fan].speed, speed);
         assert!(w.dims[0].fans[&fan].rebuild);
     }
@@ -12599,11 +12764,11 @@ mod tests {
     /// had a turn, whether it found its basin removed, and whether it looked at its basin.
     fn operator_turns(w: &mut CreateWorld) -> Vec<([i32; 3], bool, bool)> {
         let mut out = Vec::new();
-        let mut turns = w.transport_ticks(0, 0);
+        let mut turns = w.block_entity_ticks(0, 0);
         while let Some(turn) = turns.next(w) {
             match turn {
-                TransportTick::Basin(p) => w.tick_basin(0, p),
-                TransportTick::Mixer(p) | TransportTick::Press(p) => {
+                EntityTurn::Basin(p) => w.tick_basin(0, p),
+                EntityTurn::Mixer(p) | EntityTurn::Press(p) => {
                     let o = w.dims[0].operator_mut(p).unwrap();
                     let removed = o.take_removed();
                     out.push((p, removed, !removed && o.checker.take()));
@@ -12783,14 +12948,14 @@ mod tests {
             }
             w.dims[0].mixers.get_mut(&at).unwrap().running = true;
             let mut order = Vec::new();
-            let mut turns = w.transport_ticks(0, 0);
+            let mut turns = w.block_entity_ticks(0, 0);
             while let Some(turn) = turns.next(&mut w) {
                 order.push(turn);
             }
             let expected = if operator_first {
-                vec![TransportTick::Mixer(at), TransportTick::Basin(basin)]
+                vec![EntityTurn::Mixer(at), EntityTurn::Basin(basin)]
             } else {
-                vec![TransportTick::Basin(basin), TransportTick::Mixer(at)]
+                vec![EntityTurn::Basin(basin), EntityTurn::Mixer(at)]
             };
             assert_eq!(order, expected, "operator first: {operator_first}");
         }

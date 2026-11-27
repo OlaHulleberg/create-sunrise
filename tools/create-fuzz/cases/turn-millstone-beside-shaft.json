@@ -1,0 +1,87 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 40,
+  "checkpoints": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36,
+    37,
+    38,
+    39,
+    40
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "create:shaft[axis=y,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:millstone"
+    },
+    {
+      "tick": 10,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": "up",
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:cobblestone",
+          "count": 1
+        },
+        "extract": null,
+        "simulate": false
+      }
+    }
+  ]
+}
