@@ -94,8 +94,9 @@ pub(crate) fn item_name_message(
 /// - `Carts`, then `Trains` (the controls, the trains, the HUD, curves) and `TrainControls`.
 /// - `Logistics`: vaults, chutes, funnels, tunnels, brass tunnels, depots, belts (whose
 ///   machines answer `belt_process`), and `Entities`, its part of the kinetic type.
-/// - `processing::Tools`: drills, broken saws' drops, then presses and deployers on what the
-///   depots and belts did this tick (saws holding items tick in logistics' walk).
+/// - `processing::Tools`: the drills' and saws' breaking, each at its turn among the block
+///   entities, then presses and deployers on what the depots and belts did this tick (saws
+///   holding items tick in logistics' walk).
 /// - `Arms`: mechanical arms, weighted ejectors.
 /// - `redstone::Detectors`: smart observers and threshold switches, reading this tick's tank
 ///   changes before `fluids::Tanks` hands them on (and drains them).

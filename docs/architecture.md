@@ -52,6 +52,7 @@ ambience), packages, stock, schematics, decor, copycats, items and equipment, ad
    depots, belt controllers, tanks, valves, spouts, item drains and pumps share the level registration order:
    each transfer and processing callback is applied before visiting the next entity.
    Depots dispatch received items before held items, retaining the callback's lock. New belt chains attach kinetics before their inventory tick.
+   The drills and saws break at their own turns in that same order, each with its kinetic base tick first.
 4. **Clients.** The server writes what clients draw into block entity data (synced keys) or sends it on
    `create:net`; client hooks and block entity parts draw it.
 5. **Saving.** After all subsystem ticks, `write_entities` publishes live entity state (including

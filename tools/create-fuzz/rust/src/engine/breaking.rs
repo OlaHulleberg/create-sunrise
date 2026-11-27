@@ -27,13 +27,12 @@ fn offset(d: Dir) -> Pos {
 }
 
 impl Run {
-    /// `saw::tick_drills`, over the turning breakers in the engine's order.
+    /// `saw::tick_drills`, over every breaker in its block entity's order.
     pub(super) fn tick_drills(&mut self) {
         for (breaker, at) in std::mem::take(&mut self.w.dims[0].breaker_cracks) {
             self.set_break_progress(breaker, at, -1);
         }
-        let drilling = self.w.dims[0].drilling.clone();
-        for pos in drilling {
+        for pos in self.w.breakers(0) {
             let Some((block, info)) = self.w.table.get(self.at(pos)) else {
                 continue;
             };
@@ -41,17 +40,15 @@ impl Run {
                 continue;
             };
             let saw = block == Block::MechanicalSaw;
-            if saw && facing.axis() == Axis::Y {
-                continue;
-            }
+            let should_run = !saw || facing.axis() != Axis::Y;
             self.w.kinetic_base_ticks_through(0, pos);
             let speed = self.w.speed(0, pos).unwrap_or(0.0);
             let at = add(pos, offset(facing));
             let looks = self.w.dims[0].drills.get_mut(&pos).map(|d| {
                 if saw {
-                    d.rearm();
+                    d.rearm(should_run);
                 }
-                d.tick(speed, at)
+                d.tick(speed, should_run, at)
             });
             if looks != Some(true) {
                 continue;

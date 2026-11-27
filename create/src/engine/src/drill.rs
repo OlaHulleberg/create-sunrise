@@ -32,22 +32,22 @@ impl Breaker {
         self.ticks_until = 1;
     }
 
-    /// `SawBlockEntity.tick` before `super.tick()`: a saw facing sideways that rests looks next
-    /// tick.
-    pub fn rearm(&mut self) {
-        if self.ticks_until < 0 {
+    /// `SawBlockEntity.tick` before `super.tick()`: a saw that can run (`shouldRun`: it faces
+    /// sideways) and rests looks next tick.
+    pub fn rearm(&mut self, should_run: bool) {
+        if should_run && self.ticks_until < 0 {
             self.destroy_next_tick();
         }
     }
 
     /// `tick` up to the block: `SmartBlockEntity.tick`, whose `lazyTick` arms a resting breaker,
-    /// then `getSpeed() == 0` and `ticksUntilNextProgress`. Whether the breaker looks at the block
-    /// at `breaking_pos` now.
-    pub fn tick(&mut self, speed: f32, breaking_pos: [i32; 3]) -> bool {
+    /// then `shouldRun`, `getSpeed() == 0` and `ticksUntilNextProgress`. Whether the breaker
+    /// looks at the block at `breaking_pos` now.
+    pub fn tick(&mut self, speed: f32, should_run: bool, breaking_pos: [i32; 3]) -> bool {
         if self.lazy.tick() && self.ticks_until == -1 {
             self.destroy_next_tick();
         }
-        if speed == 0.0 {
+        if !should_run || speed == 0.0 {
             return false;
         }
         self.breaking_pos = Some(breaking_pos);
@@ -154,7 +154,7 @@ mod tests {
         let mut looks = Vec::new();
         let mut step = Step::Wait;
         for tick in 1..=28 {
-            if b.tick(64.0, AT) {
+            if b.tick(64.0, true, AT) {
                 looks.push(tick);
                 step = b.look(64.0, STONE);
             }
@@ -166,7 +166,7 @@ mod tests {
         assert_eq!((b.progress, b.ticks_until), (0, -1));
         // Dirt (0.5) at 256 rpm: 2.56 / 0.5 = 5 steps at once.
         let mut d = Breaker::default();
-        assert!(d.tick(256.0, AT));
+        assert!(d.tick(256.0, true, AT));
         assert_eq!(d.look(256.0, Some(0.5)), Step::Progress(5));
         assert_eq!(breakable(-1.0), None);
     }
@@ -175,7 +175,7 @@ mod tests {
     fn a_breaker_with_nothing_to_break_looks_again_two_ticks_after_each_lazy_tick() {
         let mut b = Breaker::default();
         let looks: Vec<i32> = (1..=35)
-            .filter(|_| b.tick(64.0, AT) && b.look(64.0, None) == Step::Wait)
+            .filter(|_| b.tick(64.0, true, AT) && b.look(64.0, None) == Step::Wait)
             .collect();
         assert_eq!(looks, [1, 12, 23, 34]);
         assert_eq!(b.breaking_pos, Some(AT));
@@ -184,29 +184,40 @@ mod tests {
     #[test]
     fn a_stopped_breaker_counts_nothing() {
         let mut b = Breaker::default();
-        assert!(!b.tick(0.0, AT));
+        assert!(!b.tick(0.0, true, AT));
         assert_eq!((b.ticks_until, b.breaking_pos), (0, None));
+    }
+
+    #[test]
+    fn a_stopped_breaker_keeps_its_block_entity_s_clock() {
+        let mut b = Breaker::default();
+        assert!(b.tick(64.0, true, AT));
+        assert_eq!(b.look(64.0, None), Step::Wait);
+        assert!((2..=23).all(|_| !b.tick(0.0, true, AT)));
+        assert_eq!(b.ticks_until, 1);
+        assert!(!b.tick(64.0, true, AT));
+        assert!(b.tick(64.0, true, AT));
     }
 
     #[test]
     fn a_drill_told_to_look_does_so_two_ticks_later() {
         let mut b = Breaker::default();
         b.destroy_next_tick();
-        assert!(!b.tick(64.0, AT));
+        assert!(!b.tick(64.0, true, AT));
         assert_eq!(b.ticks_until, 0);
-        assert!(b.tick(64.0, AT));
+        assert!(b.tick(64.0, true, AT));
         assert_eq!(b.look(64.0, STONE), Step::Progress(1));
     }
 
     #[test]
     fn an_unbreakable_block_takes_the_cracks() {
         let mut b = Breaker::default();
-        assert!(b.tick(64.0, AT));
+        assert!(b.tick(64.0, true, AT));
         assert_eq!(b.look(64.0, STONE), Step::Progress(1));
         while b.ticks_until > 0 {
-            assert!(!b.tick(64.0, AT));
+            assert!(!b.tick(64.0, true, AT));
         }
-        assert!(b.tick(64.0, AT));
+        assert!(b.tick(64.0, true, AT));
         assert_eq!(b.look(64.0, None), Step::Reset);
         assert_eq!(b.progress, 0);
         assert_eq!(b.look(64.0, None), Step::Wait);
@@ -215,7 +226,7 @@ mod tests {
     #[test]
     fn a_reloaded_breaker_goes_on_from_what_it_read() {
         let mut b = Breaker::default();
-        assert!(b.tick(64.0, AT));
+        assert!(b.tick(64.0, true, AT));
         assert_eq!(b.look(64.0, STONE), Step::Progress(1));
         assert_eq!(
             (b.progress, b.ticks_until, b.breaking_pos),
@@ -223,11 +234,11 @@ mod tests {
         );
         let mut reloaded = Breaker::default();
         reloaded.read(1, 607, Some(AT));
-        assert!(!reloaded.tick(64.0, AT));
+        assert!(!reloaded.tick(64.0, true, AT));
         assert_eq!(reloaded.ticks_until, 606);
         let mut resting = Breaker::default();
         resting.read(0, -1, Some(AT));
-        assert!(!resting.tick(64.0, AT));
+        assert!(!resting.tick(64.0, true, AT));
         assert_eq!(resting.ticks_until, 0);
     }
 
@@ -236,14 +247,26 @@ mod tests {
         let mut b = Breaker::default();
         let looks: Vec<i32> = (1..=7)
             .filter(|_| {
-                b.rearm();
-                b.tick(64.0, AT) && b.look(64.0, None) == Step::Wait
+                b.rearm(true);
+                b.tick(64.0, true, AT) && b.look(64.0, None) == Step::Wait
             })
             .collect();
         assert_eq!(looks, [1, 3, 5, 7]);
         let mut b = Breaker::default();
         b.destroy_next_tick();
-        b.rearm();
+        b.rearm(true);
+        assert_eq!(b.ticks_until, 1);
+    }
+
+    #[test]
+    fn an_upward_saw_does_not_rearm_or_look() {
+        let mut b = Breaker::default();
+        b.read(0, -1, Some(AT));
+        b.rearm(false);
+        assert_eq!(b.ticks_until, -1);
+        assert!(!b.tick(64.0, false, AT));
+        assert_eq!((b.ticks_until, b.breaking_pos), (1, Some(AT)));
+        assert!(!b.tick(64.0, false, AT));
         assert_eq!(b.ticks_until, 1);
     }
 }

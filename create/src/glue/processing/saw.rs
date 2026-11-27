@@ -31,12 +31,13 @@ pub fn clear() {
     SAW_DURATION.with_borrow_mut(HashMap::clear);
 }
 
-/// The turning drills and sideways saws (`BlockBreakingKineticBlockEntity.tick`), each on its
-/// turn: `KineticBlockEntity.tick` first, then the breaker's own, which looks at the block in
-/// front in steps (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`; for a
-/// saw also `isSawable`), its cracks showing (`destroyBlockProgress`), its drops left in its
-/// middle; a saw fells what stood on it (`TreeCutter`). A breaker that went since the last tick
-/// takes its cracks along (`invalidate`).
+/// The drills and the saws (`BlockBreakingKineticBlockEntity.tick`), each on its turn among the
+/// block entities: `KineticBlockEntity.tick` first, then the breaker's own, which looks at the
+/// block in front in steps (`isBreakable`: not air, a fluid, unbreakable or
+/// `create:non_breakable`; for a saw also `isSawable`), its cracks showing
+/// (`destroyBlockProgress`), its drops left in its middle; a saw fells what stood on it
+/// (`TreeCutter`) and breaks only facing sideways (`shouldRun`). A breaker that went since the
+/// last tick takes its cracks along (`invalidate`).
 pub fn tick_drills(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let cracks =
@@ -45,27 +46,21 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
         lv.level
             .set_break_progress(&mut *lv.host, breaker_id(breaker), at, -1);
     }
-    let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
-    if drills.is_empty() {
-        return;
-    }
-    for pos in drills {
+    for pos in with_world(|w| w.breakers(dim)).unwrap_or_default() {
         let Some((block, facing)) = lv.info(pos).and_then(|(b, i)| Some((b, i.facing?))) else {
             continue;
         };
         let saw = block == Block::MechanicalSaw;
-        if saw && facing.axis() == Axis::Y {
-            continue;
-        }
+        let should_run = !saw || facing.axis() != Axis::Y;
         with_world(|w| w.kinetic_base_ticks_through(dim, pos));
         let speed = lv.speed(pos);
         let at = super::step(pos, facing, 1);
         let looks = with_world(|w| {
             w.dims[dim].drills.get_mut(&pos).map(|d| {
                 if saw {
-                    d.rearm();
+                    d.rearm(should_run);
                 }
-                d.tick(speed, at)
+                d.tick(speed, should_run, at)
             })
         })
         .flatten();
