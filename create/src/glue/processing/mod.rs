@@ -288,6 +288,45 @@ impl Subsystem for Processing {
         basin::clear();
         spoutput::clear();
         crafter::clear();
+        deployer::clear();
+    }
+
+    /// `DeployerBlock.setPlacedBy` with a player placer (`instanceof ServerPlayer`, a deployer's
+    /// fake one too).
+    fn entity_place(
+        &self,
+        host: &mut dyn ServerHost,
+        event: &mut super::subsystem::Placed,
+    ) -> mod_api::Flow {
+        if event.cancelled || event.state.block() != super::states::key(Block::Deployer) {
+            return mod_api::Flow::Continue;
+        }
+        let Some(placer) = event.placer else {
+            return mod_api::Flow::Continue;
+        };
+        use crate::glue::names::Named as _;
+        let player = placer
+            .kind(&*host)
+            .is_some_and(|k| k.name(&*host) == "minecraft:player");
+        let (Some(uuid), Some(dim)) = (
+            placer.uuid(host).filter(|_| player),
+            placer.level(&*host).and_then(super::world::level_of),
+        ) else {
+            return mod_api::Flow::Continue;
+        };
+        deployer::placed_by(dim, [event.pos.x, event.pos.y, event.pos.z], uuid);
+        mod_api::Flow::Continue
+    }
+
+    fn block_changed(
+        &self,
+        dim: usize,
+        pos: [i32; 3],
+        _old: u32,
+        _new: u32,
+        _: mod_api::BlockUpdateFlags,
+    ) {
+        deployer::placed(dim, pos);
     }
 
     fn tags_updated(&self, cx: &dyn mod_api::ReloadContext) {

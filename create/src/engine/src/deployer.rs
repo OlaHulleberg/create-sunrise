@@ -94,6 +94,19 @@ pub struct Deployer {
     /// Its fake player stands at `activateInner`'s ray origin: it activated since it was loaded
     /// (not saved).
     pub activated: bool,
+    /// `owner`: the player who placed it (`DeployerBlock.setPlacedBy`), its fake player's UUID
+    /// (`DeployerFakePlayer.getUUID`).
+    pub owner: Option<u128>,
+}
+
+/// `DeployerFakePlayer`'s fallback profile, `9e2faded-cafe-4ec2-c314-dad129ae971d`.
+pub const FAKE_UUID: u128 = 0x9e2f_aded_cafe_4ec2_c314_dad1_29ae_971d;
+
+impl Deployer {
+    /// The UUID its fake player has: its owner's, else [`FAKE_UUID`].
+    pub fn fake_uuid(&self) -> u128 {
+        self.owner.unwrap_or(FAKE_UUID)
+    }
 }
 
 /// `Inventory.items`' size: the fake player's main slots, the hand's among them.

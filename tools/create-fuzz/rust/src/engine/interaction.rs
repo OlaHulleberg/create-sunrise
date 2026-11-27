@@ -936,8 +936,16 @@ impl Run {
             );
         }
         self.set(p, self.id(&next));
+        // `DeployerBlock.setPlacedBy`: placed by a player (the actor, or a deployer's fake one),
+        // it is theirs. The harness's players have no UUID to tell apart.
+        if deployer && let Some(d) = self.w.dims[0].deployers.get_mut(&p) {
+            d.owner = Some(PLACER);
+        }
         if let Some(property) = measured {
             self.measured_trig.insert(p, property.into());
         }
     }
 }
+
+/// The owner a placed deployer is given ([`Run::place_player`]).
+const PLACER: u128 = 1;
