@@ -445,6 +445,20 @@ xvfb-run -a python3 tools/check-potato-projectile.py --ctl "$CTL" \
 
 In a **disposable checkout**, apply `git apply tools/fixtures/potato-projectile.patch`, repeat the staging command with that checkout, and append `--fixture` to the test (or `--fixture --case flight` for the two billboard screenshots). Do not ship the instrumented build or publish the screenshots. Dedicated multiplayer, a free camera and flight prediction were not checked.
 
+## Issue #459: clutch and gearshift power in game on Dev `ba1f24e` (branch `fix/clutch-power`)
+
+Built with launcher 1.3.7 `native-build` against `dev-2026-11-26-ba1f24e`, a fresh creative world, driven by `sunrise-ctl`:
+a creative motor, a shaft, a clutch (and beside it a gearshift), a shaft and a cog, each with a lever on top flipped by the
+player. Speeds read back with `/data get` right after each click; a temporary debug log (removed before the build below)
+showed the clutch's state write delivered inside the neighbour change and the re-attach in the next tick's block ticks.
+
+| Check | Result | Evidence |
+|---|---|---|
+| Clutch powered | Pass | The cog reads 0 rpm right after the click and stands still across frames |
+| Clutch unpowered | Pass | The cog reads 16 rpm right after the click and turns |
+| Gearshift powered and unpowered | Pass | The cog reads −16 rpm, then 16 rpm, right after each click |
+| Save and reload | Pass | Powered clutch and gearshift reload as they were (0 and −16 rpm); after it, each still follows its lever at once |
+
 ## Fixes #227-#234 in game on `9425651` (main `11c43ca`)
 
 Built with `sunrise-launcher native-build` against `nightly-2026-11-20-9425651`, a fresh creative world, driven by

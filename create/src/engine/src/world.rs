@@ -11511,6 +11511,83 @@ mod tests {
         (w, transmission, out)
     }
 
+    /// When the host's write of the new state reaches the engine.
+    #[derive(Clone, Copy, Debug)]
+    enum Echo {
+        AtOnce,
+        AfterBlockTicks,
+        AfterSolve,
+    }
+
+    /// The level ticks after a neighbour change gives the transmission at `pos` `signal`: the
+    /// output's speed at the end of each, the host's write shown when `echo` says.
+    fn follow_signal(
+        w: &mut CreateWorld,
+        pos: [i32; 3],
+        out: [i32; 3],
+        signal: bool,
+        echo: Echo,
+    ) -> Vec<Option<f32>> {
+        let old = w.state_at(0, pos).unwrap();
+        let write = w.transmission_neighbor_changed(0, pos, signal).unwrap();
+        let mut speeds = Vec::new();
+        for tick in 0..3 {
+            if tick == 0 && matches!(echo, Echo::AtOnce) {
+                w.block_changed(0, pos, old, write.state);
+            }
+            w.reattach_scheduled_transmissions(0, &mut Vec::new());
+            if tick == 0 && matches!(echo, Echo::AfterBlockTicks) {
+                w.block_changed(0, pos, old, write.state);
+            }
+            w.tick(0, &mut Vec::new());
+            if tick == 0 && matches!(echo, Echo::AfterSolve) {
+                w.block_changed(0, pos, old, write.state);
+            }
+            speeds.push(w.speed(0, out));
+        }
+        speeds
+    }
+
+    #[test]
+    fn a_clutch_follows_its_power_whenever_the_host_shows_the_write() {
+        for echo in [Echo::AtOnce, Echo::AfterBlockTicks, Echo::AfterSolve] {
+            let (mut w, clutch, out) = transmission_line("create:clutch");
+            assert_eq!(
+                follow_signal(&mut w, clutch, out, true, echo),
+                [Some(0.0); 3],
+                "powered, {echo:?}"
+            );
+            assert_eq!(w.state_at(0, clutch), Some(11));
+            assert!(
+                w.dims[0].block_ticks.running().is_empty(),
+                "`detachKinetics(.., previouslyPowered)`: no re-attach owed"
+            );
+            assert_eq!(
+                follow_signal(&mut w, clutch, out, false, echo),
+                [Some(16.0); 3],
+                "unpowered, {echo:?}"
+            );
+            assert_eq!(w.state_at(0, clutch), Some(10));
+        }
+    }
+
+    #[test]
+    fn a_gearshift_reverses_whenever_the_host_shows_the_write() {
+        for echo in [Echo::AtOnce, Echo::AfterBlockTicks, Echo::AfterSolve] {
+            let (mut w, gearshift, out) = transmission_line("create:gearshift");
+            assert_eq!(
+                follow_signal(&mut w, gearshift, out, true, echo),
+                [Some(-16.0); 3],
+                "powered, {echo:?}"
+            );
+            assert_eq!(
+                follow_signal(&mut w, gearshift, out, false, echo),
+                [Some(16.0); 3],
+                "unpowered, {echo:?}"
+            );
+        }
+    }
+
     #[test]
     fn a_transmission_detaches_at_the_neighbour_change() {
         let (mut w, gearshift, out) = transmission_line("create:gearshift");
