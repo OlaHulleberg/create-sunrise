@@ -662,6 +662,13 @@ fn provide_items(
         Block::CrushingWheelController => {
             offer.offer(|| Box::new(crusher::CrusherItems { dim, pos: side.pos }))
         }
+        Block::Deployer => offer.offer(|| {
+            Box::new(deployer::DeployerItems {
+                level: side.level,
+                dim,
+                pos: side.pos,
+            })
+        }),
         Block::MechanicalSaw if side.side != Some(mod_api::Direction::Down) => {
             let Some(dimension) = super::world::level_id(dim) else {
                 return;

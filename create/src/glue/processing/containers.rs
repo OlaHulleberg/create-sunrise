@@ -142,8 +142,8 @@ fn containers() -> Vec<(Block, ModContainer)> {
             menu: None,
         },
     ));
-    // DeployerItemHandler's overflow (`overflowItems`): taken out by hoppers and funnels through
-    // any face; nothing goes in this way (the held item is the engine's).
+    // The deployer's overflow (`overflowItems`), kept in its block entity; `DeployerItems` offers
+    // it with the hand.
     let overflow: Vec<usize> = (0..super::deployer::OVERFLOW_SLOTS).collect();
     out.push((
         Block::Deployer,

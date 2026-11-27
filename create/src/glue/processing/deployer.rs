@@ -396,6 +396,169 @@ fn place_back(
     }
 }
 
+/// `DeployerItemHandler`, the deployer's `ITEMS` handler on every side: its overflow's slots
+/// (`overflowItems`), then the hand. Out of either; into the hand only, what its filter lets
+/// through (`isItemValid`), and not out of it while a filter it passes is set. The hand is the
+/// engine's, so an insert or take the host's transaction later aborts cannot be taken back (as
+/// with a crushing wheel controller's handler); the overflow is the block entity's slots.
+pub struct DeployerItems {
+    pub level: mod_api::LevelRef,
+    pub dim: usize,
+    pub pos: [i32; 3],
+}
+
+impl DeployerItems {
+    fn entity(&self, host: &dyn mod_api::Host) -> Option<mod_api::BlockEntityRef> {
+        host.block_entity(self.level, self.pos)
+    }
+
+    fn overflow(&self, host: &dyn mod_api::Host) -> Vec<ItemStack> {
+        let Some(e) = self.entity(host) else {
+            return Vec::new();
+        };
+        (0..OVERFLOW_SLOTS as u32)
+            .filter_map(|i| e.item_slot(host, i).ok().flatten())
+            .collect()
+    }
+
+    fn deployer(&self) -> Option<Deployer> {
+        with_world(|w| w.dims[self.dim].deployers.get(&self.pos).cloned()).flatten()
+    }
+
+    fn set_deployer(&self, d: Deployer) {
+        with_world(|w| w.set_deployer(self.dim, self.pos, d));
+    }
+
+    /// `filtering.test`: the filter (none lets all through) on `item`.
+    fn passes(&self, host: &dyn mod_api::Host, item: &str) -> Option<bool> {
+        let f = super::filtering::filter_at(self.dim, self.pos)?;
+        Some(crate::glue::items::filters::passes_item(
+            host,
+            Some(&f),
+            item,
+        ))
+    }
+
+    fn slot(&self, host: &dyn mod_api::Host, index: usize) -> Option<ItemStack> {
+        let overflow = self.overflow(host);
+        if index < overflow.len() {
+            return overflow.into_iter().nth(index);
+        }
+        held_stack(&self.deployer()?, stacks::known_stack)
+    }
+}
+
+impl mod_api::ResourceHandler<mod_api::ItemResource> for DeployerItems {
+    fn size(&self, host: &mut dyn ServerHost) -> usize {
+        1 + self.overflow(&*host).len()
+    }
+    fn resource(&self, host: &mut dyn ServerHost, index: usize) -> Option<mod_api::ItemResource> {
+        self.slot(&*host, index)
+            .map(|s| mod_api::ItemResource::of(&s))
+    }
+    fn amount(&self, host: &mut dyn ServerHost, index: usize) -> u32 {
+        self.slot(&*host, index).map_or(0, |s| s.count())
+    }
+    /// `getSlotLimit`: the slot's stack's size, else 64.
+    fn capacity(
+        &self,
+        host: &mut dyn ServerHost,
+        index: usize,
+        resource: Option<&mod_api::ItemResource>,
+    ) -> u32 {
+        let stack = resource
+            .map(|r| r.as_stack().clone())
+            .or_else(|| self.slot(&*host, index));
+        stack.map_or(64, |s| host.max_stack_size(s.item()).unwrap_or(64))
+    }
+    fn is_valid(
+        &self,
+        host: &mut dyn ServerHost,
+        _index: usize,
+        resource: &mod_api::ItemResource,
+    ) -> bool {
+        let item = stacks::id(&*host, resource.as_stack());
+        self.passes(&*host, &item) != Some(false)
+    }
+    fn insert_at(
+        &self,
+        host: &mut dyn ServerHost,
+        _tx: &mod_api::TransactionContext,
+        index: usize,
+        resource: &mod_api::ItemResource,
+        amount: u32,
+    ) -> Result<u32, mod_api::TransactionError<mod_api::Overanswered>> {
+        if index != self.overflow(&*host).len() {
+            return Ok(0);
+        }
+        let Some(mut d) = self.deployer() else {
+            return Ok(0);
+        };
+        let Some(stack) = resource.to_stack(amount.min(64)) else {
+            return Ok(0);
+        };
+        let st = engine_stack(&*host, &stack);
+        let max = host.max_stack_size(stack.item()).unwrap_or(64).min(64) as u8;
+        let valid = self.passes(&*host, &st.item) != Some(false);
+        let n = d.insert_held(&st, max, valid, false);
+        if n > 0 {
+            self.set_deployer(d);
+        }
+        Ok(u32::from(n))
+    }
+    fn extract_at(
+        &self,
+        host: &mut dyn ServerHost,
+        tx: &mod_api::TransactionContext,
+        index: usize,
+        resource: &mod_api::ItemResource,
+        amount: u32,
+    ) -> Result<u32, mod_api::TransactionError<mod_api::Overanswered>> {
+        let overflow = self.overflow(&*host);
+        if index < overflow.len() {
+            let have = &overflow[index];
+            if !resource.matches(have) {
+                return Ok(0);
+            }
+            let n = amount.min(have.count());
+            let Some(e) = self.entity(&*host) else {
+                return Ok(0);
+            };
+            // `overflowItems.remove(slot)` when it is emptied: the ones after move up.
+            let mut list = overflow.clone();
+            match list[index].clone().shrink(n) {
+                Some(left) => list[index] = left,
+                None => {
+                    list.remove(index);
+                }
+            }
+            for i in index..overflow.len() {
+                let write = e.set_item_slot(host, tx, i as u32, list.get(i).cloned());
+                if let Err(mod_api::BlockEntityItemError::InvalidContext) = write {
+                    return Err(mod_api::TransactionError::InvalidContext);
+                }
+            }
+            return Ok(n);
+        }
+        let Some(mut d) = self.deployer() else {
+            return Ok(0);
+        };
+        let Some(held) = held_stack(&d, stacks::known_stack) else {
+            return Ok(0);
+        };
+        if !resource.matches(&held) {
+            return Ok(0);
+        }
+        let keeps = self.passes(&*host, &stacks::id(&*host, &held)) == Some(true);
+        let taken = d.extract_held(amount.min(64) as u8, keeps, false);
+        let n = taken.map_or(0, |t| u32::from(t.count));
+        if n > 0 {
+            self.set_deployer(d);
+        }
+        Ok(n)
+    }
+}
+
 /// `DeployerBlock.neighborChanged` (`redstoneUpdate`): a deployer whose neighbours changed is
 /// locked while powered.
 pub fn redstone_updates(lv: &mut ServerLevel<'_>) {

@@ -727,47 +727,73 @@ impl Run {
         }
     }
 
-    /// The deployer's item handler as the port's game offers it (`containers`: eleven overflow
-    /// slots, taken from on every face and nothing put in; the held stack is the engine's, not
-    /// a slot).
+    /// `DeployerItems` (`DeployerItemHandler`): the overflow's slots, then the hand (any slot
+    /// past them). Into the hand what the filter lets through; out of an overflow slot (the
+    /// ones after move up when it is emptied) or the hand, unless a filter it passes is set.
     pub(super) fn deployer_capability(
         &mut self,
         p: Pos,
         slot: u8,
+        insert: Option<&crate::transport::Stack>,
         extract: Option<u8>,
         simulate: bool,
         outcome: &mut crate::transport::Outcome,
     ) {
         outcome.handler = Some(true);
-        let Some(n) = extract else {
+        let Some(mut d) = self.deployer(p) else {
             return;
         };
-        let taken = self
-            .deployer_overflow
-            .get_mut(&p)
-            .and_then(|slots| slots.get_mut(usize::from(slot)))
-            .and_then(|s| {
-                let have = s.as_mut()?;
-                let k = n.min(have.count);
-                let t = crate::transport::Stack {
-                    item: have.item.clone(),
-                    count: k,
-                };
-                if k == 0 {
-                    return None;
-                }
-                if !simulate {
-                    have.count -= k;
-                    if have.count == 0 {
-                        *s = None;
-                    }
-                }
-                Some(t)
+        let mut overflow = self.overflow_list(p);
+        let slot = usize::from(slot);
+        let filter = self.funnel_filters.get(&p).cloned();
+        let passes = |item: &str| filter.as_ref().is_none_or(|f| f == item);
+        if let Some(s) = insert {
+            if slot < overflow.len() {
+                return;
+            }
+            let max = deployers::limit(&s.item).unwrap_or(64);
+            let st = engine_stack(&Held::new(&s.item, s.count));
+            let n = d.insert_held(&st, max, passes(&s.item), simulate);
+            outcome.remainder = (s.count > n).then(|| crate::transport::Stack {
+                item: s.item.clone(),
+                count: s.count - n,
             });
-        if taken.is_some() && !simulate {
-            self.mark_column(p);
+            if n > 0 && !simulate {
+                self.w.set_deployer(0, p, d);
+            }
+            return;
         }
-        outcome.taken.extend(taken);
+        let Some(n) = extract.filter(|n| *n > 0) else {
+            return;
+        };
+        if slot < overflow.len() {
+            let have = &mut overflow[slot];
+            let k = n.min(have.count);
+            outcome.taken.push(crate::transport::Stack {
+                item: have.item.clone(),
+                count: k,
+            });
+            if !simulate {
+                have.count -= k;
+                if have.count == 0 {
+                    overflow.remove(slot);
+                }
+                let slots = std::array::from_fn(|i| overflow.get(i).cloned());
+                self.deployer_overflow.insert(p, slots);
+                self.mark_column(p);
+            }
+            return;
+        }
+        let keeps = filter.is_some() && d.held.as_ref().is_some_and(|h| passes(&h.0));
+        if let Some(t) = d.extract_held(n, keeps, simulate) {
+            outcome.taken.push(crate::transport::Stack {
+                item: t.item,
+                count: t.count,
+            });
+            if !simulate {
+                self.w.set_deployer(0, p, d);
+            }
+        }
     }
 
     /// `DeployerObservations` for the deployer at `p`.
