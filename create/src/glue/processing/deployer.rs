@@ -1615,34 +1615,18 @@ pub fn use_deployer(
     true
 }
 
-/// Deployers' strokes to `players`: where the hand is and how fast it moves, what it holds.
+/// Deployers' strokes to `players`: what runs the hand and what it holds, as each deployer
+/// stands (`write` with a client packet); one gone to take its hand away.
 fn send_deployers(lv: &mut ServerLevel<'_>, players: &[PlayerRef], list: &[[i32; 3]]) {
     let dim = lv.dim;
     let mut shown = Vec::new();
     for &pos in list {
         let facing = lv.facing_of(pos, Block::Deployer);
-        let rpm = lv.speed(pos);
         let d = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten();
-        shown.push(match (facing, d) {
-            (Some(f), Some(d)) => {
-                let (at, v) = d.hand(rpm);
-                deployer::Shown {
-                    pos,
-                    facing: f,
-                    at,
-                    per_tick: v,
-                    punch: d.mode == deployer::Mode::Punch,
-                    held: d.held.map(|h| h.0),
-                }
-            }
-            _ => deployer::Shown {
-                pos,
-                facing: Dir::Up,
-                at: f32::NAN,
-                per_tick: 0.0,
-                held: None,
-                punch: false,
-            },
+        shown.push(deployer::Shown {
+            pos,
+            facing: facing.unwrap_or(Dir::Up),
+            deployer: d,
         });
     }
     for chunk in shown.chunks(64) {
