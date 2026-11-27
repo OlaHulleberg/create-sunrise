@@ -1667,6 +1667,7 @@ impl BlockPart for ContactPart {
             pitch,
             sneaking,
             clicked_face: Dir::ALL[cx.face as usize],
+            operator: false,
         };
         let (facing, powered) = create_engine::place::redstone_contact(ctx, |d| {
             contact_faces_back(|p| states::level_info_at(level, p), pos, d)

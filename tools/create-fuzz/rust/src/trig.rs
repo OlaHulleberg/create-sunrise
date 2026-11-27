@@ -262,6 +262,7 @@ mod tests {
             pitch: 0.,
             sneaking: false,
             clicked_face: Dir::Up,
+            operator: false,
         };
         assert_eq!(
             nearest_property(

@@ -87,6 +87,7 @@ impl BlockPart for Placement {
             pitch,
             sneaking,
             clicked_face,
+            operator: false,
         };
         let set = |s: BlockState, k: &str, v: &str| level.state_with_property(s, k, v).unwrap_or(s);
         // `SimpleWaterloggedBlock`: placed into water, it holds it (the template's own answer,

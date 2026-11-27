@@ -841,6 +841,14 @@ fn use_block(host: &mut dyn ServerHost, event: &mut RightClickBlockEvent<'_>) ->
         *event.cancellation_result = mod_api::InteractionResult::Success;
         return mod_api::Flow::Cancel;
     }
+    // `DeployerBlock.useItemOn`: its placement helper first.
+    if block == Block::Deployer
+        && let Some(f) = info.facing
+        && deployer::place_beside(&mut lv, pos, f, click, player)
+    {
+        *event.cancellation_result = mod_api::InteractionResult::Success;
+        return mod_api::Flow::Cancel;
+    }
     // The wrench (`WrenchItem.useOn`, not sneaking): a deployer's front half changes its mode
     // (`onWrenched`), a crafter's edge joins or parts its input (`EdgeInteractionHandler`).
     let wrench = click

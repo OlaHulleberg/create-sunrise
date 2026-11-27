@@ -293,6 +293,7 @@ impl Run {
             pitch,
             sneaking,
             clicked_face: face,
+            operator: false,
         };
         let shaft = |d: Dir| {
             self.w
@@ -363,6 +364,7 @@ impl Run {
             pitch,
             sneaking,
             clicked_face: face,
+            operator: false,
         };
         let shaft = |d: Dir| {
             self.w

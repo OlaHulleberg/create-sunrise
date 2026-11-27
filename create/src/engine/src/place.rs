@@ -49,6 +49,8 @@ pub struct Context {
     pub pitch: f32,
     pub sneaking: bool,
     pub clicked_face: Dir,
+    /// `AssemblyOperatorUseContext`: an operator item placed two above what it works on.
+    pub operator: bool,
 }
 
 /// `Direction.orderedByNearest`: the six directions, nearest to the player's view first.
@@ -154,6 +156,8 @@ pub fn facing(block: Block, ctx: Context, shaft: impl Fn(Dir) -> bool) -> Option
         | Block::MechanicalBearing
         | Block::ClockworkBearing
         | Block::MechanicalDrill => directional(preferred(false, shaft)),
+        // DeployerBlock.getFacingForPlacement: down onto what it works on.
+        Block::Deployer if ctx.operator => Dir::Down,
         // DirectionalAxisKineticBlock.getFacingForPlacement (deployer, saw): away from the
         // player's view; sneaking, toward it.
         Block::Deployer | Block::MechanicalSaw if ctx.sneaking => nearest,
@@ -629,6 +633,7 @@ mod tests {
             pitch,
             sneaking,
             clicked_face: Dir::Up,
+            operator: false,
         }
     }
 
@@ -694,6 +699,7 @@ mod tests {
             pitch: 60.0,
             sneaking: false,
             clicked_face: Dir::West,
+            operator: false,
         };
         assert_eq!(
             nearest_looking_directions(c, false),
@@ -813,6 +819,7 @@ mod tests {
                 pitch,
                 sneaking: false,
                 clicked_face: face,
+                operator: false,
             })
         };
         // On a floor, looking south: south turned clockwise, west.
@@ -969,6 +976,7 @@ mod tests {
             pitch: 0.0,
             sneaking,
             clicked_face: face,
+            operator: false,
         };
         // A shaft on the floor, looking south: along the view, not the clicked face.
         assert_eq!(
