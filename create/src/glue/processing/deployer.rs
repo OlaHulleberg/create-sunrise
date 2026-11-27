@@ -301,23 +301,40 @@ fn centre(pos: [i32; 3]) -> [f64; 3] {
     pos.map(|v| f64::from(v) + 0.5)
 }
 
-/// The deployer's held stack as an item stack, with its components and its wear.
+/// The deployer's held stack rebuilt from its id, count, saved components and wear: None when it
+/// holds nothing or `make` refuses the id; `Ok` when the saved components (empty, or a patch
+/// that decodes to a compound and that `set_components` accepts) were restored; `Err` with the
+/// stack as it stands, its components missing, when a non-empty patch could not be.
+fn rebuild(
+    d: &Deployer,
+    make: impl FnOnce(&str, u32) -> Option<ItemStack>,
+) -> Option<Result<ItemStack, ItemStack>> {
+    let held = d.held.as_ref()?;
+    let mut s = make(&held.0, u32::from(held.1))?;
+    let restored = d.held_components.is_empty()
+        || if let Ok((mod_api::Tag::Compound(c), _)) =
+            mod_api::Tag::from_network_bytes(&d.held_components, None)
+        {
+            s.set_components(c).is_ok()
+        } else {
+            false
+        };
+    if d.held_damage > 0 {
+        s.set_damage(d.held_damage);
+    }
+    Some(if restored { Ok(s) } else { Err(s) })
+}
+
+/// The deployer's held stack as an item stack, with its components and its wear; components
+/// that cannot be restored are dropped (the stack is handed back to the world or a player, and
+/// a refusal would lose it).
 pub(crate) fn held_stack(
     d: &Deployer,
     make: impl FnOnce(&str, u32) -> Option<ItemStack>,
 ) -> Option<ItemStack> {
-    let held = d.held.as_ref()?;
-    let mut s = make(&held.0, u32::from(held.1))?;
-    if !d.held_components.is_empty()
-        && let Ok((mod_api::Tag::Compound(c), _)) =
-            mod_api::Tag::from_network_bytes(&d.held_components, None)
-    {
-        let _ = s.set_components(c);
+    match rebuild(d, make)? {
+        Ok(s) | Err(s) => Some(s),
     }
-    if d.held_damage > 0 {
-        s.set_damage(d.held_damage);
-    }
-    Some(s)
 }
 
 /// The deployer's held stack as an item stack, with its components and its wear.
@@ -1086,7 +1103,9 @@ fn punch(
         let _ = lv.level.remove_block(&mut *lv.host, front, false);
         return Vec::new();
     }
-    let Some(stack) = held_of(lv, d) else {
+    // A stack whose saved components cannot be restored is no stack to dig with: the stroke is
+    // skipped rather than run with a plain substitute.
+    let Some(Ok(stack)) = rebuild(d, |id, n| stacks::stack(&*lv.host, id, n)) else {
         return Vec::new();
     };
     let Some(state) = lv.block_state(at) else {
