@@ -5,8 +5,9 @@ use super::super::server::{ServerLevel, update_all};
 use super::super::world::with_world;
 use super::colliders::{self, Owner};
 use super::{
-    actors, add, axis_of, clicker, dir_name, dir_of, draw, flag, found, in_click_level, prop,
-    put_back_blocks, state_of_text, state_text, state_with, take_blocks, turned_state,
+    actors, add, axis_of, clicker, dir_name, dir_of, draw, flag, found, in_click_level,
+    preflight_cells, prop, put_back_blocks, state_of_text, state_text, state_with,
+    take_or_rollback, turned_state,
 };
 use create_engine::Block;
 use create_engine::actors::Carried;
@@ -454,10 +455,15 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             }
         };
         set_exception(lv, pos, None);
-        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
+        let Some((air, cells)) = preflight_cells(lv, pos, &blocks) else {
+            continue;
+        };
         actors::carry_storage(lv, pos, pos, &blocks);
-        let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-        take_blocks(lv, pos, &blocks);
+        let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+        if !take_or_rollback(lv, pos, pos, air, &cells, &mut extras) {
+            continue;
+        }
+        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
         let clockwise = super::option_at(dim, pos) == 0;
         // `assemble`: the angle starts at 0, turning at the speed its sails generate
@@ -722,10 +728,15 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                     }
                 };
                 set_exception(lv, pos, None);
-                crate::glue::advancements::assembled(lv, pos, &blocks);
+                let Some((air, cells)) = preflight_cells(lv, pos, &blocks) else {
+                    continue;
+                };
                 actors::carry_storage(lv, pos, pos, &blocks);
-                let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-                take_blocks(lv, pos, &blocks);
+                let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+                if !take_or_rollback(lv, pos, pos, air, &cells, &mut extras) {
+                    continue;
+                }
+                crate::glue::advancements::assembled(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
                     extras,
                     blocks,
@@ -876,9 +887,15 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         let Ok(blocks) = gathered else {
             continue;
         };
-        let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        let Some((air, cells)) = preflight_cells(lv, c, &blocks) else {
+            continue;
+        };
+        let mut carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        if !take_or_rollback(lv, c, c, air, &cells, &mut carried) {
+            with_world(|w| w.dims[dim].gantry_assemble.retain(|p| *p != c));
+            continue;
+        }
         crate::glue::advancements::assembled(lv, c, &blocks);
-        take_blocks(lv, c, &blocks);
         let limit = sequence_limit(dim, shaft, true);
         with_world(|w| {
             w.dims[dim].gantries.push(Moving {
@@ -1304,13 +1321,13 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
         .filter(|(l, _)| piston_world(c.anchor, *l, facing, c.progress) != pos)
         .copied()
         .collect();
-    let carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
-    let cells: Vec<([i32; 3], u32)> = blocks
-        .iter()
-        .map(|(l, s)| (piston_world(c.anchor, *l, facing, c.progress), *s))
-        .filter(|(p, _)| *p != pos)
-        .collect();
-    super::remove_cells(lv, &cells);
+    let Some((air, cells)) = preflight_cells(lv, origin, &local) else {
+        return;
+    };
+    let mut carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
+    if !take_or_rollback(lv, pos, origin, air, &cells, &mut carried) {
+        return;
+    }
     crate::glue::advancements::assembled(lv, pos, &blocks);
     lv.set_property(pos, "state", "moving", update_all());
     super::super::persist::mark_pos_unsaved(dim, pos);
