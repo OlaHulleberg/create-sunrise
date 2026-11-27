@@ -80,6 +80,7 @@ impl Run {
         // `Processing::level_tick`: crafters, millstones, fans, crushers, burners, the
         // leftovers of gone basins (`spoutput::forget_gone`). The basins (lazy tick, spout, backup
         // check), the mixers and the presses over basins take their turns in the transport walk.
+        self.deployer_redstone_updates();
         self.tick_millstones();
         self.tick_fans();
         self.tick_crushers();
@@ -92,11 +93,10 @@ impl Run {
         // block change).
         self.ejector_signals();
         self.tick_transport();
-        // `processing::Tools`: the drills and saws, then the depots the deployers hold
-        // (`tick_presses`), then the deployers' strokes.
+        // `processing::Tools`: the drills and saws, then the cracks of removed deployers
+        // (`send_deployer_changes`).
         self.tick_drills();
-        self.tick_presses();
-        self.tick_deployers();
+        self.w.dims[0].deployer_cracks.clear();
         self.ejectors_ticked();
         self.save_fluid_entities();
         // CreateWorld::tick: the solve, then the states its sequencers set.

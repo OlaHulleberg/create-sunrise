@@ -76,6 +76,8 @@ pub struct Deployer {
     /// The rest of the held stack's component patch (the glue's encoding; empty for a plain
     /// stack): a potion's contents, a name, enchantments. It goes with the stack.
     pub held_components: Vec<u8>,
+    /// `fistBump`: reaching out to meet another punching deployer (not saved).
+    pub fist_bump: bool,
 }
 
 /// `getTimerSpeed`: twice the speed, held between 8 and 512 (0 when still).
@@ -94,6 +96,28 @@ pub enum Tick {
     Changed,
     /// At the bottom of the stroke (`activate`): it draws back from here.
     Activate,
+    /// At rest with its timer run out: what it does next is the world's to say
+    /// ([`Deployer::turn`]).
+    Waiting,
+}
+
+/// What [`Deployer::turn`] asks of the world around a deployer.
+pub trait World {
+    /// `level.isEmptyBlock` at the block its fake player is breaking; when it is, its cracks go.
+    fn lost_block(&mut self, at: [i32; 3]) -> bool;
+    /// `tick`'s `WAITING` branch before `shouldActivate`: whether its overflow holds anything,
+    /// or it put the fake player's other items (and a held stack its filter refuses) there.
+    fn overflowing(&mut self, d: &mut Deployer) -> bool;
+    /// `DeployerHandler.shouldActivate` with the held stack on the block two ahead.
+    fn should_activate(&mut self, d: &Deployer) -> bool;
+    /// `startFistBump`: whether it and a punching deployer facing it set off toward each other.
+    fn start_fist_bump(&mut self, d: &mut Deployer) -> bool;
+    /// `start`'s ray toward the block two ahead: how far it runs before it hits (at most 1).
+    fn ray_hit(&mut self) -> f32;
+    /// `triggerFistBump` at the bottom of a bump's stroke.
+    fn trigger_fist_bump(&mut self, d: &mut Deployer);
+    /// `activate`: the fake player uses or punches with what it holds.
+    fn activate(&mut self, d: &mut Deployer);
 }
 
 impl Deployer {
@@ -105,8 +129,9 @@ impl Deployer {
         self.timer = 1000;
     }
 
-    /// `tick` for a deployer over a depot (no fake player): the stroke runs down; at the bottom
-    /// (`activate` hands the work to the depot) it draws back, then waits 500.
+    /// `DeployerBlockEntity.tick` past its checks: a running timer counts down and the tick
+    /// ends there; run out, drawn back it waits 500, and at the bottom of a stroke or at rest
+    /// it is the world's turn.
     pub fn tick(&mut self, rpm: f32) -> Tick {
         let speed = timer_speed(rpm);
         if speed == 0 {
@@ -117,12 +142,8 @@ impl Deployer {
             return Tick::None;
         }
         match self.state {
-            State::Waiting => Tick::None,
-            State::Expanding => {
-                self.state = State::Retracting;
-                self.timer = 1000;
-                Tick::Activate
-            }
+            State::Waiting => Tick::Waiting,
+            State::Expanding => Tick::Activate,
             State::Retracting => {
                 self.state = State::Waiting;
                 self.timer = 500;
@@ -131,14 +152,58 @@ impl Deployer {
         }
     }
 
+    /// `DeployerBlockEntity.tick` on the server, after `super.tick()`: still, nothing; the
+    /// cracks of a block gone since go; a running timer counts down; at rest with nothing for
+    /// its overflow it starts a stroke unless `shouldActivate` says no (it looks again
+    /// `getTimerSpeed() × 10` later), a fist bump starts instead, or it is powered (it asks
+    /// again next tick); at the bottom of a stroke it activates, a bump's partner first.
+    /// Whether clients must see it (`sendData`).
+    pub fn turn(&mut self, rpm: f32, world: &mut impl World) -> bool {
+        if timer_speed(rpm) == 0 {
+            return false;
+        }
+        if let Some((at, _)) = self.breaking
+            && world.lost_block(at)
+        {
+            self.breaking = None;
+        }
+        match self.tick(rpm) {
+            Tick::None => false,
+            Tick::Changed => true,
+            Tick::Activate => {
+                if self.fist_bump {
+                    world.trigger_fist_bump(self);
+                }
+                world.activate(self);
+                self.state = State::Retracting;
+                self.timer = 1000;
+                true
+            }
+            Tick::Waiting => {
+                if world.overflowing(self) {
+                    self.wait(rpm);
+                    return true;
+                }
+                if self.mode == Mode::Use && !world.should_activate(self) {
+                    self.wait(rpm);
+                    return false;
+                }
+                if self.mode == Mode::Punch && !self.fist_bump && world.start_fist_bump(self) {
+                    return true;
+                }
+                if self.locked {
+                    return false;
+                }
+                let hit = world.ray_hit();
+                self.start(hit);
+                true
+            }
+        }
+    }
+
     /// `timer = getTimerSpeed() * 10`: nothing to do yet, look again later.
     pub fn wait(&mut self, rpm: f32) {
         self.timer = timer_speed(rpm) * 10;
-    }
-
-    /// Whether it ticks at all: a stroke under way or a wait running down.
-    pub fn busy(&self) -> bool {
-        self.state != State::Waiting || self.timer > 0
     }
 
     /// `getHandOffset` at the start of a tick, and blocks a tick it moves at: the hand runs out
@@ -554,6 +619,29 @@ mod tests {
         }
     }
 
+    /// A deployer with nothing around it.
+    struct Alone;
+
+    impl World for Alone {
+        fn lost_block(&mut self, _: [i32; 3]) -> bool {
+            false
+        }
+        fn overflowing(&mut self, _: &mut Deployer) -> bool {
+            false
+        }
+        fn should_activate(&mut self, _: &Deployer) -> bool {
+            true
+        }
+        fn start_fist_bump(&mut self, _: &mut Deployer) -> bool {
+            false
+        }
+        fn ray_hit(&mut self) -> f32 {
+            1.0
+        }
+        fn trigger_fist_bump(&mut self, _: &mut Deployer) {}
+        fn activate(&mut self, _: &mut Deployer) {}
+    }
+
     #[test]
     fn a_stroke_over_a_depot_applies_once_at_the_bottom() {
         let mut d = Deployer {
@@ -574,7 +662,7 @@ mod tests {
                 applied = Some(t);
                 use_held(&mut d.held, &r[0]);
             }
-            d.tick(16.0);
+            d.turn(16.0, &mut Alone);
             ticks += 1;
             if applied.is_some() && d.state == State::Waiting {
                 break;
@@ -586,6 +674,48 @@ mod tests {
         assert!(ticks > 60, "{ticks}");
         assert_eq!(timer_speed(1.0), 8);
         assert_eq!(timer_speed(-300.0), 512);
+    }
+
+    #[test]
+    fn a_started_stroke_and_a_look_again_count_from_the_next_tick() {
+        let mut d = Deployer::default();
+        // Started this tick: the full 1000 stands until its next tick.
+        assert!(d.turn(16.0, &mut Alone));
+        assert_eq!((d.state, d.timer), (State::Expanding, 1000));
+        d.turn(16.0, &mut Alone);
+        assert_eq!(d.timer, 968);
+        // Using with nothing to do: it looks again eleven ticks on (160, then 10 × 16).
+        let mut d = Deployer {
+            held: Some(("minecraft:stick".into(), 1)),
+            ..Deployer::default()
+        };
+        struct Idle;
+        impl World for Idle {
+            fn lost_block(&mut self, _: [i32; 3]) -> bool {
+                false
+            }
+            fn overflowing(&mut self, _: &mut Deployer) -> bool {
+                false
+            }
+            fn should_activate(&mut self, _: &Deployer) -> bool {
+                false
+            }
+            fn start_fist_bump(&mut self, _: &mut Deployer) -> bool {
+                false
+            }
+            fn ray_hit(&mut self) -> f32 {
+                1.0
+            }
+            fn trigger_fist_bump(&mut self, _: &mut Deployer) {}
+            fn activate(&mut self, _: &mut Deployer) {}
+        }
+        d.turn(8.0, &mut Idle);
+        assert_eq!(d.timer, 160);
+        let asked = (1..20).find(|_| {
+            d.turn(8.0, &mut Idle);
+            d.timer == 160
+        });
+        assert_eq!(asked, Some(11));
     }
 
     #[test]

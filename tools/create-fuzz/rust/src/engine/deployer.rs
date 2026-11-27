@@ -8,7 +8,7 @@
 //! `fake_break`, the vanilla rules the game runs as `DeployerAudit` measured them. Entities are
 //! not in the harness, so none is used or attacked.
 use super::*;
-use create_engine::deployer::{self, Deployer, Depot, Mode, State, Tick};
+use create_engine::deployer::{self, Deployer, Depot, Mode, State};
 use create_engine::kinetics::Dir;
 use create_engine::processing;
 
@@ -202,9 +202,6 @@ impl Run {
         let above = [at[0], at[1] + 2, at[2]];
         let d2 = &mut self.w.dims[0];
         d2.deployers.insert(above, d.clone());
-        if !d2.deploying.contains(&above) {
-            d2.deploying.push(above);
-        }
         d2.deployer_changes.push(above);
     }
 
@@ -302,30 +299,25 @@ impl Run {
         }
     }
 
-    /// `BeltDeployerCallbacks` for the depot at `depot` (`deployer_on_depot`): true when a
-    /// deployer above holds its stack (the depot asks again next tick).
-    pub(super) fn deployer_on_depot(&mut self, depot: Pos) -> bool {
+    /// `BeltDeployerCallbacks` for the depot at `depot` at its turn (`deployer_on_depot`).
+    pub(super) fn deployer_on_depot(&mut self, depot: Pos) {
         let Some((mut d, rpm)) = self.deployer_above(depot) else {
-            return false;
+            return;
         };
         let above = [depot[0], depot[1] + 2, depot[2]];
         let Some(mut held) = self.w.dims[0].depots.get(&depot).copied().flatten() else {
-            return false;
+            return;
         };
         if held.sliding() && held.position < 0.5 - 1.0 / 16.0 {
-            return false;
+            return;
         }
         let Some(stack) = self.depot_stacks.get(&depot).cloned() else {
-            return false;
+            return;
         };
         let tool = d.held.as_ref().map(|h| h.0.clone()).unwrap_or_default();
         let recipe = self.deployer_recipe(&stack.item, &tool);
-        let mut keep = true;
         match deployer::on_depot(&d, rpm, held.locked, recipe.is_some()) {
-            Depot::Pass => {
-                held.locked = false;
-                keep = false;
-            }
+            Depot::Pass => held.locked = false,
             Depot::Hold => held.locked = true,
             Depot::Start => {
                 self.start_over(depot, &mut d);
@@ -333,7 +325,7 @@ impl Run {
             }
             Depot::Apply => {
                 let Some(r) = recipe else {
-                    return false;
+                    return;
                 };
                 let results = self.rolled(depot, &r);
                 held = self.results_on_depot(depot, stack.count, held, results);
@@ -345,7 +337,6 @@ impl Run {
         if let Some(h) = self.w.dims[0].depots.get_mut(&depot) {
             *h = h.map(|_| held);
         }
-        keep
     }
 
     /// `BeltDeployerCallbacks` for a stack on the belt at `at` under the deployer `d` facing
@@ -388,19 +379,15 @@ impl Run {
                 self.deployer_used(above, &mut d, &r);
                 self.w.set_deployer(0, above, d);
                 Process::Convert {
-                    held: item.left_after_one().map(|mut left| {
-                        left.fan.clear();
-                        left
-                    }),
+                    held: Some(item.left_of_one()),
                     outputs,
                 }
             }
         }
     }
 
-    /// `tick_deployers`: the power checks (`redstoneUpdate`), the deployers at rest starting a
-    /// stroke or waiting, then the strokes (`DeployerBlockEntity.tick`).
-    pub(super) fn tick_deployers(&mut self) {
+    /// `redstone_updates`: deployers whose neighbours changed are locked while powered.
+    pub(super) fn deployer_redstone_updates(&mut self) {
         let power = std::mem::take(&mut self.w.dims[0].deployer_power_checks);
         for pos in power {
             if self.deployer_facing(pos).is_none() {
@@ -416,112 +403,43 @@ impl Run {
             }
             if changed {
                 self.w.mark_unsaved(0, pos);
-                self.w.dims[0].depot_work.push([pos[0], pos[1] - 2, pos[2]]);
             }
         }
-        let mut idle: Vec<(Pos, f32, Mode)> = self.w.dims[0]
-            .deployers
-            .iter()
-            .filter(|(p, d)| !d.busy() && !d.locked && !self.w.dims[0].deploying.contains(p))
-            .map(|(p, d)| (*p, self.w.speed(0, *p).unwrap_or(0.), d.mode))
-            .filter(|(_, rpm, _)| *rpm != 0.)
-            .collect();
-        idle.sort_by_key(|(p, _, _)| *p);
-        for (pos, rpm, mode) in idle {
-            let Some(facing) = self.deployer_facing(pos) else {
-                continue;
-            };
-            // `WAITING`: while it holds overflow it waits for a funnel or hopper to take it.
-            if self.has_overflow(pos) {
-                let d = &mut self.w.dims[0];
-                if let Some(dp) = d.deployers.get_mut(&pos) {
-                    dp.wait(rpm);
-                }
-                d.deploying.push(pos);
-                continue;
-            }
-            // A held stack its filter doesn't let through leaves its hand into the overflow.
-            let held = self.deployer(pos).and_then(|d| d.held.clone());
-            if let Some(f) = self.funnel_filters.get(&pos)
-                && held.is_some_and(|held| held.0 != *f)
-                && let Some(mut d) = self.deployer(pos)
-            {
-                let stack = self.held_of(&d);
-                Self::set_hand(&mut d, None);
-                self.w.set_deployer(0, pos, d);
-                self.keep_overflow(pos, stack.into_iter().collect());
-                continue;
-            }
-            if mode == Mode::Punch && self.fist_start(pos, facing) {
-                continue;
-            }
-            let below = step(pos, facing, 2);
-            if facing == Dir::Down && self.takes_from_side(below) && mode == Mode::Use {
-                continue;
-            }
-            let place = if mode == Mode::Punch {
-                Some(below)
-            } else {
-                self.deployer_place_target(pos, facing).or_else(|| {
-                    self.deployer_uses(pos, facing)
-                        .then_some(step(pos, facing, 1))
-                })
-            };
-            let reach = if self.replaceable(step(pos, facing, 1)) {
-                0.75
-            } else {
-                0.
-            };
-            let d = &mut self.w.dims[0];
-            if let Some(dp) = d.deployers.get_mut(&pos) {
-                match place {
-                    Some(_) => {
-                        dp.start(reach);
-                        d.deployer_changes.push(pos);
-                    }
-                    None => dp.wait(rpm),
-                }
-            }
-            d.deploying.push(pos);
+    }
+
+    /// `deployer_turn`: the kinetic base tick, then [`Deployer::turn`].
+    pub(super) fn deployer_turn(&mut self, pos: Pos) {
+        self.w.kinetic_base_ticks_through(0, pos);
+        let Some(facing) = self.deployer_facing(pos) else {
+            return;
+        };
+        let Some(mut d) = self.deployer(pos) else {
+            return;
+        };
+        let rpm = self.w.speed(0, pos).unwrap_or(0.);
+        let changed = d.turn(
+            rpm,
+            &mut Turn {
+                run: self,
+                pos,
+                facing,
+            },
+        );
+        let dd = &mut self.w.dims[0];
+        if !dd.deployers.contains_key(&pos) {
+            return;
         }
-        let list = self.w.dims[0].deploying.clone();
-        for pos in list {
-            self.deployer_lost_block(pos);
-            let rpm = self.w.speed(0, pos).unwrap_or(0.);
-            let activated = {
-                let d = &mut self.w.dims[0];
-                match d.deployers.get_mut(&pos) {
-                    None => {
-                        d.deploying.retain(|p| *p != pos);
-                        false
-                    }
-                    Some(dp) => {
-                        let tick = dp.tick(rpm);
-                        if tick != Tick::None {
-                            d.deployer_changes.push(pos);
-                            if dp.state == State::Waiting {
-                                d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
-                            }
-                        }
-                        if !dp.busy() {
-                            d.deploying.retain(|p| *p != pos);
-                        }
-                        tick == Tick::Activate
-                    }
-                }
-            };
-            if activated {
-                self.fist_trigger(pos);
-                self.deployer_activate(pos);
-            }
+        dd.deployers.insert(pos, d);
+        if changed {
+            dd.deployer_changes.push(pos);
+            self.w.mark_unsaved(0, pos);
         }
-        std::mem::take(&mut self.w.dims[0].deployer_cracks);
     }
 
     /// Where the block a deployer holds would go (`deployer_place_target`), as a position;
     /// None when it holds no block, or nowhere fits.
-    fn deployer_place_target(&self, pos: Pos, facing: Dir) -> Option<Pos> {
-        let held = self.w.dims[0].deployers.get(&pos)?.held.clone()?;
+    fn deployer_place_target(&self, pos: Pos, facing: Dir, d: &Deployer) -> Option<Pos> {
+        let held = d.held.clone()?;
         let placed = deployers::item_block(&held.0)?;
         let reached = step(pos, facing, 2);
         let before = step(pos, facing, 1);
@@ -532,12 +450,8 @@ impl Run {
 
     /// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
     /// whose source is already in the block it reaches.
-    fn deployer_uses(&self, pos: Pos, facing: Dir) -> bool {
-        let Some((item, _)) = self.w.dims[0]
-            .deployers
-            .get(&pos)
-            .and_then(|d| d.held.clone())
-        else {
+    fn deployer_uses(&self, pos: Pos, facing: Dir, d: &Deployer) -> bool {
+        let Some((item, _)) = d.held.clone() else {
             return true;
         };
         if deployers::item_block(&item).is_some() {
@@ -577,25 +491,15 @@ impl Run {
     /// `DeployerBlockEntity.activate`: nothing over a depot or belt (their callbacks do the
     /// work); punching, `punch`; else the fake player clicks the block it reaches with what it
     /// holds (`activateInner` in `Mode.USE`), and the hand keeps what is left of the stack.
-    fn deployer_activate(&mut self, pos: Pos) {
-        let Some(facing) = self.deployer_facing(pos) else {
-            return;
-        };
+    fn deployer_activate(&mut self, pos: Pos, facing: Dir, d: &mut Deployer) {
         let reached = deployer::clicked(pos, facing);
         if facing == Dir::Down && self.takes_from_side(reached) {
             return;
         }
-        let Some(mut d) = self.deployer(pos) else {
-            return;
-        };
-        let before = d.clone();
         if d.mode == Mode::Punch {
-            self.punch(pos, facing, &mut d);
+            self.punch(pos, facing, d);
         } else {
-            self.fake_use_on(facing, reached, &mut d);
-        }
-        if d != before {
-            self.w.set_deployer(0, pos, d);
+            self.fake_use_on(facing, reached, d);
         }
     }
 
@@ -720,12 +624,9 @@ impl Run {
         }
     }
 
-    /// `fist::start` for the punching deployer at `pos` at rest: true when it and the one
+    /// `fist::start` for the punching deployer `d` at `pos` at rest: true when it and the one
     /// facing it set off toward each other.
-    fn fist_start(&mut self, pos: Pos, facing: Dir) -> bool {
-        if self.bumping.contains(&pos) {
-            return false;
-        }
+    fn fist_start(&mut self, pos: Pos, facing: Dir, d: &mut Deployer) -> bool {
         let Some((other, i)) = self.fist_partner(pos, facing) else {
             return false;
         };
@@ -734,18 +635,12 @@ impl Run {
         if !faces_back || !punching || self.w.speed(0, other).unwrap_or(0.) == 0. {
             return false;
         }
-        for p in [pos, other] {
-            let d = &mut self.w.dims[0];
-            if let Some(dp) = d.deployers.get_mut(&p) {
-                dp.reach = (i - 2) as f32 * 0.5;
-                dp.timer = 1000;
-                dp.state = State::Expanding;
-                d.deployer_changes.push(p);
-            }
-            if !d.deploying.contains(&p) {
-                d.deploying.push(p);
-            }
-            self.bumping.insert(p);
+        let reach = (i - 2) as f32 * 0.5;
+        fist_bump(d, reach);
+        let dd = &mut self.w.dims[0];
+        if let Some(dp) = dd.deployers.get_mut(&other) {
+            fist_bump(dp, reach);
+            dd.deployer_changes.push(other);
         }
         true
     }
@@ -758,45 +653,25 @@ impl Run {
         })
     }
 
-    /// `fist::trigger` for the deployer at `pos` at the end of its stroke: its partner there
-    /// too is drawn back.
-    fn fist_trigger(&mut self, pos: Pos) {
-        if !self.bumping.contains(&pos) {
-            return;
-        }
-        let Some(facing) = self.deployer_facing(pos) else {
-            return;
-        };
+    /// `fist::trigger` for the deployer `d` at `pos` at the end of its stroke: its partner
+    /// there too is drawn back.
+    fn fist_trigger(&mut self, pos: Pos, facing: Dir, d: &mut Deployer) {
         let Some((other, _)) = self.fist_partner(pos, facing) else {
             return;
         };
-        if !(self.bumping.contains(&other)
-            && self
-                .deployer(other)
-                .is_some_and(|d| d.state == State::Expanding && d.timer <= 0))
+        if !self
+            .deployer(other)
+            .is_some_and(|o| o.fist_bump && o.state == State::Expanding && o.timer <= 0)
         {
             return;
         }
-        self.bumping.remove(&pos);
-        self.bumping.remove(&other);
-        let d = &mut self.w.dims[0];
-        if let Some(dp) = d.deployers.get_mut(&other) {
+        d.fist_bump = false;
+        let dd = &mut self.w.dims[0];
+        if let Some(dp) = dd.deployers.get_mut(&other) {
+            dp.fist_bump = false;
             dp.state = State::Retracting;
             dp.timer = 1000;
-            d.deployer_changes.push(other);
-        }
-    }
-
-    /// `deployer_lost_block`: the breaking of a block that is gone since is forgotten.
-    fn deployer_lost_block(&mut self, pos: Pos) {
-        let Some(at) = self.deployer(pos).and_then(|d| d.breaking.map(|b| b.0)) else {
-            return;
-        };
-        if self.at(at) != AIR {
-            return;
-        }
-        if let Some(d) = self.w.dims[0].deployers.get_mut(&pos) {
-            d.breaking = None;
+            dd.deployer_changes.push(other);
         }
     }
 
@@ -926,7 +801,7 @@ impl Run {
             locked: d.locked,
             owner: None,
             filter: self.funnel_filters.get(&p).cloned(),
-            fist_bump: self.bumping.contains(&p),
+            fist_bump: d.fist_bump,
             breaking: d.breaking.map(|(pos, progress)| Breaking { pos, progress }),
         })
     }
@@ -987,7 +862,6 @@ impl Run {
         }
         Self::set_hand(&mut d, hand);
         self.w.set_deployer(0, p, d);
-        self.w.dims[0].depot_work.push([p[0], p[1] - 2, p[2]]);
         true
     }
 
@@ -1016,5 +890,72 @@ fn item_count(item: &str) -> u8 {
         1
     } else {
         deployers::limit(item).unwrap_or(64)
+    }
+}
+
+fn fist_bump(d: &mut Deployer, reach: f32) {
+    d.fist_bump = true;
+    d.reach = reach;
+    d.timer = 1000;
+    d.state = State::Expanding;
+}
+
+/// The glue's `Turn`: the world around the deployer at `pos` for [`Deployer::turn`].
+struct Turn<'a> {
+    run: &'a mut Run,
+    pos: Pos,
+    facing: Dir,
+}
+
+impl deployer::World for Turn<'_> {
+    fn lost_block(&mut self, at: Pos) -> bool {
+        self.run.at(at) == AIR
+    }
+
+    fn overflowing(&mut self, d: &mut Deployer) -> bool {
+        let (run, pos) = (&mut *self.run, self.pos);
+        if run.has_overflow(pos) {
+            return true;
+        }
+        // A held stack its filter doesn't let through leaves its hand into the overflow.
+        let refused = run
+            .funnel_filters
+            .get(&pos)
+            .is_some_and(|f| d.held.as_ref().is_some_and(|held| held.0 != *f));
+        if !refused {
+            return false;
+        }
+        let stack = run.held_of(d);
+        Run::set_hand(d, None);
+        run.keep_overflow(pos, stack.into_iter().collect());
+        true
+    }
+
+    fn should_activate(&mut self, d: &Deployer) -> bool {
+        let (run, pos, facing) = (&*self.run, self.pos, self.facing);
+        if facing == Dir::Down && run.takes_from_side(step(pos, facing, 2)) {
+            return false;
+        }
+        run.deployer_place_target(pos, facing, d).is_some() || run.deployer_uses(pos, facing, d)
+    }
+
+    fn start_fist_bump(&mut self, d: &mut Deployer) -> bool {
+        self.run.fist_start(self.pos, self.facing, d)
+    }
+
+    fn ray_hit(&mut self) -> f32 {
+        if self.run.replaceable(step(self.pos, self.facing, 1)) {
+            0.75
+        } else {
+            0.
+        }
+    }
+
+    fn trigger_fist_bump(&mut self, d: &mut Deployer) {
+        self.run.fist_trigger(self.pos, self.facing, d);
+    }
+
+    fn activate(&mut self, d: &mut Deployer) {
+        self.run.deployer_activate(self.pos, self.facing, d);
     }
 }

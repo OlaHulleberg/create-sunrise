@@ -1,5 +1,5 @@
 //! Mechanical presses over depots and belts, mirroring glue/processing/press.rs: a depot whose
-//! stack came to rest asks the press two above it (`tick_presses`, `press::depot_step`), which
+//! stack came to rest asks the press two above it (`press::depot_step`), which
 //! starts its cycle when a pressing recipe takes the stack and presses one of it at the head's
 //! lowest point (`results_on_depot`); a belt item under a press is held while the press runs and
 //! converted at that point (`press_on_belt`, the belt's `process`). Depots ask and presses move
@@ -25,24 +25,6 @@ impl Run {
     pub(super) fn processing_blocked(&self, space: Pos) -> bool {
         let above = [space[0], space[1] + 1, space[2]];
         belt::processing_blocked(self.w.block_at(0, above), || self.host_collision(above))
-    }
-    /// `tick_presses`: the depots that asked look at the deployer two above them, and keep
-    /// asking while it holds their stack. Presses are asked at their depot's turn
-    /// (`press_depot_turn`) and move at their own (`press_turn`), in the transport walk.
-    pub(super) fn tick_presses(&mut self) {
-        let work = std::mem::take(&mut self.w.dims[0].depot_work);
-        let mut keep = Vec::new();
-        for depot in work {
-            if self.deployer_on_depot(depot) {
-                keep.push(depot);
-            }
-        }
-        let d = &mut self.w.dims[0];
-        for p in keep {
-            if !d.depot_work.contains(&p) {
-                d.depot_work.push(p);
-            }
-        }
     }
     /// glue/processing/press.rs `depot_turn`: the depot at `at`, its stack arrived and not
     /// blocked, asks the press two above (`press::depot_step`).
@@ -88,6 +70,7 @@ impl Run {
         match block {
             create_engine::Block::Spout => self.spout_on_depot(at),
             create_engine::Block::MechanicalPress => self.press_depot_turn(at),
+            create_engine::Block::Deployer => self.deployer_on_depot(at),
             _ => {}
         }
     }

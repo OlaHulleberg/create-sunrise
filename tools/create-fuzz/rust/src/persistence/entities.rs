@@ -123,6 +123,7 @@ pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
         locked: at(5) != 0,
         held_damage: at(6).max(0) as u32,
         held_components: Vec::new(),
+        fist_bump: false,
     })
 }
 

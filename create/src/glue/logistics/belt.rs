@@ -809,6 +809,10 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 crate::glue::processing::basin_turn(lv, p);
                 continue;
             }
+            create_engine::world::TransportTick::Deployer(p) => {
+                crate::glue::processing::deployer_turn(lv, p);
+                continue;
+            }
             create_engine::world::TransportTick::Belt(c) => c,
         };
         let Some((seg, length, mut belt_items)) = with_world(|w| {

@@ -298,8 +298,6 @@ pub struct Run {
     saw_duration: HashMap<Pos, f32>,
     /// The deployers' overflow slots (`overflowItems`), by deployer.
     deployer_overflow: HashMap<Pos, [Option<crate::deployers::Held>; 11]>,
-    /// The deployers in a fist bump (`fist.rs`'s `BUMPING`).
-    bumping: std::collections::BTreeSet<Pos>,
     /// The side the current item handler access asks from.
     capability_side: Option<create_engine::kinetics::Dir>,
     vanilla: vanilla::Vanilla,
@@ -385,7 +383,6 @@ impl Run {
             saw_index: HashMap::new(),
             saw_duration: HashMap::new(),
             deployer_overflow: HashMap::new(),
-            bumping: Default::default(),
             capability_side: None,
             vanilla: Default::default(),
             cracks: HashMap::new(),

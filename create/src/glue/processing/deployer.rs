@@ -118,58 +118,47 @@ fn start_over(lv: &ServerLevel<'_>, d: &mut Deployer, at: [i32; 3]) {
     with_world(|w| {
         let dd = &mut w.dims[dim];
         dd.deployers.insert(above, d.clone());
-        if !dd.deploying.contains(&above) {
-            dd.deploying.push(above);
-        }
         dd.deployer_changes.push(above);
     });
 }
 
-/// `BeltDeployerCallbacks` for the depot at `depot`: true when a deployer above holds its stack
-/// (the depot asks again next tick).
-pub fn deployer_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) -> bool {
+/// `BeltDeployerCallbacks` for the depot at `depot`, at its turn with its stack arrived.
+pub fn deployer_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) {
     use deployer::Depot;
     let dim = lv.dim;
     let Some((mut d, rpm)) = deployer_above(lv, depot) else {
-        return false;
+        return;
     };
     let above = [depot[0], depot[1] + 2, depot[2]];
     let Some(mut held) =
         with_world(|w| w.dims[dim].depots.get(&depot).copied().flatten()).flatten()
     else {
-        return false;
+        return;
     };
     if held.sliding() && held.position < 0.5 - 1.0 / 16.0 {
-        return false;
+        return;
     }
     let Some(stack) = lv.slot(depot, 0) else {
-        return false;
+        return;
     };
     let item = stacks::id(&*lv.host, &stack);
     let count = stack.count().min(255) as u8;
     if !recipes::ready() {
-        return false;
+        return;
     }
     let tool = d.held.as_ref().map(|h| h.0.clone()).unwrap_or_default();
     let sequenced = press::sequenced_on_depot(lv, depot, "create:deploying", Some(&tool));
     let (_, recipe) = recipe_for(&item, stacks::sequenced_progress(&stack).as_ref(), &tool);
-    let hold = match deployer::on_depot(&d, rpm, held.locked, recipe.is_some()) {
-        Depot::Pass => {
-            held.locked = false;
-            false
-        }
-        Depot::Hold => {
-            held.locked = true;
-            true
-        }
+    match deployer::on_depot(&d, rpm, held.locked, recipe.is_some()) {
+        Depot::Pass => held.locked = false,
+        Depot::Hold => held.locked = true,
         Depot::Start => {
             start_over(lv, &mut d, depot);
             held.locked = true;
-            true
         }
         Depot::Apply => {
             let Some(r) = recipe else {
-                return false;
+                return;
             };
             held = match &sequenced {
                 Some((a, progress, _)) => {
@@ -183,15 +172,13 @@ pub fn deployer_on_depot(lv: &mut ServerLevel<'_>, depot: [i32; 3]) -> bool {
             held.locked = true;
             deployer_used(lv, &mut d, &r, above);
             with_world(|w| w.set_deployer(dim, above, d.clone()));
-            true
         }
-    };
+    }
     with_world(|w| {
         if let Some(h) = w.dims[dim].depots.get_mut(&depot) {
             *h = h.map(|_| held);
         }
     });
-    hold
 }
 
 /// `BeltDeployerCallbacks` for a stack on the belt at `at` under the deployer `d` (facing down,
@@ -247,10 +234,7 @@ pub fn deployer_on_belt(
             deployer_used(lv, &mut d, &r, above);
             with_world(|w| w.set_deployer(dim, above, d.clone()));
             Process::Convert {
-                held: item.left_after_one().map(|mut left| {
-                    left.fan.clear();
-                    left
-                }),
+                held: Some(item.left_of_one()),
                 outputs,
             }
         }
@@ -360,12 +344,10 @@ pub(crate) fn set_held_stack(
         .unwrap_or_default();
 }
 
-/// Deployers mid-stroke (`DeployerBlockEntity.tick`): the stroke runs; one back at rest has the
-/// depot below look at it again. Nothing runs without one.
-pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
-    use deployer::{Mode, State, Tick};
+/// `DeployerBlock.neighborChanged` (`redstoneUpdate`): a deployer whose neighbours changed is
+/// locked while powered.
+pub fn redstone_updates(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    // `redstoneUpdate`: powered, it is locked.
     let power =
         with_world(|w| std::mem::take(&mut w.dims[dim].deployer_power_checks)).unwrap_or_default();
     for pos in power {
@@ -379,115 +361,109 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
             {
                 d.locked = powered;
                 w.mark_unsaved(dim, pos);
-                // A depot below looks at it again.
-                w.dims[dim].depot_work.push([pos[0], pos[1] - 2, pos[2]]);
             }
         });
     }
-    // Deployers at rest, turning, not locked: `tick`'s `WAITING` start (`shouldActivate` when
-    // using), else a look again `getTimerSpeed() × 10` later. Using ones over a depot or belt
-    // wait for it.
-    let idle: Vec<([i32; 3], f32, Mode)> = with_world(|w| {
-        let d = &w.dims[dim];
-        d.deployers
-            .iter()
-            .filter(|(p, dp)| !dp.busy() && !dp.locked && !d.deploying.contains(p))
-            .map(|(p, dp)| (*p, w.speed(dim, *p).unwrap_or(0.0), dp.mode))
-            .filter(|(_, rpm, _)| *rpm != 0.0)
-            .collect()
-    })
-    .unwrap_or_default();
-    for (pos, rpm, mode) in idle {
-        let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
-            continue;
-        };
-        // `WAITING`: while it holds overflow it waits for a funnel or hopper to take it.
+}
+
+/// The world around the deployer at `pos` for its turn ([`Deployer::turn`]).
+struct Turn<'a, 'b> {
+    lv: &'a mut ServerLevel<'b>,
+    pos: [i32; 3],
+    facing: Dir,
+}
+
+impl deployer::World for Turn<'_, '_> {
+    fn lost_block(&mut self, at: [i32; 3]) -> bool {
+        if !self.lv.is_air(at) {
+            return false;
+        }
+        let breaker = deployer::breaker_id(self.pos);
+        let _ = self
+            .lv
+            .level
+            .set_break_progress(&mut *self.lv.host, breaker, at, -1);
+        true
+    }
+
+    fn overflowing(&mut self, d: &mut Deployer) -> bool {
+        let (lv, pos) = (&mut *self.lv, self.pos);
         if has_overflow(lv, pos) {
-            with_world(|w| {
-                let d = &mut w.dims[dim];
-                if let Some(dp) = d.deployers.get_mut(&pos) {
-                    dp.wait(rpm);
-                    d.deploying.push(pos);
-                }
-            });
-            continue;
+            return true;
         }
         // A held stack its filter doesn't let through leaves its hand into the overflow.
-        if let Some(f) = super::filtering::filter_at(dim, pos)
-            && let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten()
-            && let Some(held) = d.held.clone()
-            && !crate::glue::items::filters::passes_item(&*lv.host, Some(&f), &held.0)
-        {
-            let stack = held_of(lv, &d);
-            set_held_stack(&*lv.host, &mut d, None);
-            with_world(|w| w.set_deployer(dim, pos, d));
-            keep_overflow(lv, pos, stack.into_iter().collect());
-            continue;
+        let refused = super::filtering::filter_at(lv.dim, pos).is_some_and(|f| {
+            d.held.as_ref().is_some_and(|held| {
+                !crate::glue::items::filters::passes_item(&*lv.host, Some(&f), &held.0)
+            })
+        });
+        if !refused {
+            return false;
         }
-        if mode == Mode::Punch && super::fist::start(lv, pos, facing) {
-            continue;
+        let stack = held_of(lv, d);
+        set_held_stack(&*lv.host, d, None);
+        keep_overflow(lv, pos, stack.into_iter().collect());
+        true
+    }
+
+    fn should_activate(&mut self, d: &Deployer) -> bool {
+        let (lv, pos, facing) = (&*self.lv, self.pos, self.facing);
+        if facing == Dir::Down && takes_from_side(lv.dim, super::step(pos, facing, 2)) {
+            return false;
         }
-        let below = super::step(pos, facing, 2);
-        if facing == Dir::Down && takes_from_side(dim, below) && mode == Mode::Use {
-            continue;
-        }
-        let place = if mode == Mode::Punch {
-            Some(below)
-        } else {
-            deployer_place_target(lv, pos, facing)
-                .or_else(|| deployer_uses(lv, pos, facing).then_some(super::step(pos, facing, 1)))
-        };
-        let reach = if lv.replaceable(super::step(pos, facing, 1)) {
+        deployer_place_target(lv, pos, facing, d).is_some() || deployer_uses(lv, pos, facing, d)
+    }
+
+    fn start_fist_bump(&mut self, d: &mut Deployer) -> bool {
+        super::fist::start(self.lv, self.pos, self.facing, d)
+    }
+
+    fn ray_hit(&mut self) -> f32 {
+        if self.lv.replaceable(super::step(self.pos, self.facing, 1)) {
             0.75
         } else {
             0.0
-        };
-        with_world(|w| {
-            let d = &mut w.dims[dim];
-            let Some(dp) = d.deployers.get_mut(&pos) else {
-                return;
-            };
-            match place {
-                // `start`: the ray toward the block two ahead sets its reach.
-                Some(_) => {
-                    dp.start(reach);
-                    d.deployer_changes.push(pos);
-                }
-                None => dp.wait(rpm),
-            }
-            d.deploying.push(pos);
-        });
-    }
-    let Some(list) = with_world(|w| w.dims[dim].deploying.clone()) else {
-        return;
-    };
-    for pos in list {
-        deployer_lost_block(lv, pos);
-        let rpm = lv.speed(pos);
-        let activated = with_world(|w| {
-            let d = &mut w.dims[dim];
-            let Some(dp) = d.deployers.get_mut(&pos) else {
-                d.deploying.retain(|p| *p != pos);
-                return false;
-            };
-            let tick = dp.tick(rpm);
-            if tick != Tick::None {
-                d.deployer_changes.push(pos);
-                if dp.state == State::Waiting {
-                    d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
-                }
-            }
-            if !dp.busy() {
-                d.deploying.retain(|p| *p != pos);
-            }
-            tick == Tick::Activate
-        })
-        .unwrap_or(false);
-        if activated {
-            super::fist::trigger(lv, pos);
-            deployer_activate(lv, pos);
         }
     }
+
+    fn trigger_fist_bump(&mut self, d: &mut Deployer) {
+        super::fist::trigger(self.lv, self.pos, self.facing, d);
+    }
+
+    fn activate(&mut self, d: &mut Deployer) {
+        deployer_activate(self.lv, self.pos, self.facing, d);
+    }
+}
+
+/// `DeployerBlockEntity.tick` at the deployer's turn in the level's block-entity order:
+/// `KineticBlockEntity.tick` first (`attachKinetics`), then its stroke ([`Deployer::turn`]).
+pub(crate) fn deployer_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    with_world(|w| w.kinetic_base_ticks_through(dim, pos));
+    let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
+        return;
+    };
+    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let rpm = lv.speed(pos);
+    let changed = d.turn(rpm, &mut Turn { lv, pos, facing });
+    with_world(|w| {
+        let dd = &mut w.dims[dim];
+        if !dd.deployers.contains_key(&pos) {
+            return;
+        }
+        dd.deployers.insert(pos, d);
+        if changed {
+            dd.deployer_changes.push(pos);
+            dd.unsaved.push((pos[0] >> 4, pos[2] >> 4));
+        }
+    });
+}
+
+/// After the walk: the cracks of removed deployers go, and clients see the strokes that changed.
+pub fn send_deployer_changes(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
     let Some((changes, cracks)) = with_world(|w| {
         let d = &mut w.dims[dim];
         let mut c = std::mem::take(&mut d.deployer_changes);
@@ -511,10 +487,13 @@ pub fn tick_deployers(lv: &mut ServerLevel<'_>) {
 
 /// Where the block a deployer holds would go (`placement`), as a position; None when it holds
 /// no block, or nowhere fits.
-fn deployer_place_target(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> Option<[i32; 3]> {
-    let dim = lv.dim;
-    let held =
-        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()?;
+fn deployer_place_target(
+    lv: &ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &Deployer,
+) -> Option<[i32; 3]> {
+    let held = d.held.clone()?;
     // A block item (`BlockItem.getBlock`): the block it places.
     let placed = lv.host.item_block(stacks::key(&*lv.host, &held.0)?)?;
     let reached = super::step(pos, facing, 2);
@@ -526,12 +505,9 @@ fn deployer_place_target(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> Op
 
 /// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
 /// whose source is already in the block it reaches.
-fn deployer_uses(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> bool {
-    let dim = lv.dim;
+fn deployer_uses(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir, d: &Deployer) -> bool {
     // An empty hand always (it uses the block it reaches).
-    let Some((item, _)) =
-        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.held.clone())).flatten()
-    else {
+    let Some((item, _)) = d.held.clone() else {
         return true;
     };
     if stacks::key(&*lv.host, &item).is_some_and(|k| lv.host.item_block(k).is_some()) {
@@ -550,24 +526,13 @@ fn deployer_uses(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> bool {
 /// `DeployerBlockEntity.activate`: nothing over a depot or belt (their callbacks do the work);
 /// punching, `punch`; else the fake player clicks the block it reaches with what it holds
 /// (`activateInner` in `Mode.USE`), and the hand keeps what is left of the stack.
-fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let dim = lv.dim;
-    let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
-        return;
-    };
+fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, d: &mut Deployer) {
     let reached = deployer::clicked(pos, facing);
-    if facing == Dir::Down && takes_from_side(dim, reached) {
+    if facing == Dir::Down && takes_from_side(lv.dim, reached) {
         return;
     }
-    let Some(mut d) = with_world(|w| w.dims[dim].deployers.get(&pos).cloned()).flatten() else {
-        return;
-    };
-    let before = d.clone();
-    let other = activate(lv, pos, facing, &mut d, deployer::breaker_id(pos));
+    let other = activate(lv, pos, facing, d, deployer::breaker_id(pos));
     crate::glue::advancements::award_placer(lv, pos, "deployer");
-    if d != before {
-        with_world(|w| w.set_deployer(dim, pos, d));
-    }
     keep_overflow(lv, pos, other);
 }
 
@@ -1266,28 +1231,6 @@ pub fn calm_hive_harvest(
     true
 }
 
-/// `DeployerBlockEntity.tick`: cracks on a block that is gone since are cleared.
-fn deployer_lost_block(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
-    let dim = lv.dim;
-    let Some(at) =
-        with_world(|w| w.dims[dim].deployers.get(&pos).and_then(|d| d.breaking)).flatten()
-    else {
-        return;
-    };
-    let at = at.0;
-    if !lv.is_air(at) {
-        return;
-    }
-    let _ = lv
-        .level
-        .set_break_progress(&mut *lv.host, deployer::breaker_id(pos), at, -1);
-    with_world(|w| {
-        if let Some(d) = w.dims[dim].deployers.get_mut(&pos) {
-            d.breaking = None;
-        }
-    });
-}
-
 /// How far along its facing a click at `point` is from the deployer's back face.
 fn along(pos: [i32; 3], facing: Dir, point: [f64; 3]) -> f64 {
     let o = facing.offset();
@@ -1350,10 +1293,7 @@ pub fn use_deployer(
     let back = held_of(lv, &d);
     set_held_stack(&*lv.host, &mut d, hand.as_ref());
     lv.set_held(player, back);
-    with_world(|w| {
-        w.set_deployer(dim, pos, d);
-        w.dims[dim].depot_work.push([pos[0], pos[1] - 2, pos[2]]);
-    });
+    with_world(|w| w.set_deployer(dim, pos, d));
     true
 }
 

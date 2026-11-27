@@ -487,6 +487,7 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                         Some(Tag::ByteArray(c)) => c.clone(),
                         _ => Vec::new(),
                     },
+                    fist_bump: false,
                 },
             ))
         })

@@ -1111,12 +1111,7 @@ fn take_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockData>
     let block = lv.create_block(pos);
     match block {
         Some(Block::Deployer) => {
-            out.deployer = with_world(|w| {
-                let d = &mut w.dims[dim];
-                d.deploying.retain(|p| *p != pos);
-                d.deployers.remove(&pos)
-            })
-            .flatten();
+            out.deployer = with_world(|w| w.dims[dim].deployers.remove(&pos)).flatten();
         }
         Some(Block::FluidTank) => {
             out.tank = with_world(|w| w.dims[dim].tanks.take(pos)).flatten();
