@@ -225,11 +225,8 @@ fn use_track(
     let (pos2, state2) = match shape_of(&*lv.host, here) {
         Some(_) => (pos, here),
         None => {
-            let replaceable = lv.host.block_states().replaceable(here) == Some(true);
-            let p = if replaceable {
-                pos
-            } else {
-                [pos[0] + face[0], pos[1] + face[1], pos[2] + face[2]]
+            let Some(p) = clicked_pos(lv, here, pos, face) else {
+                return true;
             };
             let Some(shape) = placement_shape(lv, player, p) else {
                 return true;
@@ -818,6 +815,30 @@ fn set_stack_pick(
     items::set_held(lv.host, player, hand, Some(stack));
 }
 
+fn offset_pos(pos: [i32; 3], delta: [i32; 3]) -> Option<[i32; 3]> {
+    Some([
+        pos[0].checked_add(delta[0])?,
+        pos[1].checked_add(delta[1])?,
+        pos[2].checked_add(delta[2])?,
+    ])
+}
+
+/// Where a click on `pos` (holding `here`) places a block: `pos` itself when its block is
+/// replaceable, else the block beside it on the clicked `face`; None if that leaves the
+/// coordinate range.
+fn clicked_pos(
+    lv: &ServerLevel<'_>,
+    here: BlockState,
+    pos: [i32; 3],
+    face: [i32; 3],
+) -> Option<[i32; 3]> {
+    if lv.host.block_states().replaceable(here) == Some(true) {
+        Some(pos)
+    } else {
+        offset_pos(pos, face)
+    }
+}
+
 /// The pick kept in a signal's block entity data, if it has one.
 pub fn data_target(pos: [i32; 3], data: &Compound) -> Option<Target> {
     let Some(Tag::IntArray(t)) = data.get(&TARGET_TRACK.into()) else {
@@ -828,7 +849,7 @@ pub fn data_target(pos: [i32; 3], data: &Compound) -> Option<Target> {
     };
     let front = matches!(data.get(&TARGET_DIRECTION.into()), Some(Tag::Byte(b)) if *b != 0);
     Some(Target {
-        track: [pos[0] + x, pos[1] + y, pos[2] + z],
+        track: offset_pos(pos, [x, y, z])?,
         front,
     })
 }
@@ -864,6 +885,18 @@ fn click_sound(lv: &mut ServerLevel<'_>, pos: [i32; 3], id: &str, volume: f32, p
         pitch,
         None,
     );
+}
+
+fn within_signal_reach(track: [i32; 3], placed: [i32; 3]) -> bool {
+    let mut sum = 0i64;
+    for i in 0..3 {
+        let d = i64::from(track[i]) - i64::from(placed[i]);
+        if d.abs() >= 16 {
+            return false;
+        }
+        sum += d * d;
+    }
+    sum < 16 * 16
 }
 
 /// `TrackTargetingBlockItem.useOn` with a signal, on the server: sneaking with a pick clears
@@ -914,16 +947,10 @@ fn use_signal(
         say_target(lv, player, "missing", Some("red"));
         return Some(InteractionResult::Fail);
     };
-    let replaceable = lv.host.block_states().replaceable(here) == Some(true);
-    let placed = if replaceable {
-        pos
-    } else {
-        std::array::from_fn(|i| pos[i] + event.face[i])
+    let Some(placed) = clicked_pos(lv, here, pos, event.face) else {
+        return Some(InteractionResult::Fail);
     };
-    let far: i64 = (0..3)
-        .map(|i| i64::from(target.track[i] - placed[i]).pow(2))
-        .sum();
-    if far >= 16 * 16 {
+    if !within_signal_reach(target.track, placed) {
         say_target(lv, player, "too_far", Some("red"));
         return Some(InteractionResult::Fail);
     }
@@ -995,7 +1022,12 @@ impl ItemPart for SignalItem {
         let Some(entity) = lv.host.block_entity(lv.level, pos) else {
             return;
         };
-        let rel: Vec<i32> = (0..3).map(|i| target.track[i] - pos[i]).collect();
+        let Some(rel) = (0..3)
+            .map(|i| target.track[i].checked_sub(pos[i]))
+            .collect::<Option<Vec<i32>>>()
+        else {
+            return;
+        };
         let data = Compound::from([
             (TARGET_TRACK.into(), Tag::IntArray(rel)),
             (TARGET_DIRECTION.into(), Tag::Byte(i8::from(target.front))),
@@ -1114,6 +1146,25 @@ fn lay_fake_track(lv: &mut ServerLevel<'_>) {
     }
 }
 
+/// Widens `bounds` (min corner, then max corner) to hold the block `rel` away, one block
+/// below and two above.
+fn expand_bounds(bounds: &mut [f32; 6], rel: [f32; 3]) {
+    for (k, d) in rel.into_iter().enumerate() {
+        bounds[k] = bounds[k].min(d - 1.0);
+        bounds[k + 3] = bounds[k + 3].max(d + 2.0);
+    }
+}
+
+/// Widens `bounds` around a curve's `endpoints`, relative to the block entity at `origin`.
+fn expand_curve_bounds(bounds: &mut [f32; 6], origin: [i32; 3], endpoints: [[i32; 3]; 2]) {
+    for p in endpoints {
+        expand_bounds(
+            bounds,
+            [0, 1, 2].map(|k| (i64::from(p[k]) - i64::from(origin[k])) as f32),
+        );
+    }
+}
+
 /// Create's track and signal blocks' part on the kept blocks' block entity: their data is set
 /// when they come in, carried to clients, and drawn there.
 pub struct TrackEntity;
@@ -1182,11 +1233,7 @@ impl BlockEntityPart for TrackEntity {
                 && let Some(Tag::IntArray(t)) = c.get(&"t".into())
                 && let &[x, y, z] = &t[..]
             {
-                for (k, d) in [x, y, z].into_iter().enumerate() {
-                    let d = d as f32;
-                    event.bounds[k] = event.bounds[k].min(d - 1.0);
-                    event.bounds[k + 3] = event.bounds[k + 3].max(d + 2.0);
-                }
+                expand_bounds(event.bounds, [x as f32, y as f32, z as f32]);
             }
             return;
         }
@@ -1196,13 +1243,7 @@ impl BlockEntityPart for TrackEntity {
         let curves = saved::curves_of(event.entity.nbt().get(&CURVES.into()));
         let origin = event.pos;
         for s in curves {
-            for p in [s.from, s.to] {
-                for k in 0..3 {
-                    let d = (p[k] - origin[k]) as f32;
-                    event.bounds[k] = event.bounds[k].min(d - 1.0);
-                    event.bounds[k + 3] = event.bounds[k + 3].max(d + 2.0);
-                }
-            }
+            expand_curve_bounds(event.bounds, origin, [s.from, s.to]);
         }
     }
 
@@ -1384,7 +1425,50 @@ fn decompose(m: &Mat4) -> ([f32; 3], [f32; 3], f32, f32) {
 
 #[cfg(test)]
 mod tests {
-    use super::decompose;
+    use super::{
+        Compound, TARGET_DIRECTION, TARGET_TRACK, Tag, data_target, decompose, expand_curve_bounds,
+        within_signal_reach,
+    };
+
+    #[test]
+    fn saved_signal_target_rejects_overflow_and_decodes_valid_offsets() {
+        for (pos, offset) in [(1, i32::MAX), (-1, i32::MIN)] {
+            let data = Compound::from([(TARGET_TRACK.into(), Tag::IntArray(vec![offset, 0, 0]))]);
+            assert!(data_target([pos, 0, 0], &data).is_none());
+        }
+
+        let data = Compound::from([
+            (TARGET_TRACK.into(), Tag::IntArray(vec![1, -2, 3])),
+            (TARGET_DIRECTION.into(), Tag::Byte(1)),
+        ]);
+        let target = data_target([4, 5, 6], &data).unwrap();
+        assert_eq!(target.track, [5, 3, 9]);
+        assert!(target.front);
+    }
+
+    #[test]
+    fn signal_reach_is_strictly_less_than_sixteen_blocks() {
+        assert!(!within_signal_reach([i32::MAX; 3], [i32::MIN; 3]));
+        for track in [[16, 0, 0], [10, 10, 8]] {
+            assert!(!within_signal_reach(track, [0; 3]));
+        }
+        for track in [[15, 0, 0], [9, 9, 9]] {
+            assert!(within_signal_reach(track, [0; 3]));
+        }
+    }
+
+    #[test]
+    fn curve_bounds_expand_around_both_endpoints_without_wrapping() {
+        let origin = [i32::MIN, 0, i32::MAX];
+        let mut bounds = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        expand_curve_bounds(&mut bounds, origin, [origin, [i32::MAX, 0, i32::MIN]]);
+        let span = u32::MAX as f32;
+        assert_eq!(bounds, [-1.0, -1.0, -span, span, 2.0, 2.0]);
+
+        let mut bounds = [0.0, 0.0, 0.0, 1.0, 1.0, 1.0];
+        expand_curve_bounds(&mut bounds, [5, 7, 9], [[3, 9, 13], [8, 4, 8]]);
+        assert_eq!(bounds, [-3.0, -4.0, -2.0, 5.0, 4.0, 6.0]);
+    }
 
     /// Applies a decomposed pose to `v`: scale z, rotate (Rodrigues), translate.
     fn apply(t: [f32; 3], axis: [f32; 3], degrees: f32, z: f32, v: [f32; 3]) -> [f32; 3] {
