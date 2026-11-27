@@ -1,0 +1,32 @@
+{
+  "blocks": [
+    {
+      "motor": 16,
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=true,facing=east]"
+    }
+  ],
+  "checkpoints": [
+    2,
+    85,
+    86,
+    87,
+    88,
+    89
+  ],
+  "seed": 0,
+  "ticks": 110,
+  "version": 3
+}

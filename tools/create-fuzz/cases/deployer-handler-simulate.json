@@ -1,0 +1,188 @@
+{
+  "blocks": [
+    {
+      "motor": 16,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=false,facing=down]"
+    }
+  ],
+  "checkpoints": [
+    12,
+    13,
+    14,
+    15,
+    16,
+    17,
+    18,
+    19,
+    29,
+    30,
+    31,
+    32,
+    39,
+    40,
+    41,
+    42,
+    49,
+    50,
+    59,
+    80
+  ],
+  "events": [
+    {
+      "action": {
+        "extract": 1,
+        "insert": null,
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 10
+    },
+    {
+      "action": {
+        "extract": null,
+        "insert": {
+          "count": 64,
+          "item": "minecraft:oak_planks"
+        },
+        "kind": "capability",
+        "side": null,
+        "simulate": true,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 12
+    },
+    {
+      "action": {
+        "extract": null,
+        "insert": {
+          "count": 64,
+          "item": "minecraft:oak_planks"
+        },
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 14
+    },
+    {
+      "action": {
+        "extract": null,
+        "insert": {
+          "count": 5,
+          "item": "minecraft:oak_planks"
+        },
+        "kind": "capability",
+        "side": null,
+        "simulate": true,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 16
+    },
+    {
+      "action": {
+        "extract": null,
+        "insert": {
+          "count": 5,
+          "item": "minecraft:oak_planks"
+        },
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 18
+    },
+    {
+      "action": {
+        "extract": 2,
+        "insert": null,
+        "kind": "capability",
+        "side": null,
+        "simulate": true,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 30
+    },
+    {
+      "action": {
+        "extract": 2,
+        "insert": null,
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 40
+    },
+    {
+      "action": {
+        "extract": 64,
+        "insert": null,
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 50
+    }
+  ],
+  "seed": 0,
+  "ticks": 80,
+  "version": 3
+}

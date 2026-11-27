@@ -1,0 +1,100 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    },
+    {
+      "motor": 16,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=false,facing=down]"
+    }
+  ],
+  "checkpoints": [
+    58,
+    59,
+    60,
+    61,
+    62,
+    63
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "west",
+        "hit": [
+          0.0,
+          0.625,
+          0.5
+        ],
+        "item": "minecraft:iron_ingot",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 8
+    },
+    {
+      "action": {
+        "face": "down",
+        "hit": [
+          0.5,
+          0.0,
+          0.5
+        ],
+        "item": "minecraft:oak_planks",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 12
+    },
+    {
+      "action": {
+        "extract": 64,
+        "insert": null,
+        "kind": "capability",
+        "side": null,
+        "simulate": false,
+        "slot": 0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 90
+    }
+  ],
+  "seed": 0,
+  "ticks": 120,
+  "version": 3
+}

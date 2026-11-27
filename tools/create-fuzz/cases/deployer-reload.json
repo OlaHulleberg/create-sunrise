@@ -1,0 +1,76 @@
+{
+  "blocks": [
+    {
+      "motor": 16,
+      "pos": [
+        0,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=true,facing=east]"
+    }
+  ],
+  "checkpoints": [
+    30,
+    31,
+    32,
+    33,
+    34,
+    35,
+    36
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "east",
+        "hit": [
+          1.0,
+          0.5,
+          0.5
+        ],
+        "item": "minecraft:cobblestone",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 12
+    },
+    {
+      "action": {
+        "kind": "reload"
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 30
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "minecraft:air",
+      "tick": 90
+    }
+  ],
+  "seed": 0,
+  "ticks": 120,
+  "version": 3
+}

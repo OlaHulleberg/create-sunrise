@@ -1,0 +1,94 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:dirt"
+    },
+    {
+      "motor": 16,
+      "pos": [
+        -1,
+        10,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=true,facing=down]"
+    }
+  ],
+  "checkpoints": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    100
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "down",
+        "hit": [
+          0.5,
+          0.0,
+          0.5
+        ],
+        "item": "minecraft:iron_hoe",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 12
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:grass_block[snowy=false]",
+      "tick": 120
+    },
+    {
+      "action": {
+        "face": "down",
+        "hit": [
+          0.5,
+          0.0,
+          0.5
+        ],
+        "item": "minecraft:iron_shovel",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 121
+    }
+  ],
+  "seed": 0,
+  "ticks": 200,
+  "version": 3
+}

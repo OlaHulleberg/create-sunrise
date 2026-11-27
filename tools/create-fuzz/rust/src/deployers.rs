@@ -971,8 +971,15 @@ fn tools(sc: &mut Scenario, r: &mut Rng, rpm: i32) {
 
 /// Two punching deployers two to four blocks apart bump fists; one that uses, or stands still,
 /// does not.
-fn fist_bump(sc: &mut Scenario, r: &mut Rng, rpm: i32) {
-    let apart = 2 + r.below(3) as i32;
+fn fist_bump(sc: &mut Scenario, r: &mut Rng, rpm: i32, reloads: bool) {
+    // Two apart, a using one clicks the other's front: right after a load, before that one's
+    // first tick, it has no fake player and Create's `DeployerBlock.useItemOn` (:126) crashes
+    // the server. A history that reloads keeps them three or four apart.
+    let apart = if reloads {
+        3 + r.below(2) as i32
+    } else {
+        2 + r.below(3) as i32
+    };
     let a = Rig::new([0, 8, 0], Face::East, true);
     let b = Rig::new([apart, 8, 0], Face::West, true);
     a.build(sc, rpm);
@@ -1059,8 +1066,14 @@ fn removed(sc: &mut Scenario, r: &mut Rng, rpm: i32) {
 
 pub const VARIANTS: u64 = 9;
 
-/// The histories of the `deployers` family, picked by `index`: one seed in three never
-/// reloads, the others always do.
+/// Whether the `deployers` seed at `index` also reloads: every other run of 27 indices (each run
+/// reaches every history at both residues), so each history is run both ways.
+pub fn reloads(index: u64) -> bool {
+    (index / (3 * VARIANTS)) % 2 == 1
+}
+
+/// The histories of the `deployers` family, picked by `index`; [`reloads`] says which also
+/// reload.
 pub fn generate(seed: u64, index: u64) -> Scenario {
     let mut r = Rng::new(seed);
     let rpm = *r.pick(&[16, 32, 64, -32, 128, 256]);
@@ -1070,7 +1083,7 @@ pub fn generate(seed: u64, index: u64) -> Scenario {
         2 => placing(&mut sc, &mut r, rpm),
         3 => punching(&mut sc, &mut r, rpm),
         4 => tools(&mut sc, &mut r, rpm),
-        5 => fist_bump(&mut sc, &mut r, rpm),
+        5 => fist_bump(&mut sc, &mut r, rpm, reloads(index)),
         6 => filtered(&mut sc, &mut r, rpm),
         7 => swapping(&mut sc, &mut r, rpm),
         8 => removed(&mut sc, &mut r, rpm),
@@ -1097,13 +1110,14 @@ mod tests {
     fn every_history_is_valid_and_runs() {
         let mut variants = std::collections::BTreeSet::new();
         let mut reloaded = 0;
-        for k in 0..9 {
-            for residue in [64, 125, 253] {
+        for k in 0..27 {
+            for residue in [125, 253] {
                 let seed = residue + 256 * k;
                 let sc = crate::generate::generate(seed);
                 crate::catalogue::scenario(&sc);
                 crate::transport::validate_scenario(&sc);
-                variants.insert(crate::generate::index(seed) / 3);
+                let index = crate::generate::index(seed);
+                variants.insert(((index / 3) % VARIANTS, reloads(index)));
                 reloaded += usize::from(
                     sc.events
                         .iter()
@@ -1122,25 +1136,25 @@ mod tests {
                     .filter(|b| b.deployer.is_some())
                     .count();
                 assert!(deployers >= 1, "seed {seed}");
-                let (_, rank) = (seed / 256, seed % 256);
                 assert_eq!(
-                    rank == 64,
-                    !sc.events
+                    reloads(crate::generate::index(seed)),
+                    sc.events
                         .iter()
                         .any(|e| matches!(e.action, Some(Action::Reload))),
                     "seed {seed}"
                 );
             }
         }
-        assert_eq!(variants, (0..VARIANTS).collect());
-        assert!(reloaded >= 6);
+        // Every history, both ways.
+        assert_eq!(variants.len(), 2 * VARIANTS as usize);
+        assert_eq!(reloaded, 27);
     }
 
     #[test]
     fn every_seed_of_the_three_lanes_is_a_valid_history() {
         // Beyond the 27 variant seeds: the later picks reach event times past `TICKS`.
-        for residue in [64, 125, 253] {
-            for k in 0..64 {
+        for residue in [125, 253] {
+            for k in 0..96 {
                 let seed = residue + 256 * k;
                 let sc = crate::generate::generate(seed);
                 crate::catalogue::scenario(&sc);
