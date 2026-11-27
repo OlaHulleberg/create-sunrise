@@ -3097,6 +3097,12 @@ impl CreateWorld {
             Some(Block::MechanicalCrafter) => self.dims[dim].crafter_power_checks.push(pos),
             // `DeployerBlock.neighborChanged` → `redstoneUpdate`.
             Some(Block::Deployer) => self.dims[dim].deployer_power_checks.push(pos),
+            // `DrillBlock.neighborChanged` → `destroyNextTick`.
+            Some(Block::MechanicalDrill) => {
+                if let Some(b) = self.dims[dim].drills.get_mut(&pos) {
+                    b.destroy_next_tick();
+                }
+            }
             // `SequencedGearshiftBlock.neighborChanged`: a scheduled tick, one tick later.
             Some(Block::SequencedGearshift) => self.dims[dim].block_ticks.schedule(pos),
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),

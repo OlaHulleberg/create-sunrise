@@ -266,9 +266,10 @@ rule off from its tick to the case's end; the server puts its own rule back afte
 
 Cases in `cases/`: `breaking-saw-upward`, `breaking-drill-unbreakable`, `breaking-drill-water`,
 `breaking-mushroom-skins`, `breaking-leaf-distances`, `breaking-sand-falls`,
-`breaking-sand-column-pull`. Every history where a breaker breaks a block differs from Java by the
-first two rows below, so those histories are in the two families and, shrunk, with the report of
-the differences; the cases that pin them go to `cases/` once the port is right.
+`breaking-sand-column-pull`, `breaking-first-look`, `breaking-neighbour-arm`,
+`breaking-saw-rearm`, `breaking-placed-16`, `breaking-placed-64`. Every history where a breaker
+breaks a block differed from Java by rows of the tables below, so those histories are in the two
+families, and shrunk in the cases that pin each fix.
 
 ## Port differences found
 
@@ -346,15 +347,20 @@ A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by
 `enableMerging`), so a basin spouting into one holds its second result at the spout until the
 first leaves it.
 
+Fixed after the breaking families found them (#384), each with an engine test carrying Create's
+numbers and a case in `cases/`:
+
+| Case | Java | Port before | Deciding Java |
+| --- | --- | --- | --- |
+| `breaking-first-look`, `breaking-placed-16`, `breaking-placed-64` | A breaker looks on its first tick, with the speed it attached with: with nothing to break `NextTick` is −1 at tick 2, and stone is cracked from tick 4 | Started at −1 and was armed by its first lazy tick: a tick early in the families, two late into a network that did not change in the tick the breaker was placed; and it read speed 0 on its first tick, as the breakers ticked before the solve | `BlockBreakingKineticBlockEntity.java:26`, `:86-101`, `KineticBlockEntity.java:98-102` |
+| `breaking-neighbour-arm` | A drill beside any block change looks two ticks later: a stone arriving at tick 42 is cracked from 44 | Waited for its next lazy tick (46) | `DrillBlock.java:80-84` |
+| `breaking-saw-rearm` | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival | Looked again at its lazy ticks only | `SawBlockEntity.java:170-173` |
+
 Open, found with the breaking families (a seed reproduces each with `fuzz gen <seed>` and the
 lane; `breaking/drill` unless said):
 
 | Difference | Java | Port | Deciding Java | Port code |
 | --- | --- | --- | --- | --- |
-| First look late (64: every seed that breaks) | A breaker looks on its first tick: with nothing to break `NextTick` goes to −1 at tick 2, and stone is cracked from tick 4 | Starts at −1 and is set to 1 by its first lazy tick: tick 2 shows 0 and the cracks come at tick 3, one tick early; two ticks late into a network that did not change in the tick the breaker was placed | `BlockBreakingKineticBlockEntity.java:26`, `:98-101` | `engine/src/drill.rs:16`, `:36-41`; `glue/processing/saw.rs:73-76` |
-| No neighbour arming (1600) | A drill beside any block change looks two ticks later: a stone arriving at 42 is cracked from 44 | Waits for its next lazy tick (46) | `DrillBlock.java:80-84` | `engine/src/world.rs:3081`; `glue/processing/saw.rs:41` |
-| Saw re-arm (8384 of `breaking/saw`) | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival: at the case's last tick, 73, its `NextTick` is 0 | Every lazy tick: `NextTick` stays −1 | `SawBlockEntity.java:170-173` | `glue/processing/saw.rs:73-76` |
-| Speed 0 on the first tick (3136; of the 16 rpm seeds whose target never changes later, the only difference) | A breaker placed into a turning network has its speed on its first tick: `NextTick` −1 at tick 2 | `tick_drills` runs before the kinetic solve and reads speed 0: its lazy tick arms it to 1 instead. A generator that changes in the same tick re-places the network and hides this, which is why only the motor's default speed shows it | `KineticBlockEntity.java:99-100`, `:102` | `glue/processing/saw.rs:70`; `engine/src/world.rs:2839` |
 | Cracks left (832) | A drill removed at 21 while it cracks takes its cracks along | They stay to the end of the case | `BlockBreakingKineticBlockEntity.java:78-83` | `engine/src/world.rs:2060`; `glue/processing/saw.rs:46` |
 | Reload forgets progress (1344) | A reload at 21 keeps `Progress` and `NextTick` | Starts over (tick 22: 0 and 0 where Java holds 1 and 607) | `BlockBreakingKineticBlockEntity.java:59-76` | `engine/src/world.rs:470`, `:2377` |
 | Lazy tick stopped | A stopped breaker's lazy ticks stay on its block entity's clock (66, 77, 88 after its restart) | Its counter counts turning ticks only (70, 81, 92); no lane history runs long enough to show it | `SmartBlockEntity.java:74-86` | `glue/processing/saw.rs:41`, `:73`; `engine/src/world.rs:2690-2696` |
