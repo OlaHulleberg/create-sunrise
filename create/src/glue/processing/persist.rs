@@ -451,10 +451,18 @@ pub(crate) fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
                 if !d.inventory.is_empty() {
                     b.insert("Inventory".into(), inventory_to_nbt(&d.inventory));
                 }
+                if let Some(owner) = d.owner {
+                    b.insert("Owner".into(), Tag::IntArray(uuid_ints(owner).to_vec()));
+                }
                 Tag::Compound(b)
             })
             .collect(),
     )
+}
+
+/// A UUID as `NbtUtils.createUUID` writes it: four ints, most significant first.
+fn uuid_ints(u: u128) -> [i32; 4] {
+    std::array::from_fn(|i| (u >> (96 - 32 * i)) as u32 as i32)
 }
 
 /// `DeployerBlockEntity.write`'s `Inventory` past the hand: each stack with its slot.
@@ -543,6 +551,13 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                     fist_bump: false,
                     activated: false,
                     inventory: inventory_from_nbt(b.get(&"Inventory".into())),
+                    owner: match b.get(&"Owner".into()) {
+                        Some(Tag::IntArray(v)) if v.len() == 4 => Some(
+                            v.iter()
+                                .fold(0u128, |u, i| (u << 32) | u128::from(*i as u32)),
+                        ),
+                        _ => None,
+                    },
                 },
             ))
         })
@@ -732,6 +747,7 @@ mod tests {
             locked: true,
             held_damage: 7,
             held_components: vec![10, 0],
+            owner: Some(0x0123_4567_89ab_cdef_0011_2233_4455_6677),
             inventory: vec![(
                 3,
                 deployer::Stack {
@@ -758,6 +774,7 @@ mod tests {
         assert_eq!(back[0].1.held_damage, 7);
         assert_eq!(back[0].1.held_components, d.held_components);
         assert_eq!(back[0].1.inventory, d.inventory);
+        assert_eq!(back[0].1.owner, d.owner);
 
         // Two crafters: one alone with no offsets, one controller with two.
         data.insert(

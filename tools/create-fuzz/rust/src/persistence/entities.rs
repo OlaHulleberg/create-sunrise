@@ -95,6 +95,17 @@ pub fn deployer_to_tag(d: &create_engine::deployer::Deployer) -> Compound {
         ),
         ("HeldItem".into(), Tag::String(item)),
         (
+            "Owner".into(),
+            Tag::IntArray(
+                d.owner
+                    .map(|u| {
+                        std::array::from_fn::<i32, 4, _>(|i| (u >> (96 - 32 * i)) as u32 as i32)
+                    })
+                    .map(|a| a.to_vec())
+                    .unwrap_or_default(),
+            ),
+        ),
+        (
             "Inventory".into(),
             Tag::List(
                 d.inventory
@@ -142,6 +153,13 @@ pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
         held_components: Vec::new(),
         fist_bump: false,
         activated: false,
+        owner: match c.get("Owner") {
+            Some(Tag::IntArray(v)) if v.len() == 4 => Some(
+                v.iter()
+                    .fold(0u128, |u, i| (u << 32) | u128::from(*i as u32)),
+            ),
+            _ => None,
+        },
         inventory: match c.get("Inventory") {
             Some(Tag::List(l)) => l
                 .iter()

@@ -822,7 +822,7 @@ impl Run {
             inventory: d.inventory.iter().map(|(_, s)| held_of_stack(s)).collect(),
             overflow: self.overflow_list(p),
             locked: d.locked,
-            owner: None,
+            owner: d.owner.map(|_| "player".into()),
             filter: self.funnel_filters.get(&p).cloned(),
             fist_bump: d.fist_bump,
             breaking: d.breaking.map(|(pos, progress)| Breaking { pos, progress }),

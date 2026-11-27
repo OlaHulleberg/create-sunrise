@@ -32,9 +32,20 @@ use mod_api::{
     PlayerRef, ServerHost,
 };
 
-/// `DeployerFakePlayer`'s fallback profile: `9e2faded-cafe-4ec2-c314-dad129ae971d`, "Deployer".
-const FAKE_UUID: u128 = 0x9e2f_aded_cafe_4ec2_c314_dad1_29ae_971d;
+/// `DeployerGameProfile`'s fallback name.
 const FAKE_NAME: &str = "Deployer";
+
+/// The deployer `d`'s fake player (`DeployerFakePlayer`): its owner's UUID, the owner's name
+/// while they are online (Create: the last one known), else Create's fallback profile.
+fn fake_player(lv: &mut ServerLevel<'_>, d: &Deployer) -> Option<PlayerRef> {
+    let uuid = d.fake_uuid();
+    let name = d
+        .owner
+        .and_then(|o| lv.host.player(o))
+        .and_then(|p| p.name(&*lv.host).map(str::to_owned))
+        .unwrap_or_else(|| FAKE_NAME.to_owned());
+    lv.host.fake_player(lv.level, uuid, &name)
+}
 
 /// `minecraft:item`, for the crumbs of what a deployer feeds.
 pub(crate) static ITEM_PARTICLE: std::sync::OnceLock<mod_api::ParticleKey> =
@@ -557,6 +568,40 @@ impl mod_api::ResourceHandler<mod_api::ItemResource> for DeployerItems {
         }
         Ok(n)
     }
+}
+
+/// `DeployerBlock.setPlacedBy`: a deployer a player placed (`entity_place`'s placer, a fake one
+/// too) is theirs, once its block is written.
+pub(crate) fn placed_by(dim: usize, pos: [i32; 3], player: u128) {
+    PLACED.with_borrow_mut(|p| p.push((dim, pos, player)));
+}
+
+/// The block at `pos` of level `dim` was written: a deployer [`placed_by`] a player takes them as
+/// its owner.
+pub(crate) fn placed(dim: usize, pos: [i32; 3]) {
+    let Some(owner) = PLACED.with_borrow_mut(|p| {
+        let i = p.iter().position(|e| e.0 == dim && e.1 == pos)?;
+        Some(p.swap_remove(i).2)
+    }) else {
+        return;
+    };
+    with_world(|w| {
+        if let Some(d) = w.dims[dim].deployers.get_mut(&pos) {
+            d.owner = Some(owner);
+            w.mark_unsaved(dim, pos);
+        }
+    });
+}
+
+thread_local! {
+    /// Deployers a player placed, until their block is written: level, position, player.
+    static PLACED: std::cell::RefCell<Vec<(usize, [i32; 3], u128)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// The world closed.
+pub(crate) fn clear() {
+    PLACED.with_borrow_mut(Vec::clear);
 }
 
 /// `DeployerBlock.neighborChanged` (`redstoneUpdate`): a deployer whose neighbours changed is
@@ -1140,9 +1185,10 @@ fn prepare_punch_player(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
     facing: Dir,
+    d: &Deployer,
     stack: Option<ItemStack>,
 ) -> Option<PlayerRef> {
-    let fake = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME)?;
+    let fake = fake_player(lv, d)?;
     let (eye, yaw, pitch) = fake_pose(pos, facing, false);
     let feet = [eye[0], eye[1] - 1.62, eye[2]];
     let host = &mut *lv.host;
@@ -1171,7 +1217,7 @@ fn attack(
     target: mod_api::EntityRef,
 ) {
     let stack = held_of(lv, d);
-    let Some(fake) = prepare_punch_player(lv, pos, facing, stack) else {
+    let Some(fake) = prepare_punch_player(lv, pos, facing, d, stack) else {
         return;
     };
     let host = &mut *lv.host;
@@ -1192,7 +1238,7 @@ fn act_with(
     d: &mut Deployer,
     action: PlayerAction,
 ) -> (Option<mod_api::ActionOutcome>, Vec<ItemStack>) {
-    let Some(fake) = lv.host.fake_player(lv.level, FAKE_UUID, FAKE_NAME) else {
+    let Some(fake) = fake_player(lv, d) else {
         return (None, Vec::new());
     };
     let stack = held_of(lv, d);
@@ -1248,7 +1294,7 @@ fn punch(
     };
     // `DeployerHandler.activateInner`: `getDestroyProgress(player, ..)` of the fake player
     // holding the whole stack, its components and wear included.
-    let Some(fake) = prepare_punch_player(lv, pos, facing, Some(stack)) else {
+    let Some(fake) = prepare_punch_player(lv, pos, facing, d, Some(stack)) else {
         return Vec::new();
     };
     let host = &mut *lv.host;
@@ -1304,7 +1350,7 @@ fn harvest(
 ) -> Vec<ItemStack> {
     use crate::glue::owned::OwnedInventory as _;
     let stack = held_of(lv, d);
-    let Some(fake) = prepare_punch_player(lv, pos, facing, stack) else {
+    let Some(fake) = prepare_punch_player(lv, pos, facing, d, stack) else {
         return Vec::new();
     };
     let host = &mut *lv.host;
@@ -1332,7 +1378,22 @@ pub fn calm_hive_harvest(
     event: &mut mod_api::RightClickBlockEvent<'_>,
 ) -> bool {
     let click = event.click;
-    if click.player != FAKE_UUID || *event.use_block == mod_api::TriState::False {
+    if *event.use_block == mod_api::TriState::False
+        || host
+            .players()
+            .acting_player()
+            .is_none_or(|p| p.is_fake(&*host) != Some(true))
+    {
+        return false;
+    }
+    let deployers = with_world(|w| {
+        w.dims.iter().any(|d| {
+            d.deployers
+                .values()
+                .any(|dp| dp.fake_uuid() == click.player)
+        })
+    });
+    if deployers != Some(true) {
         return false;
     }
     let Some(stack) = click.stack else {
