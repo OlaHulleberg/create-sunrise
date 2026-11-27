@@ -329,7 +329,7 @@ impl Run {
                 self.belt_capability(p, slot, insert, extract, simulate, &mut outcome)
             }
             Some(Block::Deployer) => {
-                self.deployer_capability(p, slot, extract, simulate, &mut outcome)
+                self.deployer_capability(p, slot, insert, extract, simulate, &mut outcome)
             }
             Some(Block::AndesiteTunnel) | None => {}
             Some(b) => self.notes.push(format!(

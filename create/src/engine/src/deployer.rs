@@ -169,6 +169,59 @@ impl Deployer {
         None
     }
 
+    /// `DeployerItemHandler.insertItem` into the hand, its slot past the overflow's: nothing when
+    /// `valid` (its filter's test) is false; into an empty hand at most a stack of `max`, onto the
+    /// held stack only the same item with the same components, up to `max`. How many went in;
+    /// `simulate` changes nothing.
+    pub fn insert_held(&mut self, s: &Stack, max: u8, valid: bool, simulate: bool) -> u8 {
+        if !valid || s.count == 0 {
+            return 0;
+        }
+        let Some(mut h) = self.held_stack() else {
+            let n = s.count.min(max);
+            if !simulate {
+                self.set_held(Some(Stack {
+                    count: n,
+                    ..s.clone()
+                }));
+            }
+            return n;
+        };
+        if h.item != s.item || h.damage != s.damage || h.components != s.components {
+            return 0;
+        }
+        let n = s.count.min(max.saturating_sub(h.count));
+        if n > 0 && !simulate {
+            h.count += n;
+            self.set_held(Some(h));
+        }
+        n
+    }
+
+    /// `DeployerItemHandler.extractItem` from the hand: none of it while a filter is set that it
+    /// passes (`filter_keeps`), else up to `amount`; `simulate` changes nothing.
+    pub fn extract_held(
+        &mut self,
+        amount: u8,
+        filter_keeps: bool,
+        simulate: bool,
+    ) -> Option<Stack> {
+        let mut h = self.held_stack()?;
+        if amount == 0 || filter_keeps {
+            return None;
+        }
+        let n = amount.min(h.count);
+        let out = Stack {
+            count: n,
+            ..h.clone()
+        };
+        if !simulate {
+            h.count -= n;
+            self.set_held((h.count > 0).then_some(h));
+        }
+        Some(out)
+    }
+
     /// `tick`'s `WAITING` scan of the fake player's inventory while the overflow holds `overflow`
     /// stacks: the held stack when its filter refuses it (`held_passes` false), then every other,
     /// until the overflow holds more than ten. What goes to the overflow, in order.
@@ -906,6 +959,33 @@ mod tests {
         assert_eq!(moved.len(), 1);
         assert_eq!(moved[0].item, "minecraft:iron_pickaxe");
         assert_eq!(d.inventory, [(1, st("minecraft:dirt", 1))]);
+    }
+
+    #[test]
+    fn the_item_handler_puts_into_and_takes_from_the_hand() {
+        let planks = |count| Stack {
+            item: "minecraft:oak_planks".into(),
+            count,
+            ..Stack::default()
+        };
+        let mut d = Deployer::default();
+        assert_eq!(d.insert_held(&planks(3), 64, true, true), 3);
+        assert_eq!(d.held, None, "simulated");
+        assert_eq!(d.insert_held(&planks(3), 64, true, false), 3);
+        assert_eq!(d.insert_held(&planks(70), 64, true, false), 61);
+        assert_eq!(d.held, Some(("minecraft:oak_planks".into(), 64)));
+        let dirt = Stack {
+            item: "minecraft:dirt".into(),
+            count: 1,
+            ..Stack::default()
+        };
+        assert_eq!(d.insert_held(&dirt, 64, true, false), 0);
+        assert_eq!(d.insert_held(&planks(1), 64, false, false), 0);
+        assert_eq!(d.extract_held(2, true, false), None, "its filter keeps it");
+        assert_eq!(d.extract_held(2, false, true), Some(planks(2)));
+        assert_eq!(d.held, Some(("minecraft:oak_planks".into(), 64)));
+        assert_eq!(d.extract_held(64, false, false), Some(planks(64)));
+        assert_eq!(d.held, None);
     }
 
     #[test]
