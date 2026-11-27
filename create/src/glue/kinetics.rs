@@ -220,7 +220,7 @@ impl Subsystem for Kinetics {
     ) {
         if let Some(Tag::Int(rpm)) = data.get(&CARRIED_SPEED.into()) {
             let dim = lv.dim;
-            with_world(|w| w.load_settings(dim, std::iter::once((pos, *rpm))));
+            with_world(|w| w.read_motor_setting(dim, pos, *rpm));
         }
     }
 

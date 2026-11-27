@@ -111,7 +111,7 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
             d.tunnel_filters.insert((pos, side), f);
         }
         if let Some(b) = brass {
-            w.load_brass(dim, std::iter::once((pos, b)));
+            w.read_brass(dim, pos, b);
         }
     });
 }

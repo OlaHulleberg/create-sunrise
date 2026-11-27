@@ -103,7 +103,7 @@ impl Subsystem for Arms {
                     pt.facing = pt.facing.map(|f| turn.dir(f));
                 }
                 let dim = lv.dim;
-                with_world(|w| w.dims[dim].arms.saved.insert(pos, a));
+                with_world(|w| w.dims[dim].arms.read(pos, a));
             }
             return;
         }
@@ -120,7 +120,7 @@ impl Subsystem for Arms {
         e.launcher.clamp(ejector::MAX_DISTANCE);
         e.max_stack = max.clamp(0, 64) as u8;
         let dim = lv.dim;
-        with_world(|w| w.dims[dim].ejector_saved.insert(pos, e));
+        with_world(|w| w.read_ejector(dim, pos, e));
     }
 
     /// The `arms` and `ejectors` an older version kept in the column.

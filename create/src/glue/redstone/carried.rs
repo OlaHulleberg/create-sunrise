@@ -132,12 +132,11 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
                 Some(Tag::Int(v)) => (*v).clamp(0, 15),
                 _ => 0,
             };
-            let saved = (pos, ((text(0), text(1)), transmit));
-            with_world(|w| w.load_links(dim, std::iter::once(saved)));
+            with_world(|w| w.read_link(dim, pos, (text(0), text(1)), transmit));
         }
         Block::PulseRepeater | Block::PulseExtender | Block::PulseTimer => {
             if let [state, max] = ints(DIODE)[..] {
-                with_world(|w| w.load_diodes(dim, std::iter::once((pos, (state, max)))));
+                with_world(|w| w.read_diode(dim, pos, state, max));
             }
         }
         Block::AnalogLever => {
@@ -146,7 +145,7 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
                     state: state.clamp(0, 15) as u8,
                     due: (left > 0).then(|| now + i64::from(left)),
                 };
-                with_world(|w| w.dims[dim].levers.load(std::iter::once((pos, l))));
+                with_world(|w| w.dims[dim].levers.read(pos, l));
             }
         }
         Block::ContentObserver => {
@@ -154,11 +153,7 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
                 filter: filter(OBSERVER),
                 ..Observer::default()
             };
-            with_world(|w| {
-                w.dims[dim]
-                    .detectors
-                    .load(std::iter::once((pos, o)), std::iter::empty())
-            });
+            with_world(|w| w.dims[dim].detectors.read_observer(pos, o));
         }
         Block::StockpileSwitch => {
             let v = ints(SWITCH);
@@ -177,11 +172,7 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
                 min,
                 max,
             };
-            with_world(|w| {
-                w.dims[dim]
-                    .detectors
-                    .load(std::iter::empty(), std::iter::once((pos, s)))
-            });
+            with_world(|w| w.dims[dim].detectors.read_switch(pos, s));
         }
         _ => {}
     }
