@@ -66,7 +66,7 @@ pub fn expect(
     car: usize,
     place: impl Fn([i32; 3]) -> [i32; 3],
 ) {
-    actors::expect_back(lv, key(train, car), place);
+    actors::expect_back(lv, key(train, car), place, |_| true);
 }
 
 /// A carriage taken apart: its items go back into its storage blocks, each now at

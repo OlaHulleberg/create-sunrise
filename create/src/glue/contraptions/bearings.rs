@@ -297,7 +297,8 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
         .map(|(o, s)| (add(bearing, *o), *s))
         .collect();
     let place = |o| add(bearing, o);
-    actors::expect_back(lv, bearing, place);
+    let planned: std::collections::HashSet<[i32; 3]> = blocks.iter().map(|(p, _)| *p).collect();
+    actors::expect_back(lv, bearing, place, |p| planned.contains(&p));
     let written = put_back_blocks(lv, &blocks);
     let placed = Pose::translated(bearing.map(f64::from));
     colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
@@ -425,13 +426,12 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
     }) else {
         return;
     };
-    for (pos, w) in orphans {
+    for (pos, facing, w) in orphans {
         // A mechanical bearing broken mid-turn leaves its structure where it had turned to
-        // (`remove` → `disassemble`: the entity keeps its angle); its first block is the one in
-        // front of it. A windmill zeroes its angle first (`disassemble`'s `applyRotation`), so
-        // its sails go back where they were taken from.
-        let front = w.blocks.first().and_then(|(o, _)| Dir::from_offset(*o));
-        match (w.kind, front) {
+        // (`remove` → `disassemble`: the entity keeps its angle). A windmill zeroes its angle
+        // first (`disassemble`'s `applyRotation`), so its sails go back where they were taken
+        // from.
+        match (w.kind, facing) {
             (create_engine::world::BearingKind::Mechanical, Some(facing)) => {
                 let quarter = contraption::quarter(w.turn.angle_at(lv.game_time()));
                 put_back_turned(lv, pos, facing, quarter, &w);
@@ -446,18 +446,30 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let gathered = contraption::gather_windmill(pos, facing, |p| found(lv, p));
-        let (blocks, sails) = match gathered {
+        let (mut blocks, mut sails) = match gathered {
             Ok(g) => g,
             Err(r) => {
                 set_exception(lv, pos, Some(&r));
                 continue;
             }
         };
+        let Some(air) = super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(pos, *o))) else {
+            continue;
+        };
         set_exception(lv, pos, None);
-        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         actors::carry_storage(lv, pos, pos, &blocks);
-        let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-        take_blocks(lv, pos, &blocks);
+        let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+        let refused = take_blocks(lv, pos, &blocks, air);
+        super::drop_refused_for(dim, pos, pos, &refused, &mut blocks, &mut extras);
+        if blocks.is_empty() {
+            actors::release_storage(lv, pos, |o| add(pos, o), |_| false);
+            actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
+            continue;
+        }
+        if !refused.is_empty() {
+            sails = super::count_sails(&*lv.host, &blocks);
+        }
+        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
         let clockwise = super::option_at(dim, pos) == 0;
         // `assemble`: the angle starts at 0, turning at the speed its sails generate
@@ -714,18 +726,32 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
             }
             None if rpm != 0.0 => {
                 let gathered = contraption::gather_bearing(pos, facing, 0, |p| found(lv, p));
-                let (blocks, sails) = match gathered {
+                let (mut blocks, mut sails) = match gathered {
                     Ok(g) => g,
                     Err(r) => {
                         set_exception(lv, pos, Some(&r));
                         continue;
                     }
                 };
+                let Some(air) =
+                    super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(pos, *o)))
+                else {
+                    continue;
+                };
                 set_exception(lv, pos, None);
-                crate::glue::advancements::assembled(lv, pos, &blocks);
                 actors::carry_storage(lv, pos, pos, &blocks);
-                let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-                take_blocks(lv, pos, &blocks);
+                let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+                let refused = take_blocks(lv, pos, &blocks, air);
+                super::drop_refused_for(dim, pos, pos, &refused, &mut blocks, &mut extras);
+                if blocks.is_empty() {
+                    actors::release_storage(lv, pos, |o| add(pos, o), |_| false);
+                    actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
+                    continue;
+                }
+                if !refused.is_empty() {
+                    sails = super::count_sails(&*lv.host, &blocks);
+                }
+                crate::glue::advancements::assembled(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
                     extras,
                     blocks,
@@ -775,7 +801,8 @@ fn put_back_turned(
         let local = [o[0] - f[0], o[1] - f[1], o[2] - f[2]];
         add(anchor, contraption::rotate(local, quarter, axis))
     };
-    actors::expect_back(lv, bearing, turn);
+    let planned: std::collections::HashSet<[i32; 3]> = turned.iter().map(|(p, _)| *p).collect();
+    actors::expect_back(lv, bearing, turn, |p| planned.contains(&p));
     let written = put_back_blocks(lv, &turned);
     let placed = Pose::turned(bearing, axis, f64::from(quarter));
     colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
@@ -873,12 +900,21 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         }
         let moving_dir = if v > 0.0 { sf } else { sf.opposite() };
         let gathered = contraption::gather_gantry(c, cf, moving_dir, |p| found(lv, p));
-        let Ok(blocks) = gathered else {
+        let Ok(mut blocks) = gathered else {
             continue;
         };
-        let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        let Some(air) = super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(c, *o))) else {
+            continue;
+        };
+        let mut carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        let refused = take_blocks(lv, c, &blocks, air);
+        super::drop_refused_for(dim, c, c, &refused, &mut blocks, &mut carried);
+        if blocks.is_empty() {
+            actors::release_storage(lv, c, |o| add(c, o), |_| false);
+            actors::release_extras(lv, &mut carried, |o| add(c, o), |_| false);
+            continue;
+        }
         crate::glue::advancements::assembled(lv, c, &blocks);
-        take_blocks(lv, c, &blocks);
         let limit = sequence_limit(dim, shaft, true);
         with_world(|w| {
             w.dims[dim].gantries.push(Moving {
@@ -955,7 +991,9 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     .map(|(o, id)| (add(add(g.start, *o), shift), *id))
                     .collect();
                 let place = |o| add(at, o);
-                actors::expect_back(lv, g.start, place);
+                let planned: std::collections::HashSet<[i32; 3]> =
+                    blocks.iter().map(|(p, _)| *p).collect();
+                actors::expect_back(lv, g.start, place, |p| planned.contains(&p));
                 let written = put_back_blocks(lv, &blocks);
                 let placed = Pose::translated(at.map(f64::from));
                 colliders::lift_riders(lv, Owner::Gantry(g.start), placed);
@@ -1286,7 +1324,6 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
             return;
         }
     };
-    set_exception(lv, pos, None);
     let o = facing.offset();
     let mut blocks: Vec<([i32; 3], u32)> = c
         .poles
@@ -1301,16 +1338,22 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     let origin = piston_world(c.anchor, [0; 3], facing, c.progress);
     let local: Vec<([i32; 3], u32)> = blocks
         .iter()
-        .filter(|(l, _)| piston_world(c.anchor, *l, facing, c.progress) != pos)
+        .filter(|(l, _)| add(origin, *l) != pos)
         .copied()
         .collect();
-    let carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
-    let cells: Vec<([i32; 3], u32)> = blocks
-        .iter()
-        .map(|(l, s)| (piston_world(c.anchor, *l, facing, c.progress), *s))
-        .filter(|(p, _)| *p != pos)
-        .collect();
-    super::remove_cells(lv, &cells);
+    let cells: Vec<([i32; 3], u32)> = local.iter().map(|(l, s)| (add(origin, *l), *s)).collect();
+    let Some(air) = super::preflight_cells(lv, cells.iter().map(|(p, _)| *p)) else {
+        return;
+    };
+    set_exception(lv, pos, None);
+    let mut carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
+    let refused = super::remove_cells(lv, &cells, air);
+    super::drop_refused_for(dim, pos, origin, &refused, &mut blocks, &mut carried);
+    if refused.len() == cells.len() {
+        actors::release_storage(lv, pos, |o| add(origin, o), |_| false);
+        actors::release_extras(lv, &mut carried, |o| add(origin, o), |_| false);
+        return;
+    }
     crate::glue::advancements::assembled(lv, pos, &blocks);
     lv.set_property(pos, "state", "moving", update_all());
     super::super::persist::mark_pos_unsaved(dim, pos);
@@ -1365,7 +1408,8 @@ fn put_back_piston(
     let o = facing.offset();
     let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
     let place = |l| add(origin, l);
-    actors::expect_back(lv, pos, place);
+    let planned: std::collections::HashSet<[i32; 3]> = cells.iter().map(|(p, _)| *p).collect();
+    actors::expect_back(lv, pos, place, |p| planned.contains(&p));
     let written = put_back_blocks(lv, &cells);
     let placed = Pose::translated(origin.map(f64::from));
     colliders::lift_riders(lv, Owner::Anchor(pos, 0), placed);
