@@ -94,6 +94,9 @@ pub struct Deployer {
     /// Its fake player stands at `activateInner`'s ray origin: it activated since it was loaded
     /// (not saved).
     pub activated: bool,
+    /// Its fake player exists (`player`): made at its first tick (`initialize`), so not yet
+    /// after it is placed or loaded (not saved).
+    pub initialized: bool,
     /// `owner`: the player who placed it (`DeployerBlock.setPlacedBy`), its fake player's UUID
     /// (`DeployerFakePlayer.getUUID`).
     pub owner: Option<u128>,
@@ -341,6 +344,7 @@ impl Deployer {
     /// again next tick); at the bottom of a stroke it activates, a bump's partner first.
     /// Whether clients must see it (`sendData`).
     pub fn turn(&mut self, rpm: f32, world: &mut impl World) -> bool {
+        self.initialized = true;
         if timer_speed(rpm) == 0 {
             return false;
         }
@@ -469,7 +473,8 @@ pub fn on_depot(d: &Deployer, rpm: f32, locked: bool, fits: bool) -> Depot {
     if !locked && d.locked {
         return Depot::Pass;
     }
-    if d.held.is_none() {
+    // No fake player yet: an empty hand.
+    if d.held.is_none() || !d.initialized {
         return Depot::Hold;
     }
     if !fits {
@@ -886,6 +891,7 @@ mod tests {
     fn a_stroke_over_a_depot_applies_once_at_the_bottom() {
         let mut d = Deployer {
             held: Some(("minecraft:oak_planks".into(), 2)),
+            initialized: true,
             ..Deployer::default()
         };
         let r = [cog()];
@@ -1115,6 +1121,7 @@ mod tests {
         let mut d = Deployer {
             held: Some(("minecraft:oak_planks".into(), 1)),
             mode: Mode::Use.toggled(),
+            initialized: true,
             ..Deployer::default()
         };
         assert_eq!(d.mode, Mode::Punch);
@@ -1147,12 +1154,19 @@ mod tests {
         let d = Deployer {
             held: Some(("minecraft:oak_planks".into(), 2)),
             locked: true,
+            initialized: true,
             ..Deployer::default()
         };
         assert_eq!(on_depot(&d, 16.0, false, true), Depot::Pass);
         assert_eq!(on_depot(&d, 16.0, true, true), Depot::Pass);
         let free = Deployer { locked: false, ..d };
         assert_eq!(on_depot(&free, 16.0, false, true), Depot::Start);
+        // Before its first tick (placed or loaded) it has no fake player: an empty hand.
+        let fresh = Deployer {
+            initialized: false,
+            ..free
+        };
+        assert_eq!(on_depot(&fresh, 16.0, false, true), Depot::Hold);
     }
 
     #[test]

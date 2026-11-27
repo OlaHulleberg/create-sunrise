@@ -550,6 +550,7 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                     },
                     fist_bump: false,
                     activated: false,
+                    initialized: false,
                     inventory: inventory_from_nbt(b.get(&"Inventory".into())),
                     owner: match b.get(&"Owner".into()) {
                         Some(Tag::IntArray(v)) if v.len() == 4 => Some(

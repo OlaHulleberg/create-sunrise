@@ -153,6 +153,7 @@ pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
         held_components: Vec::new(),
         fist_bump: false,
         activated: false,
+        initialized: false,
         owner: match c.get("Owner") {
             Some(Tag::IntArray(v)) if v.len() == 4 => Some(
                 v.iter()
