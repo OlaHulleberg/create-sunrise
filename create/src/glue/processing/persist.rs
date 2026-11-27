@@ -448,10 +448,65 @@ pub(crate) fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
                         Tag::ByteArray(d.held_components.clone()),
                     );
                 }
+                if !d.inventory.is_empty() {
+                    b.insert("Inventory".into(), inventory_to_nbt(&d.inventory));
+                }
                 Tag::Compound(b)
             })
             .collect(),
     )
+}
+
+/// `DeployerBlockEntity.write`'s `Inventory` past the hand: each stack with its slot.
+fn inventory_to_nbt(list: &[(u32, deployer::Stack)]) -> Tag {
+    Tag::List(
+        list.iter()
+            .map(|(slot, st)| {
+                let mut c = Compound::new();
+                c.insert(
+                    "Values".into(),
+                    Tag::IntArray(vec![*slot as i32, i32::from(st.count), st.damage as i32]),
+                );
+                c.insert("Item".into(), Tag::String(st.item.as_str().into()));
+                if !st.components.is_empty() {
+                    c.insert("Components".into(), Tag::ByteArray(st.components.clone()));
+                }
+                Tag::Compound(c)
+            })
+            .collect(),
+    )
+}
+
+fn inventory_from_nbt(tag: Option<&Tag>) -> Vec<(u32, deployer::Stack)> {
+    let Some(Tag::List(list)) = tag else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| {
+            let Tag::Compound(c) = t else { return None };
+            let Some(Tag::IntArray(v)) = c.get(&"Values".into()) else {
+                return None;
+            };
+            let Some(Tag::String(item)) = c.get(&"Item".into()) else {
+                return None;
+            };
+            let count = (*v.get(1)?).clamp(0, 64) as u8;
+            (count > 0).then(|| {
+                (
+                    (*v.first().unwrap_or(&1)).max(1) as u32,
+                    deployer::Stack {
+                        item: item.to_string_lossy(),
+                        count,
+                        damage: v.get(2).map_or(0, |d| (*d).max(0) as u32),
+                        components: match c.get(&"Components".into()) {
+                            Some(Tag::ByteArray(b)) => b.clone(),
+                            _ => Vec::new(),
+                        },
+                    },
+                )
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::Deployer)> {
@@ -486,6 +541,7 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                         _ => Vec::new(),
                     },
                     fist_bump: false,
+                    inventory: inventory_from_nbt(b.get(&"Inventory".into())),
                 },
             ))
         })
@@ -675,6 +731,14 @@ mod tests {
             locked: true,
             held_damage: 7,
             held_components: vec![10, 0],
+            inventory: vec![(
+                3,
+                deployer::Stack {
+                    item: "minecraft:cobblestone".into(),
+                    count: 5,
+                    ..Default::default()
+                },
+            )],
             ..Default::default()
         };
         let mut data = Compound::new();
@@ -692,6 +756,7 @@ mod tests {
         assert!(back[0].1.locked);
         assert_eq!(back[0].1.held_damage, 7);
         assert_eq!(back[0].1.held_components, d.held_components);
+        assert_eq!(back[0].1.inventory, d.inventory);
 
         // Two crafters: one alone with no offsets, one controller with two.
         data.insert(

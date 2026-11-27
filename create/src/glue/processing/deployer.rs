@@ -261,7 +261,7 @@ pub fn deployer_on_belt(
 
 /// The deployer at `pos` after applying `recipe` (`activate`): its tool wears, other items are
 /// used up (`Deployer::use_for`); a crafting remainder that finds no room in the hand goes into
-/// its overflow (`overflowItems`).
+/// the fake player's inventory (`getInventory().add`).
 fn deployer_used(
     lv: &mut ServerLevel<'_>,
     d: &mut Deployer,
@@ -282,7 +282,7 @@ fn deployer_used(
     if let Some(rest) = d.use_for(recipe, max_damage, remainder.as_deref())
         && let Some(s) = stacks::stack(&*lv.host, &rest, 1)
     {
-        keep_overflow(lv, pos, vec![s]);
+        place_back(lv, pos, d, vec![s]);
     }
     // `BeltDeployerCallbacks.activate`: the held item breaking, an item picked up, and sand
     // paper's short sanding.
@@ -303,45 +303,69 @@ fn centre(pos: [i32; 3]) -> [f64; 3] {
     pos.map(|v| f64::from(v) + 0.5)
 }
 
-/// The deployer's held stack rebuilt from its id, count, saved components and wear: None when it
-/// holds nothing or `make` refuses the id; `Ok` when the saved components (empty, or a patch
-/// that decodes to a compound and that `set_components` accepts) were restored; `Err` with the
-/// stack as it stands, its components missing, when a non-empty patch could not be.
+/// A deployer's stack rebuilt from its id, count, saved components and wear: None when `make`
+/// refuses the id; `Ok` when the saved components (empty, or a patch that decodes to a compound
+/// and that `set_components` accepts) were restored; `Err` with the stack as it stands, its
+/// components missing, when a non-empty patch could not be.
 fn rebuild(
-    d: &Deployer,
+    st: &deployer::Stack,
     make: impl FnOnce(&str, u32) -> Option<ItemStack>,
 ) -> Option<Result<ItemStack, ItemStack>> {
-    let held = d.held.as_ref()?;
-    let mut s = make(&held.0, u32::from(held.1))?;
-    let restored = d.held_components.is_empty()
+    let mut s = make(&st.item, u32::from(st.count))?;
+    let restored = st.components.is_empty()
         || if let Ok((mod_api::Tag::Compound(c), _)) =
-            mod_api::Tag::from_network_bytes(&d.held_components, None)
+            mod_api::Tag::from_network_bytes(&st.components, None)
         {
             s.set_components(c).is_ok()
         } else {
             false
         };
-    if d.held_damage > 0 {
-        s.set_damage(d.held_damage);
+    if st.damage > 0 {
+        s.set_damage(st.damage);
     }
     Some(if restored { Ok(s) } else { Err(s) })
 }
 
-/// The deployer's held stack as an item stack, with its components and its wear; components
-/// that cannot be restored are dropped (the stack is handed back to the world or a player, and
-/// a refusal would lose it).
-pub(crate) fn held_stack(
-    d: &Deployer,
+/// A deployer's stack as an item stack, with its components and its wear; components that
+/// cannot be restored are dropped (the stack is handed back to the world or a player, and a
+/// refusal would lose it).
+pub(crate) fn item_stack(
+    st: &deployer::Stack,
     make: impl FnOnce(&str, u32) -> Option<ItemStack>,
 ) -> Option<ItemStack> {
-    match rebuild(d, make)? {
+    match rebuild(st, make)? {
         Ok(s) | Err(s) => Some(s),
     }
 }
 
 /// The deployer's held stack as an item stack, with its components and its wear.
+pub(crate) fn held_stack(
+    d: &Deployer,
+    make: impl FnOnce(&str, u32) -> Option<ItemStack>,
+) -> Option<ItemStack> {
+    item_stack(&d.held_stack()?, make)
+}
+
+/// The deployer's held stack as an item stack, with its components and its wear.
 fn held_of(lv: &ServerLevel<'_>, d: &Deployer) -> Option<ItemStack> {
     held_stack(d, |id, n| stacks::stack(&*lv.host, id, n))
+}
+
+/// `stack` as a deployer keeps it: its id, count, wear and the rest of its components.
+fn engine_stack(host: &dyn mod_api::Host, stack: &ItemStack) -> deployer::Stack {
+    deployer::Stack {
+        item: stacks::id(host, stack),
+        count: stack.count().min(64) as u8,
+        damage: stack.damage(),
+        components: stack
+            .components()
+            .and_then(|c| {
+                mod_api::Tag::Compound(c.as_nbt().clone())
+                    .to_network_bytes()
+                    .ok()
+            })
+            .unwrap_or_default(),
+    }
 }
 
 /// The deployer's hand takes `stack` (its id, count, wear and the rest of its components).
@@ -350,16 +374,26 @@ pub(crate) fn set_held_stack(
     d: &mut Deployer,
     stack: Option<&ItemStack>,
 ) {
-    d.held = stack.map(|s| (stacks::id(host, s), s.count().min(64) as u8));
-    d.held_damage = stack.map_or(0, ItemStack::damage);
-    d.held_components = stack
-        .and_then(|s| s.components())
-        .and_then(|c| {
-            mod_api::Tag::Compound(c.as_nbt().clone())
-                .to_network_bytes()
-                .ok()
-        })
-        .unwrap_or_default();
+    d.set_held(stack.map(|s| engine_stack(host, s)));
+}
+
+/// `Inventory.placeItemBackInInventory` on the deployer `d`'s fake player for each of `stacks`;
+/// what finds no room drops at the deployer.
+fn place_back(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    d: &mut Deployer,
+    stacks_in: Vec<ItemStack>,
+) {
+    for s in stacks_in {
+        let max = lv.host.max_stack_size(s.item()).unwrap_or(64).min(64) as u8;
+        let st = engine_stack(&*lv.host, &s);
+        if let Some(left) = d.place_back(st, max)
+            && let Some(left) = item_stack(&left, |id, n| stacks::stack(&*lv.host, id, n))
+        {
+            lv.spawn_stack(centre(pos), left, [0.0; 3]);
+        }
+    }
 }
 
 /// `DeployerBlock.neighborChanged` (`redstoneUpdate`): a deployer whose neighbours changed is
@@ -404,24 +438,26 @@ impl deployer::World for Turn<'_, '_> {
         true
     }
 
-    fn overflowing(&mut self, d: &mut Deployer) -> bool {
-        let (lv, pos) = (&mut *self.lv, self.pos);
-        if has_overflow(lv, pos) {
-            return true;
-        }
-        // A held stack its filter doesn't let through leaves its hand into the overflow.
-        let refused = super::filtering::filter_at(lv.dim, pos).is_some_and(|f| {
-            d.held.as_ref().is_some_and(|held| {
-                !crate::glue::items::filters::passes_item(&*lv.host, Some(&f), &held.0)
+    fn overflow(&mut self) -> usize {
+        overflow(self.lv, self.pos).len()
+    }
+
+    fn held_passes(&mut self, d: &Deployer) -> bool {
+        let lv = &*self.lv;
+        super::filtering::filter_at(lv.dim, self.pos).is_none_or(|f| {
+            d.held.as_ref().is_none_or(|held| {
+                crate::glue::items::filters::passes_item(&*lv.host, Some(&f), &held.0)
             })
-        });
-        if !refused {
-            return false;
-        }
-        let stack = held_of(lv, d);
-        set_held_stack(&*lv.host, d, None);
-        keep_overflow(lv, pos, stack.into_iter().collect());
-        true
+        })
+    }
+
+    fn add_overflow(&mut self, stacks_in: Vec<deployer::Stack>) {
+        let host = &*self.lv.host;
+        let stacks_in = stacks_in
+            .iter()
+            .filter_map(|s| item_stack(s, |id, n| stacks::stack(host, id, n)))
+            .collect();
+        add_overflow(self.lv, self.pos, stacks_in);
     }
 
     fn should_activate(&mut self, d: &Deployer) -> bool {
@@ -524,58 +560,44 @@ fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, d: &m
     }
     let other = activate(lv, pos, facing, d, deployer::breaker_id(pos));
     crate::glue::advancements::award_placer(lv, pos, "deployer");
-    keep_overflow(lv, pos, other);
+    place_back(lv, pos, d, other);
 }
 
-/// The slots a deployer keeps its fake player's other items in (`overflowItems`), for funnels
-/// and hoppers to take; it waits while they hold any.
+/// The slots a deployer keeps `overflowItems` in, for funnels and hoppers to take; it waits while
+/// they hold any. Create's list never grows past eleven (`tick` stops adding at more than ten).
 pub const OVERFLOW_SLOTS: usize = 11;
 
-/// Whether the deployer at `pos` holds overflow.
-fn has_overflow(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+/// `overflowItems` of the deployer at `pos`, in order.
+fn overflow(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<ItemStack> {
     lv.slots(pos, OVERFLOW_SLOTS)
-        .is_some_and(|s| s.iter().any(Option::is_some))
+        .unwrap_or_default()
+        .into_iter()
+        .flatten()
+        .collect()
 }
 
-/// `overflowItems.add`: `stacks` go into the deployer at `pos`'s overflow slots, onto stacks
-/// of their kind first; what finds no slot drops at the deployer.
-fn keep_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], stacks_in: Vec<ItemStack>) {
+/// `overflowItems.add` for each of `stacks`: after what it holds, none merged; what finds no slot
+/// drops at the deployer.
+fn add_overflow(lv: &mut ServerLevel<'_>, pos: [i32; 3], stacks_in: Vec<ItemStack>) {
     if stacks_in.is_empty() {
         return;
     }
-    let Some(mut slots) = lv.slots(pos, OVERFLOW_SLOTS) else {
+    let Some(before) = lv.slots(pos, OVERFLOW_SLOTS) else {
         for s in stacks_in {
             lv.spawn_stack(centre(pos), s, [0.0; 3]);
         }
         return;
     };
-    let before = slots.clone();
+    let mut list: Vec<ItemStack> = before.iter().flatten().cloned().collect();
     for s in stacks_in {
-        let mut left = Some(s);
-        for slot in slots.iter_mut() {
-            let Some(l) = left.take() else { break };
-            match slot {
-                None => {
-                    *slot = Some(l);
-                }
-                Some(have) if mod_api::ItemResource::of(have).matches(&l) => {
-                    let max = lv.host.max_stack_size(have.item()).unwrap_or(64);
-                    let n = l.count().min(max.saturating_sub(have.count()));
-                    if n > 0 {
-                        have.set_count(have.count() + n).ok();
-                    }
-                    left = l.shrink(n);
-                }
-                Some(_) => left = Some(l),
-            }
-        }
-        if let Some(l) = left {
-            lv.spawn_stack(centre(pos), l, [0.0; 3]);
+        if list.len() < OVERFLOW_SLOTS {
+            list.push(s);
+        } else {
+            lv.spawn_stack(centre(pos), s, [0.0; 3]);
         }
     }
-    let changes: Vec<(usize, Option<ItemStack>)> = slots
-        .into_iter()
-        .enumerate()
+    let changes: Vec<(usize, Option<ItemStack>)> = (0..OVERFLOW_SLOTS)
+        .map(|i| (i, list.get(i).cloned()))
         .filter(|(i, s)| before[*i] != *s)
         .collect();
     if !changes.is_empty() {
@@ -996,19 +1018,9 @@ fn attack(
     set_held_stack(&*host, d, left.as_ref());
 }
 
-/// The fake player at the deployer `pos` facing `facing` does `action` with what `d` holds;
-/// the deployer keeps what is left in the hand, and what else the fake ended with is returned.
-fn act(
-    lv: &mut ServerLevel<'_>,
-    pos: [i32; 3],
-    facing: Dir,
-    d: &mut Deployer,
-    action: PlayerAction,
-) -> Vec<ItemStack> {
-    act_with(lv, pos, facing, d, action).1
-}
-
-/// `act`, with what the action came to (None when the fake could not act).
+/// The fake player at the deployer `pos` facing `facing` does `action` with what `d` holds: what
+/// the action came to (None when the fake could not act) and what else the fake ended with; the
+/// deployer keeps what is left in the hand.
 fn act_with(
     lv: &mut ServerLevel<'_>,
     pos: [i32; 3],
@@ -1061,7 +1073,10 @@ fn punch(
     }
     // A stack whose saved components cannot be restored is no stack to dig with: the stroke is
     // skipped rather than run with a plain substitute.
-    let Some(Ok(stack)) = rebuild(d, |id, n| stacks::stack(&*lv.host, id, n)) else {
+    let Some(Ok(stack)) = d
+        .held_stack()
+        .and_then(|h| rebuild(&h, |id, n| stacks::stack(&*lv.host, id, n)))
+    else {
         return Vec::new();
     };
     let Some(state) = lv.block_state(at) else {
@@ -1097,8 +1112,9 @@ fn punch(
     }
     match d.punch(at, per_hit) {
         deployer::Punch::Broken => {
+            let other = harvest(lv, pos, facing, d, at);
             let _ = lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
-            return act(lv, pos, facing, d, PlayerAction::BreakBlock { pos: at });
+            return other;
         }
         deployer::Punch::Crack(Some(stage)) => {
             let _ = lv
@@ -1108,6 +1124,40 @@ fn punch(
         deployer::Punch::Crack(None) | deployer::Punch::Stop => {}
     }
     Vec::new()
+}
+
+/// `DeployerHandler.tryHarvestBlock` for the fake player at the deployer `pos` facing `facing`,
+/// holding what `d` holds: the block at `at` breaks as it breaks it
+/// (`ServerPlayerGameMode.destroyBlock`: the held tool's wear and the drops it harvests), the
+/// drops into its inventory (`placeItemBackInInventory`). The hand keeps what is left of the
+/// tool; what else the fake player ended with.
+fn harvest(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+    at: [i32; 3],
+) -> Vec<ItemStack> {
+    use crate::glue::owned::OwnedInventory as _;
+    let stack = held_of(lv, d);
+    let Some(fake) = prepare_punch_player(lv, pos, facing, stack) else {
+        return Vec::new();
+    };
+    let host = &mut *lv.host;
+    fake.destroy_block(host, at, true);
+    let slots = fake.inventory_slots(&*host).unwrap_or_default();
+    let mut other = Vec::new();
+    let mut held = None;
+    for (slot, s) in slots {
+        let _ = fake.set_inventory_slot(host, slot, None);
+        if slot == 0 {
+            held = Some(s);
+        } else {
+            other.push(s);
+        }
+    }
+    set_held_stack(&*host, d, held.as_ref());
+    other
 }
 
 /// `BeehiveBlockMixin`: a deployer harvesting a full beehive or bee nest (`honey_level` 5)
