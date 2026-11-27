@@ -8431,6 +8431,20 @@ mod tests {
         );
     }
 
+    struct BeltBreakGround<'a, F>(&'a mut CreateWorld, F);
+
+    impl<F: FnMut(&mut CreateWorld, BeltBreak)> crate::belt::BreakWorld for BeltBreakGround<'_, F> {
+        fn take_breaks(&mut self) -> Vec<BeltBreak> {
+            std::mem::take(&mut self.0.dims[0].belt_breaks)
+        }
+        fn is_belt(&self, pos: [i32; 3]) -> bool {
+            self.0.block_at(0, pos) == Some(Block::Belt)
+        }
+        fn replace(&mut self, b: BeltBreak) {
+            (self.1)(self.0, b);
+        }
+    }
+
     #[test]
     fn belt_break_cascade_reaches_far_pulley_before_returning() {
         let names = ["start", "middle", "end"].map(|part| {
@@ -8460,19 +8474,14 @@ mod tests {
         }
         transport_walk(&mut w);
         w.block_changed(0, [0, 8, 0], 10, 0);
-        struct Ground<'a>(&'a mut CreateWorld);
-        impl crate::belt::BreakWorld for Ground<'_> {
-            fn take_breaks(&mut self) -> Vec<BeltBreak> {
-                std::mem::take(&mut self.0.dims[0].belt_breaks)
-            }
-            fn replace(&mut self, b: BeltBreak) {
-                let old = self.0.dims[0].states[&b.pos];
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                let old = w.dims[0].states[&b.pos];
                 assert_eq!(b.shaft, (b.pos[2] == 2).then_some(crate::kinetics::Axis::X));
-                self.0
-                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 13 } else { 0 });
-            }
-        }
-        crate::belt::break_cascade(&mut Ground(&mut w));
+                w.block_changed(0, b.pos, old, if b.shaft.is_some() { 13 } else { 0 });
+            },
+        ));
         // Java cascade.min.json: tick 101 has air at z=1, shaft(axis=x) at z=2.
         assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 2]), Some(&13));
@@ -8518,27 +8527,72 @@ mod tests {
         w.block_changed(0, [0, 8, 1], 12, 11);
         assert!(w.dims[0].belt_breaks.is_empty());
         w.block_changed(0, [0, 8, 0], 10, 0);
-        struct Ground<'a>(&'a mut CreateWorld);
-        impl crate::belt::BreakWorld for Ground<'_> {
-            fn take_breaks(&mut self) -> Vec<BeltBreak> {
-                std::mem::take(&mut self.0.dims[0].belt_breaks)
-            }
-            fn replace(&mut self, b: BeltBreak) {
-                let old = self.0.dims[0].states[&b.pos];
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                let old = w.dims[0].states[&b.pos];
                 assert_eq!(
                     b.shaft,
                     matches!(b.pos[2], 1 | 3).then_some(crate::kinetics::Axis::X)
                 );
-                self.0
-                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
-            }
-        }
-        crate::belt::break_cascade(&mut Ground(&mut w));
+                w.block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
+            },
+        ));
         // Java c23pulley.json, tick 101: air, shaft(axis=x), air, shaft(axis=x).
         assert!(!w.dims[0].states.contains_key(&[0, 8, 0]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 1]), Some(&14));
         assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&14));
+        assert!(w.dims[0].belt_breaks.is_empty());
+    }
+
+    #[test]
+    fn belt_break_cascade_skips_segments_already_removed_in_same_tick() {
+        let names = ["start", "middle", "pulley", "end"].map(|part| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        });
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|(n, p)| (*n, p.iter().copied()))
+                .chain(std::iter::once((
+                    "create:shaft",
+                    [("axis", "x")].iter().copied(),
+                )))
+                .chain(std::iter::once((
+                    "create:andesite_casing",
+                    [].iter().copied(),
+                ))),
+        ));
+        let (start, middle, pulley, end, shaft, casing) = (10, 11, 12, 13, 14, 15);
+        for (z, state) in [start, middle, pulley, end].into_iter().enumerate() {
+            w.block_changed(0, [0, 8, z as i32], 0, state);
+        }
+        transport_walk(&mut w);
+        w.block_changed(0, [0, 8, 1], middle, 0);
+        w.block_changed(0, [0, 8, 2], pulley, 0);
+        w.block_changed(0, [0, 8, 0], start, casing);
+        crate::belt::break_cascade(&mut BeltBreakGround(
+            &mut w,
+            |w: &mut CreateWorld, b: BeltBreak| {
+                let old = w.dims[0].states.get(&b.pos).copied().unwrap_or(0);
+                w.block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
+            },
+        ));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 0]), Some(&casing));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&shaft));
         assert!(w.dims[0].belt_breaks.is_empty());
     }
 
