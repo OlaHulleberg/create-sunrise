@@ -18,8 +18,8 @@ use create_engine::door::{Door, Slide};
 use create_engine::dye::{self, DyeColor};
 use mod_api::{
     BlockPart, BlockState, Compound, Hand, Host, HostSide, HostTransaction, InteractionResult,
-    ItemStack, MenuPart, PlayerContainerCloseEvent, PlayerRef, Registrar, RegistrationContext,
-    ServerHost, SoundSource, UseItemOnEvent, UseWithoutItemEvent,
+    MenuPart, PlayerContainerCloseEvent, PlayerRef, Registrar, RegistrationContext, ServerHost,
+    SoundSource, UseItemOnEvent, UseWithoutItemEvent,
 };
 
 use super::processing::TOOLBOX_TYPE;
@@ -246,7 +246,9 @@ pub(crate) fn use_valve_handle(
                     let key = super::sources::handles::SCROLL_VALUE;
                     Some(Compound::from([(key.into(), d.get(&key.into())?.clone())]))
                 });
-            lv.set_state(pos, next, update_all());
+            if !lv.set_state(pos, next, update_all()) {
+                return None;
+            }
             if let (Some(kept), Some(entity)) = (kept, lv.host.block_entity(lv.level, pos)) {
                 let _ = entity.merge_data(&mut *lv.host, kept);
             }
@@ -294,30 +296,93 @@ fn use_toolbox(
         return Some(InteractionResult::Success);
     };
     let slots = create_engine::toolbox::STORED as u32;
-    let items: Vec<(u32, ItemStack)> = lv
-        .host
-        .block_entity(lv.level, pos)
-        .map(|be| {
-            (0..slots)
-                .filter_map(|i| Some((i, be.item_slot(&*lv.host, i).ok()??)))
-                .collect()
-        })
-        .unwrap_or_default();
-    lv.set_state(pos, next, update_all());
-    if !items.is_empty()
-        && let Some(be) = lv.host.block_entity(lv.level, pos)
-    {
-        let _ = lv.host.transaction(|host, tx| {
-            for (i, stack) in items {
-                let empty = be.item_slot(&*host, i).ok().flatten().is_none();
-                if empty {
-                    be.set_item_slot(host, tx, i, Some(stack)).map_err(|_| ())?;
-                }
-            }
-            Ok::<(), ()>(())
-        });
+    let items = snapshot_toolbox(lv.host.block_entity(lv.level, pos), slots, |be, i| {
+        be.item_slot(&*lv.host, i)
+    })?;
+    recolour_toolbox(
+        lv,
+        items,
+        |lv| lv.set_state(pos, next, update_all()),
+        |lv| {
+            lv.set_state(pos, state, update_all());
+        },
+        |lv, items| {
+            let be = lv.host.block_entity(lv.level, pos).ok_or(())?;
+            lv.host
+                .transaction(|host, tx| {
+                    for (i, stack) in items {
+                        let existing = be.item_slot(&*host, *i).map_err(|_| ())?;
+                        restore_slot(existing, stack, |put| {
+                            be.set_item_slot(host, tx, *i, Some(put))
+                        })?;
+                    }
+                    Ok::<(), ()>(())
+                })
+                .map_err(|_| ())
+        },
+        |lv, (_, stack)| lv.drop_stack(pos.map(|v| f64::from(v) + 0.5), [0.0; 3], stack, 10),
+    )
+    .then_some(InteractionResult::Success)
+}
+
+/// The occupied slots of the source toolbox, in index order. A missing block entity or a slot
+/// that cannot be read is `None`: the toolbox is not known to be intact or empty, so nothing
+/// may be recoloured.
+fn snapshot_toolbox<B, T, E>(
+    entity: Option<B>,
+    slots: u32,
+    mut read: impl FnMut(&B, u32) -> Result<Option<T>, E>,
+) -> Option<Vec<(u32, T)>> {
+    let be = entity?;
+    let mut items = Vec::new();
+    for i in 0..slots {
+        if let Some(stack) = read(&be, i).ok()? {
+            items.push((i, stack));
+        }
     }
-    Some(InteractionResult::Success)
+    Some(items)
+}
+
+/// Put a captured `stack` back into a slot that held `existing` now. An empty slot is written
+/// (`write` reporting a changed or unchanged slot alike is fine; an `Err` aborts). The identical
+/// stack already there was preserved in place and needs no write. A different occupant is not
+/// the captured stack: it is never overwritten and the restore fails, so rollback and salvage
+/// run and drop whatever was not recovered.
+fn restore_slot<T: PartialEq + Clone, E>(
+    existing: Option<T>,
+    stack: &T,
+    write: impl FnOnce(T) -> Result<bool, E>,
+) -> Result<(), ()> {
+    match existing {
+        None => write(stack.clone()).map(|_| ()).map_err(|_| ()),
+        Some(there) if there == *stack => Ok(()),
+        Some(_) => Err(()),
+    }
+}
+
+/// Try the full snapshot atomically. After a rollback attempt, salvage each stack independently
+/// so one refused slot does not send the rest to the ground.
+fn recolour_toolbox<W, T>(
+    world: &mut W,
+    items: Vec<T>,
+    recolour: impl FnOnce(&mut W) -> bool,
+    rollback: impl FnOnce(&mut W),
+    mut restore: impl FnMut(&mut W, &[T]) -> Result<(), ()>,
+    mut drop_stack: impl FnMut(&mut W, T),
+) -> bool {
+    if !recolour(world) {
+        return false;
+    }
+    if items.is_empty() || restore(world, &items).is_ok() {
+        return true;
+    }
+    rollback(world);
+    for stack in items {
+        if restore(world, std::slice::from_ref(&stack)).is_err() {
+            drop_stack(world, stack);
+        }
+    }
+    false
 }
 
 /// `PostboxBlock.useWithoutItem` → `PackagePortBlockEntity.use`: the main hand's click, not
@@ -899,6 +964,163 @@ mod toolbox_button_tests {
         assert_eq!(remainder(("iron", 9), 3, refused), Err(()));
         // Nothing is left over, so the count is never set.
         assert_eq!(remainder(("iron", 9), 0, refused), Ok(None));
+    }
+
+    #[test]
+    fn restore_slot_writes_only_an_empty_slot_and_accepts_only_the_same_stack() {
+        assert_eq!(restore_slot(None, &"iron", |_| Ok::<_, ()>(true)), Ok(()));
+        assert_eq!(restore_slot(None, &"iron", |_| Ok::<_, ()>(false)), Ok(()));
+        assert_eq!(
+            restore_slot(None, &"iron", |_| Err::<bool, _>("refused")),
+            Err(())
+        );
+        let never = |_| -> Result<bool, ()> { panic!("an occupied slot is never written") };
+        assert_eq!(restore_slot(Some("iron"), &"iron", never), Ok(()));
+        assert_eq!(restore_slot(Some("stone"), &"iron", never), Err(()));
+    }
+
+    #[test]
+    fn an_unrelated_occupant_fails_the_restore_and_the_captured_stack_is_dropped() {
+        // (slots, rolled back, dropped): slot 1 was refilled by something else.
+        let mut world = (vec![None, Some("stone")], false, Vec::new());
+        let items = vec![(0, "iron"), (1, "copper")];
+        assert!(!recolour_toolbox(
+            &mut world,
+            items,
+            |_| true,
+            |(_, rolled_back, _)| *rolled_back = true,
+            |(slots, _, _), items| {
+                // Atomic like the transaction: nothing stays when any write fails.
+                let mut trial = slots.clone();
+                for (i, stack) in items {
+                    let existing = trial[*i];
+                    restore_slot(existing, stack, |put| {
+                        trial[*i] = Some(put);
+                        Ok::<_, ()>(true)
+                    })?;
+                }
+                *slots = trial;
+                Ok(())
+            },
+            |(_, rolled_back, dropped), (_, stack)| {
+                assert!(*rolled_back);
+                dropped.push(stack);
+            },
+        ));
+        let (slots, rolled_back, dropped) = world;
+        assert!(rolled_back);
+        // The iron is salvaged into its empty slot, the copper is dropped, never skipped, and
+        // the unrelated occupant is untouched.
+        assert_eq!(slots, [Some("iron"), Some("stone")]);
+        assert_eq!(dropped, ["copper"]);
+    }
+
+    #[test]
+    fn refused_recolour_leaves_the_toolbox_alone() {
+        let mut stored = ["iron", "copper"];
+        let snapshot = stored.to_vec();
+        assert!(!recolour_toolbox(
+            &mut stored,
+            snapshot,
+            |_| false,
+            |_| panic!("nothing changed to roll back"),
+            |_, _| panic!("the original contents are still there"),
+            |_, _| panic!("nothing needs dropping"),
+        ));
+        assert_eq!(stored, ["iron", "copper"]);
+    }
+
+    #[test]
+    fn successful_recolour_restores_the_full_snapshot_without_drops() {
+        let mut stored = vec!["iron", "copper"];
+        let snapshot = stored.clone();
+        assert!(recolour_toolbox(
+            &mut stored,
+            snapshot.clone(),
+            |stored| {
+                stored.clear();
+                true
+            },
+            |_| panic!("the restore succeeded"),
+            |stored, items| {
+                assert!(stored.is_empty());
+                assert_eq!(items, snapshot.as_slice());
+                stored.extend_from_slice(items);
+                Ok(())
+            },
+            |_, _| panic!("everything was restored"),
+        ));
+        assert_eq!(stored, snapshot);
+    }
+
+    #[test]
+    fn failed_restore_rolls_back_and_drops_only_unrecovered_stacks() {
+        for can_salvage_iron in [true, false] {
+            let mut world = (false, Vec::new(), Vec::new());
+            assert!(!recolour_toolbox(
+                &mut world,
+                vec!["iron", "copper"],
+                |_| true,
+                |(rolled_back, _, _)| *rolled_back = true,
+                |(rolled_back, stored, _), items| {
+                    if !*rolled_back {
+                        assert_eq!(items, ["iron", "copper"]);
+                        return Err(());
+                    }
+                    if can_salvage_iron && items == ["iron"] {
+                        stored.extend_from_slice(items);
+                        Ok(())
+                    } else {
+                        Err(())
+                    }
+                },
+                |(rolled_back, _, dropped), stack| {
+                    assert!(*rolled_back);
+                    dropped.push(stack);
+                },
+            ));
+            let (rolled_back, stored, dropped) = world;
+            assert!(rolled_back);
+            if can_salvage_iron {
+                assert_eq!(stored, ["iron"]);
+                assert_eq!(dropped, ["copper"]);
+            } else {
+                assert!(stored.is_empty());
+                assert_eq!(dropped, ["iron", "copper"]);
+            }
+        }
+    }
+
+    #[test]
+    fn an_unreadable_source_toolbox_aborts_before_any_recolour() {
+        let recolour = |items: Vec<(u32, &'static str)>| {
+            recolour_toolbox(
+                &mut (),
+                items,
+                |_| panic!("an unreadable toolbox is never recoloured"),
+                |_| panic!("nothing changed to roll back"),
+                |_, _| panic!("nothing to restore"),
+                |_, _| panic!("nothing to drop"),
+            )
+        };
+        // No block entity: not known to be empty, `read` is never called.
+        let missing = snapshot_toolbox(None::<()>, 4, |_, _| -> Result<Option<&str>, ()> {
+            panic!("no entity to read")
+        });
+        assert_eq!(missing, None);
+        assert_eq!(missing.map(recolour), None);
+        // A slot that cannot be read, even after readable ones.
+        let failing = snapshot_toolbox(Some(()), 4, |_, i| match i {
+            0 => Ok(Some("iron")),
+            2 => Err("unreadable"),
+            _ => Ok(None),
+        });
+        assert_eq!(failing, None);
+        assert_eq!(failing.map(recolour), None);
+        // A clean read keeps the occupied slots in index order.
+        let stacks = [Some("iron"), None, Some("copper"), None];
+        let items = snapshot_toolbox(Some(stacks), 4, |be, i| Ok::<_, ()>(be[i as usize]));
+        assert_eq!(items, Some(vec![(0, "iron"), (2, "copper")]));
     }
 
     #[test]
