@@ -1057,6 +1057,7 @@ pub(crate) fn release_cart_held(
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], ItemStack)> {
     restore_engine_data(lv, key, &place, &placed);
+    restore_landed_belts(lv, key, &place, &placed);
     release_held_items(lv, key, place, free, placed)
 }
 
@@ -1173,6 +1174,36 @@ fn restore_engine_data(
             mark_pos_unsaved(dim, p);
         }
     }
+}
+
+/// Restore belt inventory only to a controller that this landing actually wrote.
+pub(crate) fn restore_landed_belts(
+    lv: &ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    placed: impl Fn([i32; 3]) -> bool,
+) {
+    let dim = lv.dim;
+    let turn = create_engine::contraption::Transform::from_place(&place);
+    HELD.with_borrow(|m| {
+        if let Some(list) = m.get(&(dim, key)) {
+            with_world(|world| {
+                for (offset, data) in list {
+                    if let (Some(Block::Belt), Some(engine)) = (data.block, &data.engine) {
+                        crate::glue::logistics::carried::restore_belt_items(
+                            world,
+                            dim,
+                            place(*offset),
+                            engine,
+                            turn,
+                            &placed,
+                            |p| lv.block(p),
+                        );
+                    }
+                }
+            });
+        }
+    });
 }
 
 fn stage_held(
@@ -3678,6 +3709,7 @@ fn debug_carried(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> String {
     // The block stays: it is found again as a loaded one is, taking what waits for it.
     let state = lv.block(pos);
     with_world(|w| w.block_loaded(dim, pos, state));
+    restore_landed_belts(lv, key, |o| add(pos, o), |_| true);
     release_held(lv, key, |o| add(pos, o));
     line
 }

@@ -149,9 +149,9 @@ impl Subsystem for Logistics {
         pos: [i32; 3],
         block: create_engine::Block,
         data: &Compound,
-        turn: create_engine::contraption::Transform,
+        _turn: create_engine::contraption::Transform,
     ) {
-        carried::carry_in(lv, pos, block, data, turn);
+        carried::carry_in(lv, pos, block, data);
     }
 
     fn register(&self, r: &mut dyn Registrar, _cx: &RegistrationContext) {
