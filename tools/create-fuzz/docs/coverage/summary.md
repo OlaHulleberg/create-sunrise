@@ -51,6 +51,39 @@ unreachable 8 / 8. Every group of the basin, burner, mixer and press classes has
 open which edge is missed, the row says so. The mixer and press classes count as kinetics in the
 table above, whose campaign never drove them, so their rows keep the category they had there.
 
+## Deployers
+
+Measured on a campaign of its own at `a8ab899d` (`FUZZ_COVER_SEEDS_FROM=64 ./run.sh fuzz cover 40`,
+its corpus the 27 seeds of the family's nine histories and 47 hand-written deployer scenarios: 86
+scenarios; 126 cases, 29 matched and 97 differed, none java-unstable), against the deployer classes
+of the `processing` subsystem: `kinetics/deployer/*` and `processing/AssemblyOperator*`.
+`./run.sh fuzz gaps processing` on it finds no unexplained branch. "Before" is a campaign with no
+deployer scenario at all (an empty corpus, `FUZZ_COVER_SEEDS_FROM=0 ./run.sh fuzz cover 4`).
+
+| Class | Branches | Reached before | Reached after |
+| --- | ---: | ---: | ---: |
+| `DeployerBlockEntity` | 156 | 0 | 114 (73.1%) |
+| `DeployerHandler` | 168 | 0 | 75 (44.6%) |
+| `DeployerItemHandler` | 52 | 0 | 34 (65.4%) |
+| `BeltDeployerCallbacks` | 68 | 0 | 56 (82.4%) |
+| `ManualApplicationRecipe` (a recipe applied by hand or in the world) | 50 | 0 | 27 (54.0%) |
+| `DeployerBlock` | 30 | 0 | 24 (80.0%) |
+| `DeployerFakePlayer` (with its game profile) | 41 | 1 | 6 (14.6%) |
+| `ItemApplicationRecipe`, `DeployerRecipeSearchEvent` | 16 | 0 | 12 (75.0%) |
+| `AssemblyOperatorBlockItem` | 16 | 0 | 13 (81.3%) |
+| `DeployerBlock$PlacementHelper`, `DeployerHandler$ItemUseWorld` | 8 | 0 | 1 (12.5%) |
+| client and contraption classes (actor visual, filter slot, movement behaviour, moving interaction, renderer, visual) | 242 | 0 | 3 (1.2%) |
+| all | 847 | 1 (0.1%) | 365 (43.1%) |
+
+Before the deployers family every one of these classes had a class-wide row in `reasons.tsv`
+("processing subsystem, not driven yet"). Now 145 groups keep a row naming its Create line and the
+input that would reach it: harness-gap 106 (entities in the block two ahead, buckets and other items
+outside the contract, a recipe applied by hand, a still network, the handler's simulated calls and
+overflow slots, a deployer saved or removed before its first tick), unreachable 20, client 13,
+error-path 4, contraptions 1, config 1. Missed now, with the class-wide rows: harness-gap 106
+groups / 173 branches, client 64 / 150, contraptions 53 / 127, unreachable 20 / 25, error-path 4 / 4,
+config 1 / 3. The six client and contraption classes keep their class-wide rows.
+
 ## Why the rest is never reached
 
 Groups / missed branches by category.

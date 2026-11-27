@@ -1,0 +1,46 @@
+{
+  "blocks": [
+    {
+      "motor": 16,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=false,facing=down]"
+    }
+  ],
+  "checkpoints": [
+    0,
+    1,
+    2,
+    3,
+    4,
+    5,
+    20,
+    39,
+    40
+  ],
+  "events": [
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "minecraft:air",
+      "tick": 1
+    }
+  ],
+  "seed": 0,
+  "ticks": 40,
+  "version": 3
+}
