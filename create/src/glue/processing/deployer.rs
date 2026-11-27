@@ -407,11 +407,26 @@ impl deployer::World for Turn<'_, '_> {
     }
 
     fn should_activate(&mut self, d: &Deployer) -> bool {
-        let (lv, pos, facing) = (&*self.lv, self.pos, self.facing);
-        if facing == Dir::Down && takes_from_side(lv.dim, super::step(pos, facing, 2)) {
-            return false;
-        }
-        deployer_place_target(lv, pos, facing, d).is_some() || deployer_uses(lv, pos, facing, d)
+        let (lv, facing) = (&*self.lv, self.facing);
+        let reached = super::step(self.pos, facing, 2);
+        let host = &*lv.host;
+        let key = d.held.as_ref().and_then(|h| stacks::key(host, &h.0));
+        let places_there = key
+            .and_then(|k| host.item_block(k))
+            .is_some_and(|b| lv.level.block(host, reached) == Some(b));
+        let bucket_there = key
+            .and_then(|k| k.bucket_fluid(&host.block_states()))
+            .is_some_and(|f| {
+                lv.level
+                    .fluid_state(host, reached)
+                    .is_some_and(|s| s.fluid == f)
+            });
+        deployer::should_activate(
+            d.held.is_some(),
+            places_there,
+            bucket_there,
+            facing == Dir::Down && takes_from_side(lv.dim, reached),
+        )
     }
 
     fn start_fist_bump(&mut self, d: &mut Deployer) -> bool {
@@ -483,44 +498,6 @@ pub fn send_deployer_changes(lv: &mut ServerLevel<'_>) {
         let players = lv.players();
         send_deployers(lv, &players, &changes);
     }
-}
-
-/// Where the block a deployer holds would go (`placement`), as a position; None when it holds
-/// no block, or nowhere fits.
-fn deployer_place_target(
-    lv: &ServerLevel<'_>,
-    pos: [i32; 3],
-    facing: Dir,
-    d: &Deployer,
-) -> Option<[i32; 3]> {
-    let held = d.held.clone()?;
-    // A block item (`BlockItem.getBlock`): the block it places.
-    let placed = lv.host.item_block(stacks::key(&*lv.host, &held.0)?)?;
-    let reached = super::step(pos, facing, 2);
-    let before = super::step(pos, facing, 1);
-    let is_held = lv.level.block(&*lv.host, reached) == Some(placed);
-    deployer::placement(lv.replaceable(reached), lv.replaceable(before), is_held)
-        .map(|at_reached| if at_reached { reached } else { before })
-}
-
-/// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
-/// whose source is already in the block it reaches.
-fn deployer_uses(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir, d: &Deployer) -> bool {
-    // An empty hand always (it uses the block it reaches).
-    let Some((item, _)) = d.held.clone() else {
-        return true;
-    };
-    if stacks::key(&*lv.host, &item).is_some_and(|k| lv.host.item_block(k).is_some()) {
-        return false;
-    }
-    let reached = super::step(pos, facing, 2);
-    let fluid = match item.as_str() {
-        "minecraft:water_bucket" => "minecraft:water",
-        "minecraft:lava_bucket" => "minecraft:lava",
-        _ => return true,
-    };
-    lv.block_name(reached).as_deref() != Some(fluid)
-        || lv.property(reached, "level").is_some_and(|l| l != "0")
 }
 
 /// `DeployerBlockEntity.activate`: nothing over a depot or belt (their callbacks do the work);
