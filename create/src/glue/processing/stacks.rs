@@ -294,36 +294,113 @@ impl ServerLevel<'_> {
             .unwrap_or_default()
             .into_iter()
             .filter_map(|entity| {
-                let item = host.item_entity(entity)?;
-                let at = entity.position(host)?;
-                if !create_engine::belt::item_touches(at, lo, hi) {
-                    return None;
-                }
-                Some(Dropped {
-                    entity,
-                    item,
-                    stack: item.stack(host)?,
-                    at,
-                    velocity: entity.velocity(host).unwrap_or_default(),
-                })
+                let d = self.dropped(entity.id())?;
+                create_engine::belt::item_touches(d.at, lo, hi).then_some(d)
             })
             .collect()
     }
 
-    /// Changes a dropped item: its stack (None: it is gone) and its motion.
+    /// The item entity `id` as the machines see it.
+    pub fn dropped(&self, id: u32) -> Option<Dropped> {
+        let host = &*self.host;
+        let entity = host.entity(id)?;
+        let item = host.item_entity(entity)?;
+        Some(Dropped {
+            entity,
+            item,
+            stack: item.stack(host)?,
+            at: entity.position(host)?,
+            velocity: entity.velocity(host).unwrap_or_default(),
+        })
+    }
+
+    /// Changes a dropped item: its stack (None: it is gone) and its motion. What a taker left
+    /// of its stack past its item's stack limit lies beside it ([`Remainder`]).
     pub fn set_dropped(&mut self, d: &Dropped, stack: Option<ItemStack>, motion: [f64; 3]) {
-        match stack {
-            None => {
-                d.entity.discard(&mut *self.host);
+        // What it has, over the limit or not, is not written again.
+        if stack.as_ref() != Some(&d.stack) {
+            let rest = Remainder::of(&*self.host, stack);
+            for p in rest.past {
+                self.spawn_stack(d.at, p, motion);
             }
-            Some(s) => {
-                if s != d.stack {
+            match rest.kept {
+                None => {
+                    d.entity.discard(&mut *self.host);
+                    return;
+                }
+                Some(s) => {
                     let _ = d.item.set_stack(&mut *self.host, Some(s));
                 }
-                if motion != d.velocity {
-                    d.entity.set_velocity(&mut *self.host, motion);
-                }
             }
+        }
+        if motion != d.velocity {
+            d.entity.set_velocity(&mut *self.host, motion);
+        }
+    }
+
+    /// The stack a landing hook lends the item entity `entity` at `at`
+    /// (`ItemAfterVerticalCollisionEvent::stack`), which had `before`: a taker's remainder goes
+    /// back through the hook, and what is past its item's stack limit lies beside the item
+    /// ([`Remainder`]), moving as it does.
+    pub fn set_lent(
+        &mut self,
+        entity: u32,
+        at: [f64; 3],
+        before: &Option<ItemStack>,
+        stack: &mut Option<ItemStack>,
+    ) {
+        if stack == before {
+            return;
+        }
+        let motion = self
+            .host
+            .entity(entity)
+            .and_then(|e| e.velocity(&*self.host))
+            .unwrap_or_default();
+        let rest = Remainder::of(&*self.host, stack.take());
+        for p in rest.past {
+            self.spawn_stack(at, p, motion);
+        }
+        *stack = rest.kept;
+    }
+}
+
+/// What an item entity keeps of the stack a taker left of it (`ItemEntity.setItem` with the
+/// rest). The game refuses a stack past its item's stack limit (`StackWriteError::CountExceeded`)
+/// and the item then keeps all it had, so what the taker took would be a copy. Only an item
+/// summoned holding more than one stack leaves such a rest: it keeps one stack, and the rest
+/// lies beside it as further items.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Remainder {
+    /// What the item keeps: None when nothing is left.
+    pub kept: Option<ItemStack>,
+    /// Stacks past the first, to lie beside the item.
+    pub past: Vec<ItemStack>,
+}
+
+impl Remainder {
+    pub fn of(host: &dyn mod_api::Host, left: Option<ItemStack>) -> Remainder {
+        let Some(s) = left else {
+            return Remainder {
+                kept: None,
+                past: Vec::new(),
+            };
+        };
+        let max = u32::from(limit(host, &id(host, &s)));
+        let count = s.count();
+        let mut kept = s.clone();
+        let _ = kept.set_count(count.min(max));
+        let mut past = Vec::new();
+        let mut n = kept.count();
+        while n < count {
+            let mut p = s.clone();
+            let _ = p.set_count((count - n).min(max));
+            past.push(p);
+            n += max;
+        }
+        Remainder {
+            kept: Some(kept),
+            past,
         }
     }
 }
@@ -341,5 +418,49 @@ impl Dropped {
     /// Its id (the network id progress is kept by).
     pub fn id(&self) -> u32 {
         self.entity.id()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use mod_api::{Identifier, prelude::ItemsHost, testing::FakeHost};
+
+    #[test]
+    fn an_item_past_its_stack_limit_keeps_one_stack_and_the_rest_lies_beside_it() {
+        let mut host = FakeHost::new();
+        let snowball = Identifier::parse("minecraft:snowball").unwrap();
+        let diamond = Identifier::parse("minecraft:diamond").unwrap();
+        host.registries
+            .resolve_items([snowball.clone(), diamond.clone()])
+            .unwrap();
+        host.registries.item_component(
+            "minecraft:snowball",
+            "minecraft:max_stack_size",
+            Tag::Int(16),
+        );
+        let snowball = host.item_key(&snowball).unwrap();
+        let diamond = host.item_key(&diamond).unwrap();
+        let stack = |key, n| ItemStack::new(key, n).unwrap();
+        let split = |left: Option<ItemStack>| {
+            let rest = Remainder::of(&host, left);
+            (
+                rest.kept.as_ref().map(ItemStack::count),
+                rest.past.iter().map(ItemStack::count).collect::<Vec<_>>(),
+            )
+        };
+        // One stack left, or less, or nothing: it goes back as it is.
+        assert_eq!(split(Some(stack(snowball, 16))), (Some(16), vec![]));
+        assert_eq!(split(Some(stack(snowball, 7))), (Some(7), vec![]));
+        assert_eq!(split(None), (None, vec![]));
+        // 64 snowballs after a basin took 16: one stack stays in the item, the rest beside it.
+        assert_eq!(split(Some(stack(snowball, 48))), (Some(16), vec![16, 16]));
+        assert_eq!(
+            split(Some(stack(snowball, 63))),
+            (Some(16), vec![16, 16, 15])
+        );
+        assert_eq!(split(Some(stack(snowball, 17))), (Some(16), vec![1]));
+        // An item without a limit given stacks to 64.
+        assert_eq!(split(Some(stack(diamond, 100))), (Some(64), vec![36]));
     }
 }

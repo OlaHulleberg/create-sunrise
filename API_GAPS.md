@@ -35,6 +35,11 @@ API, and remove it once the API has it and the port uses it.
 - **Fire immunity of entities that aren't living** (`Entity.fireImmune` on boats and projectiles): an open lava pipe
   can't ignite boats or projectiles as Create does. Create uses: calls vanilla `Entity.fireImmune` and
   `Entity.igniteForSeconds` ([`LavaEffectHandler.java:19`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/impl/effect/LavaEffectHandler.java#L19)). sunrise-org/sunrise#5082
+- **A stack past its item's stack limit written back to an item entity** (`ItemEntity.setItem` takes any count; a mod's
+  stack write past the limit is refused, `StackWriteError::CountExceeded`): an item summoned holding more than one
+  stack keeps one stack once a machine took from it, and the rest lies beside it as further items, where Create keeps
+  it as the one entity. Create uses: calls vanilla `ItemEntity.setItem`
+  ([`BasinBlock.java:149`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/processing/basin/BasinBlock.java#L149), `updateEntityAfterFallOn`). Not filed.
 
 ## Contraptions
 

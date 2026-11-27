@@ -8,7 +8,6 @@ use super::super::world::with_world;
 use super::belt::{belt_segment, insert_into_from};
 use super::info_at;
 use super::items::{self, face, random_angle, upright};
-use crate::glue::owned::OwnedStack as _;
 use create_engine::Block;
 use create_engine::board::{self, FilterClick};
 use create_engine::kinetics::{Axis, Dir};
@@ -712,35 +711,23 @@ pub fn collect_inside(lv: &mut ServerLevel<'_>) {
         if with_world(|w| w.funnel_inv_ready(dim, pos)) != Some(true) {
             continue;
         }
-        let Some(e) = lv.host.entity(id) else {
+        let Some(d) = lv.dropped(id) else {
             continue;
         };
-        let Some(item) = lv.host.item_entity(e) else {
-            continue;
-        };
-        let (Some(stack), Some(at)) = (item.stack(&*lv.host), e.position(&*lv.host)) else {
-            continue;
-        };
-        if !create_engine::funnel::past_opening(pos, f.facing, at) {
+        if !create_engine::funnel::past_opening(pos, f.facing, d.at) {
             continue;
         }
-        if !funnel_passes(lv, pos, &stack) {
+        if !funnel_passes(lv, pos, &d.stack) {
             continue;
         }
         let behind = create_engine::funnel::behind(pos, f.facing);
-        let count = stack.count();
-        let moved = stack.clone();
-        let left = items::insert_item(lv, behind, face(f.facing), stack);
-        match left {
-            None => {
-                let _ = e.discard(&mut *lv.host);
-            }
-            Some(l) if l.count() < count => {
-                let _ = item.set_stack(&mut *lv.host, Some(l));
-            }
-            _ => continue,
+        let left = items::insert_item(lv, behind, face(f.facing), d.stack.clone());
+        let took = left.as_ref().is_none_or(|l| l.count() < d.stack.count());
+        if !took {
+            continue;
         }
+        lv.set_dropped(&d, left, d.velocity);
         super::flaps::funnel(lv, pos, true);
-        crate::glue::redstone::detectors::funnel_transfer(lv, pos, &moved);
+        crate::glue::redstone::detectors::funnel_transfer(lv, pos, &d.stack);
     }
 }

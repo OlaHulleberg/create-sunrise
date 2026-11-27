@@ -227,27 +227,22 @@ fn pick_up(
             if (d[0] * d[0] + d[1] * d[1] + d[2] * d[2]).sqrt() > 3.0 {
                 return None;
             }
-            let stack = item.stack(&*host)?;
-            polished(&*host, &stack)
+            polished(&*host, &item.stack(&*host)?)
                 .is_some()
-                .then_some((e, item, stack))
+                .then_some(e)
         });
-    let Some((e, item, stack)) = found else {
+    let Some(e) = found else {
         return Some(InteractionResult::Fail);
     };
-    let one = crate::glue::packages::body::with_count(&stack, 1)?;
-    let nbt = one.to_nbt(&*host)?;
+    let dimension = level.dimension().id(&*host).map(str::to_owned)?;
+    let mut lv = crate::glue::server::ServerLevel::new(host, &dimension)?;
+    let d = lv.dropped(e.id())?;
+    let one = crate::glue::packages::body::with_count(&d.stack, 1)?;
+    let nbt = one.to_nbt(&*lv.host)?;
     let mut paper = event.stack.clone();
     set_custom(&mut paper, &[(POLISHING, Some(Tag::Compound(nbt)))]);
-    set_held(host, player, event.hand, Some(paper));
-    match stack.shrink(1) {
-        Some(rest) => {
-            let _ = item.set_stack(host, Some(rest));
-        }
-        None => {
-            e.discard(host);
-        }
-    }
+    set_held(&mut *lv.host, player, event.hand, Some(paper));
+    lv.set_dropped(&d, d.stack.clone().shrink(1), d.velocity);
     None
 }
 

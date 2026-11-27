@@ -773,8 +773,10 @@ impl BlockPart for LogisticsBlock {
             return Flow::Continue;
         };
         let thrower = crate::glue::advancements::package_thrower(event.entity, event.stack);
+        let before = event.stack.clone();
         item_landed(&mut lv, event.block_pos, event.item_pos, event.stack);
         crate::glue::advancements::package_landed(&mut lv, thrower, event.block_pos, event.stack);
+        lv.set_lent(event.entity, event.item_pos, &before, event.stack);
         Flow::Continue
     }
 
