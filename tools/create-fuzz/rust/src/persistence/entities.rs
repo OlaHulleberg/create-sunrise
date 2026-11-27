@@ -63,14 +63,10 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
                 fields.insert("Ticks".into(), Tag::Int(m.running_ticks));
             }
         }
-        // glue/processing/persist.rs `live_fields`: the deployer's `Timer`.
+        // glue/processing/persist.rs `live_fields`: the deployer as it stands.
         Some(Block::Deployer) => {
-            if let Some(d) = w.dims[0].deployers.get(&p)
-                && let Some(Tag::Compound(c)) = fields.get_mut(DEPLOYER_STATE)
-                && let Some(Tag::IntArray(v)) = c.get_mut(&"Values".to_owned())
-                && v.len() > 1
-            {
-                v[1] = d.timer;
+            if let Some(d) = w.dims[0].deployers.get(&p) {
+                fields.insert(DEPLOYER_STATE.into(), Tag::Compound(deployer_to_tag(d)));
             }
         }
         _ => {}
@@ -80,8 +76,8 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
 const DEPLOYER_STATE: &str = "DeployerState";
 
 /// glue/processing/persist.rs `deployer_to_tag` of `deployers_to_nbt`: `State`, `Timer`,
-/// `Reach`, the held stack's count, `Mode`, `Powered` and its wear, by position; the held
-/// stack's item.
+/// `Reach` (0: synced, not saved), the held stack's count, `Mode`, `Powered` and its wear, by
+/// position; the held stack's item.
 pub fn deployer_to_tag(d: &create_engine::deployer::Deployer) -> Compound {
     let (item, n) = d.held.clone().unwrap_or_default();
     Compound::from([
@@ -90,7 +86,7 @@ pub fn deployer_to_tag(d: &create_engine::deployer::Deployer) -> Compound {
             Tag::IntArray(vec![
                 i32::from(d.state.index()),
                 d.timer,
-                d.reach.to_bits() as i32,
+                0,
                 i32::from(n),
                 i32::from(d.mode.index()),
                 i32::from(d.locked),
@@ -116,7 +112,7 @@ pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
     Some(create_engine::deployer::Deployer {
         state: create_engine::deployer::State::from_index(at(0) as u8),
         timer: at(1),
-        reach: f32::from_bits(at(2) as u32),
+        reach: 0.0,
         held: (!item.is_empty() && n > 0).then_some((item, n)),
         mode: create_engine::deployer::Mode::from_index(at(4) as u8),
         breaking: None,

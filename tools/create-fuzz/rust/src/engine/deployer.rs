@@ -192,14 +192,27 @@ impl Run {
             .collect()
     }
 
-    /// `start_over`: the stroke starting toward a depot or belt: the ray from its face to the
-    /// top of the block two ahead (`start`).
+    /// `start_ray_hit`: how far `start`'s ray from the deployer at `pos` facing `facing` runs
+    /// before the block two ahead stops it (`DeployerAudit` measures each state's).
+    fn start_ray_hit(&mut self, pos: Pos, facing: Dir) -> f64 {
+        let at = step(pos, facing, 2);
+        if self.at(at) == AIR {
+            return 1.0;
+        }
+        let state = self.name(self.at(at));
+        deployers::contract()
+            .start_hit(&state, facing)
+            .unwrap_or_else(|| {
+                self.notes
+                    .push(format!("adapter gap: start's ray at {state} {at:?}"));
+                1.0
+            })
+    }
+
+    /// `start_over`: the stroke starting toward a depot or belt (`start`).
     fn start_over(&mut self, at: Pos, d: &mut Deployer) {
-        let top = deployers::contract()
-            .block(&self.name(self.at(at)))
-            .map_or(1.0, |b| b.top);
-        d.start((1.0 - top) as f32);
         let above = [at[0], at[1] + 2, at[2]];
+        d.start(self.start_ray_hit(above, Dir::Down));
         let d2 = &mut self.w.dims[0];
         d2.deployers.insert(above, d.clone());
         d2.deployer_changes.push(above);
@@ -933,12 +946,8 @@ impl deployer::World for Turn<'_> {
         self.run.fist_start(self.pos, self.facing, d)
     }
 
-    fn ray_hit(&mut self) -> f32 {
-        if self.run.replaceable(step(self.pos, self.facing, 1)) {
-            0.75
-        } else {
-            0.
-        }
+    fn ray_hit(&mut self) -> f64 {
+        self.run.start_ray_hit(self.pos, self.facing)
     }
 
     fn trigger_fist_bump(&mut self, d: &mut Deployer) {

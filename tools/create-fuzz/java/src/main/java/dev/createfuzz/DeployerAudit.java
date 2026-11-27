@@ -26,6 +26,7 @@ import net.minecraft.world.item.ItemStack;
 import net.minecraft.world.item.context.UseOnContext;
 import net.minecraft.world.item.crafting.Ingredient;
 import net.minecraft.world.item.crafting.RecipeHolder;
+import net.minecraft.world.level.ClipContext;
 import net.minecraft.world.level.block.Block;
 import net.minecraft.world.level.block.Blocks;
 import net.minecraft.world.level.block.state.BlockState;
@@ -99,11 +100,34 @@ final class DeployerAudit {
             JsonObject b = e.getAsJsonObject();
             BlockState state = state(b.get("state").getAsString());
             level.setBlock(o, state, 3);
-            expect("outline top of " + b.get("state").getAsString(), b.get("top").getAsDouble(),
-                    state.getShape(level, o).max(Direction.Axis.Y), 1e-6);
             if (b.has("hardness"))
                 expect("hardness of " + b.get("state").getAsString(), b.get("hardness").getAsFloat(),
                         state.getDestroySpeed(level, o), 1e-6);
+        }
+
+        // `DeployerBlockEntity.start`'s ray, 3/2 to 5/2 ahead of the deployer's centre: how far it
+        // runs before the state two ahead stops it, facing down, up and east. The same state one
+        // ahead, with air two ahead, never does (1, a miss).
+        BlockPos ray = o.north(8);
+        for (JsonElement e : doc.getAsJsonArray("start_rays")) {
+            JsonObject r = e.getAsJsonObject();
+            BlockState state = state(r.get("state").getAsString());
+            for (String where : List.of("ahead", "before"))
+                for (Direction facing : List.of(Direction.DOWN, Direction.UP, Direction.EAST)) {
+                    for (int i = 1; i <= 2; i++)
+                        level.setBlock(ray.relative(facing, i), Blocks.AIR.defaultBlockState(), 3);
+                    level.setBlock(ray.relative(facing, where.equals("ahead") ? 2 : 1), state, 3);
+                    Vec3 normal = Vec3.atLowerCornerOf(facing.getNormal());
+                    Vec3 from = Vec3.atCenterOf(ray).add(normal.scale(3 / 2f));
+                    Vec3 to = Vec3.atCenterOf(ray).add(normal.scale(5 / 2f));
+                    BlockHitResult hit = level.clip(new ClipContext(from, to, ClipContext.Block.OUTLINE,
+                            ClipContext.Fluid.NONE, fake));
+                    expect("start ray " + where + " " + facing.getSerializedName() + " at " + r.get("state").getAsString(),
+                            where.equals("ahead") ? r.get(facing.getSerializedName()).getAsDouble() : 1.0,
+                            hit.getLocation().subtract(from).length(), 1e-6);
+                    for (int i = 1; i <= 2; i++)
+                        level.setBlock(ray.relative(facing, i), Blocks.AIR.defaultBlockState(), 3);
+                }
         }
 
         for (JsonElement e : doc.getAsJsonArray("dig")) {
