@@ -29,6 +29,9 @@ fn offset(d: Dir) -> Pos {
 impl Run {
     /// `saw::tick_drills`, over the turning breakers in the engine's order.
     pub(super) fn tick_drills(&mut self) {
+        for (breaker, at) in std::mem::take(&mut self.w.dims[0].breaker_cracks) {
+            self.set_break_progress(breaker, at, -1);
+        }
         let drilling = self.w.dims[0].drilling.clone();
         for pos in drilling {
             let Some((block, info)) = self.w.table.get(self.at(pos)) else {

@@ -85,6 +85,11 @@ impl Breaker {
         self.progress = 0;
         self.ticks_until = -1;
     }
+
+    /// `invalidate`'s: `breakingPos` while the breaker has progress.
+    pub fn cracks_at(&self) -> Option<[i32; 3]> {
+        (self.progress != 0).then_some(self.breaking_pos).flatten()
+    }
 }
 
 /// `isBreakable`'s hardness test: unbreakable (-1) blocks stay.
