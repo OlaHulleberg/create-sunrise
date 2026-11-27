@@ -820,10 +820,9 @@ impl Kinetics {
                 self.nodes[existing as usize].state.update_speed = true;
             }
             self.pending_events.extend(events);
-            let n = &mut self.nodes[existing as usize];
-            n.stamp = self.stamp;
-            n.fresh = true;
-            self.scheduler.validate_later(self.now, existing, n.stamp);
+            // A value change keeps the entity, so its stamp and every ticket keyed by it stay:
+            // `validationCountdown` and the generator's reactivation are untouched in Java.
+            self.nodes[existing as usize].fresh = true;
             self.mark_changed(existing);
             self.dirty.push(existing);
             return;
@@ -1469,10 +1468,7 @@ impl Kinetics {
             return;
         }
         if self.nodes[id as usize].state.update_speed {
-            self.nodes[id as usize].state.update_speed = false;
-            // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
-            self.saved_dirty.insert(self.nodes[id as usize].pos);
-            self.propagate_new_source(id, events);
+            self.attach_kinetics(id, events);
         }
         // SmartBlockEntity.tick invokes KineticBlockEntity.initialize after attachKinetics,
         // before the generator's own initialize callback - even when the attach just
@@ -1544,10 +1540,7 @@ impl Kinetics {
             && id != NONE
         {
             let mut events = Vec::new();
-            self.nodes[id as usize].state.update_speed = false;
-            // attachKinetics changes the serialized NeedsSpeedUpdate flag, even at rest.
-            self.saved_dirty.insert(self.nodes[id as usize].pos);
-            self.propagate_new_source(id, &mut events);
+            self.attach_kinetics(id, &mut events);
             self.pending_events.extend(events);
         }
     }
@@ -1905,6 +1898,40 @@ mod tests {
     }
 
     #[test]
+    fn changing_a_part_in_place_keeps_its_validation_deadline() {
+        // `KineticBlockEntity.validationCountdown` is not touched by a value change: the shaft
+        // still validates 61 ticks after its first tick, not 61 after the change.
+        let mut k = Kinetics::new();
+        k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
+        k.set([1, 0, 0], 0, Part::shaft(Axis::X));
+        solve(&mut k);
+        for _ in 0..30 {
+            k.advance();
+        }
+        k.set(
+            [1, 0, 0],
+            0,
+            Part {
+                impact: 1.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        // Simulate the source disappearing without handleRemoved.
+        let root = k.at[&[0, 0, 0]][0];
+        k.nodes[root as usize].live = false;
+        for _ in 0..30 {
+            k.advance();
+        }
+        assert_eq!(k.speed([1, 0, 0], 0), Some(16.0));
+        k.advance();
+        assert!(k.has_dirty());
+        solve(&mut k);
+        assert_eq!(k.speed([1, 0, 0], 0), Some(0.0));
+    }
+
+    #[test]
     fn validation_clears_a_source_whose_block_entity_disappeared() {
         let mut k = Kinetics::new();
         k.set([0, 0, 0], 0, motor(Dir::East, 16.0));
@@ -2035,6 +2062,111 @@ mod tests {
             );
         }
         assert!(broke, "the reversing generator breaks");
+    }
+
+    #[test]
+    fn a_generator_update_before_its_first_tick_attaches_once() {
+        // applyNewSpeed calls attachKinetics, which clears `updateSpeed`: the first tick does
+        // not attach again and the entity saves `NeedsSpeedUpdate` as false.
+        let pos = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(pos, 0, motor(Dir::East, 16.0));
+        assert!(k.saved_state(pos, 0).unwrap().needs_speed_update);
+        k.set(pos, 0, motor(Dir::East, 32.0));
+        assert_eq!(k.theoretical(pos, 0), Some((32.0, false)));
+        assert!(!k.saved_state(pos, 0).unwrap().needs_speed_update);
+    }
+
+    #[test]
+    fn overpowering_an_overstressed_member_reads_its_speed_before_it_leaves_the_network() {
+        // propagateNewSource reads `prevSpeed = getSpeed()` before setSource. An overstressed
+        // member shows 0, so leaving its network (updateFromNetwork adds 5 as it shows its
+        // speed again) and then taking the faster generator's speed adds 5 once more.
+        let (source, member, faster) = ([0, 0, 0], [1, 0, 0], [2, 0, 0]);
+        let mut k = Kinetics::new();
+        k.set(source, 0, motor(Dir::East, 16.0));
+        k.set(
+            member,
+            0,
+            Part {
+                impact: 80.0,
+                ..Part::shaft(Axis::X)
+            },
+        );
+        solve(&mut k);
+        assert_eq!(k.theoretical(member, 0), Some((16.0, true)));
+        let flicker = k.flicker_score(member);
+        k.set(
+            faster,
+            0,
+            Part {
+                capacity: 16384.0 / 64.0,
+                ..motor(Dir::West, -64.0)
+            },
+        );
+        let e = solve(&mut k);
+        assert!(!e.iter().any(|e| matches!(e, Event::Break { .. })), "{e:?}");
+        assert_eq!(k.theoretical(member, 0), Some((64.0, false)));
+        assert_eq!(k.flicker_score(member), flicker + 10);
+    }
+
+    #[test]
+    fn handle_removed_skips_a_dependent_an_earlier_pass_gave_another_source() {
+        // RotationPropagator.handleRemoved reads each neighbour's source in its own iteration.
+        // Removing the generator at 0 leaves the shafts at -1 and 1 depending on it; they are
+        // also joined by a chain. Clearing the first lets the live network at -2 drive it again,
+        // and through the chain the second, which then no longer depends on the generator.
+        let saved = |speed: f32, source: Option<[i32; 3]>, net: [i32; 3]| SavedKineticState {
+            speed,
+            sequence: None,
+            source: source.map(|pos| PartLocation { pos, sub: 0 }),
+            network: Some(SavedNetwork {
+                id: network_id(net),
+                stress: 0.0,
+                capacity: 0.0,
+                size: 1,
+                added_stress: 0.0,
+                added_capacity: 0.0,
+            }),
+            needs_speed_update: false,
+        };
+        let mut k = Kinetics::new();
+        let generator = Part {
+            generated: 16.0,
+            capacity: 16384.0 / 256.0,
+            ..Part::shaft(Axis::X)
+        };
+        let parts = [
+            (
+                [-2, 0, 0],
+                Part::shaft(Axis::X),
+                saved(32.0, Some([-3, 0, 0]), [-3, 0, 0]),
+            ),
+            (
+                [-1, 0, 0],
+                Part::shaft(Axis::X),
+                saved(16.0, Some([0, 0, 0]), [0, 0, 0]),
+            ),
+            ([0, 0, 0], generator, saved(16.0, None, [0, 0, 0])),
+            (
+                [1, 0, 0],
+                Part::shaft(Axis::X),
+                saved(16.0, Some([0, 0, 0]), [0, 0, 0]),
+            ),
+        ];
+        for (pos, part, state) in parts {
+            k.set(pos, 0, part);
+            assert!(k.restore_state(pos, 0, state));
+        }
+        k.far.insert([-1, 0, 0], vec![[1, 0, 0]]);
+        k.far.insert([1, 0, 0], vec![[-1, 0, 0]]);
+        k.remove([0, 0, 0]);
+        assert_eq!(k.speed([-1, 0, 0], 0), Some(32.0));
+        assert_eq!(k.speed([1, 0, 0], 0), Some(32.0));
+        assert_eq!(
+            k.saved_state([1, 0, 0], 0).unwrap().source.map(|s| s.pos),
+            Some([-1, 0, 0])
+        );
     }
 
     #[test]

@@ -32,20 +32,23 @@ pub fn encode(bytes: &[u8]) -> io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Decode at most `max` bytes total across all members. Ignore nonmember bytes after a valid
-/// member, but require any suffix beginning with the full gzip magic to be a valid member.
-pub fn decode(mut data: &[u8], max: usize) -> Result<Vec<u8>, GzipError> {
+/// Decode at most `max` bytes total across all members. After a valid member, a missing or
+/// malformed next header ends the stream. A valid header still requires valid data and trailer.
+pub fn decode(data: &[u8], max: usize) -> Result<Vec<u8>, GzipError> {
+    let mut body = read_header(data)?;
     let mut out = Vec::new();
     loop {
-        data = member(data, max, &mut out)?;
-        if !data.starts_with(&MAGIC) {
+        let rest = member(body, max, &mut out)?;
+        // Like GZIPInputStream.readTrailer, ignore only errors reading the next header.
+        let Ok(next_body) = read_header(rest) else {
             return Ok(out);
-        }
+        };
+        body = next_body;
     }
 }
 
-/// Append one member to `out` and return the bytes after its trailer.
-fn member<'a>(data: &'a [u8], max: usize, out: &mut Vec<u8>) -> Result<&'a [u8], GzipError> {
+/// Read one member header and return the bytes starting at its DEFLATE stream.
+fn read_header(data: &[u8]) -> Result<&[u8], GzipError> {
     let (head, mut body) = data.split_first_chunk::<10>().ok_or(GzipError::Header)?;
     if !head.starts_with(&MAGIC) || head[2] != 8 {
         return Err(GzipError::Header);
@@ -74,7 +77,11 @@ fn member<'a>(data: &'a [u8], max: usize, out: &mut Vec<u8>) -> Result<&'a [u8],
         }
         body = rest;
     }
+    Ok(body)
+}
 
+/// Append one member's DEFLATE data to `out`, verify its trailer and return the remaining bytes.
+fn member<'a>(body: &'a [u8], max: usize, out: &mut Vec<u8>) -> Result<&'a [u8], GzipError> {
     let start = out.len();
     let mut decoder = Decompress::new(false);
     let mut scratch = [0; 8192];
@@ -216,17 +223,38 @@ mod tests {
 
     #[test]
     fn ignores_nonmember_suffix_only_after_a_valid_member() {
-        assert_eq!(decode(b"plain", 10), Err(GzipError::Header));
+        let mut bad_method = STORED_MEMBER[..10].to_vec();
+        bad_method[2] = 0;
+        let mut bad_fhcrc = STORED_MEMBER[..10].to_vec();
+        bad_fhcrc[3] = 2;
+        let mut crc = Crc::new();
+        crc.update(&bad_fhcrc);
+        bad_fhcrc.extend_from_slice(&((crc.sum() as u16) ^ 1).to_le_bytes());
+
         let mut gz = encode(b"one").expect("gzip encoding");
         let end = gz.len();
-        gz.extend_from_slice(b"plain");
-        assert_eq!(decode(&gz, 10).unwrap(), b"one");
+        for suffix in [
+            b"plain".as_slice(),
+            &MAGIC[..1],
+            &MAGIC,
+            &bad_method,
+            &bad_fhcrc,
+        ] {
+            assert_eq!(decode(suffix, 32), Err(GzipError::Header));
+            gz.extend_from_slice(suffix);
+            assert_eq!(decode(&gz, 32).unwrap(), b"one");
+            gz.truncate(end);
+        }
+
+        gz.extend_from_slice(&STORED_MEMBER[..10]);
+        gz.push(0x07); // Reserved DEFLATE block type.
+        assert_eq!(decode(&gz, 32), Err(GzipError::Data));
 
         gz.truncate(end);
-        gz.push(MAGIC[0]);
-        assert_eq!(decode(&gz, 10).unwrap(), b"one");
-        gz.push(MAGIC[1]);
-        assert_eq!(decode(&gz, 10), Err(GzipError::Header));
+        gz.extend_from_slice(STORED_MEMBER);
+        assert!(decode(&gz[..gz.len() - 1], 32).is_err());
+        gz[end + STORED_MEMBER.len() - 8] ^= 1;
+        assert_eq!(decode(&gz, 32), Err(GzipError::Check));
     }
 
     #[test]
