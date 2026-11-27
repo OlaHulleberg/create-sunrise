@@ -69,6 +69,18 @@ pub struct Dig {
     pub drops: Vec<Stack>,
 }
 
+impl Dig {
+    /// `BlockBehaviour.getDestroyProgress` for the fake player on a block of `hardness`, as
+    /// `DeployerAudit` checks it: the tool's speed over five, over the hardness and 30 when it
+    /// harvests, else 100; 0 for an unbreakable block.
+    pub fn progress(&self, hardness: f32) -> f32 {
+        if hardness == -1.0 {
+            return 0.0;
+        }
+        self.speed / 5.0 / hardness / if self.harvest { 30.0 } else { 100.0 }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 pub struct Recipe {
     pub id: String,
