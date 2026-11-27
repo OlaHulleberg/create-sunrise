@@ -472,9 +472,9 @@ pub struct Dimension {
     pub dropped_filters: Vec<([i32; 3], crate::filter::Filter)>,
     /// Item vault blocks and the vaults they form.
     pub vaults: crate::vault::Vaults,
-    /// Drills and their breaking, the turning ones (the only ones that tick).
+    /// The drills and the saws (`BlockBreakingKineticBlockEntity`), which tick like any block
+    /// entity, turning or not.
     pub drills: HashMap<[i32; 3], crate::drill::Breaker>,
-    pub drilling: Vec<[i32; 3]>,
     /// Removed breakers that showed cracks, for the level to clear (`invalidate`).
     pub breaker_cracks: Vec<([i32; 3], [i32; 3])>,
     /// Cuckoo clocks that turn (the only ones that look at the time), and the animations
@@ -1100,7 +1100,6 @@ impl CreateWorld {
     /// showed.
     fn breaker_removed(&mut self, dim: usize, pos: [i32; 3]) {
         let d = &mut self.dims[dim];
-        d.drilling.retain(|p| *p != pos);
         if let Some(b) = d.drills.remove(&pos)
             && let Some(at) = b.cracks_at()
         {
@@ -1364,19 +1363,8 @@ impl CreateWorld {
         if block == Block::Spout {
             d.spouts.entry(pos).or_default();
         }
-        // Block breakers: the drill, and the saw facing sideways (`SawBlockEntity` cuts only then).
-        if block == Block::MechanicalDrill
-            || (block == Block::MechanicalSaw
-                && info
-                    .facing
-                    .is_some_and(|f| f.axis() != crate::kinetics::Axis::Y))
-        {
+        if matches!(block, Block::MechanicalDrill | Block::MechanicalSaw) {
             d.drills.entry(pos).or_default();
-            // A breaker loaded already turning gets no speed change: it looks at its speed
-            // itself until one comes (a stopped one does nothing).
-            if !d.drilling.contains(&pos) {
-                d.drilling.push(pos);
-            }
         }
         if block == Block::MechanicalMixer && !d.mixers.contains_key(&pos) {
             d.mixers.insert(pos, Default::default());
@@ -2414,7 +2402,6 @@ impl CreateWorld {
                     .filter_map(|(p, b)| b.cracks_at().map(|at| (*p, at))),
             );
             d.drills.retain(|p, _| out(p));
-            d.drilling.retain(out);
             d.fluid_transport
                 .pipes
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2694,14 +2681,6 @@ impl CreateWorld {
                 d.cuckoo_turning.retain(|p| *p != pos);
                 if speed != 0.0 {
                     d.cuckoo_turning.push(pos);
-                }
-            }
-            if let Event::Speed { pos, speed, .. } = *e
-                && d.drills.contains_key(&pos)
-            {
-                d.drilling.retain(|p| *p != pos);
-                if speed != 0.0 {
-                    d.drilling.push(pos);
                 }
             }
             // Hoses move when their speed changes.
@@ -3307,6 +3286,17 @@ impl CreateWorld {
             .keys()
             .filter_map(|p| Some((*p, d.kinetics.speed(*p, 0).filter(|s| *s != 0.0)?)))
             .collect()
+    }
+
+    /// The drills and saws of `dim`, in their block entities' order (`Level.blockEntityTickers`).
+    pub fn breakers(&self, dim: usize) -> Vec<[i32; 3]> {
+        let d = &self.dims[dim];
+        if d.drills.is_empty() {
+            return Vec::new();
+        }
+        let mut out: Vec<[i32; 3]> = d.drills.keys().copied().collect();
+        out.sort_by_key(|p| d.block_entities.registration_order(*p));
+        out
     }
 
     /// A water wheel's new flow score: it turns again when the score changed.
@@ -8018,8 +8008,7 @@ mod tests {
         place(&mut w);
         w.block_changed(0, pos, 10, 0);
         assert_eq!(w.dims[0].breaker_cracks, [(pos, at)]);
-        assert!(w.dims[0].drills.is_empty());
-        assert!(!w.dims[0].drilling.contains(&pos));
+        assert!(w.breakers(0).is_empty());
         // Replaced by another of Create's blocks, which keeps the block entity type.
         w.dims[0].breaker_cracks.clear();
         place(&mut w);
@@ -8038,6 +8027,38 @@ mod tests {
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
         assert!(w.dims[0].breaker_cracks.is_empty());
+    }
+
+    /// Every drill and saw is a `BlockBreakingKineticBlockEntity`, facing up or not, and ticks
+    /// in its block entity's turn.
+    #[test]
+    fn every_drill_and_saw_is_a_breaker_in_block_entity_order() {
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:mechanical_drill",
+                vec![("facing", "east"), ("waterlogged", "false")],
+            ),
+            (
+                "create:mechanical_saw",
+                vec![
+                    ("axis_along_first", "true"),
+                    ("facing", "up"),
+                    ("flipped", "false"),
+                ],
+            ),
+        ];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, [0, 64, 0], 0, 11);
+        w.block_changed(0, [2, 64, 0], 0, 10);
+        w.block_changed(0, [1, 64, 0], 0, 11);
+        assert_eq!(w.breakers(0), [[0, 64, 0], [2, 64, 0], [1, 64, 0]]);
+        // A saw keeps its breaker through a change of its block state.
+        w.dims[0].drills.get_mut(&[1, 64, 0]).unwrap().progress = 2;
+        w.block_changed(0, [1, 64, 0], 11, 11);
+        assert_eq!(w.dims[0].drills[&[1, 64, 0]].progress, 2);
     }
 
     /// Create: a broken deployer leaves its held stack, with its damage and components, for its

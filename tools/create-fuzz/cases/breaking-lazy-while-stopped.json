@@ -1,0 +1,73 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 80,
+  "checkpoints": [
+    46,
+    61,
+    62,
+    67,
+    68,
+    69,
+    70,
+    71,
+    72,
+    73
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 64
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:mechanical_drill[facing=east,waterlogged=false]"
+    },
+    {
+      "pos": [
+        3,
+        8,
+        0
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "events": [
+    {
+      "tick": 45,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    },
+    {
+      "tick": 60,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 64
+    }
+  ]
+}

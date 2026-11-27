@@ -270,9 +270,9 @@ Cases in `cases/`: `breaking-saw-upward`, `breaking-drill-unbreakable`, `breakin
 `breaking-mushroom-skins`, `breaking-leaf-distances`, `breaking-sand-falls`,
 `breaking-sand-column-pull`, `breaking-first-look`, `breaking-neighbour-arm`,
 `breaking-saw-rearm`, `breaking-placed-16`, `breaking-placed-64`, `breaking-cracks-after-removal`,
-`breaking-reload-mid`. Every history where a breaker breaks a block differed from Java by rows of
-the tables below, so those histories are in the two families, and shrunk in the cases that pin
-each fix.
+`breaking-reload-mid`, `breaking-lazy-while-stopped`. Every history where a breaker breaks a block
+differed from Java by a row of the table below, so those histories are in the two families, and
+shrunk in the cases that pin each fix.
 
 ## Port differences found
 
@@ -350,7 +350,7 @@ A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by
 `enableMerging`), so a basin spouting into one holds its second result at the spout until the
 first leaves it.
 
-Fixed after the breaking families found them (#384, #385, #386), each with an engine test
+Fixed after the breaking families found them (#384, #385, #386, #387), each with an engine test
 carrying Create's numbers and a case in `cases/`:
 
 | Case | Java | Port before | Deciding Java |
@@ -360,17 +360,16 @@ carrying Create's numbers and a case in `cases/`:
 | `breaking-saw-rearm` | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival | Looked again at its lazy ticks only | `SawBlockEntity.java:170-173` |
 | `breaking-cracks-after-removal` | A drill removed at 21 while it cracks takes its cracks along | They stayed to the end of the case | `BlockBreakingKineticBlockEntity.java:78-83` |
 | `breaking-reload-mid` | A reload at 21 keeps `Progress`, `NextTick` and `Breaking`, and the block drops at tick 31 | Started over (tick 22: 0 and 0 where Java holds 1 and 607), and dropped at 39 | `BlockBreakingKineticBlockEntity.java:59-76` |
+| `breaking-lazy-while-stopped` | A stopped breaker's lazy ticks stay on its block entity's clock (66, 77, 88 after its restart) | Its counter counted turning ticks only (70, 81, 92) | `SmartBlockEntity.java:74-86` |
 
-Open, found with the breaking families (a seed reproduces each with `fuzz gen <seed>` and the
-lane; `breaking/drill` unless said):
-
-| Difference | Java | Port | Deciding Java | Port code |
-| --- | --- | --- | --- | --- |
-| Lazy tick stopped | A stopped breaker's lazy ticks stay on its block entity's clock (66, 77, 88 after its restart) | Its counter counts turning ticks only (70, 81, 92); no lane history runs long enough to show it | `SmartBlockEntity.java:74-86` | `glue/processing/saw.rs:41`, `:73`; `engine/src/world.rs:2690-2696` |
-
-With Java's arming, reload and crack clearing laid over the port's engine, a throwaway driver
-matched Java on 360 of the first 432 drill seeds and 284 of the first 360 saw seeds; the rest
-differed by the speed-0 row alone.
+After the fixes, each lane's first 1280 seeds (`fuzz-lane 0 327680 <residue> 256`):
+`breaking/drill` 1280 matched and `breaking/saw` 1267 matched, 13 differed; `fuzz 0 4000` matched.
+The 13 are the saw's leaves-alone history at −48 and 256 rpm, and differ in the `distance`
+of vanilla leaves alone: on the server the leaves around a cut one recompute their distances in
+another order than the driver's model of them does (`engine/vanilla.rs`, `leaf_tick`), as they did
+before the fixes. The smallest is one leaf (seed 23488 shrunk: at tick 12 `3,14,-1` is 6 on Java and
+7 on the driver). A wrench on a drill does not arm it: `IWrenchable.onWrenched` runs the drill's own
+`updateShape` and its neighbours' `neighborChanged`, never the drill's own.
 
 ## Not driven yet
 
