@@ -1524,6 +1524,58 @@ pub fn wrench_deployer(lv: &mut ServerLevel<'_>, pos: [i32; 3], point: [f64; 3])
     true
 }
 
+/// `DeployerBlock.useItemOn`'s placement helper (`DeployerBlock.PlacementHelper`,
+/// `PlacementOffset.placeInWorld`): a deployer item, not sneaking, by a player who may build,
+/// goes on the free side of the deployer at `pos` nearest the click
+/// ([`deployer::helper_offset`]), as that one stands; its place sound, one used up outside
+/// creative. True when it was placed.
+pub fn place_beside(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    click: &BlockClick<'_>,
+    player: PlayerRef,
+) -> bool {
+    let Some(stack) = click.stack else {
+        return false;
+    };
+    if stacks::id(&*lv.host, stack) != "create:deployer"
+        || player.entity().is_shift_key_down(&*lv.host) == Some(true)
+        || player.may_build(&*lv.host) != Some(true)
+    {
+        return false;
+    }
+    let hit = std::array::from_fn(|i| click.hit.point[i] - f64::from(pos[i]) - 0.5);
+    let Some(at) = deployer::helper_offset(pos, facing, hit, |p| lv.replaceable(p)) else {
+        return false;
+    };
+    let Some(state) = lv.block_state(pos) else {
+        return false;
+    };
+    let level = lv.level;
+    let face = match Dir::ALL.into_iter().find(|d| super::step(pos, *d, 1) == at) {
+        Some(Dir::Down) => mod_api::BlockFace::Down,
+        Some(Dir::North) => mod_api::BlockFace::North,
+        Some(Dir::South) => mod_api::BlockFace::South,
+        Some(Dir::West) => mod_api::BlockFace::West,
+        Some(Dir::East) => mod_api::BlockFace::East,
+        _ => mod_api::BlockFace::Up,
+    };
+    if player
+        .place_block(&mut *lv.host, level, at, state, face, true)
+        .is_err()
+    {
+        return false;
+    }
+    lv.place_sound(at);
+    if player.is_creative(&*lv.host) != Some(true)
+        && let Some(living) = lv.host.living(player.entity())
+    {
+        let _ = living.set_hand_item(&mut *lv.host, click.hand, stack.clone().shrink(1));
+    }
+    true
+}
+
 /// `DeployerBlock.useItemOn`: a click on its front half swaps the player's hand with the
 /// deployer's. True when the click was the deployer's.
 pub fn use_deployer(

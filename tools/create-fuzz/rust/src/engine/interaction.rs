@@ -667,7 +667,7 @@ impl Run {
                 if !self.replaceable(up) {
                     return;
                 }
-                self.place_player(up, item, yaw, pitch, Dir::Up, sneaking);
+                self.place_player_in(up, item, yaw, pitch, Dir::Up, sneaking, true);
                 return;
             }
         }
@@ -772,6 +772,22 @@ impl Run {
         face: create_engine::kinetics::Dir,
         sneaking: bool,
     ) {
+        self.place_player_in(p, block, yaw, pitch, face, sneaking, false);
+    }
+
+    /// `place_player`, `operator` an operator item's click moved two above what it works on
+    /// (`AssemblyOperatorUseContext`).
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn place_player_in(
+        &mut self,
+        p: Pos,
+        block: &str,
+        yaw: f32,
+        pitch: f32,
+        face: create_engine::kinetics::Dir,
+        sneaking: bool,
+        operator: bool,
+    ) {
         if self.place_pipe(p, block, yaw, pitch, sneaking) {
             return;
         }
@@ -842,6 +858,7 @@ impl Run {
             pitch,
             sneaking,
             clicked_face: face,
+            operator,
         };
         let shaft = |d: create_engine::kinetics::Dir| {
             self.w
@@ -948,4 +965,4 @@ impl Run {
 }
 
 /// The owner a placed deployer is given ([`Run::place_player`]).
-const PLACER: u128 = 1;
+pub(super) const PLACER: u128 = 1;

@@ -861,6 +861,17 @@ impl Run {
             self.w.mark_unsaved(0, p);
             return true;
         }
+        // `place_beside`: the deployer item's placement helper.
+        if item == "create:deployer" && !sneaking {
+            let centred = hit.map(|v| v - 0.5);
+            if let Some(at) = deployer::helper_offset(p, facing, centred, |q| self.replaceable(q)) {
+                self.set(at, self.at(p));
+                if let Some(d) = self.w.dims[0].deployers.get_mut(&at) {
+                    d.owner = Some(super::interaction::PLACER);
+                }
+                return true;
+            }
+        }
         let front = along(p, facing, point).abs() > 0.75;
         if item == "create:wrench" {
             if !sneaking

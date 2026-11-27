@@ -594,6 +594,25 @@ pub fn start_ray(pos: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
     (at(1.5), at(2.5))
 }
 
+/// `DeployerBlock.PlacementHelper.getOffset` for a deployer item on the deployer at `pos` facing
+/// `facing`, clicked at `hit` (from the block's centre): the side nearest the hit across its
+/// facing whose block `free` says can be replaced (`orderedByDistanceExceptAxis`), the new one
+/// facing the same way with the same `axis_along_first`. None: `PlacementOffset.fail`.
+pub fn helper_offset(
+    pos: [i32; 3],
+    facing: Dir,
+    hit: [f64; 3],
+    free: impl Fn([i32; 3]) -> bool,
+) -> Option<[i32; 3]> {
+    let beside = |d: Dir| {
+        let o = d.offset();
+        [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]]
+    };
+    crate::place::ordered_by_distance(hit, |d| d.axis() != facing.axis() && free(beside(d)))
+        .first()
+        .map(|d| beside(*d))
+}
+
 /// Where the fake player of the deployer at `pos` facing `facing` stands, its eyes at its feet:
 /// in the middle of the block ahead (`initHandler`), or once it `activated`, at `activateInner`'s
 /// ray origin.

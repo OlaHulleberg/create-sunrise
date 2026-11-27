@@ -359,6 +359,7 @@ mod tests {
             pitch: 0.0,
             sneaking: false,
             clicked_face: Dir::Up,
+            operator: false,
         };
         assert_eq!(
             facing(crate::Block::CuckooClock, ctx, |_| false),

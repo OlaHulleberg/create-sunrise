@@ -133,6 +133,7 @@ fn use_on(host: &mut dyn ServerHost, event: &UseOnEvent<'_>) -> Option<Interacti
             pitch: rotation[1],
             sneaking: sneaking(&*lv.host, player),
             clicked_face: Dir::Up,
+            operator: true,
         };
         let neighbours = create_engine::place::Neighbours(&|pos| lv.info(pos));
         match super::super::logistics::placement::placed_state(

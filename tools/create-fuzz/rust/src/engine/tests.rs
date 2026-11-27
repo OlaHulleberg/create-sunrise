@@ -400,6 +400,7 @@ fn chain_heading_boundary_uses_the_glues_axis_selection() {
         pitch: 0.,
         sneaking: true,
         clicked_face: Dir::Up,
+        operator: false,
     };
     let (axis, _) = place::axis(
         Block::AdjustableChainGearshift,
