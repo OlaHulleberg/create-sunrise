@@ -25,12 +25,20 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
             None => {}
         },
         Some(Block::ItemDrain) => super::fluids::live_drain(w, p, fields),
-        // glue/processing/saw.rs `live_saw`.
+        // glue/processing/saw.rs `live_saw`, and `live_breaker` (`BlockBreakingKineticBlockEntity.write`).
         Some(Block::MechanicalSaw) => {
             if let Some(s) = w.dims[0].saws.get(&p)
                 && let Some(Tag::Compound(c)) = fields.get_mut(SAW_INVENTORY)
             {
                 c.insert("ProcessingTime".into(), Tag::Float(s.remaining.to_bits()));
+            }
+            if let Some(b) = w.dims[0].drills.get(&p) {
+                breaker_tag(b, fields);
+            }
+        }
+        Some(Block::MechanicalDrill) => {
+            if let Some(b) = w.dims[0].drills.get(&p) {
+                breaker_tag(b, fields);
             }
         }
         // glue/processing/persist.rs `live_fields`: the millstone's `Timer`.
@@ -61,6 +69,23 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
 
 const SAW_INVENTORY: &str = "Inventory";
 const RECIPE_INDEX: &str = "RecipeIndex";
+const PROGRESS: &str = "Progress";
+const NEXT_TICK: &str = "NextTick";
+const BREAKING: &str = "Breaking";
+
+/// glue/processing/saw.rs `breaker_tag`: `BlockBreakingKineticBlockEntity.write`.
+fn breaker_tag(b: &create_engine::drill::Breaker, out: &mut Compound) {
+    out.insert(PROGRESS.into(), Tag::Int(b.progress));
+    out.insert(NEXT_TICK.into(), Tag::Int(b.ticks_until));
+    match b.breaking_pos {
+        Some(at) => {
+            out.insert(BREAKING.into(), Tag::IntArray(at.to_vec()));
+        }
+        None => {
+            out.remove(BREAKING);
+        }
+    }
+}
 
 /// glue/processing/saw.rs `save_saws`: `Inventory` and `RecipeIndex` of the saws of `column`
 /// holding items or keeping a recipe index (`index`, their `recipeDuration` in `duration`).
@@ -213,6 +238,12 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
             e.insert("Ticks".into(), Tag::Int(m.running_ticks));
         }
     }
+    // glue/processing/saw.rs `save_breakers`: `BlockBreakingKineticBlockEntity.write`.
+    for (p, b) in w.dims[0].drills.iter() {
+        if (p[0] >> 4, p[2] >> 4) == column {
+            breaker_tag(b, out.entry(*p).or_default());
+        }
+    }
     super::fluids::save_entities(w, column, &mut out);
     out
 }
@@ -277,6 +308,22 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
             if pr.running {
                 d.press_changes.push(p);
             }
+        }
+        // glue/processing/saw.rs `load_breaker`: `BlockBreakingKineticBlockEntity.read`.
+        Block::MechanicalDrill | Block::MechanicalSaw => {
+            let int = |k: &str| match tag.get(k) {
+                Some(Tag::Int(v)) => *v,
+                _ => 0,
+            };
+            let breaking = match tag.get(BREAKING) {
+                Some(Tag::IntArray(p)) if p.len() == 3 => Some([p[0], p[1], p[2]]),
+                _ => None,
+            };
+            w.dims[0]
+                .drills
+                .entry(p)
+                .or_default()
+                .read(int(PROGRESS), int(NEXT_TICK), breaking);
         }
         // glue/processing/persist.rs `load_entity`: the mixer's `Running` and `Ticks`.
         Block::MechanicalMixer => {

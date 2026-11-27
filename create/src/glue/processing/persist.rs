@@ -1,7 +1,7 @@
 //! The machines' state, saved in their block entities: deployers, crushing wheel controllers,
-//! blaze burners, basins' tanks and mechanical crafters' connections and covers. An older
-//! version kept them with the column under `deployers`, `crushers`, `burners`, `basins`,
-//! `crafter_inputs` and `crafter_covers`, read once by [`load`].
+//! blaze burners, basins' tanks, mechanical crafters' connections and covers, and the drills' and
+//! saws' breaking. An older version kept them with the column under `deployers`, `crushers`,
+//! `burners`, `basins`, `crafter_inputs` and `crafter_covers`, read once by [`load`].
 
 use crate::glue::entity_data::Entities;
 use crate::glue::world::with_world;
@@ -65,7 +65,18 @@ pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
         Block::BlazeBurner => &[BURNER],
         Block::Basin => &[BASIN],
         Block::MechanicalCrafter => &[INPUT, COVER],
-        Block::MechanicalSaw => &[super::saw::INVENTORY, super::saw::RECIPE_INDEX],
+        Block::MechanicalDrill => &[
+            super::saw::PROGRESS,
+            super::saw::NEXT_TICK,
+            super::saw::BREAKING,
+        ],
+        Block::MechanicalSaw => &[
+            super::saw::INVENTORY,
+            super::saw::RECIPE_INDEX,
+            super::saw::PROGRESS,
+            super::saw::NEXT_TICK,
+            super::saw::BREAKING,
+        ],
         Block::Millstone => &[TIMER],
         Block::MechanicalPress => &[PRESS_RUNNING, PRESS_MODE, PRESS_FINISHED, PRESS_TICKS],
         Block::MechanicalMixer => &[MIXER_RUNNING, MIXER_TICKS],
@@ -100,13 +111,15 @@ fn fluid_of(t: &Tag) -> Option<(tank::Fluid, u32)> {
 
 /// What counts down in [`save_entities`]' records, from the live deployer's `Timer`, crusher's
 /// `Remaining` (`ProcessingInventory.remainingTime`), burner's `Remaining`
-/// (`remainingBurnTime`), saw's `ProcessingTime`, millstone's `Timer` or press's `Running`,
-/// `Mode`, `Finished` and `Ticks` at `pos`.
+/// (`remainingBurnTime`), saw's `ProcessingTime`, a breaker's `Progress`, `NextTick` and
+/// `Breaking`, millstone's `Timer` or press's `Running`, `Mode`, `Finished` and `Ticks` at `pos`.
 pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compound) {
     use super::super::entity_data::patch;
     if block == Block::MechanicalSaw {
         super::saw::live_saw(dim, pos, fields);
-        return;
+    }
+    if matches!(block, Block::MechanicalDrill | Block::MechanicalSaw) {
+        super::saw::live_breaker(dim, pos, fields);
     }
     with_world(|w| {
         let d = &w.dims[dim];
@@ -162,11 +175,12 @@ pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compoun
 
 /// `DeployerBlockEntity.write`, `CrushingWheelControllerBlockEntity.write`,
 /// `BlazeBurnerBlockEntity.write`, `BasinBlockEntity.write`'s tanks,
-/// `MechanicalCrafterBlockEntity.write`'s `ConnectedInput` and `Cover`, `SawBlockEntity.write`
-/// `MillstoneBlockEntity.write`'s `Timer` and `PressingBehaviour.write`'s `Running`, `Mode`,
-/// `Finished` and `Ticks` of column `chunk`.
+/// `MechanicalCrafterBlockEntity.write`'s `ConnectedInput` and `Cover`, `SawBlockEntity.write`,
+/// `BlockBreakingKineticBlockEntity.write`, `MillstoneBlockEntity.write`'s `Timer` and
+/// `PressingBehaviour.write`'s `Running`, `Mode`, `Finished` and `Ticks` of column `chunk`.
 pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
     super::saw::save_saws(dim, chunk, out);
+    super::saw::save_breakers(dim, chunk, out);
     with_world(|w| {
         let (cx, cz) = (chunk[0], chunk[1]);
         let mine = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (cx, cz);
@@ -259,6 +273,9 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
         Some(Tag::Compound(c)) => Some(c),
         _ => None,
     };
+    if matches!(block, Block::MechanicalDrill | Block::MechanicalSaw) {
+        super::saw::load_breaker(dim, pos, tag);
+    }
     if block == Block::MechanicalSaw {
         super::saw::load_saw(dim, pos, tag);
         return;

@@ -90,6 +90,13 @@ impl Breaker {
     pub fn cracks_at(&self) -> Option<[i32; 3]> {
         (self.progress != 0).then_some(self.breaking_pos).flatten()
     }
+
+    /// `read`: `Progress`, `NextTick` and `Breaking` as they were saved.
+    pub fn read(&mut self, progress: i32, next_tick: i32, breaking_pos: Option<[i32; 3]>) {
+        self.progress = progress;
+        self.ticks_until = next_tick;
+        self.breaking_pos = breaking_pos;
+    }
 }
 
 /// `isBreakable`'s hardness test: unbreakable (-1) blocks stay.
@@ -203,6 +210,25 @@ mod tests {
         assert_eq!(b.look(64.0, None), Step::Reset);
         assert_eq!(b.progress, 0);
         assert_eq!(b.look(64.0, None), Step::Wait);
+    }
+
+    #[test]
+    fn a_reloaded_breaker_goes_on_from_what_it_read() {
+        let mut b = Breaker::default();
+        assert!(b.tick(64.0, AT));
+        assert_eq!(b.look(64.0, STONE), Step::Progress(1));
+        assert_eq!(
+            (b.progress, b.ticks_until, b.breaking_pos),
+            (1, 2, Some(AT))
+        );
+        let mut reloaded = Breaker::default();
+        reloaded.read(1, 607, Some(AT));
+        assert!(!reloaded.tick(64.0, AT));
+        assert_eq!(reloaded.ticks_until, 606);
+        let mut resting = Breaker::default();
+        resting.read(0, -1, Some(AT));
+        assert!(!resting.tick(64.0, AT));
+        assert_eq!(resting.ticks_until, 0);
     }
 
     #[test]

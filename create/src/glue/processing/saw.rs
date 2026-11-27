@@ -655,6 +655,73 @@ fn show_saw(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 /// `SawBlockEntity.write`'s keys: its `ProcessingInventory` and `recipeIndex`.
 pub(super) const INVENTORY: &str = "Inventory";
 pub(super) const RECIPE_INDEX: &str = "RecipeIndex";
+/// `BlockBreakingKineticBlockEntity.write`'s keys: `destroyProgress`, `ticksUntilNextProgress`
+/// and, once the breaker looked, `breakingPos`.
+pub(super) const PROGRESS: &str = "Progress";
+pub(super) const NEXT_TICK: &str = "NextTick";
+pub(super) const BREAKING: &str = "Breaking";
+
+/// The breaker's fields into `out`, as `BlockBreakingKineticBlockEntity.write` saves them.
+fn breaker_tag(b: &drill::Breaker, out: &mut Compound) {
+    out.insert(PROGRESS.into(), Tag::Int(b.progress));
+    out.insert(NEXT_TICK.into(), Tag::Int(b.ticks_until));
+    match b.breaking_pos {
+        Some(at) => {
+            out.insert(BREAKING.into(), Tag::IntArray(at.to_vec()));
+        }
+        None => {
+            out.remove(&BREAKING.into());
+        }
+    }
+}
+
+/// `BlockBreakingKineticBlockEntity.write` of the breakers of column `chunk`.
+pub(super) fn save_breakers(
+    dim: usize,
+    chunk: [i32; 2],
+    out: &mut crate::glue::entity_data::Entities,
+) {
+    let mine = |p: &[i32; 3]| (p[0] >> 4, p[2] >> 4) == (chunk[0], chunk[1]);
+    with_world(|w| {
+        for (p, b) in w.dims[dim].drills.iter().filter(|(p, _)| mine(p)) {
+            breaker_tag(b, out.entry(*p).or_default());
+        }
+    });
+}
+
+/// The breaker at `pos`'s fields over `fields`, as its block entity saves them.
+pub(super) fn live_breaker(dim: usize, pos: [i32; 3], fields: &mut Compound) {
+    with_world(|w| {
+        if let Some(b) = w.dims[dim].drills.get(&pos) {
+            breaker_tag(b, fields);
+        }
+    });
+}
+
+/// `BlockBreakingKineticBlockEntity.read` of `tag`: `Progress`, `NextTick` and `Breaking`.
+fn breaker_of(tag: &Compound) -> (i32, i32, Option<[i32; 3]>) {
+    let int = |k: &str| match tag.get(&k.into()) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    };
+    let breaking = match tag.get(&BREAKING.into()) {
+        Some(Tag::IntArray(p)) if p.len() == 3 => Some([p[0], p[1], p[2]]),
+        _ => None,
+    };
+    (int(PROGRESS), int(NEXT_TICK), breaking)
+}
+
+/// `BlockBreakingKineticBlockEntity.read`: the breaker at `pos` takes what `tag` saves.
+pub(super) fn load_breaker(dim: usize, pos: [i32; 3], tag: &Compound) {
+    let (progress, next_tick, breaking) = breaker_of(tag);
+    with_world(|w| {
+        w.dims[dim]
+            .drills
+            .entry(pos)
+            .or_default()
+            .read(progress, next_tick, breaking);
+    });
+}
 
 /// `ProcessingInventory.serializeNBT` of `s`: its stacks by slot (the input in 0, the results
 /// from 1 once cut), the time left and its duration, and whether it has cut them.
@@ -922,5 +989,24 @@ mod tests {
         // An empty saw keeps only its recipe index.
         let index = Compound::from([(RECIPE_INDEX.into(), Tag::Int(4))]);
         assert_eq!(saw_of(&index), (None, 4, 0.0));
+    }
+
+    /// `BlockBreakingKineticBlockEntity.write` then `read`: a breaker part way through a block
+    /// comes back as it was, and one that never looked saves no `Breaking`.
+    #[test]
+    fn a_saved_breaker_reads_back_as_it_was() {
+        let cracking = drill::Breaker {
+            progress: 4,
+            ticks_until: 607,
+            breaking_pos: Some([2, 8, 0]),
+            ..Default::default()
+        };
+        let mut tag = Compound::new();
+        breaker_tag(&cracking, &mut tag);
+        assert_eq!(breaker_of(&tag), (4, 607, Some([2, 8, 0])));
+        let mut stale = Compound::from([(BREAKING.into(), Tag::IntArray(vec![9, 9, 9]))]);
+        breaker_tag(&drill::Breaker::default(), &mut stale);
+        assert!(!stale.contains_key(&BREAKING.into()));
+        assert_eq!(breaker_of(&Compound::new()), (0, 0, None));
     }
 }

@@ -230,11 +230,13 @@ The drill and the sideways saw break the block in front of them through
   each at its block's middle flying on along the saw's facing by `distance / 20`
   (`dropItemFromCutTree`, :495). `canBreak` (:505) also asks `isSawable` (:510): not saplings;
   logs, leaves, roots, bamboo, the solid crops, cactus, sugar cane, kelp and chorus.
-- `write` and `read` (:59) save `Progress` and `NextTick`; `invalidate` (:78) clears the cracks of
+- `write` and `read` (:59) save `Progress`, `NextTick` and `Breaking`; `invalidate` (:78) clears
+  the cracks of
   a breaker that had progress.
 
 The comparison reads a breaker's `Progress` and `NextTick` (`breaking`) and the cracks it last
-asked the level to show at the block (`cracks`: 1.21.1 keeps no crack map on the server).
+asked the level to show at the block (`cracks`: 1.21.1 keeps no crack map on the server); after a
+reload, from the fields its `read` restored, as the Java side does.
 
 Around the breakers the driver keeps the game's own rules, each as the server ran it on a fixture
 (`engine/vanilla.rs`): a leaf's `distance` (1 beside a log, else the least around it one further,
@@ -267,9 +269,10 @@ rule off from its tick to the case's end; the server puts its own rule back afte
 Cases in `cases/`: `breaking-saw-upward`, `breaking-drill-unbreakable`, `breaking-drill-water`,
 `breaking-mushroom-skins`, `breaking-leaf-distances`, `breaking-sand-falls`,
 `breaking-sand-column-pull`, `breaking-first-look`, `breaking-neighbour-arm`,
-`breaking-saw-rearm`, `breaking-placed-16`, `breaking-placed-64`, `breaking-cracks-after-removal`.
-Every history where a breaker breaks a block differed from Java by rows of the tables below, so
-those histories are in the two families, and shrunk in the cases that pin each fix.
+`breaking-saw-rearm`, `breaking-placed-16`, `breaking-placed-64`, `breaking-cracks-after-removal`,
+`breaking-reload-mid`. Every history where a breaker breaks a block differed from Java by rows of
+the tables below, so those histories are in the two families, and shrunk in the cases that pin
+each fix.
 
 ## Port differences found
 
@@ -347,8 +350,8 @@ A depot merges nothing into its stack (`DepotBehaviour.allowMerge`, set only by
 `enableMerging`), so a basin spouting into one holds its second result at the spout until the
 first leaves it.
 
-Fixed after the breaking families found them (#384, #385), each with an engine test carrying
-Create's numbers and a case in `cases/`:
+Fixed after the breaking families found them (#384, #385, #386), each with an engine test
+carrying Create's numbers and a case in `cases/`:
 
 | Case | Java | Port before | Deciding Java |
 | --- | --- | --- | --- |
@@ -356,13 +359,13 @@ Create's numbers and a case in `cases/`:
 | `breaking-neighbour-arm` | A drill beside any block change looks two ticks later: a stone arriving at tick 42 is cracked from 44 | Waited for its next lazy tick (46) | `DrillBlock.java:80-84` |
 | `breaking-saw-rearm` | An idle saw sets itself to 1 every tick, so it looks again two ticks after a break or an arrival | Looked again at its lazy ticks only | `SawBlockEntity.java:170-173` |
 | `breaking-cracks-after-removal` | A drill removed at 21 while it cracks takes its cracks along | They stayed to the end of the case | `BlockBreakingKineticBlockEntity.java:78-83` |
+| `breaking-reload-mid` | A reload at 21 keeps `Progress`, `NextTick` and `Breaking`, and the block drops at tick 31 | Started over (tick 22: 0 and 0 where Java holds 1 and 607), and dropped at 39 | `BlockBreakingKineticBlockEntity.java:59-76` |
 
 Open, found with the breaking families (a seed reproduces each with `fuzz gen <seed>` and the
 lane; `breaking/drill` unless said):
 
 | Difference | Java | Port | Deciding Java | Port code |
 | --- | --- | --- | --- | --- |
-| Reload forgets progress (1344) | A reload at 21 keeps `Progress` and `NextTick` | Starts over (tick 22: 0 and 0 where Java holds 1 and 607) | `BlockBreakingKineticBlockEntity.java:59-76` | `engine/src/world.rs:470`, `:2377` |
 | Lazy tick stopped | A stopped breaker's lazy ticks stay on its block entity's clock (66, 77, 88 after its restart) | Its counter counts turning ticks only (70, 81, 92); no lane history runs long enough to show it | `SmartBlockEntity.java:74-86` | `glue/processing/saw.rs:41`, `:73`; `engine/src/world.rs:2690-2696` |
 
 With Java's arming, reload and crack clearing laid over the port's engine, a throwaway driver
