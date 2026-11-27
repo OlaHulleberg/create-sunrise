@@ -1594,7 +1594,7 @@ fn prune_held_tanks<T>(
 }
 
 /// Prunes refused fluid-tank cells from `HELD` for contraption `key`.
-pub(super) fn drop_refused_tanks(
+pub(crate) fn drop_refused_tanks(
     dim: usize,
     key: [i32; 3],
     origin: [i32; 3],

@@ -65,8 +65,40 @@ pub fn expect(
     train: u32,
     car: usize,
     place: impl Fn([i32; 3]) -> [i32; 3],
+    planned: impl Fn([i32; 3]) -> bool,
 ) {
-    actors::expect_back(lv, key(train, car), place, |_| true);
+    actors::expect_back(lv, key(train, car), place, planned);
+}
+
+/// Carriage `car` of train `train` assembled with the cells in `refused` (world positions, its
+/// blocks at `origin` plus their offsets) left standing: what it carried for them is dropped from
+/// `blocks`, its controls and glue, and its held tanks.
+pub fn drop_refused(
+    dim: usize,
+    train: u32,
+    car: usize,
+    origin: [i32; 3],
+    refused: &std::collections::HashSet<[i32; 3]>,
+    blocks: &mut Vec<([i32; 3], u32)>,
+) {
+    if refused.is_empty() {
+        return;
+    }
+    let k = key(train, car);
+    let had_extras = EXTRAS.with_borrow_mut(|m| {
+        let Some(c) = m.get_mut(&(dim, k)) else {
+            return false;
+        };
+        crate::glue::contraptions::drop_refused(origin, refused, blocks, Some(c));
+        if c.glue.is_empty() && c.controls.is_empty() {
+            m.remove(&(dim, k));
+        }
+        true
+    });
+    if !had_extras {
+        crate::glue::contraptions::drop_refused(origin, refused, blocks, None);
+    }
+    actors::drop_refused_tanks(dim, k, origin, refused);
 }
 
 /// A carriage taken apart: its items go back into its storage blocks, each now at
@@ -277,5 +309,72 @@ pub fn tick_interfaces(lv: &mut ServerLevel<'_>) {
             });
             break;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use create_engine::actors::Controls;
+    use std::collections::HashSet;
+
+    fn controls(filter: &str, disabled: bool) -> Controls {
+        Controls {
+            filter: Some(filter.to_owned()),
+            disabled,
+            powered: false,
+        }
+    }
+
+    fn carried() -> Carried {
+        let mut c = Carried {
+            controls: vec![
+                ([0, 0, 0], controls("a", false)),
+                ([1, 0, 0], controls("b", true)),
+            ],
+            ..Carried::default()
+        };
+        let all: Vec<Controls> = c.controls.iter().map(|k| k.1.clone()).collect();
+        create_engine::actors::start_moving(&mut c, &all);
+        c
+    }
+
+    #[test]
+    fn drop_refused_prunes_blocks_controls_and_recomputes_disabled() {
+        let (dim, train, car, origin) = (0, 7, 1, [10, 64, 20]);
+        let k = key(train, car);
+        keep_extras(dim, k, carried());
+        assert_eq!(
+            EXTRAS.with_borrow(|m| m[&(dim, k)].disabled.clone()),
+            vec![Some("b".to_owned())]
+        );
+        let mut blocks = vec![([0, 0, 0], 1), ([1, 0, 0], 2), ([2, 0, 0], 3)];
+
+        drop_refused(
+            dim,
+            train,
+            car,
+            origin,
+            &HashSet::from([[11, 64, 20]]),
+            &mut blocks,
+        );
+        assert_eq!(blocks, vec![([0, 0, 0], 1), ([2, 0, 0], 3)]);
+        EXTRAS.with_borrow(|m| {
+            let c = &m[&(dim, k)];
+            assert_eq!(c.controls, vec![([0, 0, 0], controls("a", false))]);
+            assert!(c.disabled.is_empty());
+        });
+
+        drop_refused(
+            dim,
+            train,
+            car,
+            origin,
+            &HashSet::from([[10, 64, 20]]),
+            &mut blocks,
+        );
+        assert_eq!(blocks, vec![([2, 0, 0], 3)]);
+        assert!(EXTRAS.with_borrow(|m| !m.contains_key(&(dim, k))));
+        forget();
     }
 }
