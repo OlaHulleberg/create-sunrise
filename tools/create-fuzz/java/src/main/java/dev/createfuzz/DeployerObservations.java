@@ -3,7 +3,6 @@ package dev.createfuzz;
 import com.google.gson.JsonArray;
 import com.google.gson.JsonElement;
 import com.google.gson.JsonNull;
-import com.google.gson.JsonNull;
 import com.google.gson.JsonObject;
 import com.google.gson.JsonPrimitive;
 import com.simibubi.create.content.kinetics.deployer.DeployerBlockEntity;
