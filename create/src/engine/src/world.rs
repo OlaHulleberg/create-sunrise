@@ -3862,6 +3862,28 @@ impl CreateWorld {
         self.dims[dim].belt_quiet.insert(pos);
     }
 
+    /// A block a refused assembly carried out of the world but never removed: what carrying it
+    /// staged or silenced is undone and its block entity is read back as if it had just been
+    /// placed (no `block_changed` comes for a block that never left).
+    pub fn restore_standing(&mut self, dim: usize, pos: [i32; 3], state: u32) {
+        let Some((block, _)) = self.table.get(state) else {
+            return;
+        };
+        let d = &mut self.dims[dim];
+        d.belt_quiet.remove(&pos);
+        if !d.displays.forgotten.is_empty() {
+            d.displays.forgotten.retain(|p| *p != pos);
+        }
+        if block == Block::FluidTank {
+            d.tanks.place(pos);
+            self.tanks_touched(dim, true);
+        }
+        self.place(dim, pos, state, true);
+        if block == Block::GantryCarriage {
+            self.dims[dim].gantry_assemble.retain(|p| *p != pos);
+        }
+    }
+
     /// `BeltBlockEntity.destroy` while the slicer sets the clicked START to air: the block
     /// entity is still the controller, so `getInventory().ejectAll()` takes every item off the
     /// belt and drops it where it is (against the `beltLength` the slicer has just zeroed).
@@ -11992,7 +12014,10 @@ mod tests {
     }
 
     /// The states the carried-data tests place, ids from 10, in this order.
-    const CARRIED: [u32; 13] = [10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22];
+    const CARRIED: [u32; 32] = [
+        10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32,
+        33, 34, 35, 36, 37, 38, 39, 40, 41,
+    ];
     const CARRIED_TANK: u32 = CARRIED[0];
     const CARRIED_BRASS: u32 = CARRIED[1];
     const CARRIED_ARM: u32 = CARRIED[2];
@@ -12006,6 +12031,12 @@ mod tests {
     const CARRIED_MOTOR: u32 = CARRIED[10];
     const CARRIED_SHAFT: u32 = CARRIED[11];
     const CARRIED_EXTENDER: u32 = CARRIED[12];
+    const CARRIED_DEPLOYER: u32 = CARRIED[13];
+    const CARRIED_FLUID_TANK: u32 = CARRIED[14];
+    const CARRIED_BELT_START: u32 = CARRIED[15];
+    const CARRIED_BELT_END: u32 = CARRIED[16];
+    const CARRIED_NIXIE: u32 = CARRIED[24];
+    const CARRIED_GANTRY: u32 = CARRIED[31];
 
     fn carried_world() -> CreateWorld {
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
@@ -12041,6 +12072,39 @@ mod tests {
                     ("powering", "true"),
                 ],
             ),
+            ("create:deployer", vec![("facing", "north")]),
+            ("create:fluid_tank", vec![]),
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", "start"),
+                ],
+            ),
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", "end"),
+                ],
+            ),
+            ("create:smart_chute", vec![]),
+            ("create:spout", vec![]),
+            ("create:item_drain", vec![]),
+            ("create:smart_fluid_pipe", vec![]),
+            ("create:basin", vec![("facing", "down")]),
+            ("create:mechanical_saw", vec![("facing", "up")]),
+            ("create:mechanical_crafter", vec![("facing", "north")]),
+            ("create:nixie_tube", vec![]),
+            ("create:display_board", vec![]),
+            ("create:display_link", vec![("facing", "north")]),
+            ("create:copper_backtank", vec![("facing", "north")]),
+            ("create:linear_chassis", vec![("axis", "x")]),
+            ("create:contraption_controls", vec![("facing", "north")]),
+            ("create:mechanical_roller", vec![("facing", "north")]),
+            ("create:gantry_carriage", vec![("facing", "north")]),
         ];
         CreateWorld::new(StateTable::new(
             10,
@@ -12340,5 +12404,709 @@ mod tests {
         w.block_changed(0, shaft(pending), 0, CARRIED_SHAFT);
         w.tick(0, &mut Vec::new());
         assert_eq!(w.speed(0, shaft(pending)), Some(128.0));
+    }
+
+    /// What a refused assembly's rollback leaves behind must be nothing: every table carrying
+    /// stages into or silences, in dimension 0.
+    fn assert_nothing_staged(w: &CreateWorld) {
+        let d = &w.dims[0];
+        assert!(d.belt_quiet.is_empty());
+        assert!(d.displays.forgotten.is_empty());
+        assert!(d.gantry_assemble.is_empty());
+        assert!(d.tanks.arriving.is_empty());
+        assert!(d.deployer_saved.is_empty());
+        assert!(d.tank_saved.is_empty());
+        assert!(d.belt_saved.is_empty());
+        assert!(d.brass_saved.is_empty());
+        assert!(d.chute_saved.is_empty());
+        assert!(d.arms.saved.is_empty());
+        assert!(d.ejector_saved.is_empty());
+        assert!(d.link_saved.is_empty());
+        assert!(d.diode_saved.is_empty());
+        assert!(d.burner_saved.is_empty());
+        assert!(d.backtank_saved.is_empty());
+        assert!(d.plumbing.creative_saved.is_empty());
+        assert!(d.creative_tank_saved.is_empty());
+        assert!(!d.detectors.has_saved());
+    }
+
+    /// One engine-backed kind of block the contraptions carry: its state, what carrying it
+    /// takes out of the engine (`take`), what releasing puts back (`back`, as `carry_in` does),
+    /// and whether that is what the engine holds then (`present`).
+    struct Audited {
+        name: &'static str,
+        state: u32,
+        take: fn(&mut CreateWorld, [i32; 3]),
+        back: fn(&mut CreateWorld, [i32; 3]),
+        present: fn(&CreateWorld, [i32; 3]) -> bool,
+    }
+
+    const IRON: &str = "minecraft:iron_ingot";
+
+    fn link_key() -> crate::link::Key {
+        ("first".to_string(), "second".to_string())
+    }
+
+    fn iron_filter() -> crate::filter::Filter {
+        crate::filter::Filter::item(IRON)
+    }
+
+    fn audited() -> Vec<Audited> {
+        use crate::tank::Fluid;
+        vec![
+            Audited {
+                name: "creative fluid tank",
+                state: CARRIED[0],
+                take: |_, _| {},
+                back: |w, p| w.read_creative_tank(0, p, Some(Fluid::Water), None),
+                present: |w, p| w.dims[0].plumbing.creative.get(&p) == Some(&Some(Fluid::Water)),
+            },
+            Audited {
+                name: "brass tunnel",
+                state: CARRIED[1],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.brass.remove(&p);
+                    d.tunnel_filters.retain(|(q, _), _| *q != p);
+                },
+                back: |w, p| {
+                    let saved = crate::tunnel::SavedBrass {
+                        stack: Some((IRON.to_string(), 3)),
+                        ..Default::default()
+                    };
+                    w.read_brass(0, p, saved);
+                },
+                present: |w, p| {
+                    w.dims[0].brass.get(&p).and_then(|b| b.stack.clone())
+                        == Some((IRON.to_string(), 3))
+                },
+            },
+            Audited {
+                name: "mechanical arm",
+                state: CARRIED[2],
+                take: |w, p| {
+                    let _ = w.dims[0].arms.removed(p);
+                },
+                back: |w, p| {
+                    let mut arm = crate::arm::Arm::new(false);
+                    arm.held = Some((IRON.to_string(), 2));
+                    arm.inputs.push(crate::arm::Point {
+                        pos: [1, 8, 3],
+                        kind: crate::arm::Kind::Depot,
+                        facing: None,
+                    });
+                    w.dims[0].arms.read(p, arm);
+                },
+                present: |w, p| {
+                    let arms = &w.dims[0].arms;
+                    arms.arms.get(&p).and_then(|a| a.held.clone()) == Some((IRON.to_string(), 2))
+                        && arms.watch.get(&[1, 8, 3]).map(Vec::as_slice) == Some(&[p][..])
+                },
+            },
+            Audited {
+                name: "weighted ejector",
+                state: CARRIED[3],
+                take: |_, _| {},
+                back: |w, p| {
+                    let e = crate::ejector::Ejector {
+                        max_stack: 3,
+                        ..Default::default()
+                    };
+                    w.read_ejector(0, p, e);
+                },
+                present: |w, p| w.dims[0].ejectors.get(&p).is_some_and(|e| e.max_stack == 3),
+            },
+            Audited {
+                name: "redstone link",
+                state: CARRIED[4],
+                take: |w, p| {
+                    let changed = w.dims[0].links.remove(p);
+                    w.dims[0].link_changes.extend(changed);
+                },
+                back: |w, p| w.read_link(0, p, link_key(), 7),
+                present: |w, p| {
+                    w.dims[0]
+                        .links
+                        .links
+                        .get(&p)
+                        .is_some_and(|l| l.key == link_key() && l.transmit == 7)
+                },
+            },
+            Audited {
+                name: "pulse repeater",
+                state: CARRIED[5],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.diodes.remove(&p);
+                    d.diode_running.retain(|q| *q != p);
+                },
+                back: |w, p| w.read_diode(0, p, 1, 9),
+                present: |w, p| {
+                    w.dims[0]
+                        .diodes
+                        .get(&p)
+                        .is_some_and(|x| (x.state, x.max) == (1, 9))
+                },
+            },
+            Audited {
+                name: "pulse extender",
+                state: CARRIED[12],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.diodes.remove(&p);
+                    d.diode_running.retain(|q| *q != p);
+                },
+                back: |w, p| w.read_diode(0, p, 2, 10),
+                present: |w, p| w.dims[0].diode_running == [p],
+            },
+            Audited {
+                name: "analog lever",
+                state: CARRIED[6],
+                take: |w, p| {
+                    let l = &mut w.dims[0].levers;
+                    l.levers.remove(&p);
+                    l.due.retain(|(_, q)| *q != p);
+                },
+                back: |w, p| {
+                    w.dims[0].levers.read(
+                        p,
+                        crate::lever::Lever {
+                            state: 5,
+                            due: None,
+                        },
+                    );
+                },
+                present: |w, p| w.dims[0].levers.state(p) == 5,
+            },
+            Audited {
+                name: "smart observer",
+                state: CARRIED[7],
+                take: |w, p| {
+                    let d = &mut w.dims[0].detectors;
+                    d.removed(p);
+                    d.dropped.retain(|(q, _)| *q != p);
+                },
+                back: |w, p| {
+                    let o = crate::observe::Observer {
+                        filter: Some(iron_filter()),
+                        ..Default::default()
+                    };
+                    w.dims[0].detectors.read_observer(p, o);
+                },
+                present: |w, p| w.dims[0].detectors.filter(p) == Some(&iron_filter()),
+            },
+            Audited {
+                name: "threshold switch",
+                state: CARRIED[8],
+                take: |w, p| {
+                    let d = &mut w.dims[0].detectors;
+                    d.removed(p);
+                    d.dropped.retain(|(q, _)| *q != p);
+                },
+                back: |w, p| {
+                    let s = crate::observe::Switch {
+                        on_above: 200,
+                        ..Default::default()
+                    };
+                    w.dims[0].detectors.read_switch(p, s);
+                },
+                present: |w, p| {
+                    w.dims[0]
+                        .detectors
+                        .switches
+                        .get(&p)
+                        .is_some_and(|s| s.on_above == 200)
+                },
+            },
+            Audited {
+                name: "blaze burner",
+                state: CARRIED[9],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.burners.remove(&p);
+                    d.burning.retain(|q| *q != p);
+                },
+                back: |w, p| {
+                    let fed = crate::burner::Burner {
+                        fuel: crate::burner::Fuel::from_index(1),
+                        remaining: 400,
+                        ..crate::burner::Burner::default()
+                    };
+                    w.read_burner(0, p, fed);
+                },
+                present: |w, p| {
+                    w.dims[0]
+                        .burners
+                        .get(&p)
+                        .is_some_and(|b| b.remaining == 400)
+                },
+            },
+            Audited {
+                name: "creative motor",
+                state: CARRIED[10],
+                take: |w, p| {
+                    let _ = w.take_motor_setting(0, p);
+                },
+                back: |w, p| w.read_motor_setting(0, p, 64),
+                present: |w, p| w.motor_setting(0, p) == Some(64.0),
+            },
+            Audited {
+                name: "deployer",
+                state: CARRIED_DEPLOYER,
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    let mut hand = d.deployers.remove(&p).unwrap();
+                    hand.held = Some((IRON.to_string(), 5));
+                    d.deploying.retain(|q| *q != p);
+                    d.deployer_saved_insert(p, hand);
+                },
+                back: |_, _| {},
+                present: |w, p| {
+                    w.dims[0].deployers.get(&p).and_then(|d| d.held.clone())
+                        == Some((IRON.to_string(), 5))
+                },
+            },
+            Audited {
+                name: "smart chute",
+                state: CARRIED[17],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.chute_filters.remove(&p);
+                    d.filter_amounts.remove(&p);
+                },
+                back: |w, p| {
+                    w.dims[0].chute_filters.insert(p, iron_filter());
+                },
+                present: |w, p| w.dims[0].chute_filters.get(&p) == Some(&iron_filter()),
+            },
+            Audited {
+                name: "spout",
+                state: CARRIED[18],
+                take: |w, p| {
+                    w.dims[0].spouts.remove(&p);
+                },
+                back: |w, p| {
+                    let s = crate::spout::Spout {
+                        fluid: Some((Fluid::Water, 500)),
+                        processing: -1,
+                    };
+                    w.dims[0].spouts.insert(p, s);
+                },
+                present: |w, p| {
+                    w.dims[0].spouts.get(&p).and_then(|s| s.fluid) == Some((Fluid::Water, 500))
+                },
+            },
+            Audited {
+                name: "item drain",
+                state: CARRIED[19],
+                take: |w, p| {
+                    w.dims[0].drains.remove(&p);
+                },
+                back: |w, p| {
+                    let d = crate::drain::Drain {
+                        fluid: Some((Fluid::Lava, 250)),
+                        ..Default::default()
+                    };
+                    w.dims[0].drains.insert(p, d);
+                },
+                present: |w, p| {
+                    w.dims[0].drains.get(&p).and_then(|d| d.fluid) == Some((Fluid::Lava, 250))
+                },
+            },
+            Audited {
+                name: "smart fluid pipe",
+                state: CARRIED[20],
+                take: |w, p| {
+                    w.dims[0].plumbing.filters.remove(&p);
+                },
+                back: |w, p| {
+                    let f = crate::fluids::SmartFilter {
+                        item: "minecraft:water_bucket".to_string(),
+                        fluid: Some(Fluid::Water),
+                    };
+                    w.dims[0].plumbing.filters.insert(p, f);
+                },
+                present: |w, p| {
+                    w.dims[0]
+                        .plumbing
+                        .filters
+                        .get(&p)
+                        .is_some_and(|f| f.item == "minecraft:water_bucket")
+                },
+            },
+            Audited {
+                name: "basin",
+                state: CARRIED[21],
+                take: |w, p| {
+                    w.dims[0].basin_fluids.remove(&p);
+                },
+                back: |w, p| {
+                    let t = crate::basin::Tanks {
+                        input: [Some((Fluid::Water, 500)), None],
+                        output: [None, None],
+                    };
+                    w.dims[0].basin_fluids.insert(p, t);
+                },
+                present: |w, p| {
+                    w.dims[0]
+                        .basin_fluids
+                        .get(&p)
+                        .is_some_and(|t| t.input[0] == Some((Fluid::Water, 500)))
+                },
+            },
+            Audited {
+                name: "mechanical saw",
+                state: CARRIED[22],
+                take: |w, p| {
+                    w.dims[0].saws.remove(&p);
+                },
+                back: |w, p| {
+                    let s = crate::saw::Saw {
+                        slots: vec![(IRON.to_string(), 3)],
+                        ..Default::default()
+                    };
+                    w.dims[0].saws.insert(p, s);
+                },
+                present: |w, p| {
+                    w.dims[0].saws.get(&p).is_some_and(|s| s.slots.len() == 1)
+                        && w.dims[0].removed_inventories.is_empty()
+                },
+            },
+            Audited {
+                name: "mechanical crafter",
+                state: CARRIED[23],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.crafter_covers.remove(&p);
+                    d.crafter_inputs.remove(&p);
+                    d.crafters.remove(&p);
+                    d.crafting.retain(|q| *q != p);
+                },
+                back: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.crafter_covers.insert(p);
+                    let input = crate::crafter_input::Input {
+                        controller: false,
+                        data: vec![[0, 1, 0]],
+                    };
+                    d.crafter_inputs.insert(p, input);
+                    let crafter = crate::crafter::Crafter {
+                        count_down: 7,
+                        ..Default::default()
+                    };
+                    d.crafters.insert(p, crafter);
+                },
+                present: |w, p| {
+                    let d = &w.dims[0];
+                    d.crafter_covers.contains(&p)
+                        && d.crafter_inputs
+                            .get(&p)
+                            .is_some_and(|i| i.data == [[0, 1, 0]])
+                        && d.crafters.get(&p).is_some_and(|c| c.count_down == 7)
+                },
+            },
+            Audited {
+                name: "nixie tube",
+                state: CARRIED_NIXIE,
+                take: |w, p| {
+                    let block = w.block_at(0, p).unwrap();
+                    w.dims[0].displays.removed(p, block);
+                },
+                back: |w, p| {
+                    w.dims[0].displays.nixies.get_mut(&p).unwrap().custom = Some("HI".into());
+                },
+                present: |w, p| {
+                    w.dims[0]
+                        .displays
+                        .nixies
+                        .get(&p)
+                        .map(|n| n.custom.as_deref())
+                        == Some(Some("HI"))
+                },
+            },
+            Audited {
+                name: "display board",
+                state: CARRIED[25],
+                take: |w, p| {
+                    let block = w.block_at(0, p).unwrap();
+                    w.dims[0].displays.removed(p, block);
+                },
+                back: |w, p| w.dims[0].displays.boards.get_mut(&p).unwrap().x_size = 3,
+                present: |w, p| {
+                    w.dims[0]
+                        .displays
+                        .boards
+                        .get(&p)
+                        .is_some_and(|b| b.x_size == 3)
+                },
+            },
+            Audited {
+                name: "display link",
+                state: CARRIED[26],
+                take: |w, p| {
+                    let block = w.block_at(0, p).unwrap();
+                    w.dims[0].displays.removed(p, block);
+                },
+                back: |w, p| w.dims[0].displays.links.get_mut(&p).unwrap().target_line = 2,
+                present: |w, p| {
+                    w.dims[0]
+                        .displays
+                        .links
+                        .get(&p)
+                        .is_some_and(|l| l.target_line == 2)
+                },
+            },
+            Audited {
+                name: "copper backtank",
+                state: CARRIED[27],
+                take: |w, p| {
+                    w.dims[0].backtanks.remove(&p);
+                },
+                back: |w, p| {
+                    let b = crate::equipment::Backtank {
+                        air: 123,
+                        timer: 4,
+                        capacity: 900,
+                    };
+                    w.dims[0].backtanks.insert(p, b);
+                },
+                present: |w, p| w.dims[0].backtanks.get(&p).is_some_and(|b| b.air == 123),
+            },
+            Audited {
+                name: "linear chassis",
+                state: CARRIED[28],
+                take: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.chassis_range.remove(&p);
+                    d.scroll_options.remove(&p);
+                },
+                back: |w, p| {
+                    let d = &mut w.dims[0];
+                    d.chassis_range.insert(p, 5);
+                    d.scroll_options.insert(p, 1);
+                },
+                present: |w, p| {
+                    let d = &w.dims[0];
+                    d.chassis_range.get(&p) == Some(&5) && d.scroll_options.get(&p) == Some(&1)
+                },
+            },
+            Audited {
+                name: "contraption controls",
+                state: CARRIED[29],
+                take: |w, p| {
+                    w.dims[0].controls.remove(&p);
+                },
+                back: |w, p| {
+                    let c = crate::actors::Controls {
+                        disabled: true,
+                        ..Default::default()
+                    };
+                    w.dims[0].controls.insert(p, c);
+                },
+                present: |w, p| w.dims[0].controls.get(&p).is_some_and(|c| c.disabled),
+            },
+            Audited {
+                name: "mechanical roller",
+                state: CARRIED[30],
+                take: |w, p| {
+                    w.dims[0].rollers.remove(&p);
+                },
+                back: |w, p| {
+                    let r = (
+                        Some("minecraft:dirt".to_string()),
+                        crate::actors::RollingMode::WideFill,
+                    );
+                    w.dims[0].rollers.insert(p, r);
+                },
+                present: |w, p| {
+                    w.dims[0].rollers.get(&p)
+                        == Some(&(
+                            Some("minecraft:dirt".to_string()),
+                            crate::actors::RollingMode::WideFill,
+                        ))
+                },
+            },
+            Audited {
+                name: "gantry carriage",
+                state: CARRIED_GANTRY,
+                take: |_, _| {},
+                back: |_, _| {},
+                present: |w, _| w.dims[0].gantry_assemble.is_empty(),
+            },
+        ]
+    }
+
+    /// `restore_standing` and the release of what carrying took undo it for every engine-backed
+    /// block kind (the fluid tank and belt are cells of several blocks: their own tests).
+    #[test]
+    fn restore_standing_undoes_what_carrying_took_from_every_engine_backed_block() {
+        for kind in audited() {
+            let mut w = carried_world();
+            let p = [1, 8, 1];
+            w.block_changed(0, p, 0, kind.state);
+            (kind.take)(&mut w, p);
+            w.restore_standing(0, p, kind.state);
+            (kind.back)(&mut w, p);
+            assert!((kind.present)(&w, p), "{}", kind.name);
+            assert_nothing_staged(&w);
+        }
+    }
+
+    #[test]
+    fn a_standing_deployer_keeps_the_stack_in_its_hand() {
+        let mut w = carried_world();
+        let p = [1, 8, 1];
+        w.block_changed(0, p, 0, CARRIED_DEPLOYER);
+        let mut hand = w.dims[0].deployers.remove(&p).unwrap();
+        hand.held = Some((IRON.to_string(), 5));
+        w.deployer_saved_insert(p, hand);
+        w.restore_standing(0, p, CARRIED_DEPLOYER);
+        assert_eq!(w.deployer_saved_remove(p), None);
+        assert_eq!(
+            w.dims[0].deployers[&p].held,
+            Some((IRON.to_string(), 5)),
+            "the hand was not given back, so nothing is left for the release to drop"
+        );
+    }
+
+    /// Both members of a tank stand, one is cleared and put back before the other is restored, or
+    /// neither left: the fluid is whole in the one tank each time.
+    #[test]
+    fn a_fluid_tank_of_standing_and_cleared_cells_keeps_its_fluid_in_one_tank() {
+        use crate::tank::{Fluid, Tank};
+        let (controller, top) = ([1, 8, 1], [1, 9, 1]);
+        for (cleared, standing) in [
+            (vec![], vec![controller, top]),
+            (vec![top], vec![controller]),
+            (vec![controller], vec![top]),
+        ] {
+            let mut w = carried_world();
+            w.block_changed(0, controller, 0, CARRIED_FLUID_TANK);
+            w.block_changed(0, top, 0, CARRIED_FLUID_TANK);
+            let water = Tank {
+                fluid: Some(Fluid::Water),
+                amount: 12000,
+            };
+            w.dims[0].tanks.get_mut(controller).unwrap().1.tank = water;
+            // Carrying: both leave their tank, the controller with it, and what waits is staged.
+            let multi = w.dims[0].tanks.take(controller).unwrap();
+            assert_eq!(w.dims[0].tanks.take(top), None);
+            let staged = crate::tank::restore_mounted(multi, controller, vec![controller, top]);
+            w.dims[0].tanks.arriving.extend(staged);
+            // Rolling back: the cleared cells are put back (a block change), then the rest
+            // restored.
+            for &p in &cleared {
+                w.block_changed(0, p, CARRIED_FLUID_TANK, 0);
+                w.block_changed(0, p, 0, CARRIED_FLUID_TANK);
+            }
+            for &p in &standing {
+                w.restore_standing(0, p, CARRIED_FLUID_TANK);
+            }
+            let (c, tank) = w.dims[0].tanks.get(top).unwrap();
+            assert_eq!((c, tank.tank), (controller, water), "{cleared:?}");
+            assert_eq!(w.dims[0].tanks.get(controller).unwrap().0, controller);
+            assert_nothing_staged(&w);
+        }
+    }
+
+    /// Carries a two-segment belt and its items out as the glue does: the belt taken, each
+    /// segment's removal silenced.
+    fn carry_belt_out(w: &mut CreateWorld) -> crate::belt::Inventory {
+        let (controller, belt) = w.take_belt(0, [0, 8, 0]).unwrap();
+        assert_eq!(controller, [0, 8, 0]);
+        for p in [[0, 8, 0], [0, 8, 1]] {
+            w.remove_belt_quietly(0, p);
+        }
+        belt.items
+    }
+
+    fn placed_belt() -> (CreateWorld, [[i32; 3]; 2]) {
+        let mut w = carried_world();
+        let (start, end) = ([0, 8, 0], [0, 8, 1]);
+        w.block_changed(0, start, 0, CARRIED_BELT_START);
+        w.block_changed(0, end, 0, CARRIED_BELT_END);
+        transport_walk(&mut w);
+        let mut item = crate::belt::Item::new(IRON, 15, 0, false);
+        item.position = 0.25;
+        w.read_belt_items(
+            0,
+            start,
+            crate::belt::Inventory::from_saved(vec![item], false),
+        );
+        (w, [start, end])
+    }
+
+    /// A belt whose segments all stand, or one whose controller was cleared and put back while
+    /// the end stood, forms again with its items, and a later break is no longer silenced.
+    #[test]
+    fn a_standing_belt_forms_again_and_breaks_normally_afterwards() {
+        for cleared_start in [false, true] {
+            let (mut w, [start, end]) = placed_belt();
+            let items = carry_belt_out(&mut w);
+            if cleared_start {
+                w.block_changed(0, start, CARRIED_BELT_START, 0);
+                w.block_changed(0, start, 0, CARRIED_BELT_START);
+            } else {
+                w.restore_standing(0, start, CARRIED_BELT_START);
+            }
+            w.restore_standing(0, end, CARRIED_BELT_END);
+            w.read_belt_items(0, start, items);
+            transport_walk(&mut w);
+            assert_eq!(w.dims[0].belts[&start].chain, [start, end]);
+            assert_eq!(w.dims[0].belts[&start].items.items.len(), 1);
+            assert_nothing_staged(&w);
+            w.block_changed(0, end, CARRIED_BELT_END, 0);
+            assert_eq!(w.dims[0].belt_drops.len(), 1, "the break is not silenced");
+            assert!(w.dims[0].belts.is_empty());
+        }
+    }
+
+    #[test]
+    fn a_standing_carriage_leaves_another_queued_carriage_alone() {
+        let mut w = carried_world();
+        let (p, other) = ([1, 8, 1], [9, 9, 9]);
+        w.block_changed(0, p, 0, CARRIED_GANTRY);
+        w.dims[0].gantry_assemble = vec![p, other];
+        w.restore_standing(0, p, CARRIED_GANTRY);
+        assert_eq!(w.dims[0].gantry_assemble, [other]);
+    }
+
+    #[test]
+    fn a_standing_display_is_not_forgotten_but_another_stays_so() {
+        let mut w = carried_world();
+        let (p, other) = ([1, 8, 1], [9, 9, 9]);
+        w.block_changed(0, p, 0, CARRIED_NIXIE);
+        w.dims[0].displays.forgotten = vec![p, other];
+        w.restore_standing(0, p, CARRIED_NIXIE);
+        assert_eq!(w.dims[0].displays.forgotten, [other]);
+    }
+
+    #[test]
+    fn a_standing_motor_and_link_work_again_after_their_data_is_read_back() {
+        let mut w = carried_world();
+        let (motor, shaft) = ([1, 64, 1], [2, 64, 1]);
+        w.block_changed(0, motor, 0, CARRIED_MOTOR);
+        w.block_changed(0, shaft, 0, CARRIED_SHAFT);
+        w.read_motor_setting(0, motor, 64);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.take_motor_setting(0, motor), Some(64));
+        w.restore_standing(0, motor, CARRIED_MOTOR);
+        w.read_motor_setting(0, motor, 64);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, shaft), Some(64.0));
+        let key = ("first".to_string(), "second".to_string());
+        let (link, rx) = ([1, 8, 1], [2, 8, 1]);
+        w.block_changed(0, link, 0, CARRIED_LINK);
+        let receiver = crate::link::Link {
+            key: key.clone(),
+            receiver: true,
+            ..Default::default()
+        };
+        w.dims[0].links.add(rx, receiver);
+        let changed = w.dims[0].links.remove(link);
+        w.dims[0].link_changes.extend(changed);
+        w.restore_standing(0, link, CARRIED_LINK);
+        w.read_link(0, link, key, 7);
+        assert_eq!(w.dims[0].links.received(rx), 7);
     }
 }

@@ -66,16 +66,16 @@ thread_local! {
 /// a motor's speed, a burner's fuel, a link's frequency...), a deployer's hand and mode, a tank
 /// controller's fluid, or another block entity's saved data (a furnace's items, a sign's text).
 #[derive(Clone, Debug)]
-struct BlockData<T = ItemStack> {
-    slots: Vec<Option<T>>,
-    data: Option<Compound>,
-    deployer: Option<create_engine::deployer::Deployer>,
-    tank: Option<create_engine::tank::Multi>,
+pub(super) struct BlockData<T = ItemStack> {
+    pub(super) slots: Vec<Option<T>>,
+    pub(super) data: Option<Compound>,
+    pub(super) deployer: Option<create_engine::deployer::Deployer>,
+    pub(super) tank: Option<create_engine::tank::Multi>,
     /// The Create block it was, its block entity's data (but what the kinetics and the
     /// structure's drawing write again), and what the subsystems keep for it.
-    block: Option<Block>,
-    own: Option<Compound>,
-    engine: Option<Compound>,
+    pub(super) block: Option<Block>,
+    pub(super) own: Option<Compound>,
+    pub(super) engine: Option<Compound>,
 }
 
 impl<T> Default for BlockData<T> {
@@ -1302,7 +1302,7 @@ fn release_held(
 
 /// What the held-data release reads and writes of the world, so its loop runs as it is. The
 /// block entity at a position is looked up once and passed on as an [`Entity`](Self::Entity).
-trait HeldRelease<T> {
+pub(super) trait HeldRelease<T> {
     /// A block entity found in the world.
     type Entity: Copy;
     /// A deployer's hand that waited for its block at `p`, taken with what else waited there
@@ -1438,7 +1438,7 @@ fn release_held_items(
 /// would swallow the carried stacks (`Contraption.addBlocksToWorld` drops what it cannot
 /// place, `Contraption.java:1130-1141`). Looks up each entry's block entity once, and not at
 /// all for a cell not written. Returns the stacks to drop and where.
-fn release_held_data<T>(
+pub(super) fn release_held_data<T>(
     world: &mut impl HeldRelease<T>,
     list: Vec<([i32; 3], BlockData<T>)>,
     place: impl Fn([i32; 3]) -> [i32; 3],

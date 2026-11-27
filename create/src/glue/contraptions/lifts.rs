@@ -24,8 +24,8 @@ use super::super::states::{self, key};
 use super::super::world::with_world;
 use super::colliders::{self, Owner};
 use super::{
-    actors, add, clicker, create_info, dir_name, draw, found, in_click_level, state_of_text,
-    state_text, state_with, take_blocks,
+    Removal, actors, add, clear_cells, clicker, create_info, dir_name, draw, found, in_click_level,
+    put_back_blocks_with_flags, rollback_cells, state_of_text, state_text, state_with,
 };
 use create_engine::Block;
 use create_engine::actors::Carried;
@@ -37,7 +37,7 @@ use mod_api::{
     LevelHost, Registrar, StateForPlacementEvent, Tag, UseItemOnEvent,
 };
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// An elevator column's floors.
 type Floors = Vec<create_engine::elevator::Floor>;
@@ -345,6 +345,15 @@ pub(super) fn clock_hands_set(lv: &mut ServerLevel<'_>, pos: [i32; 3], index: u8
     }
 }
 
+/// Both hands' blocks, the hour hand's first.
+fn clock_blocks(hands: &create_engine::clock::Arms) -> Vec<([i32; 3], u32)> {
+    let mut all = hands.hour.clone();
+    if let Some((_, m)) = &hands.minute {
+        all.extend(m.iter().copied());
+    }
+    all
+}
+
 /// `ClockworkBearingBlockEntity.assemble`: the hour hand and the minute hand leave the world.
 fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) {
     let dim = lv.dim;
@@ -357,12 +366,15 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
         }
     };
     super::set_exception(lv, pos, None);
-    let mut all = hands.hour.clone();
-    if let Some((_, m)) = &hands.minute {
-        all.extend(m.iter().copied());
-    }
+    let all = clock_blocks(&hands);
+    let Some((air, cells)) = super::preflight_cells(lv, pos, &all) else {
+        return;
+    };
     actors::carry_storage(lv, pos, pos, &all);
-    let extras = actors::carry_extras(lv, pos, &all, |p| p == pos);
+    let mut extras = actors::carry_extras(lv, pos, &all, |p| p == pos);
+    if !super::take_or_rollback(lv, pos, pos, air, &cells, &mut extras) {
+        return;
+    }
     if !extras.controls.is_empty() || !extras.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), extras));
     }
@@ -372,10 +384,6 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
         &hands.hour,
         hands.minute.as_ref().map(|m| &m.1[..]),
     );
-    take_blocks(lv, pos, &hands.hour);
-    if let Some((_, m)) = &hands.minute {
-        take_blocks(lv, pos, m);
-    }
     let arrangement = create_engine::clock::Hands::from_index(super::option_at(dim, pos) as u8);
     let c = create_engine::lifts::RunningClock {
         clock: create_engine::clock::Clock {
@@ -597,24 +605,54 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     {
         return;
     }
-    // `removeRopes`: rope in water leaves water.
-    for j in 1..=offset {
-        let c = below(pos, j);
-        if rope_at(lv, c) == Some(true)
-            && let Some(water) = lv.host.block_state_id("minecraft:water")
-        {
-            lv.set_state(c, water, UPDATE_CLIENTS);
-        } else {
-            lv.set_air(c, UPDATE_CLIENTS);
-        }
+    let Some((air, cells)) = super::preflight_cells(lv, anchor, &p.blocks) else {
+        return;
+    };
+    let Some(ropes) = (1..=offset)
+        .map(|j| {
+            let c = below(pos, j);
+            Some((c, lv.state_num(c)?))
+        })
+        .collect::<Option<Vec<_>>>()
+    else {
+        return;
+    };
+    let wet: HashSet<[i32; 3]> = ropes
+        .iter()
+        .map(|r| r.0)
+        .filter(|c| rope_at(lv, *c) == Some(true))
+        .collect();
+    let water = lv.host.block_state_id("minecraft:water");
+    if water.is_none() && !wet.is_empty() {
+        return;
     }
+    let water = water.unwrap_or(air);
     // Its actors, storage, glue and controls ride with it (`Contraption.addBlock`).
-    let carried = actors::carry(lv, pos, anchor, &p.blocks, |_| false);
+    let mut carried = actors::carry(lv, pos, anchor, &p.blocks, |_| false);
+    if !super::take_or_rollback(lv, pos, anchor, air, &cells, &mut carried) {
+        return;
+    }
+    // `removeRopes`: rope in water leaves water.
+    if let Removal::Aborted { cleared, .. } = clear_cells(
+        &ropes,
+        |_| false,
+        |c| {
+            lv.set_state(
+                c,
+                if wet.contains(&c) { water } else { air },
+                UPDATE_CLIENTS,
+            )
+        },
+    ) {
+        // Rope and magnet have no item: one that refuses to come back is lost with nothing owed.
+        put_back_blocks_with_flags(lv, &cleared, UPDATE_CLIENTS);
+        rollback_cells(lv, pos, anchor, &cells, &[], &mut carried);
+        return;
+    }
     if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
     crate::glue::advancements::assembled(lv, pos, &p.blocks);
-    take_blocks(lv, anchor, &p.blocks);
     with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
     show_pulley(lv, pos);
     mark_unsaved(lv, pos);
@@ -1274,6 +1312,19 @@ fn elevator_doors(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     mark_unsaved(lv, pos);
 }
 
+/// An elevator's controls choose floors: none turns its kind off as it starts
+/// (`ElevatorContraption.disableActorOnStart` does nothing), and they forget their filters
+/// (`ContraptionControlsMovement.startMoving`).
+fn elevator_start_carried(carried: &mut Carried) {
+    carried.disabled.clear();
+    for a in &mut carried.actors {
+        a.disabled = false;
+    }
+    for c in &mut carried.controls {
+        c.1.filter = None;
+    }
+}
+
 /// `ElevatorPulleyBlockEntity.assemble`: the structure under the free blocks below the pulley,
 /// with exactly one redstone contact facing sideways, leaves the world; its column's redstone
 /// contacts become elevator contacts (`gatherAll`) and it is called to the floor it is at.
@@ -1320,22 +1371,18 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if conflict != Some(false) {
         return;
     }
+    let Some((air, cells)) = super::preflight_cells(lv, anchor, &blocks) else {
+        return;
+    };
     let mut carried = actors::carry(lv, pos, anchor, &blocks, |_| false);
-    // An elevator's controls choose floors: none turns its kind off as it starts
-    // (`ElevatorContraption.disableActorOnStart` does nothing), and they forget their filters
-    // (`ContraptionControlsMovement.startMoving`).
-    carried.disabled.clear();
-    for a in &mut carried.actors {
-        a.disabled = false;
+    if !super::take_or_rollback(lv, pos, anchor, air, &cells, &mut carried) {
+        return;
     }
-    for c in &mut carried.controls {
-        c.1.filter = None;
-    }
+    elevator_start_carried(&mut carried);
     if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
     crate::glue::advancements::assembled(lv, pos, &blocks);
-    take_blocks(lv, anchor, &blocks);
     let (min_y, height) = lv.build_range();
     let range = pulley::extension_range(pos[1], min_y);
     let e = Elevator::new(pos[1], anchor, offset, range, column, contact_y, blocks);
@@ -2105,4 +2152,53 @@ pub(super) fn contacts_load(lv: &mut ServerLevel<'_>, data: &Compound) {
             );
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use create_engine::actors::{Actor, Controls, Kind};
+
+    #[test]
+    fn a_clock_clears_both_hands_in_one_pass() {
+        let hands = create_engine::clock::Arms {
+            hour: vec![([1, 0, 0], 1)],
+            minute: Some((1, vec![([2, 0, 0], 2)])),
+        };
+        let all = clock_blocks(&hands);
+        assert_eq!(all, vec![([1, 0, 0], 1), ([2, 0, 0], 2)]);
+        assert_eq!(
+            clear_cells(&all, |_| false, |p| p != [2, 0, 0]),
+            Removal::Aborted {
+                cleared: vec![([1, 0, 0], 1)],
+                standing: vec![([2, 0, 0], 2)],
+            }
+        );
+    }
+
+    #[test]
+    fn an_elevators_controls_forget_their_filters_only_once_it_has_started() {
+        let mut carried = Carried {
+            actors: vec![Actor::new([0, 0, 0], Kind::Roller, Dir::North, 0)],
+            controls: vec![(
+                [1, 0, 0],
+                Controls {
+                    filter: Some("minecraft:dirt".into()),
+                    ..Controls::default()
+                },
+            )],
+            disabled: vec![Some("minecraft:dirt".into())],
+            ..Carried::default()
+        };
+        carried.actors[0].disabled = true;
+        let before = carried.clone();
+        // A refused removal never reaches the start: what rolls back is what was carried.
+        let refused = clear_cells(&[([0, 0, 0], 1)], |_| false, |_| false);
+        assert!(matches!(refused, Removal::Aborted { .. }));
+        assert_eq!(carried, before);
+        elevator_start_carried(&mut carried);
+        assert!(carried.disabled.is_empty());
+        assert!(!carried.actors[0].disabled);
+        assert_eq!(carried.controls[0].1.filter, None);
+    }
 }
