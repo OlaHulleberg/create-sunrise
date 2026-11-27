@@ -29,7 +29,7 @@ use mod_api::{
     SoundSource, Tag, UseItemOnEvent,
 };
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// A storage block's items while its contraption moves: its slots.
 type Stored = Vec<Option<ItemStack>>;
@@ -76,6 +76,8 @@ struct BlockData<T = ItemStack> {
     block: Option<Block>,
     own: Option<Compound>,
     engine: Option<Compound>,
+    /// Set by [`stage_held`] when its cell was free: what waited for it is still staged.
+    staged: bool,
 }
 
 impl<T> Default for BlockData<T> {
@@ -88,6 +90,7 @@ impl<T> Default for BlockData<T> {
             block: None,
             own: None,
             engine: None,
+            staged: false,
         }
     }
 }
@@ -1089,10 +1092,9 @@ pub(crate) fn release_cart_held(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
-    free: impl Fn([i32; 3]) -> bool,
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], ItemStack)> {
-    release_held_items(lv, key, place, free, placed)
+    release_held_items(lv, key, place, placed)
 }
 
 /// Whether the block entity at `pos` is one of Create's (its state the engine's, its stacks
@@ -1178,8 +1180,9 @@ pub(crate) fn expect_back(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
+    planned: impl Fn([i32; 3]) -> bool,
 ) {
-    stage_held(lv, key, &place, |_| true);
+    stage_held(lv, key, &place, &planned);
 }
 
 /// What the engine kept for each block goes to the subsystems (`Subsystem::carry_in`), into the
@@ -1255,7 +1258,13 @@ fn stage_held(
 ) {
     use create_engine::tank;
     let dim = lv.dim;
-    let Some(list) = HELD.with_borrow(|m| m.get(&(dim, key)).cloned()) else {
+    let Some(list) = HELD.with_borrow_mut(|m| {
+        let list = m.get_mut(&(dim, key))?;
+        for (o, data) in list.iter_mut() {
+            data.staged = free(place(*o));
+        }
+        Some(list.clone())
+    }) else {
         return;
     };
     with_world(|w| {
@@ -1263,7 +1272,7 @@ fn stage_held(
         for (o, data) in &list {
             let at = place(*o);
             if let Some(dp) = &data.deployer
-                && free(at)
+                && data.staged
             {
                 let mut dp = dp.clone();
                 dp.breaking = None;
@@ -1290,7 +1299,7 @@ fn release_held(
     place: impl Fn([i32; 3]) -> [i32; 3],
     placed: impl Fn([i32; 3]) -> bool,
 ) {
-    for (pos, stack) in release_held_items(lv, key, place, |_| true, placed) {
+    for (pos, stack) in release_held_items(lv, key, place, placed) {
         lv.drop_stack(center(pos), [0.0; 3], stack, 10);
     }
 }
@@ -1403,7 +1412,6 @@ fn release_held_items(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
-    staged: impl Fn([i32; 3]) -> bool,
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], ItemStack)> {
     let Some(list) = HELD.with_borrow_mut(|m| m.remove(&(lv.dim, key))) else {
@@ -1412,23 +1420,18 @@ fn release_held_items(
     let turn = create_engine::contraption::Transform::from_place(&place);
     restore_engine_data(lv, &list, &place, turn, &placed);
     let mut drops = restore_landed_belts(lv, &list, &place, turn, &placed);
-    drops.extend(release_held_data(
-        &mut ServerHeld(lv),
-        list,
-        place,
-        staged,
-        placed,
-    ));
+    drops.extend(release_held_data(&mut ServerHeld(lv), list, place, placed));
     drops
 }
 
 /// The release of what block entities held, each entry `o` at `place(o)`. A deployer's hand
-/// left behind drops: what still waited for its block when `staged`, else what it carried. A
-/// vanilla block entity's saved data loads back into a non-Create block entity where a block
-/// was written (`placed`) and takes it, else its `Items` drop. A Create block's own data and slots only go
-/// back into a cell written back as the same Create block (`placed` and the Create block it
-/// was, turned maybe): its own data into the block entity there, its slots into it too when it
-/// is a Create block entity, else they drop. A cell not written is never restored into: a block
+/// left behind drops: what still waited for its block when staged by [`expect_back`] or
+/// [`expect_cart_held`], else what it carried. A vanilla block entity's saved data loads back
+/// into a non-Create block entity where a block was written (`placed`) and takes it, else its
+/// `Items` drop. A Create block's own data and slots only go back into a cell written back as
+/// the same Create block (`placed` and the Create block it was, turned maybe): its own data
+/// into the block entity there, its slots into it too when it is a Create block entity, else
+/// they drop. A cell not written is never restored into: a block
 /// already there (even one holding an identical stack, where a slot write answers `Ok(false)`)
 /// would swallow the carried stacks (`Contraption.addBlocksToWorld` drops what it cannot
 /// place, `Contraption.java:1130-1141`). Looks up each entry's block entity once, and not at
@@ -1437,14 +1440,13 @@ fn release_held_data<T>(
     world: &mut impl HeldRelease<T>,
     list: Vec<([i32; 3], BlockData<T>)>,
     place: impl Fn([i32; 3]) -> [i32; 3],
-    staged: impl Fn([i32; 3]) -> bool,
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], T)> {
     let mut drops = Vec::new();
     for (o, data) in list {
         let p = place(o);
         // A deployer or tank that didn't go back leaves what waited for it.
-        let held = if staged(p) {
+        let held = if data.staged {
             world.staged_held(p)
         } else {
             data.deployer.and_then(|d| d.held)
@@ -1536,6 +1538,76 @@ pub(crate) fn release_storage(
         .with_borrow_mut(|m| m.remove(&(lv.dim, key)))
         .unwrap_or_default();
     release_stored(&mut ServerStorage(lv), stored, place, placed);
+}
+
+/// Splits or drops any carried multiblock fluid tank in `list` whose footprint contains a
+/// cell that refused removal, using `tank::restore_mounted` so surviving blocks keep up to
+/// one cell's capacity each (or nothing when the controller refused).
+fn prune_held_tanks<T>(
+    list: &mut Vec<([i32; 3], BlockData<T>)>,
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+) {
+    use create_engine::tank;
+    let mut added = Vec::new();
+    for (o, data) in list.iter_mut() {
+        let Some(m) = data.tank else {
+            continue;
+        };
+        let total = usize::from(m.width) * usize::from(m.width) * usize::from(m.height);
+        let cells: Vec<[i32; 3]> = tank::blocks(*o, m.width, m.height)
+            .filter(|&cell| !refused.contains(&add(origin, cell)))
+            .collect();
+        if cells.len() == total {
+            continue;
+        }
+        data.tank = None;
+        for (cell, part) in tank::restore_mounted(m, *o, cells) {
+            let Some(part) = part else {
+                continue;
+            };
+            if cell == *o {
+                data.tank = Some(part);
+            } else {
+                added.push((cell, part));
+            }
+        }
+    }
+    for (cell, part) in added {
+        if let Some((_, data)) = list.iter_mut().find(|(o, _)| *o == cell) {
+            data.tank = Some(part);
+        } else {
+            list.push((
+                cell,
+                BlockData {
+                    tank: Some(part),
+                    ..Default::default()
+                },
+            ));
+        }
+    }
+}
+
+/// Prunes refused fluid-tank cells from `HELD` for contraption `key`.
+pub(super) fn drop_refused_tanks(
+    dim: usize,
+    key: [i32; 3],
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+) {
+    if refused.is_empty() {
+        return;
+    }
+    HELD.with_borrow_mut(|m| {
+        let Some(list) = m.get_mut(&(dim, key)) else {
+            return;
+        };
+        prune_held_tanks(list, origin, refused);
+        list.retain(|(_, d)| !d.is_empty());
+        if list.is_empty() {
+            m.remove(&(dim, key));
+        }
+    });
 }
 
 /// Each storage block's items `o` back at `place(o)`: a fresh storage block written there
@@ -3919,7 +3991,7 @@ fn debug_carried(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> String {
     let line = show(&[0; 3], &d);
     let key = [i32::MIN + 1, pos[1], i32::MIN + 1];
     HELD.with_borrow_mut(|m| m.insert((dim, key), vec![([0; 3], d)]));
-    expect_back(lv, key, |o| add(pos, o));
+    expect_back(lv, key, |o| add(pos, o), |_| true);
     // The block stays: it is found again as a loaded one is, taking what waits for it.
     let state = lv.block(pos);
     with_world(|w| w.block_loaded(dim, pos, state));
@@ -4141,6 +4213,50 @@ mod tests {
     }
 
     #[test]
+    fn prune_held_tanks_splits_partial_and_drops_missing_controller() {
+        use create_engine::tank::{self, Fluid, Multi, Tank};
+
+        let origin = [10, 20, 30];
+        let tall = Multi {
+            width: 1,
+            height: 3,
+            window: true,
+            tank: Tank {
+                fluid: Some(Fluid::Water),
+                amount: tank::CAPACITY * 2 + 1_000,
+            },
+        };
+        let cell = || Multi {
+            width: 1,
+            height: 1,
+            window: true,
+            tank: Tank {
+                fluid: Some(Fluid::Water),
+                amount: tank::CAPACITY,
+            },
+        };
+        let carried = || -> Vec<([i32; 3], BlockData<Stack>)> {
+            vec![(
+                [0, 0, 0],
+                BlockData {
+                    tank: Some(tall),
+                    ..BlockData::default()
+                },
+            )]
+        };
+        let mut list = carried();
+        prune_held_tanks(&mut list, origin, &HashSet::from([[10, 22, 30]]));
+        assert_eq!(list.len(), 2);
+        assert_eq!(list[0].0, [0, 0, 0]);
+        assert_eq!(list[0].1.tank, Some(cell()));
+        assert_eq!(list[1].0, [0, 1, 0]);
+        assert_eq!(list[1].1.tank, Some(cell()));
+        let mut list = carried();
+        prune_held_tanks(&mut list, origin, &HashSet::from([origin]));
+        assert_eq!(list[0].1.tank, None);
+    }
+
+    #[test]
     fn held_slots_of_an_unplaced_position_drop_even_over_an_identical_stack() {
         let slots = vec![Some(("iron", 4)), None, Some(("gold", 7))];
         // Not placed, a different Create block placed, a non-Create block placed, nothing of
@@ -4161,7 +4277,7 @@ mod tests {
                 ..Fake::default()
             };
             let list = vec![([1, 2, 3], belt(slots.clone()))];
-            let drops = release_held_data(&mut world, list, moved, |_| false, |_| placed);
+            let drops = release_held_data(&mut world, list, moved, |_| placed);
             assert_eq!(world.restores, 0, "no write onto the block already there");
             assert_eq!(world.merges, merges);
             assert_eq!(
@@ -4208,7 +4324,7 @@ mod tests {
             ..Fake::default()
         };
         let list = vec![([1, 2, 3], belt(slots.clone()))];
-        let drops = release_held_data(&mut world, list, moved, |_| false, |_| true);
+        let drops = release_held_data(&mut world, list, moved, |_| true);
         assert_eq!(world.lookups.get(), 1, "one lookup for merge and restore");
         assert_eq!(world.restores, 1);
         assert_eq!(world.merges, 1);
