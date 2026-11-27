@@ -854,7 +854,9 @@ impl CannonWorld for World<'_, '_> {
         if let Some(shaft) = host.block_state_id(&format!("create:shaft[axis={axis}]")) {
             self.lv.set_state(pos, shaft, super::server::update_all());
         }
-        super::items::create_belts(self.lv, pos, to);
+        if !super::items::create_belts(self.lv, pos, to) {
+            return;
+        }
         let n = casings.len().max(1) as i32 - 1;
         let step = [0, 1, 2].map(|i| if n > 0 { (to[i] - pos[i]) / n } else { 0 });
         for (i, c) in casings.iter().enumerate() {
