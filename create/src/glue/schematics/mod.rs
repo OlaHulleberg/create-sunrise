@@ -639,13 +639,14 @@ fn slots(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<Option<ItemStack>> {
         .collect()
 }
 
-/// Sets slots of the block entity at `pos`, in one transaction.
-fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<ItemStack>)]) {
+/// Sets slots of the block entity at `pos` in one transaction, returning whether it committed.
+/// Unchanged slots are successful writes; a write error rolls back the transaction.
+fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<ItemStack>)]) -> bool {
     let Some(be) = entity(lv, pos) else {
-        return;
+        return false;
     };
     OWN_WRITE.set(true);
-    let _ = lv.host.transaction(|h, tx| {
+    let result = lv.host.transaction(|h, tx| {
         for (slot, stack) in writes {
             be.set_item_slot(h, tx, *slot, stack.clone())
                 .map_err(|_| ())?;
@@ -653,6 +654,7 @@ fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<Ite
         Ok::<(), ()>(())
     });
     OWN_WRITE.set(false);
+    result.is_ok()
 }
 
 fn item_is(host: &dyn Host, stack: &ItemStack, id: &str) -> bool {
@@ -2278,7 +2280,12 @@ fn upload(
         crate::create_log!("[create] New Schematic Uploaded: {player}/{file}");
     }
     body::set_schematic_data(&mut stack, &SchematicData::written(file, player, bounds));
-    set_slots(lv, pos, &[(0, None), (1, Some(stack))]);
+    if !set_slots(lv, pos, &[(0, None), (1, Some(stack))]) {
+        crate::create_log!(
+            "[create] Failed to finish schematic upload: {player}/{file}: table slots not written"
+        );
+        return vec![format!("upload of {file} failed")];
+    }
     vec![format!(
         "uploaded {file}: {}x{}x{}",
         bounds[0], bounds[1], bounds[2]
