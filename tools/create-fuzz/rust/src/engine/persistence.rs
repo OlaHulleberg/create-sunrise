@@ -238,6 +238,7 @@ impl Run {
         at.extend(self.w.dims[0].millstones.keys().copied());
         at.extend(self.w.dims[0].presses.keys().copied());
         at.extend(self.w.dims[0].mixers.keys().copied());
+        at.extend(self.w.dims[0].drills.keys().copied());
         at.sort();
         at.dedup();
         for p in at {
@@ -497,6 +498,14 @@ impl Run {
                 h.target = saved.target_angle;
             }
         }
+        // Java's harness shows a reloaded breaker's cracks from the fields its `read` restored:
+        // the level is not asked for them again before its next look.
+        self.w.dims[0].breaker_cracks.clear();
+        self.cracks = self.w.dims[0]
+            .drills
+            .iter()
+            .filter_map(|(p, b)| b.cracks_at().map(|at| (*p, (at, b.progress))))
+            .collect();
         for (p, links) in connections {
             self.chains.add(p, links);
         }
