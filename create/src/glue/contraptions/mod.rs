@@ -891,7 +891,7 @@ fn preflight_writes<S: Eq>(
     })
 }
 
-pub(super) fn preflight_cells(
+pub(crate) fn preflight_cells(
     lv: &ServerLevel<'_>,
     cells: impl IntoIterator<Item = [i32; 3]>,
 ) -> Option<BlockState> {
@@ -989,7 +989,7 @@ fn remove_cells_with(
     refused
 }
 
-pub(super) fn drop_refused(
+pub(crate) fn drop_refused(
     origin: [i32; 3],
     refused: &HashSet<[i32; 3]>,
     blocks: &mut Vec<Cell>,
@@ -1164,7 +1164,7 @@ fn bits(dirs: &[Dir]) -> u8 {
 
 /// `BlockMovementChecksImpl.isBrittleFallback`: blocks that hang on to another and break
 /// without it.
-fn brittle(name: &str, props: &[(String, String)]) -> bool {
+pub(crate) fn brittle(name: &str, props: &[(String, String)]) -> bool {
     let id = name.strip_prefix("minecraft:").unwrap_or(name);
     prop(props, "hanging").is_some()
         || id == "ladder"
