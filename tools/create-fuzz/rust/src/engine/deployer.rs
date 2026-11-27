@@ -825,12 +825,7 @@ impl Run {
             .block(&state)
             .and_then(|b| b.hardness)
             .unwrap_or(0.);
-        let per_hit = deployer::destroy_progress(deployer::Dig {
-            hardness,
-            tool_speed: dig.speed,
-            efficiency: 0.,
-            harvest: dig.harvest,
-        });
+        let per_hit = dig.progress(hardness);
         if d.punch(at, per_hit) == deployer::Punch::Broken {
             self.fake_break(at, &held.0, d);
         }
