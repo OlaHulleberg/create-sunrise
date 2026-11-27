@@ -124,6 +124,7 @@ pub(crate) fn restore_belt_items(
     data: &Compound,
     turn: create_engine::contraption::Transform,
     placed: impl Fn([i32; 3]) -> bool,
+    level_state: impl Fn([i32; 3]) -> u32,
 ) {
     let Some(Tag::List(list)) = data.get(&BELT_ITEMS.into()) else {
         return;
@@ -131,7 +132,9 @@ pub(crate) fn restore_belt_items(
     let saved = Compound::from([("belts".into(), Tag::List(list.clone()))]);
     for (offset, items) in super::belts_from_nbt(&saved) {
         let controller = add(pos, turn.vec(offset));
-        if placed(controller) && world.block_at(dim, controller) == Some(Block::Belt) {
+        if placed(controller)
+            && world.table.get(level_state(controller)).map(|(b, _)| b) == Some(Block::Belt)
+        {
             world.read_belt_items(dim, controller, items);
         }
     }
@@ -195,8 +198,7 @@ mod tests {
                 )
             }),
         );
-        let mut world = CreateWorld::new(table);
-        world.block_loaded(0, CONTROLLER, 10);
+        let world = CreateWorld::new(table);
         let data = Compound::from([(
             BELT_ITEMS.into(),
             super::super::belts_to_nbt(&[(
@@ -208,6 +210,7 @@ mod tests {
     }
 
     fn finish_belt(world: &mut CreateWorld) -> Inventory {
+        world.block_loaded(0, CONTROLLER, 10);
         world.block_loaded(0, END, 11);
         let mut turns = world.transport_ticks(0, 0);
         while turns.next(world).is_some() {}
@@ -223,7 +226,15 @@ mod tests {
         let (mut world, data) = belt_landing();
         let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
         // The landing did not write the existing controller position.
-        restore_belt_items(&mut world, 0, END, &data, turn, |p| p == END);
+        restore_belt_items(
+            &mut world,
+            0,
+            END,
+            &data,
+            turn,
+            |p| p == END,
+            |p| if p == CONTROLLER { 10 } else { 0 },
+        );
         assert!(finish_belt(&mut world).is_empty());
     }
 
@@ -231,7 +242,15 @@ mod tests {
     fn landed_belt_controller_keeps_inventory_when_record_segment_is_refused() {
         let (mut world, data) = belt_landing();
         let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
-        restore_belt_items(&mut world, 0, END, &data, turn, |p| p == CONTROLLER);
+        restore_belt_items(
+            &mut world,
+            0,
+            END,
+            &data,
+            turn,
+            |p| p == CONTROLLER,
+            |p| if p == CONTROLLER { 10 } else { 0 },
+        );
         let inventory = finish_belt(&mut world);
         assert_eq!(inventory.items.len(), 1);
         assert_eq!(inventory.items[0].item, "minecraft:iron_ingot");

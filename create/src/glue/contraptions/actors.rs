@@ -1195,6 +1195,7 @@ pub(crate) fn restore_landed_belts(
                             engine,
                             turn,
                             &placed,
+                            |p| lv.block(p),
                         );
                     }
                 }
