@@ -314,7 +314,7 @@ pub struct Dimension {
     windmill_saved: HashMap<[i32; 3], Windmill>,
     pub windmill_assemble: Vec<[i32; 3]>,
     pub windmill_changes: Vec<[i32; 3]>,
-    pub windmill_orphans: Vec<([i32; 3], Windmill)>,
+    pub windmill_orphans: Vec<([i32; 3], Option<crate::kinetics::Dir>, Windmill)>,
     /// Encased fans, and the ones turning: only those tick.
     pub fans: HashMap<[i32; 3], Fan>,
     pub running_fans: Vec<[i32; 3]>,
@@ -2178,7 +2178,8 @@ impl CreateWorld {
                 d.piston_orphans.push((pos, m));
             }
             if let Some(w) = d.windmills.remove(&pos) {
-                d.windmill_orphans.push((pos, w));
+                let facing = self.table.get(old).and_then(|(_, i)| i.facing);
+                d.windmill_orphans.push((pos, facing, w));
                 d.windmill_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
             }
@@ -6790,6 +6791,37 @@ mod tests {
         let unloaded = [8, 8, 0];
         w.read_windmill(0, unloaded, saved(45.0));
         assert!(w.dims[0].windmill_saved.contains_key(&unloaded));
+    }
+
+    #[test]
+    fn broken_bearing_orphan_keeps_old_facing_without_front_block() {
+        let bearing = 10;
+        let names = [("create:mechanical_bearing", vec![("facing", "east")])];
+        let mut w = CreateWorld::new(StateTable::new(
+            bearing,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let pos = [0; 3];
+        w.apply_block_change(0, pos, 0, bearing, false);
+        w.dims[0].windmills.insert(
+            pos,
+            Windmill {
+                blocks: vec![([1, 1, 0], 1)],
+                sails: 0,
+                clockwise: true,
+                kind: BearingKind::Mechanical,
+                turn: crate::contraption::Turn {
+                    rpm: 16.0,
+                    ..Default::default()
+                },
+                extras: Default::default(),
+            },
+        );
+        w.apply_block_change(0, pos, bearing, 0, false);
+        assert_eq!(w.dims[0].windmill_orphans.len(), 1);
+        let orphan = &w.dims[0].windmill_orphans[0];
+        assert_eq!(orphan.0, pos);
+        assert_eq!(orphan.1, Some(crate::kinetics::Dir::East));
     }
 
     #[test]
