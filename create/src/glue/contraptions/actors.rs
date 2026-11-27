@@ -65,9 +65,9 @@ thread_local! {
 /// slots (a depot's stack), its own data and what the engine keeps for it (`Subsystem::carry_out`:
 /// a motor's speed, a burner's fuel, a link's frequency...), a deployer's hand and mode, a tank
 /// controller's fluid, or another block entity's saved data (a furnace's items, a sign's text).
-#[derive(Clone, Debug, Default)]
-struct BlockData {
-    slots: Vec<Option<ItemStack>>,
+#[derive(Clone, Debug)]
+struct BlockData<T = ItemStack> {
+    slots: Vec<Option<T>>,
     data: Option<Compound>,
     deployer: Option<create_engine::deployer::Deployer>,
     tank: Option<create_engine::tank::Multi>,
@@ -78,7 +78,21 @@ struct BlockData {
     engine: Option<Compound>,
 }
 
-impl BlockData {
+impl<T> Default for BlockData<T> {
+    fn default() -> Self {
+        Self {
+            slots: Vec::new(),
+            data: None,
+            deployer: None,
+            tank: None,
+            block: None,
+            own: None,
+            engine: None,
+        }
+    }
+}
+
+impl<T> BlockData<T> {
     fn is_empty(&self) -> bool {
         self.slots.iter().all(Option::is_none)
             && self.data.is_none()
@@ -194,17 +208,35 @@ pub(crate) fn lent_back(dim: usize, key: [i32; 3]) -> Vec<([i32; 3], Vec<Option<
         .unwrap_or_default()
 }
 
-/// Whether `pos` holds a storage block a contraption carries.
-pub(crate) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
-    lv.block_name(pos)
-        .is_some_and(|n| storage_name(&n) || slot_storage(&n).is_some())
-        && lv.host.block_entity(lv.level, pos).is_some()
+/// A resolved mounted-storage block at a position: either Create slot storage (vault or
+/// toolbox, with its entity and slot count) or a vanilla container at pos.
+enum StorageTarget {
+    Slots(mod_api::BlockEntityRef, usize),
+    Container([i32; 3]),
 }
 
-/// The slots of a vault or toolbox at `pos`, taken out of its block entity (left empty, so it
+/// The storage block at `pos`, resolved once: one block name lookup, and one block entity lookup
+/// for a storage block only.
+fn storage_at(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Option<StorageTarget> {
+    let name = lv.block_name(pos)?;
+    if let Some(size) = slot_storage(&name) {
+        let entity = lv.host.block_entity(lv.level, pos)?;
+        return Some(StorageTarget::Slots(entity, size));
+    }
+    if storage_name(&name) && lv.host.block_entity(lv.level, pos).is_some() {
+        return Some(StorageTarget::Container(pos));
+    }
+    None
+}
+
+/// Whether `pos` holds a storage block a contraption carries.
+pub(crate) fn is_storage(lv: &ServerLevel<'_>, pos: [i32; 3]) -> bool {
+    storage_at(lv, pos).is_some()
+}
+
+/// The slots of the vault or toolbox block entity `e`, taken out of it (left empty, so it
 /// spills nothing when its block goes).
-fn take_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize) -> Option<Stored> {
-    let e = lv.host.block_entity(lv.level, pos)?;
+fn take_slots(lv: &mut ServerLevel<'_>, e: mod_api::BlockEntityRef, size: usize) -> Stored {
     let stored: Stored = (0..size)
         .map(|i| e.item_slot(&*lv.host, i as u32).ok().flatten())
         .collect();
@@ -216,19 +248,17 @@ fn take_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], size: usize) -> Option<St
         }
         Ok::<(), ()>(())
     });
-    Some(stored)
+    stored
 }
 
-/// The carried slots back in the vault or toolbox now at `pos`; what has no slot drops.
+/// Writes `stored` into up to `size` slots of block entity `e`, each stack to its own slot;
+/// the stacks it refused (and any past `size`).
 fn put_slots(
     lv: &mut ServerLevel<'_>,
-    pos: [i32; 3],
+    e: mod_api::BlockEntityRef,
     size: usize,
     stored: Stored,
 ) -> Vec<ItemStack> {
-    let Some(e) = lv.host.block_entity(lv.level, pos) else {
-        return stored.into_iter().flatten().collect();
-    };
     lv.host
         .transaction(|host, tx| {
             Ok::<_, ()>(rejected_slots(&stored, size, |i, stack| {
@@ -256,34 +286,6 @@ fn rejected_slots<T: Clone, E>(
         .collect()
 }
 
-/// What of `stored` drops: all of it unless `target` names where it goes back (a block put
-/// back that can take it), else what `restore` leaves of it. A cell not written, or written
-/// with another kind of block, is never restored into: a block already there (even one holding
-/// an identical stack, where a slot write answers `Ok(false)`) would swallow the carried stack
-/// (`Contraption.addBlocksToWorld` drops what it cannot place, `Contraption.java:1130-1141`).
-fn restored_or_dropped<T, W>(
-    stored: Vec<Option<T>>,
-    target: Option<W>,
-    restore: impl FnOnce(W, Vec<Option<T>>) -> Vec<T>,
-) -> Vec<T> {
-    match target {
-        Some(w) => restore(w, stored),
-        None => stored.into_iter().flatten().collect(),
-    }
-}
-
-/// Whether the block at a position was put back as the Create block it was (`was`, turned
-/// maybe; `now` is the Create block there): written by this landing, not left standing.
-fn put_back_as(placed: bool, was: Option<Block>, now: Option<Block>) -> bool {
-    placed && was.is_some() && now == was
-}
-
-/// Where mounted storage goes back: the cell `p` when a block was written there and it is a
-/// storage block.
-fn storage_target(p: [i32; 3], placed: bool, storage: bool) -> Option<[i32; 3]> {
-    (placed && storage).then_some(p)
-}
-
 /// The `ITEMS` handler of the block at `pos`.
 fn items_at(
     lv: &mut ServerLevel<'_>,
@@ -297,12 +299,10 @@ fn items_at(
 /// `ITEMS` handler (it is left empty, so it spills nothing when its block goes); None for any
 /// other block. (A vanilla container's slots are not a mod block entity's own item slots.)
 fn take_storage(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<Stored> {
-    if !is_storage(lv, pos) {
-        return None;
-    }
-    if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
-        return take_slots(lv, pos, size);
-    }
+    let pos = match storage_at(lv, pos)? {
+        StorageTarget::Slots(e, size) => return Some(take_slots(lv, e, size)),
+        StorageTarget::Container(pos) => pos,
+    };
     let items = items_at(lv, pos)?;
     let host = &mut *lv.host;
     let size = items.size(host).min(STORAGE_SLOTS as usize);
@@ -339,9 +339,22 @@ pub(crate) fn restore_storage(
     pos: [i32; 3],
     stored: Stored,
 ) -> Vec<ItemStack> {
-    if let Some(size) = lv.block_name(pos).as_deref().and_then(slot_storage) {
-        return put_slots(lv, pos, size, stored);
+    match storage_at(lv, pos) {
+        Some(target) => restore_storage_to(lv, target, stored),
+        None => stored.into_iter().flatten().collect(),
     }
+}
+
+/// The carried `stored` items written into the resolved storage `target`; the stacks it refused.
+fn restore_storage_to(
+    lv: &mut ServerLevel<'_>,
+    target: StorageTarget,
+    stored: Stored,
+) -> Vec<ItemStack> {
+    let pos = match target {
+        StorageTarget::Slots(e, size) => return put_slots(lv, e, size, stored),
+        StorageTarget::Container(pos) => pos,
+    };
     let Some(items) = items_at(lv, pos) else {
         return stored.into_iter().flatten().collect();
     };
@@ -1273,6 +1286,110 @@ fn release_held(
     }
 }
 
+/// What the held-data release reads and writes of the world, so its loop runs as it is. The
+/// block entity at a position is looked up once and passed on as an [`Entity`](Self::Entity).
+trait HeldRelease<T> {
+    /// A block entity found in the world.
+    type Entity: Copy;
+    /// A deployer's hand that waited for its block at `p`, taken with what else waited there
+    /// (a tank's part of its tank).
+    fn staged_held(&mut self, p: [i32; 3]) -> Option<(String, u8)>;
+    /// The stack of `n` of `item`.
+    fn held_stack(&self, item: &str, n: u8) -> Option<T>;
+    /// The block entity at `p`.
+    fn block_entity(&self, p: [i32; 3]) -> Option<Self::Entity>;
+    /// Whether `entity` is one of Create's.
+    fn is_create_entity(&self, entity: Self::Entity) -> bool;
+    /// Loads `saved` into the vanilla block entity `entity`; whether it took it.
+    fn replace_data(&mut self, entity: Self::Entity, saved: &Compound) -> bool;
+    /// Streams each stack in the `Items` of `saved` into `push`.
+    fn push_items_of(&self, saved: &Compound, push: impl FnMut(T));
+    /// The Create block at `p`.
+    fn create_block(&self, p: [i32; 3]) -> Option<Block>;
+    /// Merges `own` into `entity`, the block entity of the `block` at `p`, and reads it as it
+    /// loads.
+    fn merge_own(&mut self, p: [i32; 3], entity: Self::Entity, block: Block, own: &Compound);
+    /// Writes `slots` into the slots of `entity`; the stacks it refused.
+    fn restore_slots(&mut self, entity: Self::Entity, slots: Vec<Option<T>>) -> Vec<T>;
+}
+
+/// [`HeldRelease`] on the server level.
+struct ServerHeld<'a, 'b>(&'a mut ServerLevel<'b>);
+
+impl HeldRelease<ItemStack> for ServerHeld<'_, '_> {
+    type Entity = mod_api::BlockEntityRef;
+
+    fn staged_held(&mut self, p: [i32; 3]) -> Option<(String, u8)> {
+        let dim = self.0.dim;
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            d.tanks.arriving.remove(&p);
+            d.deployer_saved_remove(p)
+        })
+        .flatten()
+        .and_then(|d| d.held)
+    }
+
+    fn held_stack(&self, item: &str, n: u8) -> Option<ItemStack> {
+        let mut stack = stack_of(&*self.0, item)?;
+        stack.set_count(u32::from(n)).ok()?;
+        Some(stack)
+    }
+
+    fn block_entity(&self, p: [i32; 3]) -> Option<mod_api::BlockEntityRef> {
+        self.0.host.block_entity(self.0.level, p)
+    }
+
+    fn is_create_entity(&self, entity: mod_api::BlockEntityRef) -> bool {
+        create_entity(&*self.0, entity)
+    }
+
+    fn replace_data(&mut self, entity: mod_api::BlockEntityRef, saved: &Compound) -> bool {
+        entity.replace_data(&mut *self.0.host, saved.clone()) == Ok(true)
+    }
+
+    fn push_items_of(&self, saved: &Compound, mut push: impl FnMut(ItemStack)) {
+        let Some(Tag::List(items)) = saved.get(&"Items".into()) else {
+            return;
+        };
+        for item in items {
+            let Tag::Compound(item) = item else {
+                continue;
+            };
+            if let Some(stack) = ItemStack::from_nbt(&*self.0.host, item) {
+                push(stack);
+            }
+        }
+    }
+
+    fn create_block(&self, p: [i32; 3]) -> Option<Block> {
+        self.0.create_block(p)
+    }
+
+    fn merge_own(
+        &mut self,
+        p: [i32; 3],
+        entity: mod_api::BlockEntityRef,
+        block: Block,
+        own: &Compound,
+    ) {
+        let lv = &mut *self.0;
+        let _ = entity.merge_data(&mut *lv.host, own.clone());
+        // What a block entity reads from its own data as it loads (`read`).
+        if block == Block::SequencedGearshift {
+            super::super::sequencer::loaded(&*lv.host, lv.dim, p, entity);
+        }
+    }
+
+    fn restore_slots(
+        &mut self,
+        entity: mod_api::BlockEntityRef,
+        slots: Vec<Option<ItemStack>>,
+    ) -> Vec<ItemStack> {
+        put_slots(&mut *self.0, entity, slots.len(), slots)
+    }
+}
+
 fn release_held_items(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
@@ -1280,76 +1397,111 @@ fn release_held_items(
     staged: impl Fn([i32; 3]) -> bool,
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], ItemStack)> {
-    let dim = lv.dim;
-    let mut drops = Vec::new();
     let list = HELD
-        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .with_borrow_mut(|m| m.remove(&(lv.dim, key)))
         .unwrap_or_default();
+    release_held_data(&mut ServerHeld(lv), list, place, staged, placed)
+}
+
+/// The release of what block entities held, each entry `o` at `place(o)`. A deployer's hand
+/// left behind drops: what still waited for its block when `staged`, else what it carried. A
+/// vanilla block entity's saved data loads back into a non-Create block entity where a block
+/// was written (`placed`) and takes it, else its `Items` drop. A Create block's own data and slots only go
+/// back into a cell written back as the same Create block (`placed` and the Create block it
+/// was, turned maybe): its own data into the block entity there, its slots into it too when it
+/// is a Create block entity, else they drop. A cell not written is never restored into: a block
+/// already there (even one holding an identical stack, where a slot write answers `Ok(false)`)
+/// would swallow the carried stacks (`Contraption.addBlocksToWorld` drops what it cannot
+/// place, `Contraption.java:1130-1141`). Looks up each entry's block entity once, and not at
+/// all for a cell not written. Returns the stacks to drop and where.
+fn release_held_data<T>(
+    world: &mut impl HeldRelease<T>,
+    list: Vec<([i32; 3], BlockData<T>)>,
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    staged: impl Fn([i32; 3]) -> bool,
+    placed: impl Fn([i32; 3]) -> bool,
+) -> Vec<([i32; 3], T)> {
+    let mut drops = Vec::new();
     for (o, data) in list {
         let p = place(o);
         // A deployer or tank that didn't go back leaves what waited for it.
-        let left = if staged(p) {
-            with_world(|w| {
-                let d = &mut w.dims[dim];
-                d.tanks.arriving.remove(&p);
-                d.deployer_saved_remove(p)
-            })
-            .flatten()
+        let held = if staged(p) {
+            world.staged_held(p)
         } else {
-            data.deployer
+            data.deployer.and_then(|d| d.held)
         };
-        if let Some((item, n)) = left.and_then(|d| d.held)
-            && let Some(mut stack) = stack_of(lv, &item)
-            && stack.set_count(u32::from(n)).is_ok()
+        if let Some((item, n)) = held
+            && let Some(stack) = world.held_stack(&item, n)
         {
             drops.push((p, stack));
         }
-        let entity = if placed(p) {
-            lv.host.block_entity(lv.level, p)
-        } else {
-            None
-        };
+        let was_placed = placed(p);
+        // The one lookup of this entry's block entity, only where a block was written.
+        let entity = was_placed.then(|| world.block_entity(p)).flatten();
         if let Some(saved) = data.data {
             let restored = entity
-                .filter(|e| !create_entity(lv, *e))
-                .is_some_and(|e| e.replace_data(&mut *lv.host, saved.clone()) == Ok(true));
-            if !restored && let Some(Tag::List(items)) = saved.get(&"Items".into()) {
-                drops.extend(items.iter().filter_map(|item| {
-                    let Tag::Compound(item) = item else {
-                        return None;
-                    };
-                    Some((p, ItemStack::from_nbt(lv.host, item)?))
-                }));
+                .filter(|e| !world.is_create_entity(*e))
+                .is_some_and(|e| world.replace_data(e, &saved));
+            if !restored {
+                world.push_items_of(&saved, |stack| drops.push((p, stack)));
             }
             continue;
         }
         // The same Create block back (turned, maybe): its data and what the engine kept for it
         // (`loadWithComponents`, `transform`).
-        let back = put_back_as(placed(p), data.block, lv.create_block(p));
-        if back && let (Some(own), Some(e)) = (&data.own, entity) {
-            let _ = e.merge_data(&mut *lv.host, own.clone());
-            // What a block entity reads from its own data as it loads (`read`).
-            if data.block == Some(Block::SequencedGearshift) {
-                super::super::sequencer::loaded(&*lv.host, dim, p, e);
-            }
+        let back = was_placed
+            .then_some(data.block)
+            .flatten()
+            .filter(|&b| world.create_block(p) == Some(b));
+        if let (Some(own), Some(block), Some(e)) = (&data.own, back, entity) {
+            world.merge_own(p, e, block, own);
         }
         if data.slots.is_empty() {
             continue;
         }
-        // Only into the block written back as the same Create block: carried slots of an
-        // unplaced position, or of another kind of block there, drop.
-        let target = entity.filter(|e| back && create_entity(lv, *e));
-        let left = restored_or_dropped(data.slots, target, |e, slots| {
-            let restored = lv.host.transaction(|host, tx| {
-                Ok::<_, ()>(rejected_slots(&slots, slots.len(), |i, stack| {
-                    e.set_item_slot(host, tx, i as u32, Some(stack.clone()))
-                }))
-            });
-            restored.unwrap_or_else(|_| slots.into_iter().flatten().collect())
-        });
+        // Only into a Create block entity of the block written back as the same Create block:
+        // carried slots of an unplaced position, of another kind of block there, or over an
+        // entity that is no Create one, drop.
+        let left = if let Some(e) = entity.filter(|e| back.is_some() && world.is_create_entity(*e))
+        {
+            world.restore_slots(e, data.slots)
+        } else {
+            data.slots.into_iter().flatten().collect()
+        };
         drops.extend(left.into_iter().map(|stack| (p, stack)));
     }
     drops
+}
+
+/// What the storage release reads and writes of the world, so its loop runs as it is.
+trait StorageRelease<T> {
+    /// A storage block found in the world, resolved once.
+    type Target;
+    /// The storage block at `p` a contraption carries.
+    fn storage_target(&self, p: [i32; 3]) -> Option<Self::Target>;
+    /// Writes `stored` into the storage block `target`; the stacks it refused.
+    fn restore_storage(&mut self, target: Self::Target, stored: Vec<Option<T>>) -> Vec<T>;
+    /// Drops `stack` at `p`.
+    fn drop_stack(&mut self, p: [i32; 3], stack: T);
+}
+
+/// [`StorageRelease`] on the server level.
+struct ServerStorage<'a, 'b>(&'a mut ServerLevel<'b>);
+
+impl StorageRelease<ItemStack> for ServerStorage<'_, '_> {
+    type Target = StorageTarget;
+
+    fn storage_target(&self, p: [i32; 3]) -> Option<StorageTarget> {
+        storage_at(&*self.0, p)
+    }
+
+    fn restore_storage(&mut self, target: StorageTarget, stored: Stored) -> Vec<ItemStack> {
+        restore_storage_to(&mut *self.0, target, stored)
+    }
+
+    fn drop_stack(&mut self, p: [i32; 3], stack: ItemStack) {
+        self.0.drop_stack(center(p), [0.0; 3], stack, 10);
+    }
 }
 
 /// The items contraption `key` carried back into its storage blocks, each now at `place(offset)`
@@ -1360,18 +1512,34 @@ pub(crate) fn release_storage(
     place: impl Fn([i32; 3]) -> [i32; 3],
     placed: impl Fn([i32; 3]) -> bool,
 ) {
-    let dim = lv.dim;
     release_held(lv, key, &place, &placed);
     let stored = STORAGE
-        .with_borrow_mut(|m| m.remove(&(dim, key)))
+        .with_borrow_mut(|m| m.remove(&(lv.dim, key)))
         .unwrap_or_default();
+    release_stored(&mut ServerStorage(lv), stored, place, placed);
+}
+
+/// Each storage block's items `o` back at `place(o)`: a fresh storage block written there
+/// (`placed`) takes them, what it refuses drops; a cell not written, or written with a
+/// non-storage block, never takes them, they all drop. A storage block that was already there
+/// would swallow a stack identical to the one it holds (a slot write answers `Ok(false)`)
+/// (`Contraption.addBlocksToWorld` drops what it cannot place, `Contraption.java:1130-1141`).
+fn release_stored<T>(
+    world: &mut impl StorageRelease<T>,
+    stored: Vec<([i32; 3], Vec<Option<T>>)>,
+    place: impl Fn([i32; 3]) -> [i32; 3],
+    placed: impl Fn([i32; 3]) -> bool,
+) {
     for (o, s) in stored {
         let p = place(o);
-        // A fresh storage block written where it went back takes the carried items; a
-        // storage block that was already there does not (it may hold an identical stack).
-        let target = storage_target(p, placed(p), is_storage(lv, p));
-        for stack in restored_or_dropped(s, target, |p, s| restore_storage(lv, p, s)) {
-            lv.drop_stack(center(p), [0.0; 3], stack, 10);
+        let left: Vec<T> =
+            if let Some(target) = placed(p).then(|| world.storage_target(p)).flatten() {
+                world.restore_storage(target, s)
+            } else {
+                s.into_iter().flatten().collect()
+            };
+        for stack in left {
+            world.drop_stack(p, stack);
         }
     }
 }
@@ -3866,55 +4034,173 @@ mod tests {
         Ok(false)
     }
 
+    type Stack = (&'static str, u32);
+
+    /// A world whose slot writes all answer `Ok(false)`, as onto an identical stack. Its block
+    /// entity is `Some(true)` for a Create one, `Some(false)` for another's, `None` for none.
+    #[derive(Default)]
+    struct Fake {
+        now: Option<Block>,
+        storage: bool,
+        entity: Option<bool>,
+        lookups: Cell<usize>,
+        storage_lookups: Cell<usize>,
+        restores: usize,
+        merges: usize,
+        drops: Vec<([i32; 3], Stack)>,
+    }
+
+    impl StorageRelease<Stack> for Fake {
+        type Target = ();
+
+        fn storage_target(&self, _: [i32; 3]) -> Option<()> {
+            self.storage_lookups.set(self.storage_lookups.get() + 1);
+            self.storage.then_some(())
+        }
+
+        fn restore_storage(&mut self, _: (), stored: Vec<Option<Stack>>) -> Vec<Stack> {
+            self.restores += 1;
+            rejected_slots(&stored, 20, identical)
+        }
+
+        fn drop_stack(&mut self, p: [i32; 3], stack: Stack) {
+            self.drops.push((p, stack));
+        }
+    }
+
+    impl HeldRelease<Stack> for Fake {
+        type Entity = bool;
+
+        fn staged_held(&mut self, _: [i32; 3]) -> Option<(String, u8)> {
+            None
+        }
+
+        fn held_stack(&self, _: &str, _: u8) -> Option<Stack> {
+            None
+        }
+
+        fn block_entity(&self, _: [i32; 3]) -> Option<bool> {
+            self.lookups.set(self.lookups.get() + 1);
+            self.entity
+        }
+
+        fn is_create_entity(&self, entity: bool) -> bool {
+            entity
+        }
+
+        fn replace_data(&mut self, _: bool, _: &Compound) -> bool {
+            false
+        }
+
+        fn push_items_of(&self, _: &Compound, _: impl FnMut(Stack)) {}
+
+        fn create_block(&self, _: [i32; 3]) -> Option<Block> {
+            self.now
+        }
+
+        fn merge_own(&mut self, _: [i32; 3], _: bool, _: Block, _: &Compound) {
+            self.merges += 1;
+        }
+
+        fn restore_slots(&mut self, _: bool, slots: Vec<Option<Stack>>) -> Vec<Stack> {
+            self.restores += 1;
+            rejected_slots(&slots, slots.len(), identical)
+        }
+    }
+
+    fn moved(o: [i32; 3]) -> [i32; 3] {
+        [o[0] + 10, o[1], o[2]]
+    }
+
+    fn belt(slots: Vec<Option<Stack>>) -> BlockData<Stack> {
+        BlockData {
+            slots,
+            block: Some(Block::Belt),
+            own: Some(Compound::new()),
+            ..BlockData::default()
+        }
+    }
+
     #[test]
     fn held_slots_of_an_unplaced_position_drop_even_over_an_identical_stack() {
         let slots = vec![Some(("iron", 4)), None, Some(("gold", 7))];
-        let belt = Some(Block::Belt);
-        // Not placed, a different Create block placed, and nothing of ours placed there.
-        for (placed, now) in [
-            (false, belt),
-            (true, Some(Block::Deployer)),
-            (true, None),
-            (false, None),
+        // Not placed, a different Create block placed, a non-Create block placed, nothing of
+        // ours placed there, and the same Create block placed over a non-Create entity (its own
+        // data still merges into that entity, the slots drop without a slot write) or over no
+        // entity (neither merges nor writes slots).
+        for (placed, now, entity, merges) in [
+            (false, Some(Block::Belt), Some(true), 0),
+            (true, Some(Block::Deployer), Some(true), 0),
+            (true, None, Some(false), 0),
+            (false, None, None, 0),
+            (true, Some(Block::Belt), Some(false), 1),
+            (true, Some(Block::Belt), None, 0),
         ] {
-            let back = put_back_as(placed, belt, now);
-            let mut writes = 0;
-            let left = restored_or_dropped(slots.clone(), back.then_some(()), |_, s| {
-                writes += 1;
-                rejected_slots(&s, s.len(), identical)
-            });
-            assert_eq!(writes, 0, "no write onto the block already there");
-            assert_eq!(left, vec![("iron", 4), ("gold", 7)]);
+            let mut world = Fake {
+                now,
+                entity,
+                ..Fake::default()
+            };
+            let list = vec![([1, 2, 3], belt(slots.clone()))];
+            let drops = release_held_data(&mut world, list, moved, |_| false, |_| placed);
+            assert_eq!(world.restores, 0, "no write onto the block already there");
+            assert_eq!(world.merges, merges);
+            assert_eq!(
+                world.lookups.get(),
+                usize::from(placed),
+                "one lookup, if placed"
+            );
+            assert_eq!(
+                drops,
+                vec![([11, 2, 3], ("iron", 4)), ([11, 2, 3], ("gold", 7))]
+            );
         }
     }
 
     #[test]
     fn mounted_storage_of_an_unplaced_position_drops_even_over_an_identical_stack() {
-        let stored = vec![Some(("iron", 4)), Some(("gold", 7)), None];
-        // `release_storage`: `placed(p) && is_storage(p)`; an unplaced `p` never restores.
-        let target = storage_target([0, 0, 0], false, true);
-        let mut writes = 0;
-        let left = restored_or_dropped(stored, target, |_, s| {
-            writes += 1;
-            rejected_slots(&s, 20, identical)
-        });
-        assert_eq!(writes, 0);
-        assert_eq!(left, vec![("iron", 4), ("gold", 7)]);
+        let stored = vec![([1, 2, 3], vec![Some(("iron", 4)), Some(("gold", 7)), None])];
+        // An unplaced storage cell, and a placed cell that is no storage block.
+        for (placed, storage) in [(false, true), (true, false)] {
+            let mut world = Fake {
+                storage,
+                ..Fake::default()
+            };
+            release_stored(&mut world, stored.clone(), moved, |_| placed);
+            assert_eq!(world.restores, 0);
+            assert_eq!(
+                world.storage_lookups.get(),
+                usize::from(placed),
+                "no storage lookup for an unplaced cell"
+            );
+            assert_eq!(
+                world.drops,
+                vec![([11, 2, 3], ("iron", 4)), ([11, 2, 3], ("gold", 7))]
+            );
+        }
     }
 
     #[test]
     fn a_placed_same_block_keeps_an_identical_stack_without_duplicating_it() {
         let slots = vec![Some(("iron", 4)), Some(("gold", 7))];
-        let mut writes = 0;
-        let back = put_back_as(true, Some(Block::Belt), Some(Block::Belt));
-        let left = restored_or_dropped(slots.clone(), back.then_some(()), |_, s| {
-            writes += 1;
-            rejected_slots(&s, s.len(), identical)
-        });
-        assert_eq!(writes, 1);
-        assert!(left.is_empty());
-        let target = storage_target([0, 0, 0], true, true);
-        let left = restored_or_dropped(slots, target, |_, s| rejected_slots(&s, 20, identical));
-        assert!(left.is_empty());
+        let mut world = Fake {
+            now: Some(Block::Belt),
+            entity: Some(true),
+            ..Fake::default()
+        };
+        let list = vec![([1, 2, 3], belt(slots.clone()))];
+        let drops = release_held_data(&mut world, list, moved, |_| false, |_| true);
+        assert_eq!(world.lookups.get(), 1, "one lookup for merge and restore");
+        assert_eq!(world.restores, 1);
+        assert_eq!(world.merges, 1);
+        assert!(drops.is_empty());
+        let mut world = Fake {
+            storage: true,
+            ..Fake::default()
+        };
+        release_stored(&mut world, vec![([1, 2, 3], slots)], moved, |_| true);
+        assert_eq!(world.storage_lookups.get(), 1, "one storage lookup");
+        assert_eq!(world.restores, 1);
+        assert!(world.drops.is_empty());
     }
 }
