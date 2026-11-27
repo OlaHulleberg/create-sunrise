@@ -108,12 +108,30 @@ fn rolled(lv: &ServerLevel<'_>, at: [i32; 3], r: &deployer::Recipe) -> Vec<(Stri
         .collect()
 }
 
-/// The deployer's stroke starting toward a depot or belt: the ray from its face to the top of
-/// the block two ahead (`start`).
+/// How far `start`'s ray ([`deployer::start_ray`]) from the deployer at `pos` facing `facing`
+/// runs before a block's outline stops it (`level.clip`, no fluids): 1 when nothing does.
+fn start_ray_hit(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> f64 {
+    let (from, to) = deployer::start_ray(pos, facing);
+    let at = lv
+        .level
+        .clip(
+            &*lv.host,
+            from,
+            to,
+            mod_api::ClipBlock::Outline,
+            mod_api::ClipFluid::None,
+        )
+        .map_or(to, |hit| hit.location);
+    (0..3)
+        .map(|i| (at[i] - from[i]).powi(2))
+        .sum::<f64>()
+        .sqrt()
+}
+
+/// The deployer's stroke starting toward a depot or belt (`start`).
 fn start_over(lv: &ServerLevel<'_>, d: &mut Deployer, at: [i32; 3]) {
-    let top = lv.outline_top(at);
-    d.start((1.0 - top) as f32);
     let above = [at[0], at[1] + 2, at[2]];
+    d.start(start_ray_hit(lv, above, Dir::Down));
     let dim = lv.dim;
     with_world(|w| {
         let dd = &mut w.dims[dim];
@@ -433,12 +451,8 @@ impl deployer::World for Turn<'_, '_> {
         super::fist::start(self.lv, self.pos, self.facing, d)
     }
 
-    fn ray_hit(&mut self) -> f32 {
-        if self.lv.replaceable(super::step(self.pos, self.facing, 1)) {
-            0.75
-        } else {
-            0.0
-        }
+    fn ray_hit(&mut self) -> f64 {
+        start_ray_hit(self.lv, self.pos, self.facing)
     }
 
     fn trigger_fist_bump(&mut self, d: &mut Deployer) {

@@ -1,5 +1,5 @@
-//! The deployers' contract (`deployers.json`): the blocks a deployer reaches (full states), the
-//! items it holds and what the game does with them (`DeployerHandler`: a block item places its
+//! The deployers' contract (`deployers.json`): the blocks a deployer reaches (full states), how
+//! far `start`'s ray runs before each stops it, the items it holds and what the game does with them (`DeployerHandler`: a block item places its
 //! block, an axe, a shovel or a hoe turns the block it is used on), what a punch with each held
 //! stack does on each block (`getDestroyProgress` from the tool's speed and whether it harvests,
 //! the drops), and Create's deploying, item application and sandpaper polishing recipes for the
@@ -20,6 +20,7 @@ pub struct Contract {
     states: Vec<String>,
     pub items: Vec<Item>,
     pub blocks: Vec<Block>,
+    start_rays: Vec<StartRay>,
     dig: Vec<Dig>,
     recipes: Recipes,
 }
@@ -48,14 +49,23 @@ fn yes() -> bool {
     true
 }
 
-/// A block a deployer reaches: its outline's top (`getShape(..).max(Y)`, for `start`'s reach) and,
-/// when a punch can break it, its hardness (`getDestroySpeed`).
+/// A block a deployer reaches: when a punch can break it, its hardness (`getDestroySpeed`).
 #[derive(Deserialize, Clone)]
 pub struct Block {
     pub state: String,
-    pub top: f64,
     #[serde(default)]
     pub hardness: Option<f32>,
+}
+
+/// How far `DeployerBlockEntity.start`'s ray (`deployer::start_ray`) runs before `state`, two
+/// ahead of the deployer, stops it, facing down, up and east (the others as east). One ahead it
+/// never does.
+#[derive(Deserialize, Clone)]
+struct StartRay {
+    state: String,
+    down: f64,
+    up: f64,
+    east: f64,
 }
 
 /// A punch at the block `block` with `held`: the fake player's destroy speed, whether it
@@ -162,6 +172,26 @@ impl Contract {
             self.blocks
                 .iter()
                 .find(|b| crate::scenario::parse_state(&b.state).0 == name)
+        })
+    }
+    /// [`StartRay`] for `state` (its own, else the first of its block) with the deployer facing
+    /// `facing`.
+    pub fn start_hit(&self, state: &str, facing: create_engine::kinetics::Dir) -> Option<f64> {
+        use create_engine::kinetics::Dir;
+        let name = crate::scenario::parse_state(state).0;
+        let r = self
+            .start_rays
+            .iter()
+            .find(|r| r.state == state)
+            .or_else(|| {
+                self.start_rays
+                    .iter()
+                    .find(|r| crate::scenario::parse_state(&r.state).0 == name)
+            })?;
+        Some(match facing {
+            Dir::Down => r.down,
+            Dir::Up => r.up,
+            _ => r.east,
         })
     }
     pub fn dig(&self, held: &str, block: &str) -> Option<&Dig> {

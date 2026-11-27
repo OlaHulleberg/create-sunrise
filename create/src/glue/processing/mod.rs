@@ -893,14 +893,6 @@ impl ServerLevel<'_> {
             .is_empty()
     }
 
-    /// The top of the outline of the block at `p`, 0 to 1 (`getShape(..).max(Y)`).
-    pub fn outline_top(&self, p: [i32; 3]) -> f64 {
-        self.shape(p, mod_api::BlockShapeKind::Outline)
-            .iter()
-            .map(|b| b[4])
-            .fold(0.0, f64::max)
-    }
-
     /// The speed of the kinetic part at `pos`.
     pub fn speed(&self, pos: [i32; 3]) -> f32 {
         let dim = self.dim;

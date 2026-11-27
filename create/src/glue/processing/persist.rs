@@ -109,10 +109,11 @@ fn fluid_of(t: &Tag) -> Option<(tank::Fluid, u32)> {
     Some((fluid, int(c, "Amount").clamp(0, 1000) as u32))
 }
 
-/// What counts down in [`save_entities`]' records, from the live deployer's `Timer`, crusher's
-/// `Remaining` (`ProcessingInventory.remainingTime`), burner's `Remaining`
-/// (`remainingBurnTime`), saw's `ProcessingTime`, a breaker's `Progress`, `NextTick` and
-/// `Breaking`, millstone's `Timer` or press's `Running`, `Mode`, `Finished` and `Ticks` at `pos`.
+/// What changes in [`save_entities`]' records, from the live block entity at `pos`: the deployer
+/// as it stands (`DeployerBlockEntity.write`), the crusher's `Remaining`
+/// (`ProcessingInventory.remainingTime`), burner's `Remaining` (`remainingBurnTime`), saw's
+/// `ProcessingTime`, a breaker's `Progress`, `NextTick` and `Breaking`, millstone's `Timer` or
+/// press's `Running`, `Mode`, `Finished` and `Ticks`.
 pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compound) {
     use super::super::entity_data::patch;
     if block == Block::MechanicalSaw {
@@ -125,12 +126,8 @@ pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compoun
         let d = &w.dims[dim];
         match block {
             Block::Deployer => {
-                if let Some(dp) = d.deployers.get(&pos)
-                    && let Some(Tag::Compound(c)) = fields.get_mut(&DEPLOYER.into())
-                    && let Some(Tag::IntArray(v)) = c.get_mut(&"Values".into())
-                    && v.len() > 1
-                {
-                    v[1] = dp.timer;
+                if let Some(dp) = d.deployers.get(&pos) {
+                    fields.insert(DEPLOYER.into(), Tag::Compound(deployer_to_tag(dp)));
                 }
             }
             Block::CrushingWheelController => {
@@ -436,7 +433,8 @@ pub(crate) fn deployers_to_nbt(list: &[([i32; 3], deployer::Deployer)]) -> Tag {
                         p[2],
                         i32::from(d.state.index()),
                         d.timer,
-                        d.reach.to_bits() as i32,
+                        // Once `Reach`, which Create syncs but does not save.
+                        0,
                         i32::from(n),
                         i32::from(d.mode.index()),
                         i32::from(d.locked),
@@ -476,7 +474,7 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                 deployer::Deployer {
                     state: deployer::State::from_index(*v.get(3)? as u8),
                     timer: *v.get(4)?,
-                    reach: f32::from_bits(*v.get(5)? as u32),
+                    reach: 0.0,
                     held: (!item.is_empty() && n > 0).then_some((item, n)),
                     // Saved before modes: using.
                     mode: deployer::Mode::from_index(v.get(7).copied().unwrap_or(0) as u8),
@@ -673,6 +671,7 @@ mod tests {
         let d = deployer::Deployer {
             held: Some(("minecraft:stone".into(), 3)),
             timer: 120,
+            reach: 0.75,
             locked: true,
             held_damage: 7,
             held_components: vec![10, 0],
@@ -688,6 +687,8 @@ mod tests {
         assert_eq!(back[0].0, [1, 2, 3]);
         assert_eq!(back[0].1.held, d.held);
         assert_eq!(back[0].1.timer, 120);
+        // `Reach` is synced, not saved.
+        assert_eq!(back[0].1.reach, 0.0);
         assert!(back[0].1.locked);
         assert_eq!(back[0].1.held_damage, 7);
         assert_eq!(back[0].1.held_components, d.held_components);

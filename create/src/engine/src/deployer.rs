@@ -112,8 +112,8 @@ pub trait World {
     fn should_activate(&mut self, d: &Deployer) -> bool;
     /// `startFistBump`: whether it and a punching deployer facing it set off toward each other.
     fn start_fist_bump(&mut self, d: &mut Deployer) -> bool;
-    /// `start`'s ray toward the block two ahead: how far it runs before it hits (at most 1).
-    fn ray_hit(&mut self) -> f32;
+    /// How far [`start_ray`] runs before a block's outline stops it (1 when none does).
+    fn ray_hit(&mut self) -> f64;
     /// `triggerFistBump` at the bottom of a bump's stroke.
     fn trigger_fist_bump(&mut self, d: &mut Deployer);
     /// `activate`: the fake player uses or punches with what it holds.
@@ -121,11 +121,10 @@ pub trait World {
 }
 
 impl Deployer {
-    /// `start`: reach down, `reach` from the ray toward the block two ahead (`.5 + min(hit,
-    /// .75)`).
-    pub fn start(&mut self, hit: f32) {
+    /// `start`: reach down, `reach` from how far [`start_ray`] ran (`.5 + min(hit, .75)`).
+    pub fn start(&mut self, hit: f64) {
         self.state = State::Expanding;
-        self.reach = 0.5 + hit.min(0.75);
+        self.reach = (0.5 + hit.min(0.75)) as f32;
         self.timer = 1000;
     }
 
@@ -394,6 +393,16 @@ pub fn hive_harvest(block: &str, honey_level: u8, item: &str) -> Option<HiveHarv
     }
 }
 
+/// `DeployerBlockEntity.start`'s ray, from `3/2` to `5/2` ahead of the deployer's centre: through
+/// the block two ahead, from its face toward the deployer to its middle.
+pub fn start_ray(pos: [i32; 3], facing: Dir) -> ([f64; 3], [f64; 3]) {
+    let o = facing.offset();
+    let at = |scale: f64| -> [f64; 3] {
+        std::array::from_fn(|i| f64::from(pos[i]) + 0.5 + f64::from(o[i]) * scale)
+    };
+    (at(1.5), at(2.5))
+}
+
 /// The block the fake player reaches (`activate`'s `clickedPos`): two ahead of the deployer.
 pub fn clicked(pos: [i32; 3], facing: Dir) -> [i32; 3] {
     let o = facing.offset();
@@ -628,7 +637,7 @@ mod tests {
         fn start_fist_bump(&mut self, _: &mut Deployer) -> bool {
             false
         }
-        fn ray_hit(&mut self) -> f32 {
+        fn ray_hit(&mut self) -> f64 {
             1.0
         }
         fn trigger_fist_bump(&mut self, _: &mut Deployer) {}
@@ -696,7 +705,7 @@ mod tests {
             fn start_fist_bump(&mut self, _: &mut Deployer) -> bool {
                 false
             }
-            fn ray_hit(&mut self) -> f32 {
+            fn ray_hit(&mut self) -> f64 {
                 1.0
             }
             fn trigger_fist_bump(&mut self, _: &mut Deployer) {}

@@ -1,5 +1,5 @@
 {
- "_comment": "The deployers' contract: the blocks a deployer may reach (full states), the items it may hold and what the game does with them (DeployerHandler: a block item places `block`, an axe, a shovel or a hoe turns the block it is used on), what a punch with each held stack does on each block (`getDestroyProgress` from the tool's speed and whether it harvests; the drops of `tryHarvestBlock`), and Create's deploying, item application and sandpaper polishing recipes for the pairs the families reach (data/create/recipe, MIT; each tag ingredient as the items of this contract it takes). The server audits every entry at startup (DeployerAudit).",
+ "_comment": "The deployers' contract: the blocks a deployer may reach (full states), how far `DeployerBlockEntity.start`'s ray runs before each, two ahead, stops it (facing down, up and east), the items it may hold and what the game does with them (DeployerHandler: a block item places `block`, an axe, a shovel or a hoe turns the block it is used on), what a punch with each held stack does on each block (`getDestroyProgress` from the tool's speed and whether it harvests; the drops of `tryHarvestBlock`), and Create's deploying, item application and sandpaper polishing recipes for the pairs the families reach (data/create/recipe, MIT; each tag ingredient as the items of this contract it takes). The server audits every entry at startup (DeployerAudit).",
  "states": [
   "create:andesite_casing",
   "create:belt[facing=south,slope=horizontal,casing=false,waterlogged=false]",
@@ -199,52 +199,188 @@
  "blocks": [
   {
    "state": "minecraft:stone",
-   "hardness": 1.5,
-   "top": 1.0
+   "hardness": 1.5
   },
   {
    "state": "minecraft:cobblestone",
-   "hardness": 2.0,
-   "top": 1.0
+   "hardness": 2.0
   },
   {
    "state": "minecraft:dirt",
-   "hardness": 0.5,
-   "top": 1.0
+   "hardness": 0.5
   },
   {
    "state": "minecraft:grass_block[snowy=false]",
-   "hardness": 0.6,
-   "top": 1.0
+   "hardness": 0.6
   },
   {
    "state": "minecraft:oak_planks",
-   "hardness": 2.0,
-   "top": 1.0
+   "hardness": 2.0
   },
   {
    "state": "minecraft:oak_log[axis=y]",
-   "hardness": 2.0,
-   "top": 1.0
+   "hardness": 2.0
   },
   {
    "state": "minecraft:stripped_oak_log[axis=y]",
-   "hardness": 2.0,
-   "top": 1.0
+   "hardness": 2.0
   },
   {
    "state": "minecraft:bedrock",
-   "hardness": -1.0,
-   "top": 1.0
+   "hardness": -1.0
   },
   {
    "state": "create:depot[waterlogged=false]",
-   "hardness": 1.5,
-   "top": 0.8125
+   "hardness": 1.5
+  },
+  {
+   "state": "create:belt[facing=south,slope=horizontal,casing=false,waterlogged=false]"
+  }
+ ],
+ "start_rays": [
+  {
+   "state": "create:andesite_casing",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
   },
   {
    "state": "create:belt[facing=south,slope=horizontal,casing=false,waterlogged=false]",
-   "top": 0.8125
+   "down": 0.1875,
+   "up": 0.1875,
+   "east": 0.0625
+  },
+  {
+   "state": "create:brass_casing",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "create:copper_casing",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "create:depot[waterlogged=false]",
+   "down": 0.1875,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:bedrock",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:cobblestone",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:copper_block",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:dirt",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:dirt_path",
+   "down": 0.0625,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:exposed_copper",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:farmland[moisture=0]",
+   "down": 0.0625,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:grass_block[snowy=false]",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:honeycomb_block",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:oak_log[axis=y]",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:oak_planks",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:stone",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:stripped_oak_log[axis=y]",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:waxed_copper_block",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "minecraft:waxed_exposed_copper",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "create:shaft",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.3125
+  },
+  {
+   "state": "create:cogwheel",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.125
+  },
+  {
+   "state": "create:large_cogwheel",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
+  },
+  {
+   "state": "create:deployer",
+   "down": 0.001,
+   "up": 0.001,
+   "east": 0.001
   }
  ],
  "dig": [
