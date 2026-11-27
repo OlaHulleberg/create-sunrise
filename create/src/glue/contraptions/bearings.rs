@@ -446,18 +446,30 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
             continue;
         };
         let gathered = contraption::gather_windmill(pos, facing, |p| found(lv, p));
-        let (blocks, sails) = match gathered {
+        let (mut blocks, mut sails) = match gathered {
             Ok(g) => g,
             Err(r) => {
                 set_exception(lv, pos, Some(&r));
                 continue;
             }
         };
+        let Some(air) = super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(pos, *o))) else {
+            continue;
+        };
         set_exception(lv, pos, None);
-        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         actors::carry_storage(lv, pos, pos, &blocks);
-        let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-        take_blocks(lv, pos, &blocks);
+        let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+        let refused = take_blocks(lv, pos, &blocks, air);
+        super::drop_refused(pos, &refused, &mut blocks, Some(&mut extras));
+        if blocks.is_empty() {
+            actors::drop_storage(lv, pos, |o| add(pos, o));
+            actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
+            continue;
+        }
+        if !refused.is_empty() {
+            sails = super::count_sails(&*lv.host, &blocks);
+        }
+        crate::glue::advancements::windmill_assembled(lv, pos, &blocks, sails);
         // `RotationDirection` on its value box: clockwise unless set otherwise.
         let clockwise = super::option_at(dim, pos) == 0;
         // `assemble`: the angle starts at 0, turning at the speed its sails generate
@@ -714,18 +726,32 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
             }
             None if rpm != 0.0 => {
                 let gathered = contraption::gather_bearing(pos, facing, 0, |p| found(lv, p));
-                let (blocks, sails) = match gathered {
+                let (mut blocks, mut sails) = match gathered {
                     Ok(g) => g,
                     Err(r) => {
                         set_exception(lv, pos, Some(&r));
                         continue;
                     }
                 };
+                let Some(air) =
+                    super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(pos, *o)))
+                else {
+                    continue;
+                };
                 set_exception(lv, pos, None);
-                crate::glue::advancements::assembled(lv, pos, &blocks);
                 actors::carry_storage(lv, pos, pos, &blocks);
-                let extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-                take_blocks(lv, pos, &blocks);
+                let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
+                let refused = take_blocks(lv, pos, &blocks, air);
+                super::drop_refused(pos, &refused, &mut blocks, Some(&mut extras));
+                if blocks.is_empty() {
+                    actors::drop_storage(lv, pos, |o| add(pos, o));
+                    actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
+                    continue;
+                }
+                if !refused.is_empty() {
+                    sails = super::count_sails(&*lv.host, &blocks);
+                }
+                crate::glue::advancements::assembled(lv, pos, &blocks);
                 let w = create_engine::world::Windmill {
                     extras,
                     blocks,
@@ -873,12 +899,21 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         }
         let moving_dir = if v > 0.0 { sf } else { sf.opposite() };
         let gathered = contraption::gather_gantry(c, cf, moving_dir, |p| found(lv, p));
-        let Ok(blocks) = gathered else {
+        let Ok(mut blocks) = gathered else {
             continue;
         };
-        let carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        let Some(air) = super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(c, *o))) else {
+            continue;
+        };
+        let mut carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
+        let refused = take_blocks(lv, c, &blocks, air);
+        super::drop_refused(c, &refused, &mut blocks, Some(&mut carried));
+        if blocks.is_empty() {
+            actors::drop_storage(lv, c, |o| add(c, o));
+            actors::release_extras(lv, &mut carried, |o| add(c, o), |_| false);
+            continue;
+        }
         crate::glue::advancements::assembled(lv, c, &blocks);
-        take_blocks(lv, c, &blocks);
         let limit = sequence_limit(dim, shaft, true);
         with_world(|w| {
             w.dims[dim].gantries.push(Moving {
@@ -1286,7 +1321,6 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
             return;
         }
     };
-    set_exception(lv, pos, None);
     let o = facing.offset();
     let mut blocks: Vec<([i32; 3], u32)> = c
         .poles
@@ -1301,16 +1335,22 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     let origin = piston_world(c.anchor, [0; 3], facing, c.progress);
     let local: Vec<([i32; 3], u32)> = blocks
         .iter()
-        .filter(|(l, _)| piston_world(c.anchor, *l, facing, c.progress) != pos)
+        .filter(|(l, _)| add(origin, *l) != pos)
         .copied()
         .collect();
-    let carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
-    let cells: Vec<([i32; 3], u32)> = blocks
-        .iter()
-        .map(|(l, s)| (piston_world(c.anchor, *l, facing, c.progress), *s))
-        .filter(|(p, _)| *p != pos)
-        .collect();
-    super::remove_cells(lv, &cells);
+    let cells: Vec<([i32; 3], u32)> = local.iter().map(|(l, s)| (add(origin, *l), *s)).collect();
+    let Some(air) = super::preflight_cells(lv, cells.iter().map(|(p, _)| *p)) else {
+        return;
+    };
+    set_exception(lv, pos, None);
+    let mut carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
+    let refused = super::remove_cells(lv, &cells, air);
+    super::drop_refused(origin, &refused, &mut blocks, Some(&mut carried));
+    if refused.len() == cells.len() {
+        actors::drop_storage(lv, pos, |o| add(origin, o));
+        actors::release_extras(lv, &mut carried, |o| add(origin, o), |_| false);
+        return;
+    }
     crate::glue::advancements::assembled(lv, pos, &blocks);
     lv.set_property(pos, "state", "moving", update_all());
     super::super::persist::mark_pos_unsaved(dim, pos);

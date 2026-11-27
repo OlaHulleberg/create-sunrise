@@ -1538,6 +1538,21 @@ pub(crate) fn release_storage(
     release_stored(&mut ServerStorage(lv), stored, place, placed);
 }
 
+/// Drops everything contraption `key` carried when no structure started (never staged).
+pub(crate) fn drop_storage(
+    lv: &mut ServerLevel<'_>,
+    key: [i32; 3],
+    place: impl Fn([i32; 3]) -> [i32; 3],
+) {
+    for (pos, stack) in release_held_items(lv, key, &place, |_| false, |_| false) {
+        lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+    }
+    let stored = STORAGE
+        .with_borrow_mut(|m| m.remove(&(lv.dim, key)))
+        .unwrap_or_default();
+    release_stored(&mut ServerStorage(lv), stored, place, |_| false);
+}
+
 /// Each storage block's items `o` back at `place(o)`: a fresh storage block written there
 /// (`placed`) takes them, what it refuses drops; a cell not written, or written with a
 /// non-storage block, never takes them, they all drop. A storage block that was already there

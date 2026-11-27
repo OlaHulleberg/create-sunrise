@@ -348,7 +348,7 @@ pub(super) fn clock_hands_set(lv: &mut ServerLevel<'_>, pos: [i32; 3], index: u8
 /// `ClockworkBearingBlockEntity.assemble`: the hour hand and the minute hand leave the world.
 fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32) {
     let dim = lv.dim;
-    let hands = match create_engine::clock::gather(pos, facing, |p| found(lv, p)) {
+    let mut hands = match create_engine::clock::gather(pos, facing, |p| found(lv, p)) {
         Ok(Some(hands)) => hands,
         Ok(None) => return,
         Err(r) => {
@@ -356,13 +356,29 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
             return;
         }
     };
-    super::set_exception(lv, pos, None);
     let mut all = hands.hour.clone();
     if let Some((_, m)) = &hands.minute {
         all.extend(m.iter().copied());
     }
+    let Some(air) = super::preflight_cells(lv, all.iter().map(|(o, _)| add(pos, *o))) else {
+        return;
+    };
+    super::set_exception(lv, pos, None);
     actors::carry_storage(lv, pos, pos, &all);
-    let extras = actors::carry_extras(lv, pos, &all, |p| p == pos);
+    let mut extras = actors::carry_extras(lv, pos, &all, |p| p == pos);
+    let refused = take_blocks(lv, pos, &all, air);
+    super::drop_refused(pos, &refused, &mut hands.hour, Some(&mut extras));
+    if let Some((_, m)) = &mut hands.minute {
+        super::drop_refused(pos, &refused, m, None);
+        if m.is_empty() {
+            hands.minute = None;
+        }
+    }
+    if hands.hour.is_empty() && hands.minute.is_none() {
+        actors::drop_storage(lv, pos, |o| add(pos, o));
+        actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
+        return;
+    }
     if !extras.controls.is_empty() || !extras.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), extras));
     }
@@ -372,10 +388,6 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
         &hands.hour,
         hands.minute.as_ref().map(|m| &m.1[..]),
     );
-    take_blocks(lv, pos, &hands.hour);
-    if let Some((_, m)) = &hands.minute {
-        take_blocks(lv, pos, m);
-    }
     let arrangement = create_engine::clock::Hands::from_index(super::option_at(dim, pos) as u8);
     let c = create_engine::lifts::RunningClock {
         clock: create_engine::clock::Clock {
@@ -584,7 +596,6 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
             return;
         }
     };
-    super::set_exception(lv, pos, None);
     let mut p = Pulley::new(anchor, offset, range, blocks);
     p.rpm = rpm;
     p.limit = with_world(|w| w.dims[dim].kinetics.sequence_limit(pos, 0, true)).flatten();
@@ -597,24 +608,50 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     {
         return;
     }
+    let ropes: Vec<_> = (1..=offset)
+        .map(|j| {
+            let c = below(pos, j);
+            (c, rope_at(lv, c) == Some(true))
+        })
+        .collect();
+    let targets: Vec<_> = ropes
+        .iter()
+        .copied()
+        .chain(p.blocks.iter().map(|(o, _)| (add(anchor, *o), false)))
+        .collect();
+    let Some((air, water)) = super::preflight_targets(lv, &targets) else {
+        return;
+    };
+    super::set_exception(lv, pos, None);
+    let mut cleared_rope = false;
     // `removeRopes`: rope in water leaves water.
-    for j in 1..=offset {
-        let c = below(pos, j);
-        if rope_at(lv, c) == Some(true)
-            && let Some(water) = lv.host.block_state_id("minecraft:water")
-        {
-            lv.set_state(c, water, UPDATE_CLIENTS);
+    for (c, wet) in ropes {
+        let target = if wet { water.unwrap_or(air) } else { air };
+        if lv.set_state(c, target, UPDATE_CLIENTS) {
+            cleared_rope = true;
         } else {
-            lv.set_air(c, UPDATE_CLIENTS);
+            crate::create_log!("[create] refused removing rope at {c:?} during pulley assembly");
         }
     }
     // Its actors, storage, glue and controls ride with it (`Contraption.addBlock`).
-    let carried = actors::carry(lv, pos, anchor, &p.blocks, |_| false);
+    let mut carried = actors::carry(lv, pos, anchor, &p.blocks, |_| false);
+    let refused = take_blocks(lv, anchor, &p.blocks, air);
+    super::drop_refused(anchor, &refused, &mut p.blocks, Some(&mut carried));
+    if !cleared_rope && !targets.is_empty() && p.blocks.is_empty() {
+        actors::drop_storage(lv, pos, |o| add(anchor, o));
+        actors::release_extras(lv, &mut carried, |o| add(anchor, o), |_| false);
+        return;
+    }
+    if !refused.is_empty() {
+        let (rpm, limit) = (p.rpm, p.limit);
+        p = Pulley::new(p.anchor, p.initial, p.range, p.blocks);
+        p.rpm = rpm;
+        p.limit = limit;
+    }
     if !carried.actors.is_empty() || !carried.controls.is_empty() || !carried.glue.is_empty() {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
     crate::glue::advancements::assembled(lv, pos, &p.blocks);
-    take_blocks(lv, anchor, &p.blocks);
     with_world(|w| w.dims[dim].lifts.pulleys.insert(pos, p));
     show_pulley(lv, pos);
     mark_unsaved(lv, pos);
@@ -1293,7 +1330,7 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     }
     let offset = i - 1;
     let anchor = below(pos, offset + 1);
-    let Ok(blocks) = pulley::gather(anchor, offset, |p| found(lv, p)) else {
+    let Ok(mut blocks) = pulley::gather(anchor, offset, |p| found(lv, p)) else {
         return;
     };
     // `ElevatorContraption.capture`: its redstone contacts facing sideways; one, no more.
@@ -1320,7 +1357,17 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     if conflict != Some(false) {
         return;
     }
+    let Some(air) = super::preflight_cells(lv, blocks.iter().map(|(o, _)| add(anchor, *o))) else {
+        return;
+    };
     let mut carried = actors::carry(lv, pos, anchor, &blocks, |_| false);
+    let refused = take_blocks(lv, anchor, &blocks, air);
+    super::drop_refused(anchor, &refused, &mut blocks, Some(&mut carried));
+    if blocks.is_empty() {
+        actors::drop_storage(lv, pos, |o| add(anchor, o));
+        actors::release_extras(lv, &mut carried, |o| add(anchor, o), |_| false);
+        return;
+    }
     // An elevator's controls choose floors: none turns its kind off as it starts
     // (`ElevatorContraption.disableActorOnStart` does nothing), and they forget their filters
     // (`ContraptionControlsMovement.startMoving`).
@@ -1335,7 +1382,6 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
         PULLEY_CARRIED.with_borrow_mut(|c| c.insert((dim, pos), carried));
     }
     crate::glue::advancements::assembled(lv, pos, &blocks);
-    take_blocks(lv, anchor, &blocks);
     let (min_y, height) = lv.build_range();
     let range = pulley::extension_range(pos[1], min_y);
     let e = Elevator::new(pos[1], anchor, offset, range, column, contact_y, blocks);
