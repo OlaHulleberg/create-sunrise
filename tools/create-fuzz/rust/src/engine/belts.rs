@@ -116,10 +116,7 @@ impl Run {
 impl Run {
     /// The segment at `p` is cased (its `casing` property).
     pub(super) fn belt_cased(&self, p: Pos) -> bool {
-        self.w
-            .table
-            .get(self.at(p))
-            .is_some_and(|(b, _)| b == Block::Belt)
+        self.segment(p).is_some()
             && parse_state(&self.name(self.at(p)))
                 .1
                 .iter()
@@ -523,6 +520,9 @@ impl Run {
 impl belt::BreakWorld for Run {
     fn take_breaks(&mut self) -> Vec<create_engine::world::BeltBreak> {
         std::mem::take(&mut self.w.dims[0].belt_breaks)
+    }
+    fn segment(&self, pos: [i32; 3]) -> Option<belt::Segment> {
+        Run::segment(self, pos)
     }
     fn replace(&mut self, b: create_engine::world::BeltBreak) {
         let s = b.shaft.map(|axis| {

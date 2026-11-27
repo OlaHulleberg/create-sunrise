@@ -691,6 +691,10 @@ impl belt::BreakWorld for BeltBreakWorld<'_, '_> {
         with_world(|w| std::mem::take(&mut w.dims[self.0.dim].belt_breaks)).unwrap_or_default()
     }
 
+    fn segment(&self, pos: [i32; 3]) -> Option<belt::Segment> {
+        super::info_at(self.0, pos).and_then(|(_, i)| i.belt)
+    }
+
     fn replace(&mut self, b: create_engine::world::BeltBreak) {
         let lv = &mut *self.0;
         let state = {
