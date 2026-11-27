@@ -240,8 +240,8 @@ pub const FAMILIES: &[Family] = &[
     family("network/face_placement", &[(256, 220)], face_placement),
     family("network/face_wrench", &[(256, 252)], face_wrench),
     family("network/driven_placement", &[(256, 124)], driven_placement),
-    // Processing machines, on residues geometry/states and geometry/stress_boundary gave up;
-    // none reloads.
+    // Processing machines, on residues geometry/states and geometry/stress_boundary gave up.
+    // None reloads by seed bit: the basin ones lie below it, and pick their reloads by index.
     family(
         "processing/millstone",
         &[(256, 205)],
@@ -253,11 +253,17 @@ pub const FAMILIES: &[Family] = &[
         crate::processing::crushing,
     ),
     family("processing/saw", &[(256, 128)], crate::processing::saw),
-    family("processing/mixing", &[(256, 77)], crate::basin::mixing),
-    family(
+    reloading(
+        "processing/mixing",
+        &[(256, 77)],
+        crate::basin::mixing,
+        basin_reloads,
+    ),
+    reloading(
         "processing/compacting",
         &[(256, 93)],
         crate::basin::compacting,
+        basin_reloads,
     ),
     // Stationary block breaking, on geometry/stress_boundary's 64 and 192; neither reloads by
     // seed bit (the drill history reloads by its own actions).
@@ -315,6 +321,12 @@ fn deployers(seed: u64) -> Scenario {
 }
 fn deployers_reload(seed: u64) -> bool {
     crate::deployers::reloads(index(seed))
+}
+
+/// The basin families reload every other seed of theirs (`index` odd), so each of their
+/// histories (running or idle at the reload the sampled phase decides) comes both ways.
+fn basin_reloads(seed: u64) -> bool {
+    index(seed) % 2 == 1
 }
 
 /// The owning family of each residue.

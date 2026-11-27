@@ -38,9 +38,11 @@ impl Mode {
     }
 }
 
-/// The press's state: `running`, `runningTicks`, `mode`, `finished`.
+/// A mechanical press's block entity (`MechanicalPressBlockEntity`): the basin operator it is,
+/// and its `PressingBehaviour`'s `running`, `runningTicks`, `mode` and `finished`.
 #[derive(Clone, Copy, Debug, Default, PartialEq)]
 pub struct Press {
+    pub operator: crate::basin_operator::Operator,
     pub running: bool,
     pub ticks: i32,
     pub mode: Mode,
@@ -80,12 +82,17 @@ pub fn head_offset(ticks: f32) -> f32 {
 impl Press {
     /// `PressingBehaviour.start`.
     pub fn start(&mut self, mode: Mode) {
-        *self = Press {
-            running: true,
-            ticks: 0,
-            mode,
-            finished: false,
-        };
+        self.running = true;
+        self.ticks = 0;
+        self.mode = mode;
+        self.finished = false;
+    }
+
+    /// `BasinOperatingBlockEntity.updateBasin`'s `currentRecipe = recipes.get(0)`, then
+    /// `MechanicalPressBlockEntity.startProcessingBasin`.
+    pub fn start_in_basin(&mut self, recipe: usize) {
+        self.operator.recipe = Some(recipe);
+        self.start(Mode::Basin);
     }
 
     /// `MechanicalPressBlockEntity.onPressingCompleted`, after the tick that ended the cycle:
@@ -216,6 +223,7 @@ pub fn decode(data: &[u8]) -> Vec<([i32; 3], Press)> {
                     ticks: i(&r[13..17]),
                     mode: Mode::from_index(r[17]),
                     finished: false,
+                    ..Press::default()
                 },
             )
         })
@@ -292,7 +300,7 @@ mod tests {
             running: true,
             ticks: CYCLE / 2 - 4,
             mode: Mode::Belt,
-            finished: false,
+            ..Press::default()
         };
         assert_eq!(depot_step(&mut held, &press, 32.0, false), Step::Wait);
         assert!(held.locked);
@@ -364,6 +372,26 @@ mod tests {
         }
     }
 
+    /// `PressingBehaviour.start` leaves `BasinOperatingBlockEntity`'s fields alone.
+    #[test]
+    fn starting_a_cycle_keeps_the_operator_s_state() {
+        let mut press = Press::default();
+        press.operator.checker.schedule();
+        press.operator.removed = true;
+        press.start(Mode::Belt);
+        assert!((press.operator.checker.pending(), press.operator.removed) == (true, true));
+    }
+
+    /// `MechanicalPressBlockEntity.startProcessingBasin` with `updateBasin`'s `currentRecipe`.
+    #[test]
+    fn a_press_started_over_a_basin_keeps_the_recipe_it_looked_at() {
+        let mut press = Press::default();
+        press.start_in_basin(3);
+        assert_eq!(press.operator.recipe, Some(3));
+        assert_eq!((press.running, press.mode), (true, Mode::Basin));
+        assert_eq!(Press::default().operator.recipe, None);
+    }
+
     #[test]
     fn cycles_round_trip() {
         let all = vec![(
@@ -372,7 +400,7 @@ mod tests {
                 running: true,
                 ticks: 120,
                 mode: Mode::Belt,
-                finished: false,
+                ..Press::default()
             },
         )];
         assert_eq!(decode(&encode(&all)[0]), all);

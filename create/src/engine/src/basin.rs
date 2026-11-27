@@ -461,15 +461,14 @@ pub fn matching(recipes: &[Recipe], slots: &[Slot], tanks: &Tanks, cx: &Context)
     out
 }
 
-/// The mixer's cycle (`MechanicalMixerBlockEntity.tick`): 20 ticks down, the processing time at
-/// the bottom, 20 ticks up.
+/// A mechanical mixer's block entity (`MechanicalMixerBlockEntity`): the basin operator it is,
+/// and its cycle (`tick`): 20 ticks down, the processing time at the bottom, 20 ticks up.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Mixer {
+    pub operator: super::basin_operator::Operator,
     pub running: bool,
     pub running_ticks: i32,
     pub processing_ticks: i32,
-    /// The recipe being mixed (`currentRecipe`), by index.
-    pub recipe: Option<usize>,
 }
 
 /// `BasinBlockEntity.recipeBackupCheck`: counted down by each of the basin's lazy ticks
@@ -512,16 +511,17 @@ fn log2(v: i32) -> i32 {
 }
 
 impl Mixer {
+    /// `BasinOperatingBlockEntity.updateBasin`'s `currentRecipe = recipes.get(0)`, then
     /// `startProcessingBasin`: leaves `processing_ticks` as it was, so the first cycle of a fresh
     /// mixer (0) spends a tick going to -1 before it works the time out, and a cycle stopped
     /// mid-mix resumes its countdown.
     pub fn start(&mut self, recipe: usize) {
+        self.operator.recipe = Some(recipe);
         if self.running && self.running_ticks <= 20 {
             return;
         }
         self.running = true;
         self.running_ticks = 0;
-        self.recipe = Some(recipe);
     }
 
     /// `continueWithPreviousRecipe` after `applyBasinRecipe` applied the recipe: the head stays

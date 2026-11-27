@@ -8,7 +8,8 @@ shafts and cogs stay in the kinetic catalogue.
 ## Driven
 
 Seven families, one residue each modulo 256 (`rust/src/processing.rs`, `rust/src/breaking.rs`,
-the two basin ones in `rust/src/basin.rs`). None reloads.
+the two basin ones in `rust/src/basin.rs`). None reloads by seed bit: the basin ones lie below
+it, and reload every other seed of theirs by `index` (#458).
 
 | Family | Residue | Machine |
 | --- | --- | --- |
@@ -139,6 +140,12 @@ is `create:blaze_burner[blaze]`, a magma block or a lit campfire (`BasinBlockEnt
   batches outputs taken by handler, the basin emptied by hand, the motor stopped or slowed, the
   basin removed, the wrench on the spout, a bucket filled; the basin and its operator placed in
   either order; and a depot the basin spouts into in 30% of the seeds.
+- Reload (`persistence::schedule`, in every other seed by `index`): the basin with its tanks,
+  the mixer or the press and its cycle (`Running`, `Ticks`, `NeedsUpdate`) are saved and loaded
+  at a sampled boundary, right after a bucket or an item went in, while the machine runs,
+  between cycles, after placement or settled. The driver mirrors the glue's load: the column's
+  records, the entities' `read` (`read_mixer`, `read_press`, the tanks), then `block_loaded`,
+  which constructs each block entity with its operator from what it read.
 - Observed: the basin's slots, tanks and filter; the mixer's `running`, `runningTicks`,
   `processingTicks`; the press's `running`, `runningTicks`, `mode`; the depot's stack and what is
   dropped.
@@ -294,6 +301,26 @@ The driver spilled a broken millstone's slots as `Block.popResource` does; the g
 mod container as `Containers.dropContents` does, as Create's `destroy` (:144,
 `ItemHelper.dropContents`) does, so seeds 973 and 1485 differed whenever Java's items landed
 outside the narrower range.
+
+Fixed (#458), each with a case in `cases/`:
+
+| Case | Java | Port before | Deciding Java |
+| --- | --- | --- | --- |
+| `processing-basin-mixer-reload`, `processing-basin-press-reload` | A mixer or a press over a basin, saved and loaded, is asked by its basin's fresh `contentsChanged` and looks: inputs added after the reload are processed | The operator was never made: the saved cycle was read before the engine knew the block, and `place` then found the mixer or the press present, so nothing reached its `basinChecker` | `BasinOperatingBlockEntity.java:41-46`, `BasinBlockEntity.java:117`, `:357-361` |
+| `processing-basin-mixer-reload-mid`, `processing-basin-press-reload-mid` | A machine loaded mid-cycle goes on with what it saved (`Running`, `Ticks`, `NeedsUpdate`); `currentRecipe` is not saved, so a press's resumed cycle compacts nothing, and each looks again when its cycle ends | The operator was never made, and the press kept the recipe it had looked at | `DeferralBehaviour.java:28-37`, `MechanicalPressBlockEntity.java:83-84`, `:101-112`, `:170-178`, `BasinOperatingBlockEntity.java:110-112` |
+
+With them: a basin's `recipeBackupCheck` is not saved, so one that loads starts at 20
+(`BasinBlockEntity.java:131`; the glue forgot it once a tick, which a load with no tick in
+between kept), and a mixer or a press replaced by another of Create's blocks left its state for
+the next one there. Seed 349's reload showed the driver carrying no basin tanks across a
+reload; they go through `BasinTanks` now, as the glue's do.
+
+Not fixed, seen while placing `processing-basin-press-reload-mid`: a basin's tanks sync lazily
+(`SmartFluidTankBehaviour.java:100-110`, `SYNC_RATE` 8). `initialize` calls each segment's
+`onFluidStackChanged`, whose `sendDataLazily` answers at once and queues the second segment's;
+8 ticks later that runs `whenFluidUpdates` again, so the basin asks its operator to look once
+more at its 8th tick. The port has no such sync. No family has inputs by then and every real
+change of contents tells the operator at once, so no case shows it.
 
 Fixed on `main` (#290, #296, #291, #297, #289), each kept by its case here:
 

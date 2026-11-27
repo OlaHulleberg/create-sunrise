@@ -25,6 +25,15 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
             None => {}
         },
         Some(Block::ItemDrain) => super::fluids::live_drain(w, p, fields),
+        // glue/processing/persist.rs `live_fields`: a burner's `Remaining`.
+        Some(Block::BlazeBurner) => {
+            if let Some(b) = w.dims[0].burners.get(&p)
+                && b.creative.is_none()
+                && let Some(Tag::Compound(c)) = fields.get_mut(BURNER)
+            {
+                c.insert("Remaining".into(), Tag::Int(b.remaining));
+            }
+        }
         // glue/processing/saw.rs `live_saw`, and `live_breaker` (`BlockBreakingKineticBlockEntity.write`).
         Some(Block::MechanicalSaw) => {
             if let Some(s) = w.dims[0].saws.get(&p)
@@ -47,20 +56,16 @@ pub fn live_fields(w: &CreateWorld, p: Pos, now: u64, fields: &mut Compound) {
                 fields.insert("Timer".into(), Tag::Int(m.timer));
             }
         }
-        // glue/processing/persist.rs `live_fields`: the press's cycle.
+        // glue/processing/persist.rs `live_fields`: the press's cycle and its `NeedsUpdate`.
         Some(Block::MechanicalPress) => {
             if let Some(pr) = w.dims[0].presses.get(&p) {
-                fields.insert("Running".into(), Tag::Byte(i8::from(pr.running)));
-                fields.insert("Mode".into(), Tag::Int(i32::from(pr.mode.index())));
-                fields.insert("Finished".into(), Tag::Byte(i8::from(pr.finished)));
-                fields.insert("Ticks".into(), Tag::Int(pr.ticks));
+                write_press(pr, fields);
             }
         }
-        // glue/processing/persist.rs `live_fields`: the mixer's `Running` and `Ticks`.
+        // glue/processing/persist.rs `live_fields`: the mixer's `Running`, `Ticks` and `NeedsUpdate`.
         Some(Block::MechanicalMixer) => {
             if let Some(m) = w.dims[0].mixers.get(&p) {
-                fields.insert("Running".into(), Tag::Byte(i8::from(m.running)));
-                fields.insert("Ticks".into(), Tag::Int(m.running_ticks));
+                write_mixer(m, fields);
             }
         }
         // glue/processing/persist.rs `live_fields`: the deployer as it stands.
@@ -339,24 +344,25 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
                 .insert("Timer".into(), Tag::Int(m.timer));
         }
     }
-    // glue/processing/persist.rs `save_entities`: the press's `Running`, `Mode`, `Finished`
-    // and `Ticks`.
+    // glue/processing/persist.rs `save_entities`: the press's cycle and `NeedsUpdate`, and the
+    // mixer's `Running`, `Ticks` and `NeedsUpdate`.
     for (p, pr) in w.dims[0].presses.iter() {
         if (p[0] >> 4, p[2] >> 4) == column {
-            let e = out.entry(*p).or_default();
-            e.insert("Running".into(), Tag::Byte(i8::from(pr.running)));
-            e.insert("Mode".into(), Tag::Int(i32::from(pr.mode.index())));
-            e.insert("Finished".into(), Tag::Byte(i8::from(pr.finished)));
-            e.insert("Ticks".into(), Tag::Int(pr.ticks));
+            write_press(pr, out.entry(*p).or_default());
         }
     }
-    // glue/processing/persist.rs `save_entities`: the mixer's `Running` and `Ticks`.
     for (p, m) in w.dims[0].mixers.iter() {
         if (p[0] >> 4, p[2] >> 4) == column {
-            let e = out.entry(*p).or_default();
-            e.insert("Running".into(), Tag::Byte(i8::from(m.running)));
-            e.insert("Ticks".into(), Tag::Int(m.running_ticks));
+            write_mixer(m, out.entry(*p).or_default());
         }
+    }
+    // glue/processing/persist.rs `save_entities`: the basins' tanks.
+    for (p, t) in w.dims[0]
+        .basin_fluids
+        .iter()
+        .filter(|(p, _)| (p[0] >> 4, p[2] >> 4) == column)
+    {
+        super::fluids::save_basin_tanks(t, out.entry(*p).or_default());
     }
     // glue/processing/saw.rs `save_breakers`: `BlockBreakingKineticBlockEntity.write`.
     for (p, b) in w.dims[0].drills.iter() {
@@ -369,6 +375,10 @@ pub fn save_column(w: &CreateWorld, column: (i32, i32), now: u64) -> BTreeMap<Po
         out.entry(p)
             .or_default()
             .insert(DEPLOYER_STATE.into(), Tag::Compound(deployer_to_tag(&d)));
+    }
+    // glue/processing/persist.rs `save_entities`: each burner's fuel.
+    for (p, b) in w.column_burners(0, cx, cz) {
+        write_burner(&b, out.entry(p).or_default());
     }
     super::fluids::save_entities(w, column, &mut out);
     out
@@ -418,56 +428,148 @@ pub fn load(w: &mut CreateWorld, p: Pos, block: Block, tag: &Compound, now: u64)
             };
             w.dims[0].millstones.entry(p).or_default().timer = timer;
         }
-        // glue/processing/persist.rs `load_entity`: the press's cycle.
-        Block::MechanicalPress => {
-            let flag = |k: &str| matches!(tag.get(k), Some(Tag::Byte(b)) if *b != 0);
-            let int = |k: &str| match tag.get(k) {
-                Some(Tag::Int(v)) => *v,
-                _ => 0,
-            };
-            let d = &mut w.dims[0];
-            let pr = d.presses.entry(p).or_default();
-            pr.running = flag("Running");
-            pr.mode = create_engine::press::Mode::from_index(int("Mode").clamp(0, 2) as u8);
-            pr.finished = flag("Finished");
-            pr.ticks = int("Ticks");
-            if pr.running {
-                d.press_changes.push(p);
+        // glue/processing/persist.rs `load_entity`.
+        Block::BlazeBurner => {
+            if let Some(Tag::Compound(c)) = tag.get(BURNER) {
+                w.read_burner(0, p, read_burner(c));
             }
         }
+        Block::MechanicalPress => w.read_press(0, p, read_press(tag)),
+        Block::MechanicalMixer => w.read_mixer(0, p, read_mixer(tag)),
+        Block::Basin => match super::fluids::load_basin_tanks(tag) {
+            Some(t) => {
+                w.dims[0].basin_fluids.insert(p, t);
+            }
+            None => {
+                w.dims[0].basin_fluids.remove(&p);
+            }
+        },
         // glue/processing/saw.rs `load_breaker`: `BlockBreakingKineticBlockEntity.read`.
         Block::MechanicalDrill | Block::MechanicalSaw => {
-            let int = |k: &str| match tag.get(k) {
-                Some(Tag::Int(v)) => *v,
-                _ => 0,
-            };
             let breaking = match tag.get(BREAKING) {
                 Some(Tag::IntArray(p)) if p.len() == 3 => Some([p[0], p[1], p[2]]),
                 _ => None,
             };
-            w.dims[0]
-                .drills
-                .entry(p)
-                .or_default()
-                .read(int(PROGRESS), int(NEXT_TICK), breaking);
-        }
-        // glue/processing/persist.rs `load_entity`: the mixer's `Running` and `Ticks`.
-        Block::MechanicalMixer => {
-            let running = matches!(tag.get("Running"), Some(Tag::Byte(b)) if *b != 0);
-            let running_ticks = match tag.get("Ticks") {
-                Some(Tag::Int(v)) => *v,
-                _ => 0,
-            };
-            w.dims[0].mixers.insert(
-                p,
-                create_engine::basin::Mixer {
-                    running,
-                    running_ticks,
-                    ..Default::default()
-                },
+            w.dims[0].drills.entry(p).or_default().read(
+                int(tag, PROGRESS),
+                int(tag, NEXT_TICK),
+                breaking,
             );
         }
         _ => {}
+    }
+}
+
+fn int(c: &Compound, k: &str) -> i32 {
+    match c.get(k) {
+        Some(Tag::Int(v)) => *v,
+        _ => 0,
+    }
+}
+
+fn flag(c: &Compound, k: &str) -> bool {
+    matches!(c.get(k), Some(Tag::Byte(b)) if *b != 0)
+}
+
+const BURNER: &str = "BurnerState";
+/// A saved burner's fuel type when it is creative: its heat follows (the glue's
+/// `CREATIVE_BURNER`).
+const CREATIVE_BURNER: i32 = 3;
+
+/// glue/processing/persist.rs `write_burner`: `BlazeBurnerBlockEntity.write`'s `FuelType` and
+/// `Remaining`.
+fn write_burner(b: &create_engine::burner::Burner, out: &mut Compound) {
+    let (fuel, remaining) = match b.creative {
+        Some(h) => (CREATIVE_BURNER, h as i32),
+        None => (b.fuel.index(), b.remaining),
+    };
+    let tag = Compound::from([
+        ("Fuel".into(), Tag::Int(fuel)),
+        ("Remaining".into(), Tag::Int(remaining)),
+    ]);
+    out.insert(BURNER.into(), Tag::Compound(tag));
+}
+
+/// The glue's `read_burner` of `BlazeBurnerBlockEntity.read`.
+fn read_burner(c: &Compound) -> create_engine::burner::Burner {
+    let (fuel, remaining) = (int(c, "Fuel"), int(c, "Remaining"));
+    if fuel == CREATIVE_BURNER {
+        create_engine::burner::Burner {
+            creative: Some(heat_of(remaining)),
+            ..Default::default()
+        }
+    } else {
+        create_engine::burner::Burner {
+            fuel: create_engine::burner::Fuel::from_index(fuel),
+            remaining,
+            ..Default::default()
+        }
+    }
+}
+
+/// The glue's `heat_of`: a creative burner's saved heat.
+fn heat_of(i: i32) -> create_engine::fan::Heat {
+    use create_engine::fan::Heat;
+    match i {
+        2 => Heat::Fading,
+        3 => Heat::Kindled,
+        4 => Heat::Seething,
+        _ => Heat::Smouldering,
+    }
+}
+
+/// glue/processing/persist.rs `write_press`: `PressingBehaviour.write`, then the press's
+/// `basinChecker` (`DeferralBehaviour.write`).
+fn write_press(pr: &create_engine::press::Press, out: &mut Compound) {
+    out.insert("Running".into(), Tag::Byte(i8::from(pr.running)));
+    out.insert("Mode".into(), Tag::Int(i32::from(pr.mode.index())));
+    out.insert("Finished".into(), Tag::Byte(i8::from(pr.finished)));
+    out.insert("Ticks".into(), Tag::Int(pr.ticks));
+    write_checker(&pr.operator, out);
+}
+
+/// The glue's `read_press`: `PressingBehaviour.read`, then the press's `basinChecker`'s
+/// `NeedsUpdate`.
+fn read_press(tag: &Compound) -> create_engine::press::Press {
+    create_engine::press::Press {
+        operator: read_operator(tag),
+        running: flag(tag, "Running"),
+        mode: create_engine::press::Mode::from_index(int(tag, "Mode").clamp(0, 2) as u8),
+        finished: flag(tag, "Finished"),
+        ticks: int(tag, "Ticks"),
+    }
+}
+
+/// glue/processing/persist.rs `write_mixer`: `MechanicalMixerBlockEntity.write`, then its
+/// `basinChecker`'s.
+fn write_mixer(m: &create_engine::basin::Mixer, out: &mut Compound) {
+    out.insert("Running".into(), Tag::Byte(i8::from(m.running)));
+    out.insert("Ticks".into(), Tag::Int(m.running_ticks));
+    write_checker(&m.operator, out);
+}
+
+/// The glue's `read_mixer`: `MechanicalMixerBlockEntity.read`.
+fn read_mixer(tag: &Compound) -> create_engine::basin::Mixer {
+    create_engine::basin::Mixer {
+        operator: read_operator(tag),
+        running: flag(tag, "Running"),
+        running_ticks: int(tag, "Ticks"),
+        ..Default::default()
+    }
+}
+
+fn write_checker(operator: &create_engine::basin_operator::Operator, out: &mut Compound) {
+    out.insert(
+        "NeedsUpdate".into(),
+        Tag::Byte(i8::from(operator.checker.pending())),
+    );
+}
+
+/// The glue's `read_checker`: `DeferralBehaviour.read` of a basin operator.
+fn read_operator(tag: &Compound) -> create_engine::basin_operator::Operator {
+    create_engine::basin_operator::Operator {
+        checker: create_engine::basin_operator::Deferral::read(flag(tag, "NeedsUpdate")),
+        ..Default::default()
     }
 }
 

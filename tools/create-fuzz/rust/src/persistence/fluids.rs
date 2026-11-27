@@ -34,6 +34,7 @@ const HOSE: &str = "HosePulley";
 const CREATIVE: &str = "CreativeTank";
 const SPOUT: &str = "SpoutTank";
 const DRAIN: &str = "DrainTank";
+const BASIN: &str = "BasinTanks";
 
 fn put_fluid(c: &mut Compound, fluid: Option<Fluid>) {
     if let Some(f) = fluid {
@@ -95,6 +96,48 @@ fn fluid_tank(fluid: Option<(Fluid, u32)>, processing: Option<i32>) -> Compound 
 }
 fn fluid_tank_of(c: &Compound) -> Option<(Fluid, u32)> {
     fluid_of(c).map(|f| (f, int(c, "Amount").max(0) as u32))
+}
+
+/// glue/processing/persist.rs `save_entities`: a basin's tanks (`BasinTanks`), two inputs and
+/// two outputs.
+pub fn save_basin_tanks(t: &create_engine::basin::Tanks, out: &mut Compound) {
+    let tag = Compound::from([
+        ("Input".into(), Tag::List(t.input.map(fluid_tag).to_vec())),
+        ("Output".into(), Tag::List(t.output.map(fluid_tag).to_vec())),
+    ]);
+    out.insert(BASIN.into(), Tag::Compound(tag));
+}
+
+/// glue/processing/persist.rs `load_entity` of a basin: its tanks; None when it saved none.
+pub fn load_basin_tanks(tag: &Compound) -> Option<create_engine::basin::Tanks> {
+    let Tag::Compound(c) = tag.get(BASIN)? else {
+        return None;
+    };
+    let pair = |k: &str| match c.get(k) {
+        Some(Tag::List(l)) => [0, 1].map(|i| l.get(i).and_then(tank_content)),
+        _ => [None; 2],
+    };
+    Some(create_engine::basin::Tanks {
+        input: pair("Input"),
+        output: pair("Output"),
+    })
+}
+
+/// `SmartFluidTankBehaviour.write`'s `TankContent` as the glue's codec writes one tank.
+fn fluid_tag(f: Option<(Fluid, u32)>) -> Tag {
+    let mut c = Compound::new();
+    if let Some((fluid, n)) = f {
+        c.insert("FluidName".into(), Tag::String(fluid.key()));
+        c.insert("Amount".into(), Tag::Int(n as i32));
+    }
+    Tag::Compound(c)
+}
+
+fn tank_content(t: &Tag) -> Option<(Fluid, u32)> {
+    let Tag::Compound(c) = t else {
+        return None;
+    };
+    Some((fluid_of(c)?, int(c, "Amount").clamp(0, 1000) as u32))
 }
 
 /// glue/fluids/saved.rs `live_fields`: the drain's `ProcessingTicks`.

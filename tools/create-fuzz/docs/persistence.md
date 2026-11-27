@@ -130,6 +130,13 @@ turn in that walk is not spuriously captured before its later change notificatio
 Kinetic callbacks occurring after take_unsaved remain pending until the next
 solve, matching the glue. Reload consumes the saved records as they stand.
 
+A basin crosses a reload as its block entities do ([processing scope](processing-scope.md),
+#458): its slots and its spout's buffer are host data its entity saves; its tanks cross the
+boundary in `BasinTanks`; a loaded basin's `recipeBackupCheck` starts at 20 again. The mixer
+and the press above it are read (`Running`, `Ticks`, `NeedsUpdate`) before their blocks load,
+and `block_loaded` constructs each with its operator from what it read; `currentRecipe` and the
+mixer's `processingTicks` are not saved, so a loaded one works them out again.
+
 The #35 regression is cases/persistence-depot-belt-save-order.json. Before
 7e33c30, the completed-tick-90 handoff left an empty saved depot record; reload
 then produced position 0.5 instead of Java's 0.125. The new port publisher saves

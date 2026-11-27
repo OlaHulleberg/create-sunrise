@@ -5,7 +5,9 @@
 
 use crate::glue::entity_data::Entities;
 use crate::glue::world::with_world;
-use create_engine::{Block, basin, burner, crafter_input, crusher, deployer, press, tank};
+use create_engine::{
+    Block, basin, basin_operator, burner, crafter_input, crusher, deployer, press, tank,
+};
 use mod_api::{Compound, Tag};
 
 /// What an older version saved with the column, handed to the engine before the column's blocks
@@ -41,21 +43,69 @@ const PRESS_FINISHED: &str = "Finished";
 const PRESS_TICKS: &str = "Ticks";
 const MIXER_RUNNING: &str = "Running";
 const MIXER_TICKS: &str = "Ticks";
+/// `DeferralBehaviour.write`: whether the operator's `basinChecker` has an update to run.
+const NEEDS_UPDATE: &str = "NeedsUpdate";
 
-/// `MechanicalMixerBlockEntity.write`: `Running` (a boolean) and `Ticks` (`runningTicks`).
+/// The basin operator's `basinChecker` as `DeferralBehaviour.write` saves it: `NeedsUpdate`.
+fn write_checker(operator: &basin_operator::Operator, out: &mut Compound) {
+    out.insert(
+        NEEDS_UPDATE.into(),
+        Tag::Byte(i8::from(operator.checker.pending())),
+    );
+}
+
+/// `DeferralBehaviour.read`: `NeedsUpdate`.
+fn read_checker(tag: &Compound) -> basin_operator::Deferral {
+    basin_operator::Deferral::read(
+        matches!(tag.get(&NEEDS_UPDATE.into()), Some(Tag::Byte(b)) if *b != 0),
+    )
+}
+
+/// `MechanicalMixerBlockEntity.write`: `Running` (a boolean) and `Ticks` (`runningTicks`), then
+/// its `basinChecker`'s.
 fn write_mixer(m: &basin::Mixer, out: &mut Compound) {
     out.insert(MIXER_RUNNING.into(), Tag::Byte(i8::from(m.running)));
     out.insert(MIXER_TICKS.into(), Tag::Int(m.running_ticks));
+    write_checker(&m.operator, out);
 }
 
 /// `MechanicalMixerBlockEntity.read`: what it saves, the rest of a new block entity's (no
 /// recipe, no processing time worked out).
 fn read_mixer(tag: &Compound) -> basin::Mixer {
     basin::Mixer {
+        operator: basin_operator::Operator {
+            checker: read_checker(tag),
+            ..basin_operator::Operator::default()
+        },
         running: matches!(tag.get(&MIXER_RUNNING.into()), Some(Tag::Byte(b)) if *b != 0),
         running_ticks: int(tag, MIXER_TICKS),
         ..basin::Mixer::default()
     }
+}
+
+/// `PressingBehaviour.read`: `Running`, `Mode`, `Finished` and `Ticks`, and the press's
+/// `basinChecker`'s `NeedsUpdate`.
+fn read_press(tag: &Compound) -> press::Press {
+    let flag = |k: &str| matches!(tag.get(&k.into()), Some(Tag::Byte(b)) if *b != 0);
+    press::Press {
+        operator: basin_operator::Operator {
+            checker: read_checker(tag),
+            ..basin_operator::Operator::default()
+        },
+        running: flag(PRESS_RUNNING),
+        mode: press::Mode::from_index(int(tag, PRESS_MODE).clamp(0, 2) as u8),
+        finished: flag(PRESS_FINISHED),
+        ticks: int(tag, PRESS_TICKS),
+    }
+}
+
+/// The press's cycle as `PressingBehaviour.write` saves it.
+fn write_press(pr: &press::Press, out: &mut Compound) {
+    out.insert(PRESS_RUNNING.into(), Tag::Byte(i8::from(pr.running)));
+    out.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
+    out.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
+    out.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
+    write_checker(&pr.operator, out);
 }
 
 pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
@@ -78,8 +128,14 @@ pub(super) fn saved_keys(block: Block) -> &'static [&'static str] {
             super::saw::BREAKING,
         ],
         Block::Millstone => &[TIMER],
-        Block::MechanicalPress => &[PRESS_RUNNING, PRESS_MODE, PRESS_FINISHED, PRESS_TICKS],
-        Block::MechanicalMixer => &[MIXER_RUNNING, MIXER_TICKS],
+        Block::MechanicalPress => &[
+            PRESS_RUNNING,
+            PRESS_MODE,
+            PRESS_FINISHED,
+            PRESS_TICKS,
+            NEEDS_UPDATE,
+        ],
+        Block::MechanicalMixer => &[MIXER_RUNNING, MIXER_TICKS, NEEDS_UPDATE],
         _ => &[],
     }
 }
@@ -154,10 +210,7 @@ pub fn live_fields(dim: usize, pos: [i32; 3], block: Block, fields: &mut Compoun
             }
             Block::MechanicalPress => {
                 if let Some(pr) = d.presses.get(&pos) {
-                    fields.insert(PRESS_RUNNING.into(), Tag::Byte(i8::from(pr.running)));
-                    fields.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
-                    fields.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
-                    fields.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
+                    write_press(pr, fields);
                 }
             }
             Block::MechanicalMixer => {
@@ -252,11 +305,7 @@ pub fn save_entities(dim: usize, chunk: [i32; 2], out: &mut Entities) {
                 .insert(TIMER.into(), Tag::Int(m.timer));
         }
         for (p, pr) in d.presses.iter().filter(|(p, _)| mine(p)) {
-            let e = out.entry(*p).or_default();
-            e.insert(PRESS_RUNNING.into(), Tag::Byte(i8::from(pr.running)));
-            e.insert(PRESS_MODE.into(), Tag::Int(i32::from(pr.mode.index())));
-            e.insert(PRESS_FINISHED.into(), Tag::Byte(i8::from(pr.finished)));
-            e.insert(PRESS_TICKS.into(), Tag::Int(pr.ticks));
+            write_press(pr, out.entry(*p).or_default());
         }
         for (p, m) in d.mixers.iter().filter(|(p, _)| mine(p)) {
             write_mixer(m, out.entry(*p).or_default());
@@ -374,21 +423,8 @@ pub fn load_entity(dim: usize, pos: [i32; 3], block: Block, tag: &Compound) {
         Block::Millstone => {
             w.dims[dim].millstones.entry(pos).or_default().timer = int(tag, TIMER);
         }
-        Block::MechanicalPress => {
-            let flag = |k: &str| matches!(tag.get(&k.into()), Some(Tag::Byte(b)) if *b != 0);
-            let d = &mut w.dims[dim];
-            let pr = d.presses.entry(pos).or_default();
-            pr.running = flag(PRESS_RUNNING);
-            pr.mode = press::Mode::from_index(int(tag, PRESS_MODE).clamp(0, 2) as u8);
-            pr.finished = flag(PRESS_FINISHED);
-            pr.ticks = int(tag, PRESS_TICKS);
-            if pr.running {
-                d.press_changes.push(pos);
-            }
-        }
-        Block::MechanicalMixer => {
-            w.dims[dim].mixers.insert(pos, read_mixer(tag));
-        }
+        Block::MechanicalPress => w.read_press(dim, pos, read_press(tag)),
+        Block::MechanicalMixer => w.read_mixer(dim, pos, read_mixer(tag)),
         _ => {}
     });
 }
@@ -711,32 +747,62 @@ fn covers_from_nbt(data: &Compound) -> Vec<[i32; 3]> {
 mod tests {
     use super::*;
 
+    /// A mixer mid-cycle reads back `Running`, `Ticks` and `NeedsUpdate`: what Create saves.
+    /// Not saved: a reloaded mixer works its processing time out again, for a recipe it looks
+    /// for again, and its basin is not removed.
     #[test]
     fn a_mixer_mid_cycle_reads_back_running_and_ticks_as_saved() {
-        let mixer = basin::Mixer {
-            running: true,
-            running_ticks: 27,
-            // Not saved: a reloaded mixer works its processing time out again.
-            processing_ticks: 9,
-            recipe: Some(4),
-        };
+        let mut mixer = basin::Mixer::default();
+        mixer.start(4);
+        mixer.running_ticks = 27;
+        mixer.processing_ticks = 9;
+        mixer.operator.checker.schedule();
+        mixer.operator.removed = true;
         let mut saved = Compound::new();
         write_mixer(&mixer, &mut saved);
         assert_eq!(saved.get(&"Running".into()), Some(&Tag::Byte(1)));
         assert_eq!(saved.get(&"Ticks".into()), Some(&Tag::Int(27)));
+        assert_eq!(saved.get(&"NeedsUpdate".into()), Some(&Tag::Byte(1)));
+        let back = read_mixer(&saved);
+        assert!(back.running);
+        assert_eq!(back.running_ticks, 27);
+        assert!(back.operator.checker.pending());
         assert_eq!(
-            read_mixer(&saved),
-            basin::Mixer {
-                running: true,
-                running_ticks: 27,
-                ..basin::Mixer::default()
-            }
+            (
+                back.processing_ticks,
+                back.operator.recipe,
+                back.operator.removed
+            ),
+            (0, None, false)
         );
         // A mixer at rest, and a tag that saves nothing for it, read as a new one.
         let mut rest = Compound::new();
         write_mixer(&basin::Mixer::default(), &mut rest);
         assert_eq!(read_mixer(&rest), basin::Mixer::default());
         assert_eq!(read_mixer(&Compound::new()), basin::Mixer::default());
+    }
+
+    /// `PressingBehaviour.read`: the press's cycle and its `basinChecker`, nothing else.
+    #[test]
+    fn a_press_mid_cycle_reads_back_its_cycle_and_needs_update_as_saved() {
+        let mut press = press::Press::default();
+        press.start_in_basin(4);
+        press.ticks = 120;
+        press.operator.checker.schedule();
+        press.operator.removed = true;
+        let mut saved = Compound::new();
+        write_press(&press, &mut saved);
+        let back = read_press(&saved);
+        assert_eq!(
+            (back.running, back.ticks, back.mode),
+            (true, 120, press::Mode::Basin)
+        );
+        assert!(back.operator.checker.pending());
+        assert_eq!((back.operator.recipe, back.operator.removed), (None, false));
+        let mut ended = Compound::new();
+        write_press(&press::Press::default(), &mut ended);
+        assert_eq!(read_press(&ended), press::Press::default());
+        assert_eq!(read_press(&Compound::new()), press::Press::default());
     }
 
     #[test]

@@ -1,0 +1,117 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 118,
+  "checkpoints": [
+    19,
+    20,
+    21,
+    22,
+    23,
+    24,
+    25,
+    26,
+    27,
+    28,
+    29,
+    30,
+    60,
+    62,
+    64,
+    66,
+    68,
+    70,
+    72,
+    74,
+    76,
+    78,
+    116,
+    117
+  ],
+  "blocks": [
+    {
+      "pos": [
+        -1,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:cogwheel[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_mixer"
+    },
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "minecraft:iron_nugget",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 20,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    }
+  ]
+}

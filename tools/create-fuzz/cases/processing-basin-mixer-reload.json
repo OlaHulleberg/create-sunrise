@@ -1,0 +1,151 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 236,
+  "checkpoints": [
+    129,
+    130,
+    131,
+    132,
+    133,
+    134,
+    135,
+    139,
+    140,
+    141,
+    142,
+    143,
+    144,
+    145,
+    146,
+    147,
+    148,
+    149,
+    234,
+    235
+  ],
+  "blocks": [
+    {
+      "pos": [
+        -1,
+        7,
+        0
+      ],
+      "state": "create:creative_motor[facing=up]",
+      "motor": 256
+    },
+    {
+      "pos": [
+        -1,
+        8,
+        0
+      ],
+      "state": "create:cogwheel[axis=y,waterlogged=false]"
+    },
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:mechanical_mixer"
+    },
+    {
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "state": "create:basin[facing=down]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 12,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "minecraft:iron_nugget",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 130,
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "action": {
+        "kind": "reload"
+      }
+    },
+    {
+      "tick": 140,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 0,
+        "insert": {
+          "item": "minecraft:andesite",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      }
+    },
+    {
+      "tick": 142,
+      "pos": [
+        0,
+        6,
+        0
+      ],
+      "action": {
+        "kind": "capability",
+        "side": null,
+        "slot": 1,
+        "insert": {
+          "item": "minecraft:iron_nugget",
+          "count": 2
+        },
+        "extract": null,
+        "simulate": false
+      }
+    }
+  ]
+}

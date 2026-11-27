@@ -230,8 +230,9 @@ pub(crate) fn press_turn(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
     if !recipes::ready() {
         return;
     }
+    // A removed basin ends the turn's behaviours: the checker does not tick.
     let (removed, look) = with_world(|w| {
-        let Some(o) = w.dims[dim].operators.get_mut(&at) else {
+        let Some(o) = w.dims[dim].operator_mut(at) else {
             return (false, false);
         };
         let removed = o.take_removed();
