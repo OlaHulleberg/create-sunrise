@@ -33,6 +33,18 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `6a02076` |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `6a02076` |
 
+## #458 in game on Dev `ba1f24e` (branch `fix/operator-reload`, main `54e58817`)
+
+One run on 2026-11-27 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, driven by the control socket), with launcher 1.3.7. The mod is `git archive` of `create/` at `ce7bd129` plus the one uncommitted tag file of #359 (`data/c/tags/block/barrels.json`), built by `sunrise-launcher native-build` as `native-ba1f24e-e1ba491cbedf`. Two rigs on a stone platform, a mixer over a basin and a press over a basin, each on a creative motor at 64 rpm, built in one session, then saved and reloaded. Items go in as summoned item entities of at most one stack. Details and screenshots are not kept in the repository.
+
+| Area | Result |
+|---|---|
+| Mixer and press after a reload (#458) | **Passes**, where the same row of the next section failed. New inputs dropped in after a reload: the mixer's basin went from 2 to 4 `andesite_alloy`, the press's from 2 to 3 snow blocks; 32 andesite and 32 iron nuggets made 15 more alloy and 64 snowballs 13 more snow blocks in the 12 s before the frames. The whisk, down in the basin, differs between frames 0.3 s apart (2206 and 2422 of the 17850 pixels of its region; 1 at rest), and the press head is up in one frame and down at the basin half a second later. |
+| Saved mid-cycle | Saved with the mixer `Running` 1, `Ticks` 20 and the press `Running` 1, `Ticks` 208, and once more at `Ticks` 232: within 3 s of the reload both read `Running` 1 each time, and the frames of the second show them moving (2747 and 3547 pixels). Each run ended on its inputs alone: 16 andesite and 16 iron nuggets gave 16 alloy, 32 snowballs 8 snow blocks; the next time 44 snowballs and 9 snow blocks gave 2 ice and 2 snow blocks. Snowball entities waiting in the basin at the save were there after it. |
+| Full output | With 64 `andesite_alloy` in its basin the mixer stops (`Running` 0) and leaves its 20 andesite and 20 iron nuggets: the outputs must fit (`BasinRecipe.apply`, `acceptItemOutputsIntoBasin`). |
+
+Not run: #460 in game, which was read from Java and is proven by the fuzzer's cases. Found on the way, not among these fixes: an item entity holding more of an item than its stack limit (made here with `/summon`) is an endless source for a basin. 64 snowballs in one entity (limit 16) kept `count: 64` while the basin under the press filled: 49 snow blocks and 7 ice three minutes later. An entity of one stack is consumed exactly. `basin_take` (`glue/processing/basin.rs`) hands the rest back as `BasinBlock.updateEntityAfterFallOn` does; why the entity's count stays is not traced.
+
 ## Basin, sequenced gearshift and drill/saw fixes in game on Dev `ba1f24e` (main `f5f2449d`)
 
 One run on 2026-11-27 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
