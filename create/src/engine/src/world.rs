@@ -8465,6 +8465,13 @@ mod tests {
             fn take_breaks(&mut self) -> Vec<BeltBreak> {
                 std::mem::take(&mut self.0.dims[0].belt_breaks)
             }
+            fn is_belt(&self, pos: [i32; 3]) -> bool {
+                self.0.dims[0]
+                    .states
+                    .get(&pos)
+                    .and_then(|s| self.0.table.get(*s))
+                    .is_some_and(|(b, _)| b == Block::Belt)
+            }
             fn replace(&mut self, b: BeltBreak) {
                 let old = self.0.dims[0].states[&b.pos];
                 assert_eq!(b.shaft, (b.pos[2] == 2).then_some(crate::kinetics::Axis::X));
@@ -8523,6 +8530,13 @@ mod tests {
             fn take_breaks(&mut self) -> Vec<BeltBreak> {
                 std::mem::take(&mut self.0.dims[0].belt_breaks)
             }
+            fn is_belt(&self, pos: [i32; 3]) -> bool {
+                self.0.dims[0]
+                    .states
+                    .get(&pos)
+                    .and_then(|s| self.0.table.get(*s))
+                    .is_some_and(|(b, _)| b == Block::Belt)
+            }
             fn replace(&mut self, b: BeltBreak) {
                 let old = self.0.dims[0].states[&b.pos];
                 assert_eq!(
@@ -8539,6 +8553,68 @@ mod tests {
         assert_eq!(w.dims[0].states.get(&[0, 8, 1]), Some(&14));
         assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
         assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&14));
+        assert!(w.dims[0].belt_breaks.is_empty());
+    }
+
+    #[test]
+    fn belt_break_cascade_skips_segments_already_removed_in_same_tick() {
+        let names = ["start", "middle", "pulley", "end"].map(|part| {
+            (
+                "create:belt",
+                vec![
+                    ("facing", "south"),
+                    ("slope", "horizontal"),
+                    ("part", part),
+                    ("casing", "false"),
+                    ("waterlogged", "false"),
+                ],
+            )
+        });
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names
+                .iter()
+                .map(|(n, p)| (*n, p.iter().copied()))
+                .chain(std::iter::once((
+                    "create:shaft",
+                    [("axis", "x")].iter().copied(),
+                )))
+                .chain(std::iter::once((
+                    "create:andesite_casing",
+                    [].iter().copied(),
+                ))),
+        ));
+        let (start, middle, pulley, end, shaft, casing) = (10, 11, 12, 13, 14, 15);
+        for (z, state) in [start, middle, pulley, end].into_iter().enumerate() {
+            w.block_changed(0, [0, 8, z as i32], 0, state);
+        }
+        transport_walk(&mut w);
+        w.block_changed(0, [0, 8, 1], middle, 0);
+        w.block_changed(0, [0, 8, 2], pulley, 0);
+        w.block_changed(0, [0, 8, 0], start, casing);
+        struct Ground<'a>(&'a mut CreateWorld);
+        impl crate::belt::BreakWorld for Ground<'_> {
+            fn take_breaks(&mut self) -> Vec<BeltBreak> {
+                std::mem::take(&mut self.0.dims[0].belt_breaks)
+            }
+            fn is_belt(&self, pos: [i32; 3]) -> bool {
+                self.0.dims[0]
+                    .states
+                    .get(&pos)
+                    .and_then(|s| self.0.table.get(*s))
+                    .is_some_and(|(b, _)| b == Block::Belt)
+            }
+            fn replace(&mut self, b: BeltBreak) {
+                let old = self.0.dims[0].states.get(&b.pos).copied().unwrap_or(0);
+                self.0
+                    .block_changed(0, b.pos, old, if b.shaft.is_some() { 14 } else { 0 });
+            }
+        }
+        crate::belt::break_cascade(&mut Ground(&mut w));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 0]), Some(&casing));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 1]));
+        assert!(!w.dims[0].states.contains_key(&[0, 8, 2]));
+        assert_eq!(w.dims[0].states.get(&[0, 8, 3]), Some(&shaft));
         assert!(w.dims[0].belt_breaks.is_empty());
     }
 
