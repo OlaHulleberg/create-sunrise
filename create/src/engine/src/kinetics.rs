@@ -1594,7 +1594,12 @@ impl Kinetics {
             let n = &self.nodes[id as usize];
             n.live && n.stamp == stamp && n.state.validate_pending
         });
-        self.dirty.clear();
+        // An entity that owes `attachKinetics` since its turn (a state write in a later
+        // entity's tick cleared it) keeps the next pass active.
+        self.dirty.retain(|&id| {
+            let n = &self.nodes[id as usize];
+            n.live && n.state.update_speed
+        });
         let mut stats = SolveStats::default();
         self.base_pass += 1;
         let mut touched_nets = HashSet::new();

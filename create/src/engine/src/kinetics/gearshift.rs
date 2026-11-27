@@ -238,8 +238,10 @@ impl Kinetics {
         self.write_sequencer_state(pos, (index + 1).clamp(0, 5) as u8);
     }
 
-    /// `level.setBlock(pos, state.setValue(STATE, value), UPDATE_ALL)`, for the host to make:
-    /// an unchanged state is no change at all.
+    /// `level.setBlock(pos, state.setValue(STATE, value), UPDATE_ALL)`: an unchanged state is no
+    /// change at all; another one is never kinetically equivalent, so
+    /// `KineticBlock.updateIndirectNeighbourShapes` clears the entity's kinetic information
+    /// and it attaches again on its next tick.
     fn write_sequencer_state(&mut self, pos: [i32; 3], value: u8) {
         let Some(s) = self.sequencers.get_mut(&pos) else {
             return;
@@ -249,6 +251,9 @@ impl Kinetics {
         }
         s.state = value;
         self.sequencer_writes.push((pos, value));
+        if let Some(id) = self.sequencer_node(pos) {
+            self.clear_kinetic_information(id);
+        }
     }
 }
 
@@ -289,16 +294,6 @@ mod tests {
         k
     }
 
-    /// The host shows the states written: the same block in another state, which is not
-    /// kinetically equivalent.
-    fn show(k: &mut Kinetics) -> Vec<([i32; 3], u8)> {
-        let writes = k.take_sequencer_writes();
-        for _ in &writes {
-            k.change_block_state(GEARSHIFT, 0, gearshift(), false);
-        }
-        writes
-    }
-
     fn tick(k: &mut Kinetics) {
         k.solve_with(&mut Vec::new(), true, |k, pos, _| k.tick_sequencer(pos));
     }
@@ -308,11 +303,13 @@ mod tests {
     }
 
     #[test]
-    fn run_writes_its_state_and_the_entity_attaches_on_its_next_tick() {
+    fn run_writes_its_state_and_clears_the_entity_until_its_next_tick() {
         let mut k = line(16.0, vec![Instruction::new(Kind::TurnAngle, 90)]);
         assert_eq!(speed(&k, OUTPUT), 0.0, "idle: the output face is still");
         k.sequencer_redstone(GEARSHIFT, true, false);
-        assert_eq!(show(&mut k), [(GEARSHIFT, 1)]);
+        assert_eq!(k.take_sequencer_writes(), [(GEARSHIFT, 1)]);
+        // `setBlock` cleared the gearshift's kinetic information inside `run`.
+        assert_eq!(speed(&k, GEARSHIFT), 0.0);
         assert_eq!(k.sequencer(GEARSHIFT).unwrap().duration, 21);
         tick(&mut k);
         assert_eq!(speed(&k, GEARSHIFT), 16.0);
@@ -321,11 +318,11 @@ mod tests {
             tick(&mut k);
         }
         assert!((k.sequencer(GEARSHIFT).unwrap().progress - 100.8).abs() < 1e-3);
-        assert!(show(&mut k).is_empty());
+        assert!(k.take_sequencer_writes().is_empty());
         // Past the list while unpowered: state 0, its output face stops.
         k.set_sequencer_signal(GEARSHIFT, false);
         tick(&mut k);
-        assert_eq!(show(&mut k), [(GEARSHIFT, 0)]);
+        assert_eq!(k.take_sequencer_writes(), [(GEARSHIFT, 0)]);
         assert!(k.sequencer(GEARSHIFT).unwrap().is_idle());
         tick(&mut k);
         assert_eq!(speed(&k, GEARSHIFT), 16.0);
@@ -339,17 +336,17 @@ mod tests {
         for _ in 0..8 {
             tick(&mut k);
         }
-        show(&mut k);
+        k.take_sequencer_writes();
         tick(&mut k);
         assert!(k.sequencer(GEARSHIFT).unwrap().is_idle());
-        assert!(show(&mut k).is_empty());
+        assert!(k.take_sequencer_writes().is_empty());
         // `detachKinetics` alone: its own speed and source stay, and it owes no attach.
         assert_eq!(speed(&k, GEARSHIFT), 32.0);
         assert_eq!(speed(&k, OUTPUT), 0.0);
         assert!(!k.saved_state(GEARSHIFT, 0).unwrap().needs_speed_update);
         // Unpowered while idle and running: state 0.
         k.sequencer_redstone(GEARSHIFT, false, true);
-        assert_eq!(show(&mut k), [(GEARSHIFT, 0)]);
+        assert_eq!(k.take_sequencer_writes(), [(GEARSHIFT, 0)]);
     }
 
     #[test]
@@ -385,10 +382,10 @@ mod tests {
     fn a_speed_lost_inside_propagation_ends_the_sequence_at_once() {
         let mut k = line(16.0, crate::sequencer::default_instructions());
         k.sequencer_redstone(GEARSHIFT, true, false);
-        show(&mut k);
         for _ in 0..10 {
             tick(&mut k);
         }
+        k.take_sequencer_writes();
         // `applyNewSpeed` detaches first: the gearshift loses its source, `run(-1)` ends the
         // turn (unpowered: state 0), and the old turn is timed again against 0 RPM.
         k.set_sequencer_signal(GEARSHIFT, false);
@@ -396,9 +393,10 @@ mod tests {
         let s = k.sequencer(GEARSHIFT).unwrap();
         assert!(s.is_idle());
         assert_eq!(s.duration, i32::MIN + 1);
+        assert_eq!(k.take_sequencer_writes(), [(GEARSHIFT, 0)]);
+        // Cleared by that write, it is taken along by the motor's `attachKinetics` that follows.
         assert_eq!(speed(&k, GEARSHIFT), 32.0);
         assert_eq!(speed(&k, OUTPUT), 0.0);
-        assert_eq!(show(&mut k), [(GEARSHIFT, 0)]);
     }
 
     #[test]
@@ -427,7 +425,7 @@ mod tests {
         let s = k.sequencer(GEARSHIFT).unwrap();
         assert_eq!((s.current, s.modifier(), s.duration), (2, -1, 7));
         assert_eq!(
-            show(&mut k),
+            k.take_sequencer_writes(),
             [(GEARSHIFT, 1), (GEARSHIFT, 2), (GEARSHIFT, 3)]
         );
     }

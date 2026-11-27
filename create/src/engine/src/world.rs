@@ -1518,6 +1518,22 @@ impl CreateWorld {
                 s.belt = Some(pos);
             }
         }
+        // The state a sequenced gearshift's `run` wrote, now shown: it took effect then.
+        let shown = same
+            && block == Block::SequencedGearshift
+            && previous.is_some_and(|(_, old)| {
+                StateInfo {
+                    sequence: info.sequence,
+                    ..*old
+                } == *info
+            })
+            && d.kinetics
+                .sequencer(pos)
+                .is_some_and(|s| s.state == info.sequence);
+        if shown {
+            d.states.insert(pos, state);
+            return;
+        }
         if same && block == Block::SequencedGearshift {
             d.kinetics.sequencer_state_changed(pos, info.sequence);
         }
@@ -10717,8 +10733,10 @@ mod tests {
             );
             level_tick(&mut w);
             assert_eq!(w.speed(0, pos), Some(32.0));
-            // Java transmission-sequencer tick 100: the unpowered packet stops it.
+            // Java transmission-sequencer tick 100: the unpowered packet stops it, and its
+            // state write clears the entity at once.
             w.set_sequencer_instructions(0, pos, instructions, true);
+            assert_eq!(w.speed(0, pos), Some(0.0));
             let writes = w.take_sequencer_writes(0);
             assert_eq!(writes, [(pos, 0)]);
             show_writes(&mut w, writes);
