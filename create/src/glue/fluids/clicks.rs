@@ -95,7 +95,9 @@ impl BlockPart for Clicks {
             return Flow::Continue;
         };
         if info_at(&lv, event.block_pos).map(|(b, _)| b) == Some(Block::ItemDrain) {
+            let before = event.stack.clone();
             super::machines::drain_landed(&mut lv, event.block_pos, event.stack);
+            lv.set_lent(event.entity, event.item_pos, &before, event.stack);
         }
         Flow::Continue
     }

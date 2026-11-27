@@ -51,7 +51,7 @@ mod press;
 pub mod recipes;
 pub(crate) mod saw;
 mod spoutput;
-mod stacks;
+pub(crate) mod stacks;
 pub(crate) mod toolbelt;
 
 pub use containers::TOOLBOX_TYPE;
@@ -761,12 +761,14 @@ impl BlockPart for Landing {
         if (stack.components().is_some() || stack.damage() != 0) && !carried {
             return mod_api::Flow::Continue;
         }
+        let before = event.stack.clone();
         match block {
             Some(Block::Basin) => basin::basin_take(&mut lv, pos, event.stack),
             Some(Block::MechanicalSaw) => saw::saw_take(&mut lv, pos, event.stack),
             Some(Block::Millstone) => millstone::millstone_take(&mut lv, pos, event.stack),
             _ => {}
         }
+        lv.set_lent(event.entity, event.item_pos, &before, event.stack);
         mod_api::Flow::Continue
     }
 }
