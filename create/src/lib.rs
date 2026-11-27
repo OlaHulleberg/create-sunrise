@@ -182,6 +182,7 @@ impl Hooks for Create {
         }
         glue::fluids::tick_pipe_shapes(&mut lv);
         world::with_world(|w| w.dims[lv.dim].fluid_transport.begin_tick());
+        glue::kinetics::block_ticks(&mut lv);
     }
 
     fn level_tick_post(&self, host: HostSide, event: &mut LevelTickPostEvent) {
@@ -771,9 +772,10 @@ struct CreateBlock;
 
 #[mod_api::sunrise_part]
 impl BlockPart for CreateBlock {
-    /// A neighbour of a Create block changed (`neighborChanged`). Runs inside the write: the
-    /// subsystems note it and act in the level tick.
-    fn neighbor_changed(&self, _level: &mut dyn LevelWriteHost, event: &mut NeighborChangedEvent) {
+    /// A neighbour of a Create block changed (`neighborChanged`). Runs inside the write: a
+    /// clutch or gearshift follows its signal at once; the subsystems note it and act in the
+    /// level tick.
+    fn neighbor_changed(&self, level: &mut dyn LevelWriteHost, event: &mut NeighborChangedEvent) {
         let Some(state) = states::id(event.state) else {
             return;
         };
@@ -781,6 +783,7 @@ impl BlockPart for CreateBlock {
             return;
         };
         let pos = [event.pos.x, event.pos.y, event.pos.z];
+        glue::kinetics::transmission_neighbor_changed(level, dim, pos, state);
         for s in SUBSYSTEMS {
             s.neighbor_changed(dim, pos, state);
         }

@@ -481,15 +481,51 @@ fn saved_from_nbt(data: &Compound) -> Option<SavedKineticState> {
     })
 }
 
-/// What feeds a level's solve: split shafts following redstone (set before solving, so the
-/// change turns the network in this tick's solve) and their scheduled re-attach, cranks and
-/// valves turning down, water wheels' flow, chain drives' places and sequenced gearshifts.
+/// `GearshiftBlock.neighborChanged` and `ClutchBlock.neighborChanged` at the neighbour change:
+/// the engine detaches and takes the new state, which is written here as Java's `setBlock` does.
+pub(crate) fn transmission_neighbor_changed(
+    level: &mut dyn mod_api::LevelWriteHost,
+    dim: usize,
+    pos: [i32; 3],
+    state: u32,
+) {
+    if with_world(|w| w.is_transmission(state)) != Some(true) {
+        return;
+    }
+    let Some(signal) = level.has_neighbor_signal(pos) else {
+        return;
+    };
+    let Some(write) = with_world(|w| w.transmission_neighbor_changed(dim, pos, signal)).flatten()
+    else {
+        return;
+    };
+    let value = if signal { "true" } else { "false" };
+    let flags = if write.known_shape {
+        super::server::UPDATE_CLIENTS | mod_api::BlockUpdateFlags::KNOWN_SHAPE
+    } else {
+        super::server::UPDATE_CLIENTS
+    };
+    level.set_block_property(pos, "powered", value, flags);
+}
+
+/// The level's block-tick phase, before its own block ticks: the transmissions' scheduled
+/// re-attach (`GearshiftBlock.tick`, `EXTREMELY_HIGH`), so it runs before any base tick, and
+/// the effects of what was detached since the last tick.
+pub(crate) fn block_ticks(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    refresh_sequencer_signals(lv);
+    let mut scheduled = Vec::new();
+    with_world(|w| w.reattach_scheduled_transmissions(dim, &mut scheduled));
+    apply_events(lv, scheduled);
+    with_world(|w| w.flush_kinetic_callbacks(dim));
+    apply_sequencer_writes(lv);
+}
+
+/// What feeds a level's solve: blocks following redstone, cranks and valves turning down,
+/// water wheels' flow, chain drives' places and sequenced gearshifts.
 fn tick_inputs(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     refresh_sequencer_signals(lv);
-    // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): the callback
-    // runs with the block change, before any block entity of this tick. `powered` is set
-    // before solving, so the change turns the network in this tick's solve.
     for pos in with_world(|w| w.take_redstone(dim)).unwrap_or_default() {
         let state = lv.block(pos);
         let Some(was) = with_world(|w| w.powered(state)).flatten() else {
@@ -497,7 +533,6 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
         };
         let now = lv.has_neighbor_signal(pos);
         if now != was {
-            with_world(|w| w.transmission_power_changing(dim, pos));
             let value = if now { "true" } else { "false" };
             if with_world(|w| w.reads_signal(state)) == Some(true) {
                 if let Some(next) = lv
@@ -520,12 +555,6 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
             with_world(|w| w.set_chain_signal(dim, pos, signal));
         }
     }
-    // The scheduled block ticks the detach owes (`GearshiftBlock.tick`): the level runs them
-    // before block entities tick, so the transmission re-attaches before any base tick.
-    let mut scheduled = Vec::new();
-    with_world(|w| w.reattach_scheduled_transmissions(dim, &mut scheduled));
-    apply_events(lv, scheduled);
-    // The valves' and bearings' `onSpeedChanged` of that propagation, before any entity ticks.
     with_world(|w| w.flush_kinetic_callbacks(dim));
     apply_sequencer_writes(lv);
     with_world(|w| w.tick_cranks(dim));

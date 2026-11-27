@@ -1,11 +1,10 @@
-//! Vanilla's server block ticks, as Create's blocks schedule them: a block that cares about a
-//! neighbour changes (`neighborChanged`) calls `level.scheduleTick(pos, this, 1)`, and its
-//! `tick` runs a tick later, in the level's block-tick phase before block entities tick.
+//! Vanilla's server block ticks, as Create's blocks schedule them: `level.scheduleTick(pos, this,
+//! 1)` from a block's `neighborChanged`, its `tick` run a tick later in the level's block-tick
+//! phase, before block entities tick.
 //!
-//! `Level.getBlockTicks().willTickThisTick(pos, block)` is what a block checks first: while a
-//! tick is already due this tick, `neighborChanged` schedules nothing, so a block whose own
-//! state change notifies itself and its neighbour in the tick the neighbour is looked at is not
-//! looked at a second time on the next.
+//! `Level.getBlockTicks().willTickThisTick(pos, block)` is a block's own check (the sequenced
+//! gearshift's): while its tick is due this tick, its `neighborChanged` schedules nothing.
+//! `scheduleTick` itself only keeps one tick owed per position.
 //!
 //! A tick carries vanilla's priority: the level collects every block type's due ticks into one
 //! queue and runs the lowest value first, so `GearshiftBlock`'s `EXTREMELY_HIGH` re-attach
@@ -45,10 +44,9 @@ pub struct ScheduledTicks {
 }
 
 impl ScheduledTicks {
-    /// `neighborChanged`'s `scheduleTick(pos, this, 1)`: the tick runs in the next tick's
-    /// block-tick phase, unless it is already due this tick (`willTickThisTick`) or already
-    /// scheduled for the next (`LevelChunkTicks` holds one tick per position and time, and a
-    /// second schedule does not replace it).
+    /// `scheduleTick(pos, this, 1)`: the tick runs in the next tick's block-tick phase, unless
+    /// one is already scheduled for it (`LevelChunkTicks` holds one tick per position and time,
+    /// and a second schedule does not replace it).
     pub fn schedule(&mut self, pos: [i32; 3]) {
         self.schedule_at(pos, TickPriority::Normal);
     }
@@ -56,10 +54,15 @@ impl ScheduledTicks {
     /// `scheduleTick(pos, this, 1, priority)`: as `schedule`, at a chosen priority. A tick
     /// already owed keeps the priority it was scheduled with.
     pub fn schedule_at(&mut self, pos: [i32; 3], priority: TickPriority) {
-        if self.running.contains(&pos) || self.due_next.iter().any(|&(_, p)| p == pos) {
+        if self.due_next.iter().any(|&(_, p)| p == pos) {
             return;
         }
         self.due_next.push((priority, pos));
+    }
+
+    /// `LevelTicks.willTickThisTick`: the tick at `pos` is due in this tick's block-tick phase.
+    pub fn will_tick_this_tick(&self, pos: [i32; 3]) -> bool {
+        self.running.contains(&pos)
     }
 
     /// The block-tick phase, before block entities tick: the ticks scheduled earlier run now,
@@ -110,15 +113,16 @@ mod tests {
     }
 
     #[test]
-    fn a_tick_due_this_tick_is_not_scheduled_again() {
+    fn a_tick_running_this_tick_is_owed_again_when_scheduled() {
         let mut ticks = ScheduledTicks::default();
         ticks.schedule([0, 8, 0]);
         assert_eq!(ticks.due(), [[0, 8, 0]]);
-        // A neighbour changed while the block-tick phase runs (`willTickThisTick`): the tick
-        // being looked at this tick serves it, so the next tick has none.
-        ticks.schedule([0, 8, 0]);
+        assert!(ticks.will_tick_this_tick([0, 8, 0]));
+        assert!(!ticks.will_tick_this_tick([1, 8, 0]));
+        ticks.schedule_at([0, 8, 0], TickPriority::ExtremelyHigh);
         ticks.phase_ended();
-        assert!(ticks.due().is_empty());
+        assert!(!ticks.will_tick_this_tick([0, 8, 0]));
+        assert_eq!(ticks.due(), [[0, 8, 0]]);
     }
 
     #[test]

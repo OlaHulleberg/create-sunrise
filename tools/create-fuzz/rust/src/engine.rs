@@ -647,6 +647,7 @@ impl Run {
                 // `updateShape` of each neighbour; a frame cell's is the engine's
                 // (`WaterWheelStructuralBlock.updateShape`), which schedules its tick.
                 self.w.neighbor_changed(0, q, s);
+                self.transmission_neighbor_changed(q);
                 if new == AIR && self.hangs_on(q, s, p) {
                     fallen.push(q);
                 }
@@ -654,6 +655,22 @@ impl Run {
         }
         for q in fallen {
             self.break_block(q, false);
+        }
+    }
+
+    /// The glue's `transmission_neighbor_changed`: a clutch or gearshift follows its signal in
+    /// the change, and its state is written as Java's `setBlock` does.
+    fn transmission_neighbor_changed(&mut self, q: Pos) {
+        if !self.w.is_transmission(self.at(q)) {
+            return;
+        }
+        let signal = self.signal(q) > 0;
+        if let Some(write) = self.w.transmission_neighbor_changed(0, q, signal) {
+            if write.known_shape {
+                self.commit_known_shape(q, write.state);
+            } else {
+                self.commit(q, write.state, false);
+            }
         }
     }
 
