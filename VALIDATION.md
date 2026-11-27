@@ -33,6 +33,41 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `6a02076` |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `6a02076` |
 
+## Basin, sequenced gearshift and drill/saw fixes in game on Dev `ba1f24e` (main `f5f2449d`)
+
+One run on 2026-11-27 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
+socket), with launcher 1.3.7 (`launcher@1.3.7`, checked against its `SHA256SUMS`). The mod is `git archive` of `create/`
+at `f5f2449d`, built by `sunrise-launcher native-build` as `native-ba1f24e-9d1e11a56f2d`, with Create 6.0.10's jar by its
+pinned sha512. Details and screenshots are not kept in the repository.
+
+As committed, the mod does not start on `ba1f24e` (#359): the jar's `create:single_block_inventories` names the block tag
+`#c:barrels`, which nothing in the merged content defines. The rows after the first ran on the committed code plus one
+uncommitted file, `data/c/tags/block/barrels.json` holding `minecraft:barrel` (the vanilla barrel, as the repository's
+own item tag `c:barrels/wooden`), and most of them also on builds with temporary DEBUG lines (`create_log!` and
+`eprintln!`, not committed) added while tracing the differences below.
+
+| Area | Result |
+|---|---|
+| Startup as committed | **Fails** (#359): `Sunrise: unresolved block tags` before the title screen. Without the mod the same client reaches its first frame; with the one tag file above the game starts. |
+| Mixer over a basin (#345) | At 32 and 64 rpm, andesite and an iron nugget make `andesite_alloy`, the head staying down (`Ticks` 20) while the recipe still fits; at 16 rpm the head stays up, as in Create (`MechanicalMixerBlock` needs medium speed). Emptying the basin by hand (`BasinBlock.useItemOn` → `onEmptied`) and breaking it mid-mix both read `Running` 0, `Ticks` 0 one tick later, head up (`BasinOperatingBlockEntity.tick` → `onBasinRemoved`, then `runningTicks >= 40` in `MechanicalMixerBlockEntity.tick`). |
+| Spout output (#346) | A raised basin under a mixer spouts its alloy onto a depot below: the depot holds one, the next two wait in the basin's `Overflow` (a depot does not merge: `DepotBehaviour.canMergeItems`). Into a basin below: 3 alloys. The turn order within a tick is not visible in game. |
+| Press over a basin (#347) | A new press over 5 iron nuggets stays idle; 4 more nuggets and it presses an iron ingot (from the basin's block data; the screenshot does not show the press). The 231-tick backup check was not observed. |
+| Mixer saved mid-mix (#348) | At 32 rpm with `Running` 1, `Ticks` 20, after quit and reload it reads `Running` 1, `Ticks` 20 and finishes the cycle in 82 turns (1 + 1 + 61 processing + 18 up + 1, as `MechanicalMixerBlockEntity.tick` from an unsaved `processingTicks` 0). `currentRecipe` is not saved, so that cycle makes nothing (`applyBasinRecipe` returns on a null recipe, `BasinOperatingBlockEntity.java:110-112`), and the basin's items are left; see the next row. |
+| Mixer and press after a reload | **Fails.** A loaded mixer or press over a basin never looks at its basin again: items added later stay, a speed change does nothing; a freshly placed one works. A DEBUG log shows `persist::load_entity` inserting the saved mixer or press (`glue/processing/persist.rs`, `Block::MechanicalMixer`, `Block::MechanicalPress`) before the engine knows the block (`block_at` None), so `CreateWorld::place` (`engine/src/world.rs`, `!d.mixers.contains_key`, `!d.presses.contains_key`) creates no operator and `schedule_basin_check` finds none. In Create every operator has its `basinChecker` (`BasinOperatingBlockEntity.addBehaviours`, `:40-44`), which a change of the basin's contents schedules (`BasinBlockEntity.java:357-361`), as does `onSpeedChanged` (`:47-53`). |
+| Sequenced gearshift's screen | Opens on use; the mouse wheel set Turn 180° forward, Turn 90° reversed, End, saved as `Instructions` the way `Instruction.serialize` writes them. A lever goes on it only sneaking: `SequencedGearshiftBlock.useItemOn` opens the screen for any item but a kinetic block. |
+| Powered and unpowered | 16 rpm motor: instruction 0 turns the far cog at 16, instruction 1 at −16, then it is idle with state 2 while powered (`run` keeps the state while `hasNeighborSignal`) and state 0 once unpowered. Unpowered mid-sequence it runs to its End, then state 0. Powered with no rotation it stays idle (`onRedstoneUpdate` returns at speed 0). |
+| Hand crank (#341) | Crank held, then the signal: the sequence runs, instruction 0 at the crank's −32 and instruction 1 at 32 (twice out of twice). Signal first, then the crank: it stays idle (three of three). #341's case, the crank's first turn and the signal between the same two ticks, was not reproduced: no try was tick-stamped. |
+| Clutch in the line | **Fails** (not among these fixes; the earlier "In game" run below passed it). A clutch acts one change late: powered, the cog keeps turning (two screenshots a second apart differ); unpowered, it stops; also with no sequenced gearshift in the line. DEBUG lines show `reattach_scheduled_transmissions` re-attaching the clutch on the engine's old state (`powered` false after a rising signal, true after a falling one), with the mod's `block_changed` for the clutch's own `powered` write arriving after it. In Create `ClutchBlock.neighborChanged` writes `POWERED` before it detaches (`ClutchBlock.java:17-28`), and `ClutchBlockEntity.getRotationSpeedModifier` reads the block state. Same code path as #371 (detach and re-attach back to back in `tick_inputs`). The sequence kept its timing: no `onSpeedChanged` reached the gearshift when the clutch switched. |
+| Lever on a sequenced gearshift | **Differs, expected from the Java, not confirmed in Create's game**: a lever on top of it powers a clutch beside it in the port. Create overrides `SequencedGearshiftBlock.shouldCheckWeakPower` to return false (`:56-59`), which is meant to keep the gearshift from passing that power on. |
+| Sequenced gearshift saved mid-instruction | At 4 rpm (`Timer` 65 of 152): after quit and reload `InstructionIndex` 0, `Timer` and `InstructionProgress` are kept; it finishes instruction 0, runs 1 and ends (`SequencedGearshiftBlockEntity.write/read`). |
+| Drill on a motor (#384) | At 16 rpm it cracks and breaks stone, an oak log and a column of three sand (each falling block in turn); bedrock and water stay (`NextTick` −1, `isBreakable`). Facing down works. Stone placed by the player in front of an idle drill reads `Progress` 1 two ticks later, without waiting for a lazy tick (`DrillBlock.neighborChanged` → `destroyNextTick`). |
+| Drill broken mid-crack (#385) | The cracks go with it (`BlockBreakingKineticBlockEntity.invalidate`). |
+| Drill saved mid-break (#386) | At 4 rpm with `Progress` 5: after quit and reload `Progress` 5 and the same crack stage, then it breaks the stone. |
+| Motor stopped and restarted | Stopped mid-break, `Progress` and the cracks stay; restarted, it goes on and breaks the block. |
+| Saw | A horizontal saw (shaft from behind, `SawBlock.hasShaftTowards`) cuts an oak's lowest log and the whole tree comes down: 5 logs and 35 leaves gone; logs, saplings, sticks and an apple drop. Against stone it does nothing (`SawBlockEntity.canBreak`). |
+
+Not observable in game: #341's same-tick case, #346's order within a tick, #347's backup check, #387's lazy tick. Not run: a vertical sequenced gearshift (the shape of #341's case), belts or funnels at a basin's spout, a heated mixer, fluids in a basin, the saw's recipes, contraptions, multiplayer, sound.
+
 ## Dev build `6a02076` in game
 
 One run of the Linux build of draft Dev `6a02076` (headless, software Vulkan, driven by the control socket), from the mod
