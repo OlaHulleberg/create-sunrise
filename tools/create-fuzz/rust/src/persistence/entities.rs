@@ -77,7 +77,7 @@ const DEPLOYER_STATE: &str = "DeployerState";
 
 /// glue/processing/persist.rs `deployer_to_tag` of `deployers_to_nbt`: `State`, `Timer`,
 /// `Reach` (0: synced, not saved), the held stack's count, `Mode`, `Powered` and its wear, by
-/// position; the held stack's item.
+/// position; the held stack's item and the fake player's inventory past its hand.
 pub fn deployer_to_tag(d: &create_engine::deployer::Deployer) -> Compound {
     let (item, n) = d.held.clone().unwrap_or_default();
     Compound::from([
@@ -94,6 +94,27 @@ pub fn deployer_to_tag(d: &create_engine::deployer::Deployer) -> Compound {
             ]),
         ),
         ("HeldItem".into(), Tag::String(item)),
+        (
+            "Inventory".into(),
+            Tag::List(
+                d.inventory
+                    .iter()
+                    .map(|(slot, st)| {
+                        Tag::Compound(Compound::from([
+                            (
+                                "Values".into(),
+                                Tag::IntArray(vec![
+                                    *slot as i32,
+                                    i32::from(st.count),
+                                    st.damage as i32,
+                                ]),
+                            ),
+                            ("Item".into(), Tag::String(st.item.clone())),
+                        ]))
+                    })
+                    .collect(),
+            ),
+        ),
     ])
 }
 
@@ -120,6 +141,29 @@ pub fn deployer_of(c: &Compound) -> Option<create_engine::deployer::Deployer> {
         held_damage: at(6).max(0) as u32,
         held_components: Vec::new(),
         fist_bump: false,
+        inventory: match c.get("Inventory") {
+            Some(Tag::List(l)) => l
+                .iter()
+                .filter_map(|t| {
+                    let Tag::Compound(e) = t else { return None };
+                    let (Some(Tag::IntArray(v)), Some(Tag::String(item))) =
+                        (e.get("Values"), e.get("Item"))
+                    else {
+                        return None;
+                    };
+                    Some((
+                        (*v.first()?).max(1) as u32,
+                        create_engine::deployer::Stack {
+                            item: item.clone(),
+                            count: (*v.get(1)?).clamp(0, 64) as u8,
+                            damage: v.get(2).map_or(0, |d| (*d).max(0) as u32),
+                            components: Vec::new(),
+                        },
+                    ))
+                })
+                .collect(),
+            _ => Vec::new(),
+        },
     })
 }
 

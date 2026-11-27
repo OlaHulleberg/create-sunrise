@@ -59,6 +59,16 @@ impl Mode {
     }
 }
 
+/// A stack the deployer's fake player keeps besides its held one: its id, count, wear and the
+/// rest of its components (the glue's encoding).
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Stack {
+    pub item: String,
+    pub count: u8,
+    pub damage: u32,
+    pub components: Vec<u8>,
+}
+
 /// A deployer's typed state: its cycle, `timer` (1000 a stroke) and `reach`, the stack in its
 /// hand, its mode, and the fake player's `blockBreakingProgress` (not saved, as in Create).
 #[derive(Clone, Debug, Default, PartialEq)]
@@ -78,6 +88,107 @@ pub struct Deployer {
     pub held_components: Vec<u8>,
     /// `fistBump`: reaching out to meet another punching deployer (not saved).
     pub fist_bump: bool,
+    /// The fake player's inventory past its hand (`Inventory` slot 0, the selected one), by slot:
+    /// what a punch broke, what a use left over, until `tick` puts it in the overflow.
+    pub inventory: Vec<(u32, Stack)>,
+}
+
+/// `Inventory.items`' size: the fake player's main slots, the hand's among them.
+pub const INVENTORY_SLOTS: u32 = 36;
+
+impl Deployer {
+    /// The held stack as a [`Stack`].
+    pub fn held_stack(&self) -> Option<Stack> {
+        let (item, count) = self.held.clone()?;
+        Some(Stack {
+            item,
+            count,
+            damage: self.held_damage,
+            components: self.held_components.clone(),
+        })
+    }
+
+    /// The hand takes `s` (None empties it).
+    pub fn set_held(&mut self, s: Option<Stack>) {
+        let s = s.unwrap_or_default();
+        self.held = (!s.item.is_empty() && s.count > 0).then_some((s.item, s.count));
+        self.held_damage = if self.held.is_some() { s.damage } else { 0 };
+        self.held_components = if self.held.is_some() {
+            s.components
+        } else {
+            Vec::new()
+        };
+    }
+
+    /// `Inventory.placeItemBackInInventory` for the fake player: `s` goes onto the held stack or
+    /// one in the inventory of the same item with room (the hand first), then into the first free
+    /// slot (the hand's when it is empty); `max` is its stack size. What finds no room.
+    pub fn place_back(&mut self, mut s: Stack, max: u8) -> Option<Stack> {
+        let same = |a: &Stack, b: &Stack| {
+            a.item == b.item && a.damage == b.damage && a.components == b.components
+        };
+        if let Some(mut h) = self.held_stack()
+            && same(&h, &s)
+            && h.count < max
+        {
+            let n = s.count.min(max - h.count);
+            h.count += n;
+            s.count -= n;
+            self.set_held(Some(h));
+        }
+        for (_, have) in self.inventory.iter_mut() {
+            if s.count == 0 {
+                return None;
+            }
+            if same(have, &s) && have.count < max {
+                let n = s.count.min(max - have.count);
+                have.count += n;
+                s.count -= n;
+            }
+        }
+        while s.count > 0 {
+            let n = s.count.min(max);
+            let mut part = s.clone();
+            part.count = n;
+            if self.held.is_none() {
+                self.set_held(Some(part));
+            } else {
+                let Some(free) =
+                    (1..INVENTORY_SLOTS).find(|i| self.inventory.iter().all(|(j, _)| j != i))
+                else {
+                    return Some(s);
+                };
+                let at = self.inventory.partition_point(|(j, _)| *j < free);
+                self.inventory.insert(at, (free, part));
+            }
+            s.count -= n;
+        }
+        None
+    }
+
+    /// `tick`'s `WAITING` scan of the fake player's inventory while the overflow holds `overflow`
+    /// stacks: the held stack when its filter refuses it (`held_passes` false), then every other,
+    /// until the overflow holds more than ten. What goes to the overflow, in order.
+    pub fn sort_inventory(&mut self, overflow: usize, held_passes: bool) -> Vec<Stack> {
+        let mut out = Vec::new();
+        if overflow <= 10
+            && !held_passes
+            && let Some(h) = self.held_stack()
+        {
+            out.push(h);
+            self.set_held(None);
+        }
+        let mut kept = Vec::new();
+        for (slot, s) in std::mem::take(&mut self.inventory) {
+            if overflow + out.len() > 10 {
+                kept.push((slot, s));
+            } else {
+                out.push(s);
+            }
+        }
+        self.inventory = kept;
+        out
+    }
 }
 
 /// `getTimerSpeed`: twice the speed, held between 8 and 512 (0 when still).
@@ -105,9 +216,12 @@ pub enum Tick {
 pub trait World {
     /// `level.isEmptyBlock` at the block its fake player is breaking; when it is, its cracks go.
     fn lost_block(&mut self, at: [i32; 3]) -> bool;
-    /// `tick`'s `WAITING` branch before `shouldActivate`: whether its overflow holds anything,
-    /// or it put the fake player's other items (and a held stack its filter refuses) there.
-    fn overflowing(&mut self, d: &mut Deployer) -> bool;
+    /// How many stacks `overflowItems` holds.
+    fn overflow(&mut self) -> usize;
+    /// Whether the deployer's filter lets its held stack through (`filtering.test`).
+    fn held_passes(&mut self, d: &Deployer) -> bool;
+    /// `overflowItems.add` for each of `stacks`, in order.
+    fn add_overflow(&mut self, stacks: Vec<Stack>);
     /// `DeployerHandler.shouldActivate` with the held stack on the block two ahead.
     fn should_activate(&mut self, d: &Deployer) -> bool;
     /// `startFistBump`: whether it and a punching deployer facing it set off toward each other.
@@ -179,7 +293,15 @@ impl Deployer {
                 true
             }
             Tick::Waiting => {
-                if world.overflowing(self) {
+                let overflow = world.overflow();
+                if overflow > 0 {
+                    self.wait(rpm);
+                    return false;
+                }
+                let passes = world.held_passes(self);
+                let moved = self.sort_inventory(overflow, passes);
+                if !moved.is_empty() {
+                    world.add_overflow(moved);
                     self.wait(rpm);
                     return true;
                 }
@@ -628,9 +750,13 @@ mod tests {
         fn lost_block(&mut self, _: [i32; 3]) -> bool {
             false
         }
-        fn overflowing(&mut self, _: &mut Deployer) -> bool {
-            false
+        fn overflow(&mut self) -> usize {
+            0
         }
+        fn held_passes(&mut self, _: &Deployer) -> bool {
+            true
+        }
+        fn add_overflow(&mut self, _: Vec<Stack>) {}
         fn should_activate(&mut self, _: &Deployer) -> bool {
             true
         }
@@ -696,9 +822,13 @@ mod tests {
             fn lost_block(&mut self, _: [i32; 3]) -> bool {
                 false
             }
-            fn overflowing(&mut self, _: &mut Deployer) -> bool {
-                false
+            fn overflow(&mut self) -> usize {
+                0
             }
+            fn held_passes(&mut self, _: &Deployer) -> bool {
+                true
+            }
+            fn add_overflow(&mut self, _: Vec<Stack>) {}
             fn should_activate(&mut self, _: &Deployer) -> bool {
                 false
             }
@@ -718,6 +848,37 @@ mod tests {
             d.timer == 160
         });
         assert_eq!(asked, Some(11));
+    }
+
+    #[test]
+    fn what_the_fake_player_gets_waits_in_its_inventory_then_overflows() {
+        let st = |item: &str, count| Stack {
+            item: item.into(),
+            count,
+            ..Stack::default()
+        };
+        let mut d = Deployer {
+            held: Some(("minecraft:iron_pickaxe".into(), 1)),
+            ..Deployer::default()
+        };
+        // A punch's drop: past the held pickaxe, into slot 1; more of it stacks there.
+        assert_eq!(d.place_back(st("minecraft:cobblestone", 1), 64), None);
+        assert_eq!(d.place_back(st("minecraft:cobblestone", 2), 64), None);
+        assert_eq!(d.inventory, [(1, st("minecraft:cobblestone", 3))]);
+        // With an empty hand the hand takes it.
+        let mut e = Deployer::default();
+        e.place_back(st("minecraft:dirt", 1), 64);
+        assert_eq!(e.held, Some(("minecraft:dirt".into(), 1)));
+        // The scan: all but the held stack, which its filter lets through.
+        let moved = d.sort_inventory(0, true);
+        assert_eq!(moved, [st("minecraft:cobblestone", 3)]);
+        assert!(d.inventory.is_empty() && d.held.is_some());
+        // A refused held stack goes too, first; never past eleven.
+        d.place_back(st("minecraft:dirt", 1), 64);
+        let moved = d.sort_inventory(10, false);
+        assert_eq!(moved.len(), 1);
+        assert_eq!(moved[0].item, "minecraft:iron_pickaxe");
+        assert_eq!(d.inventory, [(1, st("minecraft:dirt", 1))]);
     }
 
     #[test]

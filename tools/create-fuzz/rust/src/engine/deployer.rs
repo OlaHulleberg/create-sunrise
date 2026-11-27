@@ -102,49 +102,45 @@ impl Run {
         }
     }
 
-    fn has_overflow(&self, p: Pos) -> bool {
+    /// `overflow`: the deployer's `overflowItems`, in order.
+    fn overflow_list(&self, p: Pos) -> Vec<Held> {
         self.deployer_overflow
             .get(&p)
-            .is_some_and(|s| s.iter().any(Option::is_some))
+            .map(|s| s.iter().flatten().cloned().collect())
+            .unwrap_or_default()
     }
 
-    /// `keep_overflow`: onto stacks of their kind first, then the empty slots; what finds no
-    /// slot drops at the deployer.
-    fn keep_overflow(&mut self, p: Pos, stacks: Vec<Held>) {
+    /// `add_overflow`: after what it holds, none merged; what finds no slot drops at the
+    /// deployer.
+    fn add_overflow(&mut self, p: Pos, stacks: Vec<Held>) {
         if stacks.is_empty() {
             return;
         }
-        let slots = self
-            .deployer_overflow
-            .entry(p)
-            .or_insert([const { None }; OVERFLOW_SLOTS]);
-        let before = slots.clone();
+        let mut list = self.overflow_list(p);
         let mut drops = Vec::new();
         for s in stacks {
-            let mut left = Some(s);
-            for slot in slots.iter_mut() {
-                let Some(l) = left.take() else { break };
-                match slot {
-                    None => *slot = Some(l),
-                    Some(have) if have.item == l.item => {
-                        let max = deployers::limit(&have.item).unwrap_or(64);
-                        let n = l.count.min(max.saturating_sub(have.count));
-                        have.count += n;
-                        left = (l.count > n).then(|| Held {
-                            count: l.count - n,
-                            ..l
-                        });
-                    }
-                    Some(_) => left = Some(l),
-                }
+            if list.len() < OVERFLOW_SLOTS {
+                list.push(s);
+            } else {
+                drops.push(s);
             }
-            drops.extend(left);
         }
-        if *slots != before {
-            self.mark_column(p);
-        }
+        let slots = std::array::from_fn(|i| list.get(i).cloned());
+        self.deployer_overflow.insert(p, slots);
+        self.mark_column(p);
         for l in drops {
             self.spawn_item(centre(p), [0.0; 3], &l.item, l.count);
+        }
+    }
+
+    /// `place_back`: `Inventory.placeItemBackInInventory` on the deployer's fake player for each
+    /// of `stacks`; what finds no room drops at the deployer.
+    fn place_back(&mut self, p: Pos, d: &mut Deployer, stacks: Vec<Held>) {
+        for h in stacks {
+            let max = deployers::limit(&h.item).unwrap_or(64);
+            if let Some(left) = d.place_back(engine_stack(&h), max) {
+                self.spawn_item(centre(p), [0.0; 3], &left.item, left.count);
+            }
         }
     }
 
@@ -308,7 +304,7 @@ impl Run {
             .as_ref()
             .and_then(|h| deployers::item(&h.item).and_then(|i| i.remainder.as_deref()));
         if let Some(rest) = d.use_for(recipe, max_damage, remainder) {
-            self.keep_overflow(pos, vec![Held::new(&rest, 1)]);
+            self.place_back(pos, d, vec![Held::new(&rest, 1)]);
         }
     }
 
@@ -709,27 +705,31 @@ impl Run {
             .unwrap_or(0.);
         let per_hit = dig.progress(hardness);
         if d.punch(at, per_hit) == deployer::Punch::Broken {
-            self.fake_break(at, &held.0, d);
+            self.fake_break(pos, at, &held.0, d);
         }
     }
 
-    /// `PlayerAction::BreakBlock` (`ServerPlayerGameMode.destroyBlock`) for the fake player
-    /// holding `held`: the block goes, its drops lie where it stood when its stack harvests
-    /// it, and a tool wears.
-    fn fake_break(&mut self, at: Pos, held: &str, d: &mut Deployer) {
+    /// `harvest` (`tryHarvestBlock`) for the fake player of the deployer at `pos` holding
+    /// `held`: the block goes, a tool wears, and the drops of a block its stack harvests go into
+    /// the fake player's inventory.
+    fn fake_break(&mut self, pos: Pos, at: Pos, held: &str, d: &mut Deployer) {
         let state = self.name(self.at(at));
         let dig = deployers::contract()
             .dig(held, &state)
-            .expect("the punch's dig facts");
+            .expect("the punch's dig facts")
+            .clone();
         self.set(at, AIR);
-        if dig.harvest {
-            for s in &dig.drops {
-                self.pop_resource(at, &s.item, s.count);
-            }
-        }
         let max = deployers::item(held).map_or(0, |i| i.max_damage);
         if max > 0 {
             d.wear(1, max);
+        }
+        if dig.harvest {
+            let drops = dig
+                .drops
+                .iter()
+                .map(|s| Held::new(&s.item, s.count))
+                .collect();
+            self.place_back(pos, d, drops);
         }
     }
 
@@ -799,12 +799,8 @@ impl Run {
             timer: d.timer,
             reach: d.reach,
             held: self.held_of(&d),
-            inventory: Vec::new(),
-            overflow: self
-                .deployer_overflow
-                .get(&p)
-                .map(|s| s.iter().flatten().cloned().collect())
-                .unwrap_or_default(),
+            inventory: d.inventory.iter().map(|(_, s)| held_of_stack(s)).collect(),
+            overflow: self.overflow_list(p),
             locked: d.locked,
             owner: None,
             filter: self.funnel_filters.get(&p).cloned(),
@@ -919,23 +915,20 @@ impl deployer::World for Turn<'_> {
         self.run.at(at) == AIR
     }
 
-    fn overflowing(&mut self, d: &mut Deployer) -> bool {
-        let (run, pos) = (&mut *self.run, self.pos);
-        if run.has_overflow(pos) {
-            return true;
-        }
-        // A held stack its filter doesn't let through leaves its hand into the overflow.
-        let refused = run
+    fn overflow(&mut self) -> usize {
+        self.run.overflow_list(self.pos).len()
+    }
+
+    fn held_passes(&mut self, d: &Deployer) -> bool {
+        self.run
             .funnel_filters
-            .get(&pos)
-            .is_some_and(|f| d.held.as_ref().is_some_and(|held| held.0 != *f));
-        if !refused {
-            return false;
-        }
-        let stack = run.held_of(d);
-        Run::set_hand(d, None);
-        run.keep_overflow(pos, stack.into_iter().collect());
-        true
+            .get(&self.pos)
+            .is_none_or(|f| d.held.as_ref().is_none_or(|held| held.0 == *f))
+    }
+
+    fn add_overflow(&mut self, stacks: Vec<deployer::Stack>) {
+        let held = stacks.iter().map(held_of_stack).collect();
+        self.run.add_overflow(self.pos, held);
     }
 
     fn should_activate(&mut self, d: &Deployer) -> bool {
@@ -956,5 +949,23 @@ impl deployer::World for Turn<'_> {
 
     fn activate(&mut self, d: &mut Deployer) {
         self.run.deployer_activate(self.pos, self.facing, d);
+    }
+}
+
+/// A deployer's stack as the contract's `Held` (no components: the contract's stacks have none).
+fn held_of_stack(s: &deployer::Stack) -> Held {
+    Held {
+        item: s.item.clone(),
+        count: s.count,
+        damage: s.damage,
+    }
+}
+
+fn engine_stack(h: &Held) -> deployer::Stack {
+    deployer::Stack {
+        item: h.item.clone(),
+        count: h.count,
+        damage: h.damage,
+        components: Vec::new(),
     }
 }

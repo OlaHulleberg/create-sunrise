@@ -2156,9 +2156,9 @@ impl CreateWorld {
                 if let Some((at, _)) = dp.breaking {
                     d.deployer_cracks.push((pos, at));
                 }
-                if dp.held.is_some() {
-                    // `DeployerBlockEntity.discardPlayer`: its held stack drops with its
-                    // components and wear.
+                if dp.held.is_some() || !dp.inventory.is_empty() {
+                    // `DeployerBlockEntity.discardPlayer`: its fake player's stacks drop with
+                    // their components and wear.
                     d.removed_deployers.insert(pos, dp);
                 }
             }
