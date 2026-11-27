@@ -318,12 +318,7 @@ impl Deployer {
     /// ends there; run out, drawn back it waits 500, and at the bottom of a stroke or at rest
     /// it is the world's turn.
     pub fn tick(&mut self, rpm: f32) -> Tick {
-        let speed = timer_speed(rpm);
-        if speed == 0 {
-            return Tick::None;
-        }
-        if self.timer > 0 {
-            self.timer -= speed;
+        if !self.count_down(rpm) {
             return Tick::None;
         }
         match self.state {
@@ -400,31 +395,50 @@ impl Deployer {
         self.timer = timer_speed(rpm) * 10;
     }
 
-    /// `getHandOffset` at the start of a tick, and blocks a tick it moves at: the hand runs out
-    /// over the stroke to `reach + handLength` (3/16 punching, else 4/16 holding, none
-    /// pointing), at most 21/16.
-    pub fn hand(&self, rpm: f32) -> (f32, f32) {
-        let length = if self.mode == Mode::Punch {
-            3.0 / 16.0
-        } else if self.held.is_some() {
-            4.0 / 16.0
-        } else {
-            0.0
-        };
-        let full = self.reach + length;
-        let speed = timer_speed(rpm) as f32 / 1000.0;
-        let progress = match self.state {
-            State::Expanding => 1.0 - self.timer as f32 / 1000.0,
-            State::Retracting => self.timer as f32 / 1000.0,
+    /// The client's `DeployerBlockEntity.tick`: at speed 0 it returns before `timer` moves, so
+    /// the hand keeps its place; a running timer counts down, and one run out waits for the
+    /// server. Its speed is asked for only while the timer runs.
+    pub fn client_tick(&mut self, rpm: impl FnOnce() -> f32) {
+        if self.timer > 0 {
+            self.count_down(rpm());
+        }
+    }
+
+    /// `tick`'s start, the client's too: still, `timer` stays; a running one loses the timer
+    /// speed. Whether it had run out, so the server's tick goes on.
+    fn count_down(&mut self, rpm: f32) -> bool {
+        let speed = timer_speed(rpm);
+        if speed == 0 {
+            return false;
+        }
+        if self.timer > 0 {
+            self.timer -= speed;
+            return false;
+        }
+        true
+    }
+
+    /// `getHandOffset`: how far along its facing the hand is drawn this frame, `partial` of a
+    /// tick on from `timer`'s place: out over a stroke to `reach + handLength` (3/16 punching,
+    /// 4/16 holding, none pointing), at most 21/16. The progress is clamped to its stroke, so
+    /// a hand whose timer ran out waits for the server, and still (speed 0) it keeps its place.
+    pub fn hand_offset(&self, rpm: f32, partial: f32) -> f32 {
+        let speed = timer_speed(rpm);
+        let left = self.timer as f32 - partial * speed as f32;
+        let mut progress = match self.state {
+            State::Expanding => 1.0 - left / 1000.0,
+            State::Retracting => left / 1000.0,
             State::Waiting => 0.0,
         };
-        let at = (progress.clamp(0.0, 1.0) * full).min(21.0 / 16.0);
-        let v = match self.state {
-            State::Expanding if at < full.min(21.0 / 16.0) => speed * full,
-            State::Retracting if at > 0.0 => -speed * full,
-            _ => 0.0,
+        if self.state == State::Expanding && self.fist_bump {
+            progress *= progress;
+        }
+        let hand = match (self.mode, self.held.is_some()) {
+            (Mode::Punch, _) => 3.0 / 16.0,
+            (_, true) => 4.0 / 16.0,
+            (_, false) => 0.0,
         };
-        (at, v)
+        (progress.clamp(0.0, 1.0) * (self.reach + hand)).min(21.0 / 16.0)
     }
 }
 
@@ -785,18 +799,22 @@ pub fn breaker_id(pos: [i32; 3]) -> i32 {
 /// The mod message channel for deployers' strokes, server to client.
 pub const CHANNEL: &str = "create:deployer";
 
-/// A deployer's stroke as clients get it: the hand's offset along `facing` now and blocks a
-/// tick it moves, what it holds; `at` NaN when the deployer is gone.
+/// A deployer as its clients get it (`DeployerBlockEntity.write` with `clientPacket`, and its
+/// `read` of it): what runs its hand, the `state`, `timer` and `reach`, with the `fistBump`,
+/// the `mode` and the item it holds. `deployer` None: the deployer is gone.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Shown {
     pub pos: [i32; 3],
     pub facing: Dir,
-    pub at: f32,
-    pub per_tick: f32,
-    pub held: Option<String>,
-    /// In punch mode (`Mode.PUNCH`): the held item is shown as a fist holds it.
-    pub punch: bool,
+    pub deployer: Option<Deployer>,
 }
+
+/// Bits of the byte after a deployer's position: the facing, the state above it, the fist bump
+/// and the punch mode. A deployer that is gone has the top bit set and nothing after it.
+const STATE_BIT: u8 = 3;
+const FIST_BUMP_BIT: u8 = 5;
+const PUNCH_BIT: u8 = 6;
+const GONE_BIT: u8 = 7;
 
 pub fn encode(list: &[Shown]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -804,11 +822,18 @@ pub fn encode(list: &[Shown]) -> Vec<u8> {
         for v in s.pos {
             out.extend_from_slice(&v.to_le_bytes());
         }
-        // The facing, with the punch mode in its high bit.
-        out.push(s.facing as u8 | u8::from(s.punch) << 7);
-        out.extend_from_slice(&s.at.to_le_bytes());
-        out.extend_from_slice(&s.per_tick.to_le_bytes());
-        let item = s.held.as_deref().unwrap_or("");
+        let mut byte = s.facing as u8;
+        let Some(d) = &s.deployer else {
+            out.push(byte | 1 << GONE_BIT);
+            continue;
+        };
+        byte |= d.state.index() << STATE_BIT;
+        byte |= u8::from(d.fist_bump) << FIST_BUMP_BIT;
+        byte |= u8::from(d.mode == Mode::Punch) << PUNCH_BIT;
+        out.push(byte);
+        out.extend_from_slice(&d.timer.to_le_bytes());
+        out.extend_from_slice(&d.reach.to_le_bytes());
+        let item = d.held.as_ref().map_or("", |h| h.0.as_str());
         let b = &item.as_bytes()[..item.len().min(255)];
         out.push(b.len() as u8);
         out.extend_from_slice(b);
@@ -818,28 +843,60 @@ pub fn encode(list: &[Shown]) -> Vec<u8> {
 
 pub fn decode(mut data: &[u8]) -> Vec<Shown> {
     let mut out = Vec::new();
-    while data.len() >= 22 {
-        let int = |i: usize| i32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-        let float = |i: usize| f32::from_le_bytes([data[i], data[i + 1], data[i + 2], data[i + 3]]);
-        let Some(&facing) = Dir::ALL.get(usize::from(data[12] & 0x7f)) else {
+    while !data.is_empty() {
+        let Some(head) = take(&mut data, 13) else {
             break;
         };
-        let n = usize::from(data[21]);
-        let Some(item) = data.get(22..22 + n) else {
+        let int = |i: usize| i32::from_le_bytes([head[i], head[i + 1], head[i + 2], head[i + 3]]);
+        let byte = head[12];
+        let Some(&facing) = Dir::ALL.get(usize::from(byte & 0x7)) else {
             break;
         };
-        let item = String::from_utf8_lossy(item).into_owned();
+        let pos = [int(0), int(4), int(8)];
+        if (byte & (1 << GONE_BIT)) != 0 {
+            out.push(Shown {
+                pos,
+                facing,
+                deployer: None,
+            });
+            continue;
+        }
+        let Some(stroke) = take(&mut data, 8) else {
+            break;
+        };
+        let Some(&n) = data.first() else {
+            break;
+        };
+        let Some(item) = take(&mut data, 1 + usize::from(n)) else {
+            break;
+        };
+        let item = String::from_utf8_lossy(&item[1..]).into_owned();
         out.push(Shown {
-            pos: [int(0), int(4), int(8)],
+            pos,
             facing,
-            at: float(13),
-            per_tick: float(17),
-            held: (!item.is_empty()).then_some(item),
-            punch: data[12] & 0x80 != 0,
+            deployer: Some(Deployer {
+                state: State::from_index((byte >> STATE_BIT) & 0x3),
+                timer: i32::from_le_bytes([stroke[0], stroke[1], stroke[2], stroke[3]]),
+                reach: f32::from_le_bytes([stroke[4], stroke[5], stroke[6], stroke[7]]),
+                held: (!item.is_empty()).then_some((item, 1)),
+                mode: if (byte & (1 << PUNCH_BIT)) != 0 {
+                    Mode::Punch
+                } else {
+                    Mode::Use
+                },
+                fist_bump: (byte & (1 << FIST_BUMP_BIT)) != 0,
+                ..Deployer::default()
+            }),
         });
-        data = &data[22 + n..];
     }
     out
+}
+
+/// The first `n` bytes of `data`, which lose them.
+fn take<'a>(data: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
+    let (head, rest) = data.split_at_checked(n)?;
+    *data = rest;
+    Some(head)
 }
 
 #[cfg(test)]
@@ -1032,18 +1089,28 @@ mod tests {
             Shown {
                 pos: [1, -2, 3],
                 facing: Dir::Down,
-                at: 0.5,
-                per_tick: -0.032,
-                held: Some("minecraft:oak_planks".into()),
-                punch: true,
+                deployer: Some(Deployer {
+                    state: State::Retracting,
+                    timer: -24,
+                    reach: 0.75,
+                    held: Some(("minecraft:oak_planks".into(), 1)),
+                    mode: Mode::Punch,
+                    fist_bump: true,
+                    ..Deployer::default()
+                }),
             },
             Shown {
                 pos: [4, 5, 6],
                 facing: Dir::East,
-                at: 0.0,
-                per_tick: 0.0,
-                held: None,
-                punch: false,
+                deployer: Some(Deployer {
+                    timer: 500,
+                    ..Deployer::default()
+                }),
+            },
+            Shown {
+                pos: [7, 8, 9],
+                facing: Dir::Up,
+                deployer: None,
             },
         ];
         assert_eq!(decode(&encode(&list)), list);
@@ -1133,20 +1200,74 @@ mod tests {
         d.mode = Mode::Punch;
         d.start(0.25);
         d.timer = 0;
-        assert!((d.hand(16.0).0 - (0.75 + 3.0 / 16.0)).abs() < 1e-6);
+        assert_eq!(d.hand_offset(16.0, 0.0), 0.75 + 3.0 / 16.0);
     }
 
     #[test]
-    fn the_hand_runs_out_to_its_reach() {
+    fn the_hand_runs_out_to_its_reach_and_waits_there_for_the_server() {
+        let mut d = Deployer {
+            held: Some(("x".into(), 1)),
+            ..Deployer::default()
+        };
+        // 16 rpm: 32 of the timer a tick, over a reach of 3/4 and a hand of 4/16.
+        d.start(0.25);
+        assert_eq!(d.hand_offset(16.0, 0.0), 0.0);
+        assert!((d.hand_offset(16.0, 0.5) - 0.016).abs() < 1e-6);
+        assert!((d.hand_offset(16.0, 1.0) - 0.032).abs() < 1e-6);
+        for _ in 0..31 {
+            d.client_tick(|| 16.0);
+        }
+        assert_eq!(d.timer, 8);
+        assert!((d.hand_offset(16.0, 0.0) - 0.992).abs() < 1e-6);
+        // The client's timer runs past 0 and stops: the hand waits, clamped to its reach.
+        d.client_tick(|| 16.0);
+        assert_eq!(d.timer, -24);
+        assert_eq!(d.hand_offset(16.0, 0.75), 1.0);
+        d.client_tick(|| unreachable!("a timer run out needs no speed"));
+        assert_eq!(d.timer, -24);
+        // Drawing back, the same from 1000.
+        d.state = State::Retracting;
+        d.timer = 500;
+        assert!((d.hand_offset(16.0, 0.0) - 0.5).abs() < 1e-6);
+        assert!((d.hand_offset(16.0, 0.5) - 0.484).abs() < 1e-6);
+        d.timer = 0;
+        assert_eq!(d.hand_offset(16.0, 0.5), 0.0);
+        // At most 21/16, however far it reaches.
+        d.state = State::Expanding;
+        d.timer = -24;
+        d.reach = 1.25;
+        assert_eq!(d.hand_offset(16.0, 0.0), 21.0 / 16.0);
+        // A bump's hand slows into the meeting: its progress is squared.
+        d.reach = 0.5;
+        d.timer = 500;
+        d.fist_bump = true;
+        assert_eq!(d.hand_offset(16.0, 0.0), 0.25 * 0.75);
+    }
+
+    #[test]
+    fn a_hand_stopped_mid_stroke_keeps_its_place() {
         let mut d = Deployer {
             held: Some(("x".into(), 1)),
             ..Deployer::default()
         };
         d.start(0.25);
-        assert_eq!(d.hand(16.0), (0.0, 0.032));
-        d.timer = 0;
-        let (at, v) = d.hand(16.0);
-        assert!((at - 1.0).abs() < 1e-6 && v == 0.0);
+        for _ in 0..10 {
+            d.client_tick(|| 16.0);
+        }
+        assert!((d.hand_offset(16.0, 0.0) - 0.32).abs() < 1e-6);
+        // Its motor goes: the server's turn does nothing, and the client's `tick` returns
+        // before its timer moves.
+        assert!(!d.turn(0.0, &mut Alone));
+        for _ in 0..100 {
+            d.client_tick(|| 0.0);
+        }
+        assert_eq!(d.timer, 680);
+        assert_eq!(d.hand_offset(0.0, 0.0), d.hand_offset(0.0, 0.9));
+        assert!((d.hand_offset(0.0, 0.5) - 0.32).abs() < 1e-6);
+        // Back, it goes on from there.
+        d.client_tick(|| 16.0);
+        assert_eq!(d.timer, 648);
+        assert!((d.hand_offset(16.0, 0.0) - 0.352).abs() < 1e-6);
     }
 
     #[test]

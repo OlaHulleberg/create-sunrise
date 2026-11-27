@@ -6,7 +6,8 @@
 //!
 //! The press's cycle and the deployer's stroke come from the server when they change
 //! (`create:press`, `create:deployer`); the client runs them on between messages, as Create's
-//! does, and draws them each frame. The mixer's head goes down and up with its cycle
+//! does, and draws them each frame: a deployer as its own `tick` runs its timer at the speed its
+//! block entity shows, still when that is 0. The mixer's head goes down and up with its cycle
 //! (`getRenderedHeadOffset`), which the server keeps in its block entity's data, the head turning
 //! with the mixer. A basin's fluids and items and a crafter's phase and item come with their
 //! block entity's data too (a client's block entity has no slots): a change of it draws them
@@ -33,11 +34,11 @@ thread_local! {
     /// Running presses: their cycle, run on from the server's last word, and whether the head
     /// waits at its lowest point for the server to say it pressed.
     static PRESSES: RefCell<HashMap<[i32; 3], (press::Press, bool)>> = RefCell::new(HashMap::new());
-    /// Each deployer's stroke as last sent, and the client tick it came at.
-    static DEPLOYERS: RefCell<HashMap<[i32; 3], (deployer::Shown, u64)>> = RefCell::new(HashMap::new());
+    /// Each deployer as the server last sent it, ticking as its own `tick` does.
+    static DEPLOYERS: RefCell<HashMap<[i32; 3], deployer::Shown>> = RefCell::new(HashMap::new());
     /// Each basin's ingredient swirl: angle, speed, and the client tick they are at.
     static SPINS: RefCell<HashMap<[i32; 3], (f32, f32, u64)>> = RefCell::new(HashMap::new());
-    /// This client's ticks, for the strokes' glide between messages.
+    /// This client's ticks, for the basins' swirls.
     static TICKS: Cell<u64> = const { Cell::new(0) };
 }
 
@@ -327,13 +328,12 @@ pub fn server_message(_host: &mut dyn ClientHost, channel: &str, data: &[u8]) ->
         return true;
     }
     if channel == deployer::CHANNEL {
-        let now = TICKS.get();
         DEPLOYERS.with_borrow_mut(|d| {
             for s in deployer::decode(data) {
-                if s.at.is_nan() {
+                if s.deployer.is_none() {
                     d.remove(&s.pos);
                 } else {
-                    d.insert(s.pos, (s, now));
+                    d.insert(s.pos, s);
                 }
             }
         });
@@ -378,14 +378,15 @@ fn client_press_step(p: &press::Press, speed: f32, waiting: bool) -> i32 {
     next
 }
 
-/// Each client tick: running presses move on a cycle step.
+/// Each client tick: running presses move on a cycle step, and every deployer runs its own
+/// `tick` at the speed its block entity shows.
 pub fn tick(host: &mut dyn ClientHost) {
     TICKS.set(TICKS.get() + 1);
     super::burner_draw::tick(&*host);
     let running: Vec<([i32; 3], press::Press, bool)> =
         PRESSES.with_borrow(|c| c.iter().map(|(k, v)| (*k, v.0, v.1)).collect());
     for (pos, mut p, waiting) in running {
-        let speed = press_speed(host, pos);
+        let speed = shown_speed(host, pos);
         p.ticks = client_press_step(&p, speed, waiting);
         if p.ticks > press::CYCLE {
             p.running = false;
@@ -398,10 +399,17 @@ pub fn tick(host: &mut dyn ClientHost) {
             }
         });
     }
+    DEPLOYERS.with_borrow_mut(|all| {
+        for (&pos, s) in all.iter_mut() {
+            if let Some(d) = &mut s.deployer {
+                d.client_tick(|| shown_speed(&*host, pos));
+            }
+        }
+    });
 }
 
-/// The press's shaft speed, as its block entity shows it.
-fn press_speed(host: &dyn ClientHost, pos: [i32; 3]) -> f32 {
+/// The shaft speed the block entity at `pos` shows a client (a press's, a deployer's).
+fn shown_speed(host: &dyn ClientHost, pos: [i32; 3]) -> f32 {
     let Some(level) = host.local_player().and_then(|p| p.level(host)) else {
         return 0.0;
     };
@@ -526,21 +534,24 @@ fn draw_press_head(draw: &mut dyn BlockEntityDrawContext, pos: [i32; 3], facing:
     draw.pop();
 }
 
-/// The deployer's pole and hand (pointing, or holding) at the hand's offset along its facing,
-/// moving on at the speed the server gave, and what it holds (`DeployerRenderer.renderItem`).
+/// The deployer's pole and hand (pointing, or holding) at its hand's offset this frame
+/// (`getHandOffset`), and what it holds (`DeployerRenderer.renderItem`).
 fn draw_deployer(
     host: &dyn ClientHost,
     draw: &mut dyn BlockEntityDrawContext,
     pos: [i32; 3],
     rpm: f32,
 ) {
-    let Some((s, at_tick)) = DEPLOYERS.with_borrow(|d| d.get(&pos).cloned()) else {
+    let Some(s) = DEPLOYERS.with_borrow(|d| d.get(&pos).cloned()) else {
         return;
     };
-    let elapsed = (TICKS.get().saturating_sub(at_tick)) as f32 + draw.partial();
-    let at = s.at + s.per_tick * elapsed;
+    let Some(d) = s.deployer else {
+        return;
+    };
+    let at = d.hand_offset(rpm, draw.partial());
+    let punch = d.mode == deployer::Mode::Punch;
     let o = s.facing.offset().map(|v| v as f32);
-    let hand = if s.held.is_some() {
+    let hand = if d.held.is_some() {
         Partial::DeployerHandHolding
     } else {
         Partial::DeployerHandPointing
@@ -549,14 +560,14 @@ fn draw_deployer(
     draw.translate([o[0] * at, o[1] * at, o[2] * at]);
     draw_partial(draw, Partial::DeployerPole, dir_name(s.facing));
     // `getHandPose`: a fist in punch mode.
-    match states::partial("part_deployer_hand_punching").filter(|_| s.punch) {
+    match states::partial("part_deployer_hand_punching").filter(|_| punch) {
         Some(fist) => {
             crate::glue::states::draw_block(&mut *draw, fist, &[("facing", dir_name(s.facing))]);
         }
         None => draw_partial(draw, hand, dir_name(s.facing)),
     }
     draw.pop();
-    let Some(stack) = s.held.as_deref().and_then(|id| stacks::stack(host, id, 1)) else {
+    let Some(stack) = d.held.as_ref().and_then(|h| stacks::stack(host, &h.0, 1)) else {
         return;
     };
     // `AngleHelper.horizontalAngle(facing) + 180`; up and down tip the item over x.
@@ -573,7 +584,7 @@ fn draw_deployer(
         _ => 0.0,
     };
     // Facing up and still, it shows its item turning on top (`displayMode`).
-    let display = s.facing == Dir::Up && rpm == 0.0 && !s.punch;
+    let display = s.facing == Dir::Up && rpm == 0.0 && !punch;
     let block = host.item_block(stack.item()).is_some()
         && host.item_uses_block_light(&stack, ItemDisplayContext::Fixed);
     draw.push();
@@ -583,7 +594,7 @@ fn draw_deployer(
         draw.rotate_about([1.0, 0.0, 0.0], x_rot, [0.0; 3]);
         draw.translate([0.0, 0.0, -11.0 / 16.0]);
     }
-    if s.punch {
+    if punch {
         draw.translate([0.0, 1.0 / 8.0, -1.0 / 16.0]);
     }
     let context = if display {
@@ -594,7 +605,7 @@ fn draw_deployer(
         draw.rotate_about([0.0, 1.0, 0.0], turn, [0.0; 3]);
         ItemDisplayContext::Ground
     } else {
-        let scale = if s.punch {
+        let scale = if punch {
             0.75
         } else if block {
             0.75 - 1.0 / 64.0
@@ -602,7 +613,7 @@ fn draw_deployer(
             0.5
         };
         draw.scale([scale; 3]);
-        if s.punch {
+        if punch {
             ItemDisplayContext::ThirdPersonRightHand
         } else {
             ItemDisplayContext::Fixed
