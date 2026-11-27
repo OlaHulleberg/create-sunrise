@@ -1708,13 +1708,9 @@ fn put_back(lv: &mut ServerLevel<'_>, rider: EntityRef, at: [f64; 3], on: OnCart
         }
     }
     placed.retain(|&p, expected| lv.block_state(p).is_some_and(|s| s.block() == *expected));
-    drops.extend(actors::release_cart_held(
-        lv,
-        key,
-        place,
-        |p| free.contains(&p),
-        |p| placed.contains_key(&p),
-    ));
+    drops.extend(actors::release_cart_held(lv, key, place, |p| {
+        placed.contains_key(&p)
+    }));
     for (o, slots) in on.storage {
         let p = place(o);
         if placed.contains_key(&p) {

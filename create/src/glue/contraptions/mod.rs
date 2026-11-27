@@ -121,7 +121,7 @@ use mod_api::{
     BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, HostBlockStates, ItemStack,
     LeftClickBlockEvent, PlayerRef, Registrar, RegistrationContext, ServerHost,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::RwLock;
 
 pub use super::kinetics::dir_name;
@@ -668,14 +668,6 @@ impl ServerLevel<'_> {
         }
     }
 
-    /// Air at `pos` (`removeBlocksFromWorld`).
-    pub fn set_air(&mut self, pos: [i32; 3], flags: BlockUpdateFlags) -> bool {
-        match self.host.block_state_id("minecraft:air") {
-            Some(air) => self.set_state(pos, air, flags),
-            None => false,
-        }
-    }
-
     /// A cell a moving structure passes without colliding (`isCollidingWithWorld`): a block
     /// that can be replaced, or one with no collision shape (and nothing unloaded).
     fn moved_through(&self, pos: [i32; 3]) -> bool {
@@ -878,30 +870,166 @@ impl Landing for Cells<'_, '_> {
     }
 }
 
+type Cell = ([i32; 3], u32);
+
+fn preflight_writes<S: Eq>(
+    targets: impl IntoIterator<Item = ([i32; 3], S)>,
+    (min_y, height): (i32, i32),
+    mut is_loaded: impl FnMut([i32; 3]) -> bool,
+    mut state_at: impl FnMut([i32; 3]) -> Option<S>,
+) -> bool {
+    let Some(max_y) = min_y.checked_add(height) else {
+        return false;
+    };
+    let mut seen = HashSet::new();
+    targets.into_iter().all(|(p, target)| {
+        p[1] >= min_y
+            && p[1] < max_y
+            && is_loaded(p)
+            && seen.insert(p)
+            && state_at(p).is_some_and(|live| live != target)
+    })
+}
+
+pub(super) fn preflight_cells(
+    lv: &ServerLevel<'_>,
+    cells: impl IntoIterator<Item = [i32; 3]>,
+) -> Option<BlockState> {
+    let air = lv.host.block_state_id("minecraft:air")?;
+    let range = lv.level.height(&*lv.host)?;
+    preflight_writes(
+        cells.into_iter().map(|p| (p, air)),
+        range,
+        |p| lv.is_loaded(p),
+        |p| lv.block_state(p),
+    )
+    .then_some(air)
+}
+
+pub(super) fn preflight_targets(
+    lv: &ServerLevel<'_>,
+    cells: &[([i32; 3], bool)],
+) -> Option<(BlockState, Option<BlockState>)> {
+    let air = lv.host.block_state_id("minecraft:air")?;
+    let water = if cells.iter().any(|&(_, wet)| wet) {
+        Some(lv.host.block_state_id("minecraft:water")?)
+    } else {
+        None
+    };
+    let range = lv.level.height(&*lv.host)?;
+    preflight_writes(
+        cells
+            .iter()
+            .map(|&(p, wet)| (p, if wet { water.unwrap_or(air) } else { air })),
+        range,
+        |p| lv.is_loaded(p),
+        |p| lv.block_state(p),
+    )
+    .then_some((air, water))
+}
+
 /// Takes `blocks` (offsets from `base`) out of the world (`removeBlocksFromWorld`).
-fn take_blocks(lv: &mut ServerLevel<'_>, base: [i32; 3], blocks: &[([i32; 3], u32)]) {
-    let cells: Vec<([i32; 3], u32)> = blocks.iter().map(|(o, s)| (add(base, *o), *s)).collect();
-    remove_cells(lv, &cells);
+fn take_blocks(
+    lv: &mut ServerLevel<'_>,
+    base: [i32; 3],
+    blocks: &[Cell],
+    air: BlockState,
+) -> HashSet<[i32; 3]> {
+    let cells: Vec<Cell> = blocks.iter().map(|(o, s)| (add(base, *o), *s)).collect();
+    remove_cells(lv, &cells, air)
 }
 
 /// `removeBlocksFromWorld` for blocks at world positions: brittle ones first, each left as air
 /// with no drops and no neighbour updates (nothing hanging on them breaks off), then their
 /// neighbours hear of it.
-fn remove_cells(lv: &mut ServerLevel<'_>, cells: &[([i32; 3], u32)]) {
+fn remove_cells(lv: &mut ServerLevel<'_>, cells: &[Cell], air: BlockState) -> HashSet<[i32; 3]> {
     let flags = BlockUpdateFlags::MOVE_BY_PISTON
         | BlockUpdateFlags::SUPPRESS_DROPS
         | BlockUpdateFlags::KNOWN_SHAPE
         | BlockUpdateFlags::CLIENTS;
-    for brittles in [true, false] {
-        for &(p, state) in cells {
-            if brittle_state(&*lv.host, state) == brittles {
-                lv.set_air(p, flags);
+    let brittle: Vec<bool> = cells
+        .iter()
+        .map(|&(_, state)| brittle_state(&*lv.host, state))
+        .collect();
+    let refused = remove_cells_with(
+        cells,
+        &brittle,
+        |p| lv.set_state(p, air, flags),
+        |p| {
+            crate::create_log!(
+                "[create] refused removing block at {p:?} during contraption assembly"
+            )
+        },
+    );
+    if refused.len() != cells.len() {
+        for &(p, _) in cells {
+            if !refused.contains(&p) {
+                lv.update_signal_neighbors(p);
             }
         }
     }
-    for &(p, _) in cells {
-        lv.update_signal_neighbors(p);
+    refused
+}
+
+fn remove_cells_with(
+    cells: &[Cell],
+    brittle: &[bool],
+    mut set: impl FnMut([i32; 3]) -> bool,
+    mut on_refused: impl FnMut([i32; 3]),
+) -> HashSet<[i32; 3]> {
+    let mut refused = HashSet::new();
+    for brittles in [true, false] {
+        for (&(p, _), &is_brittle) in cells.iter().zip(brittle) {
+            if is_brittle == brittles && !set(p) {
+                on_refused(p);
+                refused.insert(p);
+            }
+        }
     }
+    refused
+}
+
+pub(super) fn drop_refused(
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+    blocks: &mut Vec<Cell>,
+    carried: Option<&mut create_engine::actors::Carried>,
+) {
+    if refused.is_empty() {
+        return;
+    }
+    blocks.retain(|(o, _)| !refused.contains(&add(origin, *o)));
+    if let Some(carried) = carried {
+        carried
+            .actors
+            .retain(|a| !refused.contains(&add(origin, a.local)));
+        let controls_before = carried.controls.len();
+        carried
+            .controls
+            .retain(|(o, _)| !refused.contains(&add(origin, *o)));
+        if carried.controls.len() != controls_before {
+            for a in &mut carried.actors {
+                a.disabled = false;
+            }
+            let controls: Vec<_> = carried.controls.iter().map(|c| c.1.clone()).collect();
+            create_engine::actors::start_moving(carried, &controls);
+        }
+    }
+}
+
+pub(super) fn drop_refused_for(
+    dim: usize,
+    key: [i32; 3],
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+    blocks: &mut Vec<Cell>,
+    carried: &mut create_engine::actors::Carried,
+) {
+    if refused.is_empty() {
+        return;
+    }
+    drop_refused(origin, refused, blocks, Some(carried));
+    actors::drop_refused_tanks(dim, key, origin, refused);
 }
 
 /// A radial chassis as the search reads it: its axis, glued sides and range.
@@ -928,6 +1056,20 @@ fn chassis_range(dim: usize, p: [i32; 3]) -> i32 {
         .unwrap_or(create_engine::contraption::CHASSIS_RANGE)
 }
 
+fn sail_facing(name: &str, props: &[(String, String)]) -> Option<Dir> {
+    let sail =
+        name == "create:sail_frame" || (name.starts_with("create:") && name.ends_with("_sail"));
+    sail.then(|| prop(props, "facing").and_then(dir_of))
+        .flatten()
+}
+
+pub(super) fn count_sails(host: &dyn Host, blocks: &[Cell]) -> u32 {
+    let sails = blocks.iter().filter(|(_, state)| {
+        name_props(host, *state).is_some_and(|(name, props)| sail_facing(&name, &props).is_some())
+    });
+    sails.count() as u32
+}
+
 /// What a structure search finds at `p` (`contraption_found`): None for air and fluids. Blocks
 /// Create can't move (unbreakable ones) are unmovable; block entities ride with what they hold
 /// (`actors::carry_storage`).
@@ -937,11 +1079,7 @@ pub fn found(lv: &ServerLevel<'_>, p: [i32; 3]) -> Option<Found> {
     if AIRS.contains(&name.as_str()) || name == "minecraft:water" || name == "minecraft:lava" {
         return None;
     }
-    let sail =
-        name == "create:sail_frame" || (name.starts_with("create:") && name.ends_with("_sail"));
-    let sail_facing = sail
-        .then(|| prop(&props, "facing").and_then(dir_of))
-        .flatten();
+    let sail_facing = sail_facing(&name, &props);
     let unmovable = matches!(
         name.as_str(),
         "minecraft:bedrock"
@@ -1448,6 +1586,86 @@ mod tests {
 
     const A: [i32; 3] = [0, 0, 0];
     const B: [i32; 3] = [1, 0, 0];
+
+    #[test]
+    fn preflight_writes_checks_height_loaded_distinct_and_state() {
+        const AIR: u32 = 0;
+        const WATER: u32 = 1;
+        const BLOCK: u32 = 2;
+        let check = |targets: &[Cell], range, unloaded, live_a, live_b| {
+            preflight_writes(
+                targets.iter().copied(),
+                range,
+                |p| unloaded != Some(p),
+                |p| if p == A { live_a } else { live_b },
+            )
+        };
+        let range = (0, 2);
+        let block = Some(BLOCK);
+        let mixed = [(A, AIR), (B, WATER)];
+        assert!(check(&mixed, range, None, block, block));
+        assert!(!check(&[([0, -1, 0], AIR)], range, None, block, block));
+        assert!(!check(&[([0, 2, 0], AIR)], range, None, block, block));
+        assert!(!check(&[], (i32::MAX, 1), None, block, block));
+        assert!(!check(&mixed, range, Some(B), block, block));
+        assert!(!check(&[(A, AIR), (A, WATER)], range, None, block, block));
+        assert!(!check(&mixed, range, None, block, None));
+        assert!(!check(&mixed, range, None, Some(AIR), block));
+        assert!(!check(&mixed, range, None, block, Some(WATER)));
+    }
+
+    #[test]
+    fn remove_cells_with_logs_and_drops_refused_cells() {
+        use create_engine::actors::{Actor, Carried, Controls, Kind};
+
+        let origin = [10, 20, 30];
+        let kept = add(origin, A);
+        let blocked = add(origin, B);
+        let mut blocks = vec![(A, 2), (B, 1)];
+        let saw_off = Controls {
+            filter: Some("create:mechanical_saw".into()),
+            disabled: true,
+            powered: false,
+        };
+        let all_off = Controls {
+            filter: None,
+            disabled: true,
+            powered: true,
+        };
+        let mut carried = Carried {
+            actors: vec![
+                Actor::new(A, Kind::Drill, Dir::Up, 0),
+                Actor::new(B, Kind::Drill, Dir::Up, 1),
+            ],
+            controls: vec![(A, saw_off.clone()), (B, all_off.clone())],
+            ..Default::default()
+        };
+        create_engine::actors::start_moving(&mut carried, &[saw_off.clone(), all_off]);
+        assert_eq!(
+            carried.disabled,
+            [Some("create:mechanical_saw".into()), None]
+        );
+        assert!(carried.actors[0].disabled);
+        let mut attempted = Vec::new();
+        let mut logged = Vec::new();
+        let refused = remove_cells_with(
+            &[(kept, 2), (blocked, 1)],
+            &[false, true],
+            |p| {
+                attempted.push(p);
+                p != blocked
+            },
+            |p| logged.push(p),
+        );
+        assert_eq!(attempted, [blocked, kept]);
+        assert_eq!(logged, [blocked]);
+        assert_eq!(refused, HashSet::from([blocked]));
+        drop_refused(origin, &refused, &mut blocks, Some(&mut carried));
+        assert_eq!(blocks, [(A, 2)]);
+        assert_eq!(carried.actors, [Actor::new(A, Kind::Drill, Dir::Up, 0)]);
+        assert_eq!(carried.controls, [(A, saw_off)]);
+        assert_eq!(carried.disabled, [Some("create:mechanical_saw".into())]);
+    }
 
     #[test]
     fn air_and_fluids_accept_landing_without_breaking() {
