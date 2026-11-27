@@ -475,6 +475,8 @@ pub struct Dimension {
     /// Drills and their breaking, the turning ones (the only ones that tick).
     pub drills: HashMap<[i32; 3], crate::drill::Breaker>,
     pub drilling: Vec<[i32; 3]>,
+    /// Removed breakers that showed cracks, for the level to clear (`invalidate`).
+    pub breaker_cracks: Vec<([i32; 3], [i32; 3])>,
     /// Cuckoo clocks that turn (the only ones that look at the time), and the animations
     /// running: what, and its progress.
     pub cuckoo_turning: Vec<[i32; 3]>,
@@ -1078,7 +1080,6 @@ impl CreateWorld {
 
     /// Level entity registration survives state changes and same-entity recolouring.
     fn register_block_entity(&mut self, dim: usize, pos: [i32; 3], old: u32, new: u32) {
-        let entities = &mut self.dims[dim].block_entities;
         let retains = self.table.has_block_entity(new)
             && self
                 .table
@@ -1086,11 +1087,24 @@ impl CreateWorld {
                 .zip(self.table.get(new))
                 .is_some_and(|((old, _), (new, _))| keeps_block_entity(old, new));
         if !retains {
-            entities.remove(pos);
+            self.dims[dim].block_entities.remove(pos);
+            self.breaker_removed(dim, pos);
         }
         if self.table.has_block_entity(new) {
             let view = entity_view(self.table.get(new).unwrap().0);
-            entities.register(pos, view);
+            self.dims[dim].block_entities.register(pos, view);
+        }
+    }
+
+    /// `SmartBlockEntity.setRemoved` of the breaker at `pos`: `invalidate` clears the cracks it
+    /// showed.
+    fn breaker_removed(&mut self, dim: usize, pos: [i32; 3]) {
+        let d = &mut self.dims[dim];
+        d.drilling.retain(|p| *p != pos);
+        if let Some(b) = d.drills.remove(&pos)
+            && let Some(at) = b.cracks_at()
+        {
+            d.breaker_cracks.push((pos, at));
         }
     }
 
@@ -2083,9 +2097,6 @@ impl CreateWorld {
                     }
                 }
             }
-            if d.drills.remove(&pos).is_some() {
-                d.drilling.retain(|p| *p != pos);
-            }
             d.mixers.remove(&pos);
             if self.table.get(old).map(|(b, _)| b) == Some(Block::Basin) {
                 // `BasinBlockEntity.remove` -> `onEmptied`: the operator over it stops at its turn.
@@ -2396,8 +2407,14 @@ impl CreateWorld {
             d.rollers.retain(|p, _| out(p));
             d.observer_filters.retain(|p, _| out(p));
             d.vaults.column_unloaded(cx, cz);
-            d.drills.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.drilling.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            d.breaker_cracks.extend(
+                d.drills
+                    .iter()
+                    .filter(|(p, _)| !out(p))
+                    .filter_map(|(p, b)| b.cracks_at().map(|at| (*p, at))),
+            );
+            d.drills.retain(|p, _| out(p));
+            d.drilling.retain(out);
             d.fluid_transport
                 .pipes
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -7969,6 +7986,58 @@ mod tests {
         w.block_changed(0, pos, 0, 10);
         w.block_changed(0, pos, 10, 0);
         assert!(w.dims[0].deployer_cracks.is_empty());
+    }
+
+    /// `BlockBreakingKineticBlockEntity.invalidate`: a drill or saw that goes takes its cracks
+    /// along.
+    #[test]
+    fn a_removed_breaker_clears_its_cracks() {
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (
+                "create:mechanical_drill",
+                vec![("facing", "east"), ("waterlogged", "false")],
+            ),
+            ("create:shaft", vec![("axis", "x")]),
+        ];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (pos, at) = ([0, 64, 0], [1, 64, 0]);
+        let place = |w: &mut CreateWorld| {
+            w.block_changed(0, pos, 0, 10);
+            w.dims[0].drills.insert(
+                pos,
+                crate::drill::Breaker {
+                    progress: 3,
+                    breaking_pos: Some(at),
+                    ..Default::default()
+                },
+            );
+        };
+        place(&mut w);
+        w.block_changed(0, pos, 10, 0);
+        assert_eq!(w.dims[0].breaker_cracks, [(pos, at)]);
+        assert!(w.dims[0].drills.is_empty());
+        assert!(!w.dims[0].drilling.contains(&pos));
+        // Replaced by another of Create's blocks, which keeps the block entity type.
+        w.dims[0].breaker_cracks.clear();
+        place(&mut w);
+        w.block_changed(0, pos, 10, 11);
+        assert_eq!(w.dims[0].breaker_cracks, [(pos, at)]);
+        assert!(w.dims[0].drills.is_empty());
+        w.dims[0].breaker_cracks.clear();
+        w.block_changed(0, pos, 11, 0);
+        // Unloaded with its column.
+        place(&mut w);
+        w.column_unloaded(0, 0, 0);
+        assert_eq!(w.dims[0].breaker_cracks, [(pos, at)]);
+        assert!(w.dims[0].drills.is_empty());
+        w.dims[0].breaker_cracks.clear();
+        // One that broke nothing leaves none.
+        w.block_changed(0, pos, 0, 10);
+        w.block_changed(0, pos, 10, 0);
+        assert!(w.dims[0].breaker_cracks.is_empty());
     }
 
     /// Create: a broken deployer leaves its held stack, with its damage and components, for its

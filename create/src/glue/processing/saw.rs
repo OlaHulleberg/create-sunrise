@@ -35,9 +35,16 @@ pub fn clear() {
 /// turn: `KineticBlockEntity.tick` first, then the breaker's own, which looks at the block in
 /// front in steps (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`; for a
 /// saw also `isSawable`), its cracks showing (`destroyBlockProgress`), its drops left in its
-/// middle; a saw fells what stood on it (`TreeCutter`).
+/// middle; a saw fells what stood on it (`TreeCutter`). A breaker that went since the last tick
+/// takes its cracks along (`invalidate`).
 pub fn tick_drills(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
+    let cracks =
+        with_world(|w| std::mem::take(&mut w.dims[dim].breaker_cracks)).unwrap_or_default();
+    for (breaker, at) in cracks {
+        lv.level
+            .set_break_progress(&mut *lv.host, breaker_id(breaker), at, -1);
+    }
     let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
     if drills.is_empty() {
         return;

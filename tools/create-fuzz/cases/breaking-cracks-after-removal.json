@@ -1,0 +1,49 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 8,
+  "checkpoints": [
+    5,
+    6,
+    7,
+    8
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 64
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:mechanical_drill[facing=east,waterlogged=false]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "minecraft:stone"
+    }
+  ],
+  "events": [
+    {
+      "tick": 6,
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "minecraft:air"
+    }
+  ]
+}
