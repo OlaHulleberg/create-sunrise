@@ -690,12 +690,8 @@ impl ServerLevel<'_> {
         is_passable_name(self.block_name(pos).as_deref())
     }
 
-    /// The block of state `id` as an item, dropped at the middle of `pos` (a block that could
-    /// not go back).
-    fn drop_block(&mut self, pos: [i32; 3], id: u32) {
-        let Some(state) = unnum(id) else {
-            return;
-        };
+    /// Drops the block of `state` as an item at the middle of `pos`, if it has an item.
+    pub(crate) fn drop_block(&mut self, pos: [i32; 3], state: BlockState) {
         let Some(item) = self.host.block_item(state.block()) else {
             return;
         };
@@ -876,7 +872,9 @@ impl Landing for Cells<'_, '_> {
     }
 
     fn drop_block(&mut self, p: [i32; 3], state: u32) {
-        self.lv.drop_block(p, state);
+        if let Some(state) = unnum(state) {
+            self.lv.drop_block(p, state);
+        }
     }
 }
 
