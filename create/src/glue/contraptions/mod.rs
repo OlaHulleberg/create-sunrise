@@ -118,8 +118,8 @@ use create_engine::Block;
 use create_engine::contraption::{Chassis, Found, Sticky};
 use create_engine::kinetics::{Axis, Dir};
 use mod_api::{
-    BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, ItemStack, LeftClickBlockEvent,
-    PlayerRef, Registrar, RegistrationContext, ServerHost,
+    BlockClick, BlockState, BlockUpdateFlags, Compound, Flow, Host, HostBlockStates, ItemStack,
+    LeftClickBlockEvent, PlayerRef, Registrar, RegistrationContext, ServerHost,
 };
 use std::collections::HashMap;
 use std::sync::RwLock;
@@ -638,6 +638,12 @@ fn center(p: [i32; 3]) -> [f64; 3] {
 
 const AIRS: [&str; 3] = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
 
+fn is_passable_name(name: Option<&str>) -> bool {
+    name.is_some_and(|name| {
+        AIRS.contains(&name) || matches!(name, "minecraft:water" | "minecraft:lava")
+    })
+}
+
 impl ServerLevel<'_> {
     /// The state at `pos`, numbered; None where nothing is loaded.
     pub fn state_num(&self, pos: [i32; 3]) -> Option<u32> {
@@ -670,13 +676,6 @@ impl ServerLevel<'_> {
         }
     }
 
-    /// Whether `pos` holds air (`minecraft:air` or `cave_air`), the cells a turned structure
-    /// goes back into.
-    fn is_free(&self, pos: [i32; 3]) -> bool {
-        self.block_name(pos)
-            .is_some_and(|n| n == "minecraft:air" || n == "minecraft:cave_air")
-    }
-
     /// A cell a moving structure passes without colliding (`isCollidingWithWorld`): a block
     /// that can be replaced, or one with no collision shape (and nothing unloaded).
     fn moved_through(&self, pos: [i32; 3]) -> bool {
@@ -688,9 +687,7 @@ impl ServerLevel<'_> {
 
     /// A cell a moving structure passes (air, or a fluid; `canBeReplaced` with no collision).
     fn passable(&self, pos: [i32; 3]) -> bool {
-        self.block_name(pos).is_some_and(|n| {
-            AIRS.contains(&n.as_str()) || n == "minecraft:water" || n == "minecraft:lava"
-        })
+        is_passable_name(self.block_name(pos).as_deref())
     }
 
     /// The block of state `id` as an item, dropped at the middle of `pos` (a block that could
@@ -752,36 +749,119 @@ fn unbreakable(name: &str) -> bool {
     )
 }
 
-/// Puts `blocks` (world positions) back (`Contraption.addBlocksToWorld`): the sturdy ones first,
-/// then the brittle ones that hang on them. A cell `free` says takes a block takes it; a block
-/// that can't be broken there, or a brittle block meeting something else, drops the moving
-/// block; anything else there is broken (dropping) for it.
+/// Puts `blocks` (world positions) back (`Contraption.addBlocksToWorld`) with the flags the
+/// moving structures use (`UPDATE_MOVE_BY_PISTON | UPDATE_ALL`); see [`put_back_blocks_with_flags`].
 fn put_back_blocks(
     lv: &mut ServerLevel<'_>,
     blocks: &[([i32; 3], u32)],
-    free: impl Fn(&ServerLevel<'_>, [i32; 3]) -> bool,
 ) -> std::collections::HashSet<[i32; 3]> {
-    let mut placed = std::collections::HashSet::new();
     let flags = super::server::update_all() | BlockUpdateFlags::MOVE_BY_PISTON;
+    put_back_blocks_with_flags(lv, blocks, flags)
+}
+
+/// Puts `blocks` (world positions) back (`Contraption.addBlocksToWorld`): the sturdy ones first,
+/// then the brittle ones that hang on them. A passable cell takes a block without breaking anything; a block
+/// that can't be broken there, or a brittle block meeting something else, drops the moving
+/// block (`Contraption.java:1130-1141` emits particles and drops, then `continue`s with no `setBlock`); anything else there is broken
+/// (dropping) for it, and a refused break or placement drops the moving block instead of
+/// losing it. Returns the cells that were written, the only ones whose carried contents go back.
+pub(crate) fn put_back_blocks_with_flags(
+    lv: &mut ServerLevel<'_>,
+    blocks: &[([i32; 3], u32)],
+    flags: BlockUpdateFlags,
+) -> std::collections::HashSet<[i32; 3]> {
+    land_blocks(&mut Cells { lv, flags }, blocks)
+}
+
+/// What a destination cell holds before a moving block lands there, read once.
+struct Dest {
+    free: bool,
+    unbreakable: bool,
+}
+
+/// The world a structure lands in, cell by cell (what [`land_blocks`] asks of it).
+trait Landing {
+    /// Whether `state` is brittle (`BlockMovementChecks.isBrittle`).
+    fn brittle(&self, state: u32) -> bool;
+    fn cell(&self, p: [i32; 3]) -> Dest;
+    /// `Level.destroyBlock(p, true)`; false when the block was not broken.
+    fn destroy(&mut self, p: [i32; 3]) -> bool;
+    /// `Level.setBlock(p, state, flags)`; false when nothing was placed.
+    fn set(&mut self, p: [i32; 3], state: u32) -> bool;
+    /// The moving block dropped as an item at `p`.
+    fn drop_block(&mut self, p: [i32; 3], state: u32);
+}
+
+/// The sturdy blocks, then the brittle ones, each landing in its cell or dropping; the cells
+/// written.
+fn land_blocks(
+    world: &mut impl Landing,
+    blocks: &[([i32; 3], u32)],
+) -> std::collections::HashSet<[i32; 3]> {
+    let mut written = std::collections::HashSet::new();
     for brittles in [false, true] {
         for &(p, state) in blocks {
-            if brittle_state(&*lv.host, state) != brittles {
+            if world.brittle(state) != brittles {
                 continue;
             }
-            if !free(lv, p) {
-                let here = lv.block_name(p).unwrap_or_default();
-                if brittles || unbreakable(&here) {
-                    lv.drop_block(p, state);
-                    continue;
-                }
-                lv.destroy_block(p, true);
+            let dest = world.cell(p);
+            if !dest.free && (brittles || dest.unbreakable || !world.destroy(p)) {
+                world.drop_block(p, state);
+                continue;
             }
-            if lv.set_num(p, state, flags) {
-                placed.insert(p);
+            if world.set(p, state) {
+                written.insert(p);
+            } else {
+                world.drop_block(p, state);
             }
         }
     }
-    placed
+    written
+}
+
+/// A level a structure lands in and the flags it places with.
+struct Cells<'a, 'b> {
+    lv: &'a mut ServerLevel<'b>,
+    flags: BlockUpdateFlags,
+}
+
+impl Landing for Cells<'_, '_> {
+    fn brittle(&self, state: u32) -> bool {
+        brittle_state(&*self.lv.host, state)
+    }
+
+    fn cell(&self, p: [i32; 3]) -> Dest {
+        let Some(s) = self.lv.block_state(p) else {
+            return Dest {
+                free: false,
+                unbreakable: false,
+            };
+        };
+        let text = self.lv.host.block_state_string(s);
+        let name = text.as_deref().map(|t| states::split(t).0);
+        let free = is_passable_name(name);
+        let unbreakable = !free
+            && (self
+                .lv
+                .host
+                .block_states()
+                .destroy_speed(s)
+                .is_some_and(|h| h < 0.0)
+                || name.is_some_and(unbreakable));
+        Dest { free, unbreakable }
+    }
+
+    fn destroy(&mut self, p: [i32; 3]) -> bool {
+        self.lv.destroy_block(p, true)
+    }
+
+    fn set(&mut self, p: [i32; 3], state: u32) -> bool {
+        self.lv.set_num(p, state, self.flags)
+    }
+
+    fn drop_block(&mut self, p: [i32; 3], state: u32) {
+        self.lv.drop_block(p, state);
+    }
 }
 
 /// Takes `blocks` (offsets from `base`) out of the world (`removeBlocksFromWorld`).
@@ -1296,4 +1376,137 @@ fn in_click_level<R>(
     let dimension = click.dimension.key().id().to_owned();
     let mut lv = ServerLevel::new(host, &dimension)?;
     Some(f(&mut lv))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::HashSet;
+
+    /// A level of cells: which are free, unbreakable, refuse breaking or placing, and which
+    /// states are brittle; mutations are logged.
+    #[derive(Default)]
+    struct Fake {
+        brittle: HashSet<u32>,
+        free: HashSet<[i32; 3]>,
+        names: HashMap<[i32; 3], &'static str>,
+        unbreakable: HashSet<[i32; 3]>,
+        keeps: HashSet<[i32; 3]>,
+        refuses: HashSet<[i32; 3]>,
+        log: Vec<String>,
+    }
+
+    impl Landing for Fake {
+        fn brittle(&self, state: u32) -> bool {
+            self.brittle.contains(&state)
+        }
+        fn cell(&self, p: [i32; 3]) -> Dest {
+            Dest {
+                free: self.free.contains(&p) || is_passable_name(self.names.get(&p).copied()),
+                unbreakable: self.unbreakable.contains(&p),
+            }
+        }
+        fn destroy(&mut self, p: [i32; 3]) -> bool {
+            self.log.push(format!("destroy {p:?}"));
+            !self.keeps.contains(&p)
+        }
+        fn set(&mut self, p: [i32; 3], state: u32) -> bool {
+            self.log.push(format!("set {p:?} {state}"));
+            !self.refuses.contains(&p)
+        }
+        fn drop_block(&mut self, p: [i32; 3], state: u32) {
+            self.log.push(format!("drop {p:?} {state}"));
+        }
+    }
+
+    const A: [i32; 3] = [0, 0, 0];
+    const B: [i32; 3] = [1, 0, 0];
+
+    #[test]
+    fn air_and_fluids_accept_landing_without_breaking() {
+        for name in [
+            "minecraft:water",
+            "minecraft:lava",
+            "minecraft:void_air",
+            "minecraft:stone",
+        ] {
+            let mut w = Fake {
+                names: HashMap::from([(A, name)]),
+                ..Fake::default()
+            };
+            assert_eq!(land_blocks(&mut w, &[(A, 2)]), HashSet::from([A]));
+            let mut expected = Vec::new();
+            if name == "minecraft:stone" {
+                expected.push(format!("destroy {A:?}"));
+            }
+            expected.push(format!("set {A:?} 2"));
+            assert_eq!(w.log, expected, "{name}");
+        }
+        assert!(!is_passable_name(None));
+    }
+
+    #[test]
+    fn sturdy_blocks_land_before_brittle_ones() {
+        let mut w = Fake {
+            brittle: HashSet::from([1]),
+            free: HashSet::from([A, B]),
+            ..Fake::default()
+        };
+        // The brittle block is listed first, the sturdy one it hangs on second.
+        let written = land_blocks(&mut w, &[(A, 1), (B, 2)]);
+        assert_eq!(w.log, vec![format!("set {B:?} 2"), format!("set {A:?} 1")]);
+        assert_eq!(written, HashSet::from([A, B]));
+    }
+
+    #[test]
+    fn unbreakable_or_brittle_onto_occupied_drops_the_moving_block() {
+        let mut w = Fake {
+            brittle: HashSet::from([1]),
+            unbreakable: HashSet::from([B]),
+            ..Fake::default()
+        };
+        let written = land_blocks(&mut w, &[(A, 1), (B, 2)]);
+        assert_eq!(
+            w.log,
+            vec![format!("drop {B:?} 2"), format!("drop {A:?} 1")]
+        );
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn a_refused_break_drops_the_block_and_places_nothing() {
+        let mut w = Fake {
+            keeps: HashSet::from([A]),
+            ..Fake::default()
+        };
+        let written = land_blocks(&mut w, &[(A, 2)]);
+        assert_eq!(
+            w.log,
+            vec![format!("destroy {A:?}"), format!("drop {A:?} 2")]
+        );
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn a_refused_placement_drops_the_block() {
+        let mut w = Fake {
+            free: HashSet::from([A]),
+            refuses: HashSet::from([A]),
+            ..Fake::default()
+        };
+        let written = land_blocks(&mut w, &[(A, 2)]);
+        assert_eq!(w.log, vec![format!("set {A:?} 2"), format!("drop {A:?} 2")]);
+        assert!(written.is_empty());
+    }
+
+    #[test]
+    fn a_broken_block_is_replaced_and_written() {
+        let mut w = Fake::default();
+        let written = land_blocks(&mut w, &[(A, 2)]);
+        assert_eq!(
+            w.log,
+            vec![format!("destroy {A:?}"), format!("set {A:?} 2")]
+        );
+        assert_eq!(written, HashSet::from([A]));
+    }
 }
