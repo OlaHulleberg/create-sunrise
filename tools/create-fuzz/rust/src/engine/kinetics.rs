@@ -15,7 +15,14 @@ impl Run {
     fn level_tick(&mut self) {
         self.now += 1;
         self.persisted.clock += 1;
-        // The scheduled block ticks run before the entities, those before the block entities.
+        // The scheduled block ticks run before the entities, those before the block entities;
+        // the transmissions' `EXTREMELY_HIGH` re-attach first (the glue's `block_ticks`).
+        self.refresh_sequencer_signals();
+        let mut events = Vec::new();
+        self.w.reattach_scheduled_transmissions(0, &mut events);
+        self.publish_after_effects(events);
+        self.w.flush_kinetic_callbacks(0);
+        self.show_sequencer_writes();
         self.vanilla_ticks();
         self.vanilla_entities();
         // Shape notifications from committed inputs precede the level tick.
@@ -29,9 +36,6 @@ impl Run {
         }
         self.apply_wheel_flow();
         self.refresh_sequencer_signals();
-        let mut events = Vec::new();
-        // Clutches and gearshifts follow redstone (`ClutchBlock.neighborChanged`): the
-        // callback runs with the block change, before any block entity of this tick.
         for p in self.w.take_redstone(0) {
             let state = self.at(p);
             let Some(was) = self.w.powered(state) else {
@@ -45,8 +49,6 @@ impl Run {
                     if now { "true" } else { "false" },
                 );
                 let id = self.id(&next);
-                // The glue's `tick_inputs`: GearshiftBlock.neighborChanged detaches first.
-                self.w.transmission_power_changing(0, p);
                 // ChainGearshiftBlock.neighborChanged sets with UPDATE_KNOWN_SHAPE.
                 if self.w.reads_signal(state) {
                     self.commit_known_shape(p, id);
@@ -59,11 +61,6 @@ impl Run {
                 self.w.set_chain_signal(0, p, signal);
             }
         }
-        // The scheduled block ticks the detach owes (`GearshiftBlock.tick`): the level runs
-        // them before block entities tick, so the transmission re-attaches before any base
-        // tick of this tick.
-        self.w.reattach_scheduled_transmissions(0, &mut events);
-        self.publish_after_effects(events);
         self.w.flush_kinetic_callbacks(0);
         self.show_sequencer_writes();
         self.w.tick_cranks(0);

@@ -152,6 +152,15 @@ impl StateTable {
         Some((*self.block.get(i)?, self.info.get(i)?))
     }
 
+    /// The state of the same block as `state` with `powered` set to `powered`.
+    pub fn with_powered(&self, state: u32, powered: bool) -> Option<u32> {
+        let (block, info) = self.get(state)?;
+        let want = StateInfo { powered, ..*info };
+        (0..self.block.len())
+            .find(|&k| self.block[k] == block && self.info[k] == want)
+            .map(|k| self.first + k as u32)
+    }
+
     /// The belt segment of a state id, if it is a `create:belt` (guaranteed by `StateTable::new`).
     #[inline]
     pub fn belt_segment(&self, state: u32) -> Option<crate::belt::Segment> {
@@ -1018,14 +1027,13 @@ pub struct BeltBreak {
     pub shaft: Option<crate::kinetics::Axis>,
 }
 
-/// Blocks that follow redstone power (`powered`): Create's split shafts, and the cart assembler
-/// (`CartAssemblerBlock.neighborChanged`).
+/// Blocks whose `powered` the host sets after the neighbour change: the adjustable chain
+/// gearshift and gantry shaft, and the cart assembler (`CartAssemblerBlock.neighborChanged`).
+/// Clutches and gearshifts follow theirs in the change (`transmission_neighbor_changed`).
 fn follows_power(block: Block) -> bool {
     matches!(
         block,
-        Block::Clutch
-            | Block::Gearshift
-            | Block::GantryShaft
+        Block::GantryShaft
             | Block::AdjustableChainGearshift
             | Block::SmartChute
             | Block::TrackSignal
@@ -1058,6 +1066,14 @@ fn is_chain_drive(block: Block) -> bool {
         block,
         Block::EncasedChainDrive | Block::AdjustableChainGearshift
     )
+}
+
+/// The state a clutch or gearshift took at a neighbour change, for the host to write:
+/// `known_shape` for the clutch's `UPDATE_CLIENTS | UPDATE_KNOWN_SHAPE`, else `UPDATE_CLIENTS`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransmissionWrite {
+    pub state: u32,
+    pub known_shape: bool,
 }
 
 /// Create's state for the open world: three vanilla dimensions, by index.
@@ -1566,26 +1582,67 @@ impl CreateWorld {
         }
     }
 
-    /// `GearshiftBlock.neighborChanged`: detach before committing a redstone power change.
-    /// Direct state replacement does not run this callback.
-    pub fn transmission_power_changing(&mut self, dim: usize, pos: [i32; 3]) {
-        if self
-            .block_at(dim, pos)
-            .is_some_and(|b| matches!(b, Block::Clutch | Block::Gearshift))
-        {
-            let d = &mut self.dims[dim];
-            d.kinetics.detach_transmission(pos);
-            // `worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`.
+    /// Whether `state` is a clutch's or a gearshift's (`GearshiftBlock`).
+    #[inline]
+    pub fn is_transmission(&self, state: u32) -> bool {
+        self.table
+            .get(state)
+            .is_some_and(|(b, _)| matches!(b, Block::Clutch | Block::Gearshift))
+    }
+
+    /// `GearshiftBlock.neighborChanged` and `ClutchBlock.neighborChanged`, run at the neighbour
+    /// change: the transmission at `pos` follows `signal` (`hasNeighborSignal`). Its new state
+    /// is set here in Java's order around `detachKinetics` and returned for the host to write;
+    /// the host's block change then only shows it.
+    pub fn transmission_neighbor_changed(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+        signal: bool,
+    ) -> Option<TransmissionWrite> {
+        let state = *self.dims[dim].states.get(&pos)?;
+        let (block, info) = self.table.get(state)?;
+        let was = info.powered;
+        if !matches!(block, Block::Clutch | Block::Gearshift) || was == signal {
+            return None;
+        }
+        let next = self.table.with_powered(state, signal)?;
+        let known_shape = block == Block::Clutch;
+        if known_shape {
+            // `worldIn.setBlock(pos, state.cycle(POWERED), 2 | 16)`, then
+            // `detachKinetics(worldIn, pos, previouslyPowered)`.
+            self.place(dim, pos, next, true);
+            self.detach_transmission(dim, pos, was);
+        } else {
+            // `detachKinetics(worldIn, pos, true)`, then
+            // `worldIn.setBlock(pos, state.cycle(POWERED), Block.UPDATE_CLIENTS)`.
+            self.detach_transmission(dim, pos, true);
+            self.place(dim, pos, next, false);
+        }
+        Some(TransmissionWrite {
+            state: next,
+            known_shape,
+        })
+    }
+
+    /// `GearshiftBlock.detachKinetics`: `RotationPropagator.handleRemoved`, and with
+    /// `reAttachNextTick` the re-attach as a block tick
+    /// (`worldIn.scheduleTick(pos, this, 1, TickPriority.EXTREMELY_HIGH)`).
+    fn detach_transmission(&mut self, dim: usize, pos: [i32; 3], reattach_next_tick: bool) {
+        let d = &mut self.dims[dim];
+        d.kinetics.detach_transmission(pos);
+        if reattach_next_tick {
             d.block_ticks
                 .schedule_at(pos, crate::scheduled::TickPriority::ExtremelyHigh);
         }
     }
 
     /// The level's block-tick phase for Create's transmissions: `GearshiftBlock.tick`, one
-    /// tick after `transmission_power_changing` detached the transmission. The level runs it
-    /// before any block entity ticks, so hosts owe this call at the start of the level tick,
-    /// before any base tick runs (issue #95: after a reload, the re-attach joins the
-    /// still-fresh entities to the network before the first of them initializes it). The
+    /// tick after `transmission_neighbor_changed` detached the transmission. Their
+    /// `EXTREMELY_HIGH` ticks run first in the level's block ticks, so hosts owe this call at
+    /// the start of the level tick, before the level's own block ticks and any base tick (issue
+    /// #95: after a reload, the re-attach joins the still-fresh entities to the network before
+    /// the first of them initializes it). The
     /// schedule belongs to the block change, not the entities: a reload that replaces every
     /// block entity still owes it. The queue also holds the sequenced gearshifts' checks,
     /// which run after these at their `NORMAL` priority (`take_sequencer_checks`).
@@ -1964,13 +2021,9 @@ impl CreateWorld {
             if is_block.and_then(diode_kind).is_none() && was_block.and_then(diode_kind).is_some() {
                 self.diode_removed(dim, pos);
             }
-            if self.table.get(new).is_some_and(|(b, _)| {
-                follows_power(b) && !matches!(b, Block::Clutch | Block::Gearshift)
-            }) && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
+            if self.table.get(new).is_some_and(|(b, _)| follows_power(b))
+                && self.table.get(old).map(|(b, _)| b) != self.table.get(new).map(|(b, _)| b)
             {
-                // Other power-following blocks still initialize on placement.
-                // GearshiftBlock (also ClutchBlock) reads power only in
-                // getStateForPlacement and neighborChanged, never on state insertion.
                 self.dims[dim].redstone.push(pos);
             }
             let tunnel = |s: u32| {
@@ -3119,7 +3172,12 @@ impl CreateWorld {
                 }
             }
             // `SequencedGearshiftBlock.neighborChanged`: a scheduled tick, one tick later.
-            Some(Block::SequencedGearshift) => self.dims[dim].block_ticks.schedule(pos),
+            Some(Block::SequencedGearshift) => {
+                let ticks = &mut self.dims[dim].block_ticks;
+                if !ticks.will_tick_this_tick(pos) {
+                    ticks.schedule(pos);
+                }
+            }
             Some(Block::WaterWheel) => self.dims[dim].wheel_checks.push(pos),
             Some(Block::LargeWaterWheel) => schedule_large_wheel(&mut self.dims[dim], pos),
             // `WaterWheelStructuralBlock.updateShape`: the cell looks at its wheel now, and
@@ -8157,10 +8215,11 @@ mod tests {
                     w.take_redstone(0).is_empty(),
                     "{name}: insertion preserves power"
                 );
-                assert_eq!(w.powered(state), Some(state == 11));
+                assert_eq!(w.state_at(0, [0, 0, 0]), Some(state));
                 w.neighbor_changed(0, [0, 0, 0], state);
-                assert_eq!(w.take_redstone(0), [[0, 0, 0]]);
-                w.block_changed(0, [0, 0, 0], state, 0);
+                let write = w.transmission_neighbor_changed(0, [0, 0, 0], false);
+                assert_eq!(write.map(|t| t.state), (state == 11).then_some(10));
+                w.block_changed(0, [0, 0, 0], w.state_at(0, [0, 0, 0]).unwrap(), 0);
             }
         }
     }
@@ -11423,7 +11482,7 @@ mod tests {
         // `onSpeedChanged` ends the sequence and writes its state there, before this tick's
         // base ticks.
         w.set_sequencer_signal(0, gearshift, false);
-        w.transmission_power_changing(0, clutch);
+        w.transmission_neighbor_changed(0, clutch, true);
         w.block_changed(0, clutch, 10, 11);
         assert_eq!(w.speed(0, gearshift), Some(0.0));
         let writes = w.take_sequencer_writes(0);
@@ -11461,6 +11520,76 @@ mod tests {
         assert!(w.take_sequencer_writes(0).is_empty());
     }
 
+    /// A motor, a shaft, a clutch (or gearshift) at x 1, a shaft at x 2: `first` is the
+    /// transmission's unpowered state, `first + 1` its powered one.
+    fn transmission_line(name: &str) -> (CreateWorld, [i32; 3], [i32; 3]) {
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            (name, vec![("axis", "x"), ("powered", "false")]),
+            (name, vec![("axis", "x"), ("powered", "true")]),
+            ("create:shaft", vec![("axis", "x")]),
+            ("create:creative_motor", vec![("facing", "east")]),
+        ];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let (transmission, out) = ([1, 0, 0], [2, 0, 0]);
+        w.block_changed(0, [-1, 0, 0], 0, 13);
+        w.block_changed(0, [0, 0, 0], 0, 12);
+        w.block_changed(0, transmission, 0, 10);
+        w.block_changed(0, out, 0, 12);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, out), Some(16.0));
+        (w, transmission, out)
+    }
+
+    #[test]
+    fn a_transmission_detaches_at_the_neighbour_change() {
+        let (mut w, gearshift, out) = transmission_line("create:gearshift");
+        assert_eq!(w.transmission_neighbor_changed(0, gearshift, false), None);
+        let write = w.transmission_neighbor_changed(0, gearshift, true);
+        assert_eq!(
+            write,
+            Some(TransmissionWrite {
+                state: 11,
+                known_shape: false
+            })
+        );
+        assert_eq!(
+            w.state_at(0, gearshift),
+            Some(11),
+            "the engine holds it at once"
+        );
+        assert_eq!(w.speed(0, out), Some(0.0), "detached until its block tick");
+        assert_eq!(w.transmission_neighbor_changed(0, gearshift, true), None);
+        w.reattach_scheduled_transmissions(0, &mut Vec::new());
+        assert_eq!(w.speed(0, out), Some(-16.0));
+        let (mut w, clutch, _) = transmission_line("create:clutch");
+        assert_eq!(
+            w.transmission_neighbor_changed(0, clutch, true),
+            Some(TransmissionWrite {
+                state: 11,
+                known_shape: true
+            })
+        );
+    }
+
+    #[test]
+    fn a_change_after_the_block_tick_phase_reattaches_on_the_next_tick() {
+        let (mut w, gearshift, out) = transmission_line("create:gearshift");
+        w.transmission_neighbor_changed(0, gearshift, true);
+        w.reattach_scheduled_transmissions(0, &mut Vec::new());
+        assert_eq!(w.speed(0, out), Some(-16.0));
+        // A repeater's tick later in the same block-tick phase turns it back
+        // (`GearshiftBlock.detachKinetics` checks no `willTickThisTick`).
+        w.transmission_neighbor_changed(0, gearshift, false);
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, out), Some(0.0), "detached until the next tick");
+        w.reattach_scheduled_transmissions(0, &mut Vec::new());
+        w.tick(0, &mut Vec::new());
+        assert_eq!(w.speed(0, out), Some(16.0));
+    }
+
     #[test]
     fn a_gearshifts_scheduled_reattach_runs_before_the_sequencers_check() {
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
@@ -11495,7 +11624,7 @@ mod tests {
         // re-attach is scheduled at EXTREMELY_HIGH, the sequenced gearshift's power check at
         // NORMAL and the state change commits before either runs.
         w.neighbor_changed(0, sequencer, 14);
-        w.transmission_power_changing(0, gearshift);
+        w.transmission_neighbor_changed(0, gearshift, true);
         w.block_changed(0, gearshift, 10, 11);
         assert_eq!(
             w.speed(0, output),
