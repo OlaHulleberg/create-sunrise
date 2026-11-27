@@ -595,8 +595,11 @@ impl Run {
             }
             self.switch(p, self.id(&next));
             // `updateAfterWrenched`: `Block.updateFromNeighbourShapes` runs the block's own
-            // shape update, which is how a wheel looks at its flow again.
-            self.w.neighbor_changed(0, p, self.at(p));
+            // shape update, which is how a wheel looks at its flow again. A drill's arming is
+            // `DrillBlock.neighborChanged`, which the wrench runs on its neighbours only.
+            if name != "create:mechanical_drill" {
+                self.w.neighbor_changed(0, p, self.at(p));
+            }
             return;
         }
         if item == "minecraft:air"

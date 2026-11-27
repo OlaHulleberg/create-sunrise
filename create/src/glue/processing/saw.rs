@@ -31,11 +31,11 @@ pub fn clear() {
     SAW_DURATION.with_borrow_mut(HashMap::clear);
 }
 
-/// Turning drills and sideways saws (`BlockBreakingKineticBlockEntity.tick`): the block in front
-/// breaks in steps (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`; for a
+/// The turning drills and sideways saws (`BlockBreakingKineticBlockEntity.tick`), each on its
+/// turn: `KineticBlockEntity.tick` first, then the breaker's own, which looks at the block in
+/// front in steps (`isBreakable`: not air, a fluid, unbreakable or `create:non_breakable`; for a
 /// saw also `isSawable`), its cracks showing (`destroyBlockProgress`), its drops left in its
-/// middle; a saw fells what stood on it (`TreeCutter`). A breaker that broke one looks again at
-/// its next `SmartBlockEntity` lazy tick (rate 10).
+/// middle; a saw fells what stood on it (`TreeCutter`).
 pub fn tick_drills(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     let drills = with_world(|w| w.dims[dim].drilling.clone()).unwrap_or_default();
@@ -50,46 +50,40 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
         if saw && facing.axis() == Axis::Y {
             continue;
         }
-        let at = super::step(pos, facing, 1);
-        let fluid = lv
-            .level
-            .fluid_state(&*lv.host, at)
-            .is_some_and(|f| f.amount > 0)
-            && lv.replaceable(at);
-        let hardness = if lv.is_air(at)
-            || fluid
-            || lv.block_tagged(at, "create:non_breakable")
-            || (saw && !sawable(lv, at))
-        {
-            None
-        } else {
-            lv.block_state(at)
-                .and_then(|s| lv.host.block_states().destroy_speed(s))
-                .and_then(drill::breakable)
-        };
+        with_world(|w| w.kinetic_base_ticks_through(dim, pos));
         let speed = lv.speed(pos);
-        let Some(step) = with_world(|w| {
-            let d = w.dims[dim].drills.get_mut(&pos)?;
-            if d.lazy.tick() {
-                d.lazy();
-            }
-            Some(d.tick(speed, hardness))
+        let at = super::step(pos, facing, 1);
+        let looks = with_world(|w| {
+            w.dims[dim].drills.get_mut(&pos).map(|d| {
+                if saw {
+                    d.rearm();
+                }
+                d.tick(speed, at)
+            })
         })
-        .flatten() else {
+        .flatten();
+        if looks != Some(true) {
             continue;
-        };
+        }
+        let hardness = target(lv, at, saw);
+        let step = with_world(|w| {
+            w.dims[dim]
+                .drills
+                .get_mut(&pos)
+                .map(|d| d.look(speed, hardness))
+        })
+        .flatten();
         let breaker = breaker_id(pos);
         match step {
-            drill::Step::Wait => {}
-            drill::Step::Progress(stage) => {
+            None | Some(drill::Step::Wait) => {}
+            Some(drill::Step::Progress(stage)) => {
                 lv.level
                     .set_break_progress(&mut *lv.host, breaker, at, stage);
             }
-            drill::Step::Reset => {
+            Some(drill::Step::Reset) => {
                 lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
             }
-            drill::Step::Broken => {
-                lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
+            Some(drill::Step::Broken) => {
                 let broken = cell(lv, at);
                 // `onBlockBroken`: the drops left at the block's middle, standing still.
                 let centre = at.map(|v| f64::from(v) + 0.5);
@@ -99,9 +93,38 @@ pub fn tick_drills(lv: &mut ServerLevel<'_>) {
                 if saw {
                     fell(lv, pos, at, broken);
                 }
+                // The blocks that went arm this drill too (`DrillBlock.neighborChanged`): its
+                // rest comes after them.
+                with_world(|w| {
+                    if let Some(d) = w.dims[dim].drills.get_mut(&pos) {
+                        d.rest();
+                    }
+                });
+                lv.level.set_break_progress(&mut *lv.host, breaker, at, -1);
             }
         }
     }
+}
+
+/// `canBreak` for the block at `at`: None for what `isBreakable` refuses (air, a fluid,
+/// unbreakable or `create:non_breakable`) and a saw for what `isSawable` refuses; else its
+/// `getDestroySpeed`.
+fn target(lv: &ServerLevel<'_>, at: [i32; 3], saw: bool) -> Option<f32> {
+    let fluid = lv
+        .level
+        .fluid_state(&*lv.host, at)
+        .is_some_and(|f| f.amount > 0)
+        && lv.replaceable(at);
+    if lv.is_air(at)
+        || fluid
+        || lv.block_tagged(at, "create:non_breakable")
+        || (saw && !sawable(lv, at))
+    {
+        return None;
+    }
+    lv.block_state(at)
+        .and_then(|s| lv.host.block_states().destroy_speed(s))
+        .and_then(drill::breakable)
 }
 
 /// A machine's stable negative breaker id for its cracks (`NEXT_BREAKER_ID` in Create).

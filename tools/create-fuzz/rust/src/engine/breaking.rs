@@ -41,34 +41,30 @@ impl Run {
             if saw && facing.axis() == Axis::Y {
                 continue;
             }
-            let at = add(pos, offset(facing));
-            let state = self.state_at(at);
-            let fluid = crate::fluid_world::observe(&state).is_some_and(|o| o.amount > 0);
-            let hardness = if self.at(at) == AIR
-                || fluid
-                || crate::breaking::tagged(&state, "create:non_breakable")
-                || (saw && !Self::sawable(&state))
-            {
-                None
-            } else {
-                crate::breaking::hardness(&state).and_then(drill::breakable)
-            };
+            self.w.kinetic_base_ticks_through(0, pos);
             let speed = self.w.speed(0, pos).unwrap_or(0.0);
-            let step = self.w.dims[0].drills.get_mut(&pos).map(|d| {
-                if d.lazy.tick() {
-                    d.lazy();
+            let at = add(pos, offset(facing));
+            let looks = self.w.dims[0].drills.get_mut(&pos).map(|d| {
+                if saw {
+                    d.rearm();
                 }
-                d.tick(speed, hardness)
+                d.tick(speed, at)
             });
-            let Some(step) = step else {
+            if looks != Some(true) {
                 continue;
-            };
+            }
+            let state = self.state_at(at);
+            let hardness = self.target(at, &state, saw);
+            let step = self.w.dims[0]
+                .drills
+                .get_mut(&pos)
+                .map(|d| d.look(speed, hardness))
+                .unwrap_or(drill::Step::Wait);
             match step {
                 drill::Step::Wait => {}
                 drill::Step::Progress(stage) => self.set_break_progress(pos, at, stage),
                 drill::Step::Reset => self.set_break_progress(pos, at, -1),
                 drill::Step::Broken => {
-                    self.set_break_progress(pos, at, -1);
                     let broken = Self::cell(&state);
                     let centre = at.map(|v| f64::from(v) + 0.5);
                     for (item, count) in self.destroy_collect(at) {
@@ -77,9 +73,26 @@ impl Run {
                     if saw {
                         self.fell(pos, at, broken);
                     }
+                    if let Some(d) = self.w.dims[0].drills.get_mut(&pos) {
+                        d.rest();
+                    }
+                    self.set_break_progress(pos, at, -1);
                 }
             }
         }
+    }
+
+    /// `saw::target`: `canBreak`'s hardness of `state` at `at`.
+    fn target(&self, at: Pos, state: &str, saw: bool) -> Option<f32> {
+        let fluid = crate::fluid_world::observe(state).is_some_and(|o| o.amount > 0);
+        if self.at(at) == AIR
+            || fluid
+            || crate::breaking::tagged(state, "create:non_breakable")
+            || (saw && !Self::sawable(state))
+        {
+            return None;
+        }
+        crate::breaking::hardness(state).and_then(drill::breakable)
     }
 
     /// `lv.level.set_break_progress`: what the host shows of the breaker's cracks (-1: none).
