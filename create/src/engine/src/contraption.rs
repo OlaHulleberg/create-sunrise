@@ -554,6 +554,16 @@ impl Transform {
         [0, 1, 2].map(|r| m[r][0] * v[0] + m[r][1] * v[1] + m[r][2] * v[2])
     }
 
+    /// Offset `v` turned, or none when a component overflows `i32`.
+    pub fn checked_vec(&self, v: [i32; 3]) -> Option<[i32; 3]> {
+        let row = |r: &[i32; 3]| {
+            r[0].checked_mul(v[0])?
+                .checked_add(r[1].checked_mul(v[1])?)?
+                .checked_add(r[2].checked_mul(v[2])?)
+        };
+        Some([row(&self.m[0])?, row(&self.m[1])?, row(&self.m[2])?])
+    }
+
     /// Direction `d` turned.
     pub fn dir(&self, d: crate::kinetics::Dir) -> crate::kinetics::Dir {
         let v = self.vec(d.offset());
@@ -613,6 +623,31 @@ mod tests {
             Transform::from_place(|o| [-o[0], o[1], o[2]]),
             Transform::NONE
         );
+    }
+
+    #[test]
+    fn checked_vec_matches_vec_and_refuses_overflow() {
+        use crate::kinetics::Axis;
+        let v = [3, -5, 7];
+        for quarter in [90, 180, 270] {
+            for axis in [Axis::X, Axis::Y, Axis::Z] {
+                let t = Transform::from_place(|o| rotate(o, quarter, axis));
+                assert_eq!(t.checked_vec(v), Some(t.vec(v)), "{quarter} {axis:?}");
+            }
+        }
+        // Each turn negates one component: `i32::MIN` has no negation.
+        let about_y = |quarter| Transform::from_place(move |o| rotate(o, quarter, Axis::Y));
+        assert_eq!(about_y(90).checked_vec([i32::MIN, 0, 0]), None);
+        assert_eq!(about_y(270).checked_vec([0, 0, i32::MIN]), None);
+        assert_eq!(about_y(180).checked_vec([i32::MIN, 0, 0]), None);
+        assert_eq!(about_y(180).checked_vec([0, 0, i32::MIN]), None);
+        // A turn that negates nothing of it keeps it.
+        assert_eq!(
+            about_y(90).checked_vec([0, 0, i32::MIN]),
+            Some([i32::MIN, 0, 0])
+        );
+        let corner = [i32::MIN, i32::MAX, i32::MIN];
+        assert_eq!(Transform::NONE.checked_vec(corner), Some(corner));
     }
 
     #[test]

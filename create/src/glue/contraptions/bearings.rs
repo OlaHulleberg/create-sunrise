@@ -299,11 +299,15 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
     let place = |o| add(bearing, o);
     actors::expect_back(lv, bearing, place);
     let written = put_back_blocks(lv, &blocks);
-    actors::restore_landed_belts(lv, bearing, place, |p| written.contains(&p));
     let placed = Pose::translated(bearing.map(f64::from));
     colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
     actors::release_storage(lv, bearing, |o| add(bearing, o), |p| written.contains(&p));
-    actors::release_extras(lv, &mut w.extras.clone(), |o| add(bearing, o));
+    actors::release_extras(
+        lv,
+        &mut w.extras.clone(),
+        |o| add(bearing, o),
+        |p| written.contains(&p),
+    );
 }
 
 /// The facing of the Create block `block` at `pos`.
@@ -773,11 +777,10 @@ fn put_back_turned(
     };
     actors::expect_back(lv, bearing, turn);
     let written = put_back_blocks(lv, &turned);
-    actors::restore_landed_belts(lv, bearing, turn, |p| written.contains(&p));
     let placed = Pose::turned(bearing, axis, f64::from(quarter));
     colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
     actors::release_storage(lv, bearing, turn, |p| written.contains(&p));
-    actors::release_extras(lv, &mut w.extras.clone(), turn);
+    actors::release_extras(lv, &mut w.extras.clone(), turn, |p| written.contains(&p));
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -954,7 +957,6 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                 let place = |o| add(at, o);
                 actors::expect_back(lv, g.start, place);
                 let written = put_back_blocks(lv, &blocks);
-                actors::restore_landed_belts(lv, g.start, place, |p| written.contains(&p));
                 let placed = Pose::translated(at.map(f64::from));
                 colliders::lift_riders(lv, Owner::Gantry(g.start), placed);
                 actors::release(lv, g.start, at, &mut g.carried, |p| written.contains(&p));
@@ -1365,7 +1367,6 @@ fn put_back_piston(
     let place = |l| add(origin, l);
     actors::expect_back(lv, pos, place);
     let written = put_back_blocks(lv, &cells);
-    actors::restore_landed_belts(lv, pos, place, |p| written.contains(&p));
     let placed = Pose::translated(origin.map(f64::from));
     colliders::lift_riders(lv, Owner::Anchor(pos, 0), placed);
     if own {

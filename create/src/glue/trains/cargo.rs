@@ -78,10 +78,9 @@ pub fn release(
     place: impl Fn([i32; 3]) -> [i32; 3],
     placed: impl Fn([i32; 3]) -> bool,
 ) {
-    actors::restore_landed_belts(lv, key(train, car), &place, &placed);
     actors::release_storage(lv, key(train, car), &place, &placed);
     if let Some(mut c) = EXTRAS.with_borrow_mut(|m| m.remove(&(lv.dim, key(train, car)))) {
-        actors::release_extras(lv, &mut c, place);
+        actors::release_extras(lv, &mut c, &place, &placed);
     }
 }
 

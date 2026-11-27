@@ -811,35 +811,38 @@ pub(crate) fn with_extras(mut carried: Carried, extras: &Carried) -> Carried {
 }
 
 /// What a structure carried besides its blocks goes back where its blocks go, each offset `o`
-/// at `place(o)` (`addBlocksToWorld`): its contraption controls, off as the contraption has
-/// their kind (`ContraptionControlsMovement.stopMoving`), and its glue, its corners placed as
-/// its blocks are (turned with a turning structure).
+/// at `place(o)` (`addBlocksToWorld`): its contraption controls, only into a cell written back
+/// as contraption controls (`placed`), off as the contraption has their kind
+/// (`ContraptionControlsMovement.stopMoving`), and its glue, its corners placed as its blocks
+/// are (turned with a turning structure), whether or not its blocks were (the glue entities
+/// are added whatever happened to the blocks, `Contraption.java:1219-1226`).
 pub(crate) fn release_extras(
     lv: &mut ServerLevel<'_>,
     carried: &mut Carried,
     place: impl Fn([i32; 3]) -> [i32; 3],
+    placed: impl Fn([i32; 3]) -> bool,
 ) {
     let dim = lv.dim;
     for (o, mut c) in std::mem::take(&mut carried.controls) {
         let p = place(o);
-        if lv.create_block(p) == Some(Block::ContraptionControls) {
+        if placed(p) && lv.create_block(p) == Some(Block::ContraptionControls) {
             c.disabled = actors::stays_disabled(&carried.disabled, &c.filter);
             with_world(|w| w.dims[dim].controls.insert(p, c));
             super::actor_draw::sync_controls(lv, p);
             mark_pos_unsaved(dim, p);
         }
     }
-    let placed: Vec<Glue> = carried
+    let glued: Vec<Glue> = carried
         .glue
         .drain(..)
         .map(|g| Glue::span(place(g.min), place(g.max)))
         .collect();
-    for g in &placed {
+    for g in &glued {
         let (cx, cz) = g.column();
         mark_unsaved(dim, [cx, cz]);
     }
-    if !placed.is_empty() {
-        with_world(|w| w.dims[dim].glue.extend(placed));
+    if !glued.is_empty() {
+        with_world(|w| w.dims[dim].glue.extend(glued));
     }
 }
 
@@ -1089,8 +1092,6 @@ pub(crate) fn release_cart_held(
     free: impl Fn([i32; 3]) -> bool,
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], ItemStack)> {
-    restore_engine_data(lv, key, &place, &placed);
-    restore_landed_belts(lv, key, &place, &placed);
     release_held_items(lv, key, place, free, placed)
 }
 
@@ -1175,31 +1176,32 @@ fn take_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockData>
 /// What contraption `key`'s deployers and tanks held waits for their blocks to be put back,
 /// each at `place(offset)` (`addBlocksToWorld` places a block with its block entity's data):
 /// a deployer placed there takes its state, a tank its part of its tank, which forms nothing
-/// new. Called before the blocks go back.
+/// new. Called before the blocks go back; it only stages, so a refused placement changes
+/// nothing already there. What the engine kept for the other blocks and the belts' items wait
+/// for the blocks written ([`release_held`]).
 pub(crate) fn expect_back(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     place: impl Fn([i32; 3]) -> [i32; 3],
 ) {
-    restore_engine_data(lv, key, &place, |_| true);
     stage_held(lv, key, &place, |_| true);
 }
 
+/// What the engine kept for each block goes to the subsystems (`Subsystem::carry_in`), into the
+/// live entries of a cell written back (`placed`) and still holding that Create block.
 fn restore_engine_data(
     lv: &mut ServerLevel<'_>,
-    key: [i32; 3],
+    list: &[([i32; 3], BlockData)],
     place: impl Fn([i32; 3]) -> [i32; 3],
+    turn: create_engine::contraption::Transform,
     placed: impl Fn([i32; 3]) -> bool,
 ) {
     let dim = lv.dim;
-    let Some(list) = HELD.with_borrow(|m| m.get(&(dim, key)).cloned()) else {
-        return;
-    };
-    let turn = create_engine::contraption::Transform::from_place(&place);
-    for (o, data) in &list {
+    for (o, data) in list {
         let p = place(*o);
         if placed(p)
             && let (Some(engine), Some(b)) = (&data.engine, data.block)
+            && lv.create_block(p) == Some(b)
         {
             for s in super::super::SUBSYSTEMS {
                 s.carry_in(lv, p, b, engine, turn);
@@ -1209,34 +1211,45 @@ fn restore_engine_data(
     }
 }
 
-/// Restore belt inventory only to a controller that this landing actually wrote.
-pub(crate) fn restore_landed_belts(
+/// Belt inventories go only to a controller this landing wrote as a belt; the items of any other
+/// are returned as stacks to drop where they fell (`BeltBlockEntity.read` loads `Inventory` on
+/// the controller only; Create loses these items, the port drops them).
+fn restore_landed_belts(
     lv: &ServerLevel<'_>,
-    key: [i32; 3],
+    list: &[([i32; 3], BlockData)],
     place: impl Fn([i32; 3]) -> [i32; 3],
+    turn: create_engine::contraption::Transform,
     placed: impl Fn([i32; 3]) -> bool,
-) {
+) -> Vec<([i32; 3], ItemStack)> {
+    if !list
+        .iter()
+        .any(|(_, d)| d.block == Some(Block::Belt) && d.engine.is_some())
+    {
+        return Vec::new();
+    }
     let dim = lv.dim;
-    let turn = create_engine::contraption::Transform::from_place(&place);
-    HELD.with_borrow(|m| {
-        if let Some(list) = m.get(&(dim, key)) {
-            with_world(|world| {
-                for (offset, data) in list {
-                    if let (Some(Block::Belt), Some(engine)) = (data.block, &data.engine) {
-                        crate::glue::logistics::carried::restore_belt_items(
-                            world,
-                            dim,
-                            place(*offset),
-                            engine,
-                            turn,
-                            &placed,
-                            |p| lv.block(p),
-                        );
-                    }
-                }
-            });
+    let unplaced = with_world(|world| {
+        let mut unplaced = Vec::new();
+        for (offset, data) in list {
+            if let (Some(Block::Belt), Some(engine)) = (data.block, &data.engine) {
+                unplaced.extend(crate::glue::logistics::carried::restore_belt_items(
+                    world,
+                    dim,
+                    place(*offset),
+                    engine,
+                    turn,
+                    &placed,
+                    |p| lv.block(p),
+                ));
+            }
         }
-    });
+        unplaced
+    })
+    .unwrap_or_default();
+    unplaced
+        .into_iter()
+        .filter_map(|(p, item)| Some((p, crate::glue::logistics::belt_stack(lv, &item)?)))
+        .collect()
 }
 
 fn stage_held(
@@ -1273,8 +1286,9 @@ fn stage_held(
 }
 
 /// What contraption `key`'s other block entities held, back in theirs now at `place(offset)`:
-/// slots into a Create block entity's slots, saved data loaded into another's; a deployer's
-/// stack, or slots with nowhere to go (or no block of theirs written, `placed`), drop there.
+/// the engine's state for each block written (`placed`), slots into a Create block entity's
+/// slots, saved data loaded into another's; a deployer's stack, a belt's items on no written
+/// belt, or slots with nowhere to go (or no block of theirs written), drop there.
 fn release_held(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
@@ -1397,10 +1411,20 @@ fn release_held_items(
     staged: impl Fn([i32; 3]) -> bool,
     placed: impl Fn([i32; 3]) -> bool,
 ) -> Vec<([i32; 3], ItemStack)> {
-    let list = HELD
-        .with_borrow_mut(|m| m.remove(&(lv.dim, key)))
-        .unwrap_or_default();
-    release_held_data(&mut ServerHeld(lv), list, place, staged, placed)
+    let Some(list) = HELD.with_borrow_mut(|m| m.remove(&(lv.dim, key))) else {
+        return Vec::new();
+    };
+    let turn = create_engine::contraption::Transform::from_place(&place);
+    restore_engine_data(lv, &list, &place, turn, &placed);
+    let mut drops = restore_landed_belts(lv, &list, &place, turn, &placed);
+    drops.extend(release_held_data(
+        &mut ServerHeld(lv),
+        list,
+        place,
+        staged,
+        placed,
+    ));
+    drops
 }
 
 /// The release of what block entities held, each entry `o` at `place(o)`. A deployer's hand
@@ -1722,7 +1746,8 @@ pub(crate) fn storage_from_nbt(lv: &ServerLevel<'_>, key: [i32; 3], tag: Option<
 
 /// What a contraption carried goes back with its blocks (`addBlocksToWorld`, `stop`): its
 /// storage blocks' items into the storage blocks now at `origin` + their offset (dropped where
-/// one couldn't be put back or was not written, `placed`), its controls and glue there, and its
+/// one couldn't be put back or was not written, `placed`), what the engine kept for its blocks,
+/// its rollers' settings and controls only into cells written back as theirs, its glue, and its
 /// breakers' cracks gone.
 pub(super) fn release(
     lv: &mut ServerLevel<'_>,
@@ -1738,14 +1763,14 @@ pub(super) fn release(
     // Rollers' settings back with the blocks put back.
     for a in carried.actors.iter().filter(|a| a.kind == Kind::Roller) {
         let p = at(a.local);
-        if lv.create_block(p) == Some(Block::MechanicalRoller) {
+        if placed(p) && lv.create_block(p) == Some(Block::MechanicalRoller) {
             let v = (a.filter.clone(), a.mode);
             with_world(|w| w.dims[dim].rollers.insert(p, v));
             mark_pos_unsaved(dim, p);
         }
     }
-    release_storage(lv, key, at, placed);
-    release_extras(lv, carried, at);
+    release_storage(lv, key, at, &placed);
+    release_extras(lv, carried, at, placed);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3903,7 +3928,6 @@ fn debug_carried(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> String {
     // The block stays: it is found again as a loaded one is, taking what waits for it.
     let state = lv.block(pos);
     with_world(|w| w.block_loaded(dim, pos, state));
-    restore_landed_belts(lv, key, |o| add(pos, o), |_| true);
     release_held(lv, key, |o| add(pos, o), |_| true);
     line
 }

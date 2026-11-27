@@ -261,22 +261,52 @@ pub fn controller_of(
     None
 }
 
-/// `BeltBlock.getBeltChain`: the segments from the controller to the end.
-pub fn chain(
+/// Walks forward from `controller` (whose segment `start` the caller already read), at most 1000
+/// segments, reading each later segment once: the positions walked and the last segment read.
+fn walk_chain(
     controller: [i32; 3],
+    start: Segment,
     segment_at: impl Fn([i32; 3]) -> Option<Segment>,
-) -> Vec<[i32; 3]> {
-    let mut out = Vec::new();
-    let mut current = Some(controller);
+) -> (Vec<[i32; 3]>, Segment) {
+    let mut out = vec![controller];
+    let mut last = start;
+    let mut current = start.next(controller, true);
     while let Some(p) = current {
         if out.len() >= 1000 {
             break;
         }
         let Some(s) = segment_at(p) else { break };
         out.push(p);
+        last = s;
         current = s.next(p, true);
     }
-    out
+    (out, last)
+}
+
+/// `BeltBlock.getBeltChain`: the segments from the controller to the end.
+pub fn chain(
+    controller: [i32; 3],
+    segment_at: impl Fn([i32; 3]) -> Option<Segment>,
+) -> Vec<[i32; 3]> {
+    match segment_at(controller) {
+        Some(start) => walk_chain(controller, start, segment_at).0,
+        None => Vec::new(),
+    }
+}
+
+/// `BeltBlock.initBelt`'s whole-chain check from `controller`: starts at `Part::Start`, has at
+/// least two segments, and ends at `Part::End`. The controller's segment and the chain, each
+/// segment read once.
+pub fn whole_chain(
+    controller: [i32; 3],
+    segment_at: impl Fn([i32; 3]) -> Option<Segment>,
+) -> Option<(Segment, Vec<[i32; 3]>)> {
+    let start = segment_at(controller)?;
+    if start.part != Part::Start {
+        return None;
+    }
+    let (out, last) = walk_chain(controller, start, segment_at);
+    (out.len() >= 2 && last.part == Part::End).then_some((start, out))
 }
 
 /// `BeltHelper.getPositionForOffset` from the controller's segment.
@@ -1931,6 +1961,58 @@ mod tests {
         );
         assert_eq!(c.rotation_axis(), Axis::Z);
         assert!(c.has_pulley() && !at([1, 1, 0]).unwrap().has_pulley());
+    }
+
+    #[test]
+    fn whole_chains_start_at_a_start_and_end_at_an_end() {
+        let part = |p: Part| Some(seg(Dir::East, Slope::Horizontal, p));
+        let two = |p: [i32; 3]| match p {
+            [0, 0, 0] => part(Part::Start),
+            [1, 0, 0] => part(Part::End),
+            _ => None,
+        };
+        assert_eq!(
+            whole_chain([0, 0, 0], two),
+            Some((
+                seg(Dir::East, Slope::Horizontal, Part::Start),
+                vec![[0, 0, 0], [1, 0, 0]]
+            ))
+        );
+        let reads = std::cell::Cell::new(0usize);
+        let three = |p: [i32; 3]| {
+            reads.set(reads.get() + 1);
+            match p {
+                [0, 0, 0] => part(Part::Start),
+                [1, 0, 0] => part(Part::Middle),
+                [2, 0, 0] => part(Part::End),
+                _ => None,
+            }
+        };
+        assert_eq!(
+            whole_chain([0, 0, 0], three),
+            Some((
+                seg(Dir::East, Slope::Horizontal, Part::Start),
+                vec![[0, 0, 0], [1, 0, 0], [2, 0, 0]]
+            ))
+        );
+        assert_eq!(reads.get(), 3, "no reread of the start or the end");
+        // No end written, or a middle missing.
+        let no_end = |p: [i32; 3]| {
+            if p == [0, 0, 0] {
+                part(Part::Start)
+            } else {
+                None
+            }
+        };
+        assert_eq!(whole_chain([0, 0, 0], no_end), None);
+        let gap = |p: [i32; 3]| match p {
+            [0, 0, 0] => part(Part::Start),
+            [2, 0, 0] => part(Part::End),
+            _ => None,
+        };
+        assert_eq!(whole_chain([0, 0, 0], gap), None);
+        // Not a start.
+        assert_eq!(whole_chain([1, 0, 0], two), None);
     }
 
     #[test]

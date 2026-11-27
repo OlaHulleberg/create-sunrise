@@ -117,6 +117,17 @@ pub(super) fn carry_in(lv: &ServerLevel<'_>, pos: [i32; 3], block: Block, data: 
 }
 
 /// The carried record may ride on any segment, but Java loads Inventory only on the controller.
+/// A controller this landing wrote that heads a whole belt chain takes its items; for any other
+/// cell (refused controller, non-controller segment, broken or partial belt chain, or overflowing
+/// offset) they come back as drops, each with where it falls.
+///
+/// `placed` gates only the controller, while `whole_chain` reads the live world (`level_state`)
+/// for the rest of the chain. That is deliberate: `initialize_belt` forms a belt whenever a newly
+/// written `Part::Start` controller heads a complete live chain, including when an end or middle
+/// segment already stood in the world and its own write was refused, and it consumes
+/// `belt_saved` at the controller. A written controller whose chain is incomplete, or whose
+/// block is not a start, cannot form a belt, so its items drop; a controller this landing did
+/// not write never consumes them either.
 pub(crate) fn restore_belt_items(
     world: &mut create_engine::world::CreateWorld,
     dim: usize,
@@ -125,23 +136,38 @@ pub(crate) fn restore_belt_items(
     turn: create_engine::contraption::Transform,
     placed: impl Fn([i32; 3]) -> bool,
     level_state: impl Fn([i32; 3]) -> u32,
-) {
+) -> Vec<([i32; 3], create_engine::belt::Item)> {
     let Some(Tag::List(list)) = data.get(&BELT_ITEMS.into()) else {
-        return;
+        return Vec::new();
     };
     let saved = Compound::from([("belts".into(), Tag::List(list.clone()))]);
+    let mut drops = Vec::new();
     for (offset, items) in super::belts_from_nbt(&saved) {
-        let controller = add(pos, turn.vec(offset));
-        if placed(controller)
-            && world.table.get(level_state(controller)).map(|(b, _)| b) == Some(Block::Belt)
+        let controller = turn.checked_vec(offset).and_then(|o| checked_add(pos, o));
+        if let Some(controller) = controller
+            && placed(controller)
+            && create_engine::belt::whole_chain(controller, |p| {
+                world.table.belt_segment(level_state(p))
+            })
+            .is_some()
         {
             world.read_belt_items(dim, controller, items);
+        } else {
+            // A malformed offset that overflows has no controller: it never writes the world,
+            // and its items fall at the anchor.
+            let drop_pos = controller.unwrap_or(pos);
+            drops.extend(items.items.into_iter().map(|item| (drop_pos, item)));
         }
     }
+    drops
 }
 
-fn add(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
-    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
+fn checked_add(a: [i32; 3], b: [i32; 3]) -> Option<[i32; 3]> {
+    Some([
+        a[0].checked_add(b[0])?,
+        a[1].checked_add(b[1])?,
+        a[2].checked_add(b[2])?,
+    ])
 }
 
 /// A belt segment leaving with a moving structure: the whole belt leaves its tables the first
@@ -187,11 +213,23 @@ mod tests {
 
     const CONTROLLER: [i32; 3] = [0, 8, 0];
     const END: [i32; 3] = [0, 8, 1];
+    const MIDDLE: [i32; 3] = [0, 8, 1];
+    const END2: [i32; 3] = [0, 8, 2];
 
-    fn belt_landing() -> (CreateWorld, Compound) {
+    /// The live whole belt from `CONTROLLER` to `END` (states 10 start, 11 end).
+    fn whole_belt(p: [i32; 3]) -> u32 {
+        match p {
+            CONTROLLER => 10,
+            END => 11,
+            _ => 0,
+        }
+    }
+
+    /// States 10 start, 11 end, 12 middle.
+    fn belt_landing_at(offset: [i32; 3]) -> (CreateWorld, Compound) {
         let table = StateTable::new(
             10,
-            ["start", "end"].into_iter().map(|part| {
+            ["start", "end", "middle"].into_iter().map(|part| {
                 (
                     "create:belt",
                     [("facing", "south"), ("slope", "horizontal"), ("part", part)].into_iter(),
@@ -202,23 +240,40 @@ mod tests {
         let data = Compound::from([(
             BELT_ITEMS.into(),
             super::super::belts_to_nbt(&[(
-                [1, 0, 0],
+                offset,
                 Inventory::fresh(vec![Item::new("minecraft:iron_ingot", 3, 0, false)]),
             )]),
         )]);
         (world, data)
     }
 
-    fn finish_belt(world: &mut CreateWorld) -> Inventory {
-        world.block_loaded(0, CONTROLLER, 10);
-        world.block_loaded(0, END, 11);
+    fn belt_landing() -> (CreateWorld, Compound) {
+        belt_landing_at([1, 0, 0])
+    }
+
+    /// The items of the belt that starts at `start` (and ends one block south of it) once it has
+    /// formed.
+    fn finish_belt(world: &mut CreateWorld, start: [i32; 3]) -> Inventory {
+        world.block_loaded(0, start, 10);
+        world.block_loaded(0, [start[0], start[1], start[2] + 1], 11);
+        belt_items_after_tick(world, start)
+    }
+
+    fn belt_items_after_tick(world: &mut CreateWorld, start: [i32; 3]) -> Inventory {
         let mut turns = world.transport_ticks(0, 0);
         while turns.next(world).is_some() {}
-        let mut belts = world.column_belts(0, 0, 0);
+        let mut belts = world.column_belts(0, start[0] >> 4, start[2] >> 4);
         assert_eq!(belts.len(), 1);
         let (controller, inventory) = belts.pop().unwrap();
-        assert_eq!(controller, CONTROLLER);
+        assert_eq!(controller, start);
         inventory
+    }
+
+    fn iron(drops: &[([i32; 3], Item)]) -> Vec<([i32; 3], &str, u8)> {
+        drops
+            .iter()
+            .map(|(p, i)| (*p, i.item.as_str(), i.count))
+            .collect()
     }
 
     #[test]
@@ -226,23 +281,74 @@ mod tests {
         let (mut world, data) = belt_landing();
         let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
         // The landing did not write the existing controller position.
-        restore_belt_items(
-            &mut world,
-            0,
-            END,
-            &data,
-            turn,
-            |p| p == END,
-            |p| if p == CONTROLLER { 10 } else { 0 },
-        );
-        assert!(finish_belt(&mut world).is_empty());
+        let drops = restore_belt_items(&mut world, 0, END, &data, turn, |p| p == END, whole_belt);
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
+        assert!(finish_belt(&mut world, CONTROLLER).is_empty());
     }
 
     #[test]
     fn landed_belt_controller_keeps_inventory_when_record_segment_is_refused() {
         let (mut world, data) = belt_landing();
         let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
-        restore_belt_items(
+        // END already stands in the world as `Part::End` (its write was refused) and joins the
+        // newly written CONTROLLER start into a whole chain.
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            END,
+            &data,
+            turn,
+            |p| p == CONTROLLER,
+            whole_belt,
+        );
+        assert!(drops.is_empty());
+        let inventory = finish_belt(&mut world, CONTROLLER);
+        assert_eq!(inventory.items.len(), 1);
+        assert_eq!(inventory.items[0].item, "minecraft:iron_ingot");
+        assert_eq!(inventory.items[0].count, 3);
+    }
+
+    #[test]
+    fn non_belt_at_placed_controller_drops_carried_belt_items() {
+        let (mut world, data) = belt_landing();
+        let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            END,
+            &data,
+            turn,
+            |p| p == CONTROLLER,
+            |p| if p == END { 11 } else { 0 },
+        );
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
+        assert!(finish_belt(&mut world, CONTROLLER).is_empty());
+    }
+
+    #[test]
+    fn written_non_controller_belt_segment_drops_carried_belt_items() {
+        let (mut world, data) = belt_landing();
+        let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            END,
+            &data,
+            turn,
+            |p| p == CONTROLLER,
+            |p| if p == CONTROLLER || p == END { 11 } else { 0 },
+        );
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
+        assert!(world.take_belt_saved_changes(0).is_empty());
+        assert!(finish_belt(&mut world, CONTROLLER).is_empty());
+    }
+
+    #[test]
+    fn partial_belt_landing_without_end_drops_carried_belt_items() {
+        let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
+        // Two segments: the start was written, the end was refused and holds air.
+        let (mut world, data) = belt_landing();
+        let drops = restore_belt_items(
             &mut world,
             0,
             END,
@@ -251,9 +357,92 @@ mod tests {
             |p| p == CONTROLLER,
             |p| if p == CONTROLLER { 10 } else { 0 },
         );
-        let inventory = finish_belt(&mut world);
-        assert_eq!(inventory.items.len(), 1);
-        assert_eq!(inventory.items[0].item, "minecraft:iron_ingot");
-        assert_eq!(inventory.items[0].count, 3);
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
+        assert!(world.take_belt_saved_changes(0).is_empty());
+        assert!(finish_belt(&mut world, CONTROLLER).is_empty());
+        // Three segments: start and middle were written, the end was refused.
+        let (mut world, data) = belt_landing_at([2, 0, 0]);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            END2,
+            &data,
+            turn,
+            |p| p == CONTROLLER || p == MIDDLE,
+            |p| match p {
+                CONTROLLER => 10,
+                MIDDLE => 12,
+                _ => 0,
+            },
+        );
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
+        assert!(world.take_belt_saved_changes(0).is_empty());
+        // The belt that forms there later starts empty.
+        world.block_loaded(0, CONTROLLER, 10);
+        world.block_loaded(0, MIDDLE, 12);
+        world.block_loaded(0, END2, 11);
+        assert!(belt_items_after_tick(&mut world, CONTROLLER).is_empty());
+    }
+
+    #[test]
+    fn overflowing_belt_offset_never_writes_world_and_drops_at_anchor() {
+        // A whole live belt stands at `at`, so only the overflow refuses the landing.
+        let belt_at = |at: [i32; 3]| {
+            move |p: [i32; 3]| {
+                if p == at {
+                    10
+                } else if p == [at[0], at[1], at[2] + 1] {
+                    11
+                } else {
+                    0
+                }
+            }
+        };
+        // The sum with the anchor overflows.
+        let pos = [i32::MAX, 8, 0];
+        let (mut world, data) = belt_landing_at([1, 0, 0]);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            pos,
+            &data,
+            Transform::NONE,
+            |_| true,
+            belt_at(pos),
+        );
+        assert_eq!(iron(&drops), [(pos, "minecraft:iron_ingot", 3)]);
+        // (No belt is formed at this edge: a kinetic part there would look past `i32::MAX`.)
+        assert!(world.column_belts(0, pos[0] >> 4, pos[2] >> 4).is_empty());
+        assert!(world.take_belt_saved_changes(0).is_empty());
+        // The same overflow with a live belt, away from `i32::MAX` for kinetic neighbours.
+        let pos = [i32::MAX - 10, 8, 0];
+        let (mut world, data) = belt_landing_at([11, 0, 0]);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            pos,
+            &data,
+            Transform::NONE,
+            |_| true,
+            belt_at(pos),
+        );
+        assert_eq!(iron(&drops), [(pos, "minecraft:iron_ingot", 3)]);
+        assert!(world.take_belt_saved_changes(0).is_empty());
+        assert!(finish_belt(&mut world, pos).is_empty());
+        // The turned offset overflows: `i32::MIN` has no negation.
+        let (mut world, data) = belt_landing_at([i32::MIN, 0, 0]);
+        let turn = Transform::from_place(|[x, y, z]| [z, y, -x]);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            CONTROLLER,
+            &data,
+            turn,
+            |_| true,
+            belt_at(CONTROLLER),
+        );
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
+        assert!(world.take_belt_saved_changes(0).is_empty());
+        assert!(finish_belt(&mut world, CONTROLLER).is_empty());
     }
 }

@@ -3774,16 +3774,7 @@ impl CreateWorld {
         let Some(controller) = crate::belt::controller_of(pos, segment_at) else {
             return;
         };
-        let chain = crate::belt::chain(controller, segment_at);
-        let whole = chain.len() >= 2
-            && chain
-                .last()
-                .and_then(|p| segment_at(*p))
-                .is_some_and(|s| s.part == crate::belt::Part::End);
-        if !whole {
-            return;
-        }
-        let Some(segment) = segment_at(controller) else {
+        let Some((segment, chain)) = crate::belt::whole_chain(controller, segment_at) else {
             return;
         };
         self.kinetic_base_ticks_before(dim, pos);
