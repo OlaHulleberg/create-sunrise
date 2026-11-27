@@ -558,6 +558,7 @@ fn deployer_activate(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, d: &m
     if facing == Dir::Down && takes_from_side(lv.dim, reached) {
         return;
     }
+    d.activated = true;
     let other = activate(lv, pos, facing, d, deployer::breaker_id(pos));
     crate::glue::advancements::award_placer(lv, pos, "deployer");
     place_back(lv, pos, d, other);

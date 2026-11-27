@@ -81,6 +81,9 @@ API, and remove it once the API has it and the port uses it.
 - **A rail block's velocity edit inside the minecart rail step, with the cart's speed cap**: a controller rail sets the
   cart's speed outside the rail step. Create uses: overrides `onMinecartPass`, reading
   `AbstractMinecart.getMaxSpeedWithRail` ([`ControllerRailBlock.java:144`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/redstone/rail/ControllerRailBlock.java#L144)). sunrise-org/sunrise#5075
+- **Throwing a stack from a block entity's removal** (`BlockRemovalEffects` can only spawn a still stack): a broken
+  deployer's stacks drop from where its fake player stands but are not thrown about, with the default pickup delay.
+  Create uses: calls vanilla `Player.drop(stack, true, false)` on its fake player ([`DeployerBlockEntity.java:466`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/deployer/DeployerBlockEntity.java#L466)).
 
 ## Client
 

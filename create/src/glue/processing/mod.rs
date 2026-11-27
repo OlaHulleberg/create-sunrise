@@ -113,9 +113,25 @@ pub(crate) fn spill_removed(event: &mut mod_api::PreRemoveSideEffectsEvent<'_>) 
                 .iter_mut()
                 .find_map(|d| d.removed_deployers.remove(&pos))
         })
-        .flatten();
-        if let Some(stack) = dp.and_then(|dp| deployer::held_stack(&dp, stacks::known_stack)) {
-            let _ = event.effects.drop_slot(Some(stack));
+        .flatten()
+        .unwrap_or_default();
+        let facing = super::states::id(event.state)
+            .and_then(|id| with_world(|w| w.table.get(id).and_then(|(_, i)| i.facing)).flatten())
+            .unwrap_or(Dir::Down);
+        // The overflow's slots drop here, from the fake player, not where the block stood.
+        event.effects.set_keep_contents(true);
+        let overflow = (0..event.entity.item_slots() as u32)
+            .filter_map(|i| event.entity.copy_item_slot(i))
+            .collect::<Vec<_>>();
+        let mut at = create_engine::deployer::fake_position(pos, facing, dp.activated);
+        at[1] -= create_engine::deployer::DROP_BELOW_EYES;
+        for st in create_engine::deployer::discarded(&dp, Vec::new()) {
+            if let Some(stack) = deployer::item_stack(&st, stacks::known_stack) {
+                let _ = event.effects.spawn_item(stack, at);
+            }
+        }
+        for stack in overflow {
+            let _ = event.effects.spawn_item(stack, at);
         }
         return;
     }

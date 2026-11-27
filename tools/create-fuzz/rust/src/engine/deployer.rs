@@ -57,13 +57,6 @@ fn along(pos: Pos, facing: Dir, point: [f64; 3]) -> f64 {
         .sum()
 }
 
-fn stack_of(h: &Held) -> crate::transport::Stack {
-    crate::transport::Stack {
-        item: h.item.clone(),
-        count: h.count,
-    }
-}
-
 impl Run {
     fn deployer(&self, p: Pos) -> Option<Deployer> {
         self.w.dims[0].deployers.get(&p).cloned()
@@ -499,6 +492,7 @@ impl Run {
         if facing == Dir::Down && self.takes_from_side(reached) {
             return;
         }
+        d.activated = true;
         if d.mode == Mode::Punch {
             self.punch(pos, facing, d);
         } else {
@@ -868,19 +862,29 @@ impl Run {
         true
     }
 
-    /// A deployer gone (`DeployerBlockEntity.discardPlayer`): its overflow, the removed block
-    /// entity's slots, and its held stack drop where the deployer stood (`drop_slot`).
-    pub(super) fn deployer_removed(&mut self, p: Pos) {
-        if let Some(slots) = self.deployer_overflow.remove(&p) {
-            for s in slots.into_iter().flatten() {
-                let stack = stack_of(&s);
-                self.drop_item_stack(p.map(f64::from), &stack.item, stack.count);
-            }
-        }
-        if let Some(dp) = self.w.dims[0].removed_deployers.remove(&p)
-            && let Some((item, n)) = dp.held
-        {
-            self.drop_item_stack(p.map(f64::from), &item, n);
+    /// `spill_removed` for a deployer gone (`DeployerBlockEntity.discardPlayer`): its fake
+    /// player's stacks, then its overflow, dropped from below its eyes. The glue's removal
+    /// effects can only put a still stack there (`spawn_item`), not throw it.
+    pub(super) fn deployer_removed(&mut self, p: Pos, old: u32) {
+        let overflow: Vec<deployer::Stack> = self
+            .deployer_overflow
+            .remove(&p)
+            .map(|slots| slots.iter().flatten().map(engine_stack).collect())
+            .unwrap_or_default();
+        let facing = self
+            .w
+            .table
+            .get(old)
+            .and_then(|(_, i)| i.facing)
+            .unwrap_or(Dir::Down);
+        let dp = self.w.dims[0]
+            .removed_deployers
+            .remove(&p)
+            .unwrap_or_default();
+        let mut at = deployer::fake_position(p, facing, dp.activated);
+        at[1] -= deployer::DROP_BELOW_EYES;
+        for st in deployer::discarded(&dp, overflow) {
+            self.spawn_item(at, [0.0; 3], &st.item, st.count);
         }
         self.funnel_filters.remove(&p);
     }

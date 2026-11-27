@@ -541,6 +541,7 @@ pub(crate) fn deployers_from_nbt(data: &Compound) -> Vec<([i32; 3], deployer::De
                         _ => Vec::new(),
                     },
                     fist_bump: false,
+                    activated: false,
                     inventory: inventory_from_nbt(b.get(&"Inventory".into())),
                 },
             ))
