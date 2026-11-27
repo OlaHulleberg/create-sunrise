@@ -643,23 +643,54 @@ fn toolbox_draw(
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum ToolboxAction {
+    DepositAll,
+    Confirm,
+}
+
+impl ToolboxAction {
+    fn decode(menu: &str, block: Option<&str>, id: i32) -> Option<Self> {
+        if menu != create_engine::toolbox::MENU || block.and_then(toolbox_block).is_none() {
+            return None;
+        }
+        match id {
+            TOOLBOX_DEPOSIT_BUTTON => Some(Self::DepositAll),
+            TOOLBOX_CONFIRM_BUTTON => Some(Self::Confirm),
+            _ => None,
+        }
+    }
+}
+
 /// Server-side buttons for a toolbox's menu.
 struct ToolboxButtons;
 
 #[mod_api::sunrise_part]
 impl MenuPart for ToolboxButtons {
+    fn menu_button_valid(
+        &self,
+        _host: &dyn Host,
+        event: &mut mod_api::MenuButtonValidEvent<'_>,
+    ) -> mod_api::Flow {
+        if ToolboxAction::decode(event.menu, event.block, event.id).is_some() {
+            mod_api::Flow::Cancel
+        } else {
+            mod_api::Flow::Continue
+        }
+    }
+
     fn menu_button(&self, event: &mut mod_api::MenuButtonEvent<'_>) {
-        if event.block.and_then(toolbox_block).is_none()
-            || event.subject.with_view(|v| v.id() == TOOLBOX_TYPE) != Some(true)
-        {
+        let Some(action) = ToolboxAction::decode(event.menu, event.block, event.context.id) else {
+            return;
+        };
+        if event.subject.with_view(|v| v.id() == TOOLBOX_TYPE) != Some(true) {
             return;
         }
-        match event.context.id {
-            TOOLBOX_CONFIRM_BUTTON => {
+        match action {
+            ToolboxAction::Confirm => {
                 crate::glue::close_menu(event.subject.host(), event.context.player)
             }
-            TOOLBOX_DEPOSIT_BUTTON => deposit_all(event),
-            _ => {}
+            ToolboxAction::DepositAll => deposit_all(event),
         }
     }
 }
@@ -757,77 +788,147 @@ fn toolbox_confirm() -> [f32; 2] {
 /// (`insertItemStacked`).
 fn deposit_all(event: &mut mod_api::MenuButtonEvent<'_>) {
     use create_engine::toolbox::{STACKS_PER_COMPARTMENT, STORED};
-    let player = event.context.player;
-    let Some(mut items) = event.subject.with_view(|v| {
-        (0..STORED as u32)
-            .map(|i| v.item_slot(i).and_then(|s| s.to_owned()))
-            .collect::<Vec<_>>()
-    }) else {
-        return;
-    };
-    let host = event.subject.host();
-    let Some(player) = host.player(player) else {
-        return;
-    };
-    let Some(slots) = player.with_inventory(&*host, |view| {
-        view.iter()
-            .take_while(|(slot, _)| *slot < 36)
-            .filter_map(|(slot, stack)| Some((slot, stack.project()?)))
-            .collect::<Vec<_>>()
-    }) else {
-        return;
-    };
-    let mut changed = vec![false; items.len()];
-    for (slot, stack) in slots {
-        let mut left = stack.count();
-        let max = host.max_stack_size(stack.item()).unwrap_or(64);
-        for c in 0..STORED / STACKS_PER_COMPARTMENT {
-            let range = c * STACKS_PER_COMPARTMENT..(c + 1) * STACKS_PER_COMPARTMENT;
-            // The compartment's kind: its first stack that holds anything.
-            let kind = range.clone().find_map(|i| items.get(i).cloned().flatten());
-            if !kind.is_some_and(|k| k.item() == stack.item() && k.same_components(&stack)) {
-                continue;
-            }
-            for i in range.clone() {
-                if let Some(Some(held)) = items.get_mut(i) {
-                    let room = max.saturating_sub(held.count()).min(left);
-                    if room > 0 && held.set_count(held.count() + room).is_ok() {
-                        left -= room;
-                        changed[i] = true;
+    let who = event.context.player;
+    // Every write on both sides is accepted or none stays: a refusal aborts the transaction, which
+    // restores the player's slots and the toolbox's.
+    let moved = event.subject.transaction(|scope, _| {
+        let mut items = scope
+            .with_view(|v| {
+                (0..STORED as u32)
+                    .map(|i| v.item_slot(i).and_then(|s| s.to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .ok_or(())?;
+        let host = scope.host();
+        let player = host.player(who).ok_or(())?;
+        let slots = player
+            .with_inventory(&*host, |view| {
+                view.iter()
+                    .take_while(|(slot, _)| *slot < 36)
+                    .filter_map(|(slot, stack)| Some((slot, stack.project()?)))
+                    .collect::<Vec<_>>()
+            })
+            .ok_or(())?;
+        let mut changed = vec![false; items.len()];
+        for (slot, stack) in slots {
+            let mut left = stack.count();
+            let max = host.max_stack_size(stack.item()).unwrap_or(64);
+            for c in 0..STORED / STACKS_PER_COMPARTMENT {
+                let range = c * STACKS_PER_COMPARTMENT..(c + 1) * STACKS_PER_COMPARTMENT;
+                // The compartment's kind: its first stack that holds anything.
+                let kind = range.clone().find_map(|i| items.get(i).cloned().flatten());
+                if !kind.is_some_and(|k| k.item() == stack.item() && k.same_components(&stack)) {
+                    continue;
+                }
+                for i in range.clone() {
+                    if let Some(Some(held)) = items.get_mut(i) {
+                        let room = max.saturating_sub(held.count()).min(left);
+                        if room > 0 {
+                            held.set_count(held.count() + room).map_err(|_| ())?;
+                            left -= room;
+                            changed[i] = true;
+                        }
                     }
                 }
-            }
-            for i in range {
-                if left == 0 {
-                    break;
-                }
-                if let Some(empty @ None) = items.get_mut(i) {
-                    let n = left.min(max);
-                    let mut put = stack.clone();
-                    if put.set_count(n).is_ok() {
+                for i in range {
+                    if left == 0 {
+                        break;
+                    }
+                    if let Some(empty @ None) = items.get_mut(i) {
+                        let n = left.min(max);
+                        let mut put = stack.clone();
+                        put.set_count(n).map_err(|_| ())?;
                         left -= n;
                         *empty = Some(put);
                         changed[i] = true;
                     }
                 }
+                break;
             }
-            break;
-        }
-        if left != stack.count() {
-            let mut rest = stack;
-            let rest = (left > 0 && rest.set_count(left).is_ok()).then_some(rest);
-            let _ = player.set_inventory_slot(host, slot, rest);
-        }
-    }
-    let entity = event.subject.with_view(|mut v| {
-        for (i, stack) in items.into_iter().enumerate() {
-            if changed[i] {
-                let _ = v.set_item_slot(i as u32, stack);
+            if left != stack.count() {
+                let rest = remainder(stack, left, |s, n| s.set_count(n))?;
+                player
+                    .set_inventory_slot(host, slot, rest)
+                    .map_err(|_| ())?;
             }
         }
-        v.handle()
+        scope
+            .with_view(|mut v| {
+                for (i, stack) in items.into_iter().enumerate() {
+                    if changed[i] {
+                        v.set_item_slot(i as u32, stack).map_err(|_| ())?;
+                    }
+                }
+                Ok::<_, ()>(v.handle())
+            })
+            .ok_or(())?
     });
-    if let Some(entity) = entity {
+    // `setChanged` is not journaled, so only a committed transfer issues it.
+    if let Ok(entity) = moved {
         let _ = entity.set_changed(event.subject.host());
+    }
+}
+
+/// What stays in the player's slot after a deposit: nothing when `left` is 0, else `rest` with
+/// that count. A refused count is an `Err`, which aborts the transaction, never an emptied slot.
+fn remainder<T, E>(
+    mut rest: T,
+    left: u32,
+    set_count: impl FnOnce(&mut T, u32) -> Result<(), E>,
+) -> Result<Option<T>, ()> {
+    if left == 0 {
+        return Ok(None);
+    }
+    set_count(&mut rest, left).map_err(|_| ())?;
+    Ok(Some(rest))
+}
+
+#[cfg(test)]
+mod toolbox_button_tests {
+    use super::*;
+
+    #[test]
+    fn the_remainder_is_nothing_the_stack_or_a_failed_transaction() {
+        let set = |s: &mut (&str, u32), n| {
+            s.1 = n;
+            Ok::<(), ()>(())
+        };
+        assert_eq!(remainder(("iron", 9), 0, set), Ok(None));
+        assert_eq!(remainder(("iron", 9), 3, set), Ok(Some(("iron", 3))));
+        let refused = |_: &mut (&str, u32), _| Err::<(), _>("refused");
+        assert_eq!(remainder(("iron", 9), 3, refused), Err(()));
+        // Nothing is left over, so the count is never set.
+        assert_eq!(remainder(("iron", 9), 0, refused), Ok(None));
+    }
+
+    #[test]
+    fn the_shared_toolbox_menu_only_decodes_deposit_and_confirm() {
+        let menu = create_engine::toolbox::MENU;
+        for block in Block::ALL
+            .iter()
+            .copied()
+            .filter(|block| dye::is_toolbox(*block))
+        {
+            let name = format!("create:{}", block.name());
+            let decode = |id| ToolboxAction::decode(menu, Some(&name), id);
+            assert_eq!(
+                decode(TOOLBOX_DEPOSIT_BUTTON),
+                Some(ToolboxAction::DepositAll)
+            );
+            assert_eq!(decode(TOOLBOX_CONFIRM_BUTTON), Some(ToolboxAction::Confirm));
+            for id in [i32::MIN, 2, 100, i32::MAX] {
+                assert_eq!(decode(id), None);
+            }
+        }
+        for (menu, block) in [
+            (menu, None),
+            (menu, Some("create:schematicannon")),
+            ("create:schematicannon", Some("create:red_toolbox")),
+        ] {
+            assert_eq!(
+                ToolboxAction::decode(menu, block, TOOLBOX_DEPOSIT_BUTTON),
+                None
+            );
+        }
     }
 }

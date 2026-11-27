@@ -639,13 +639,14 @@ fn slots(lv: &ServerLevel<'_>, pos: [i32; 3]) -> Vec<Option<ItemStack>> {
         .collect()
 }
 
-/// Sets slots of the block entity at `pos`, in one transaction.
-fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<ItemStack>)]) {
+/// Sets slots of the block entity at `pos` in one transaction, returning whether it committed.
+/// Unchanged slots are successful writes; a write error rolls back the transaction.
+fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<ItemStack>)]) -> bool {
     let Some(be) = entity(lv, pos) else {
-        return;
+        return false;
     };
     OWN_WRITE.set(true);
-    let _ = lv.host.transaction(|h, tx| {
+    let result = lv.host.transaction(|h, tx| {
         for (slot, stack) in writes {
             be.set_item_slot(h, tx, *slot, stack.clone())
                 .map_err(|_| ())?;
@@ -653,6 +654,7 @@ fn set_slots(lv: &mut ServerLevel<'_>, pos: [i32; 3], writes: &[(u32, Option<Ite
         Ok::<(), ()>(())
     });
     OWN_WRITE.set(false);
+    result.is_ok()
 }
 
 fn item_is(host: &dyn Host, stack: &ItemStack, id: &str) -> bool {
@@ -1304,17 +1306,31 @@ fn send_screen_data(lv: &mut ServerLevel<'_>, c: &Cannon) {
     }
 }
 
+#[derive(Debug, PartialEq, Eq)]
+struct TableUpload(usize);
+
+impl TableUpload {
+    fn decode(id: i32) -> Option<Self> {
+        Some(Self(
+            usize::try_from(id.checked_sub(screens::UPLOAD)?).ok()?,
+        ))
+    }
+
+    /// An encoded selection is not permission to read a file. Resolve it only within the
+    /// current list authorized for the clicking player, without substituting another entry.
+    fn select(self, files: Vec<body::TableFile>) -> Option<body::TableFile> {
+        files.into_iter().nth(self.0)
+    }
+}
+
 /// The table's upload button (`SchematicUploadPacket`): the schematic chosen, by its place
 /// among the saved ones, uploaded at the level's next tick (the table's block entity is out of
 /// the world while its button is handled).
-fn table_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
-    let Some(index) = context
-        .id
-        .checked_sub(screens::UPLOAD)
-        .and_then(|id| usize::try_from(id).ok())
-    else {
-        return;
-    };
+fn table_button(
+    host: &mut dyn ServerHost,
+    context: &mod_api::item::menu::MenuButtonContext,
+    action: TableUpload,
+) {
     let Some(player) = host.player(context.player) else {
         return;
     };
@@ -1328,10 +1344,7 @@ fn table_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuBu
         return;
     };
     let local_owner = player.is_singleplayer_owner(&*host).then_some(name);
-    let Some(file) = body::table_files(&*host, local_owner)
-        .into_iter()
-        .nth(index)
-    else {
+    let Some(file) = action.select(body::table_files(&*host, local_owner)) else {
         return;
     };
     let Some(pos) = context.pos else {
@@ -1354,12 +1367,12 @@ fn run_uploads(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// `ConfigureSchematicannonPacket` from the cannon's screen, and its confirm button.
-fn cannon_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuButtonContext) {
-    if context.id == screens::CONFIRM {
-        crate::glue::close_menu(host, context.player);
-        return;
-    }
+/// `ConfigureSchematicannonPacket` from the cannon's screen.
+fn cannon_button(
+    host: &mut dyn ServerHost,
+    context: &mod_api::item::menu::MenuButtonContext,
+    option: screens::CannonOption,
+) {
     let Some(player) = host.player(context.player) else {
         return;
     };
@@ -1373,9 +1386,7 @@ fn cannon_button(host: &mut dyn ServerHost, context: &mod_api::item::menu::MenuB
         return;
     };
     let data = with(dim, |d| d.sent_data.get(&pos).cloned()).unwrap_or_default();
-    let Some(option) = screens::configure(context.id, &data) else {
-        return;
-    };
+    let option = option.configure(&data);
     let Some(lv) = ServerLevel::new(host, &dimension) else {
         return;
     };
@@ -1645,21 +1656,56 @@ fn table_screen(_host: &dyn ClientHost, open: mod_api::MenuScreenOpen<'_>) -> Op
     )
 }
 
+#[derive(Debug, PartialEq, Eq)]
+enum SchematicAction {
+    Cannon(screens::CannonAction),
+    Upload(TableUpload),
+}
+
+impl SchematicAction {
+    fn decode(menu: &str, block: Option<&str>, id: i32) -> Option<Self> {
+        match (menu, block) {
+            (CANNON_MENU, Some(CANNON_MENU)) => screens::CannonAction::decode(id).map(Self::Cannon),
+            (TABLE_MENU, Some(TABLE_MENU)) => TableUpload::decode(id).map(Self::Upload),
+            _ => None,
+        }
+    }
+}
+
 /// The cannon's and the table's menu buttons.
 struct SchematicMenus;
 
 #[mod_api::sunrise_part]
 impl MenuPart for SchematicMenus {
+    fn menu_button_valid(
+        &self,
+        _host: &dyn Host,
+        event: &mut mod_api::MenuButtonValidEvent<'_>,
+    ) -> Flow {
+        if SchematicAction::decode(event.menu, event.block, event.id).is_some() {
+            Flow::Cancel
+        } else {
+            Flow::Continue
+        }
+    }
+
     fn menu_button(&self, event: &mut mod_api::MenuButtonEvent<'_>) {
         let context = event.context;
-        let Some(kind) = event.subject.with_view(|v| v.id().to_owned()) else {
+        let Some(action) = SchematicAction::decode(event.menu, event.block, context.id) else {
             return;
         };
+        if event.subject.with_view(|v| v.id() == event.menu) != Some(true) {
+            return;
+        }
         let host = event.subject.host();
-        match kind.as_str() {
-            "create:schematicannon" => cannon_button(host, context),
-            "create:schematic_table" => table_button(host, context),
-            _ => {}
+        match action {
+            SchematicAction::Cannon(screens::CannonAction::Confirm) => {
+                crate::glue::close_menu(host, context.player);
+            }
+            SchematicAction::Cannon(screens::CannonAction::Configure(option)) => {
+                cannon_button(host, context, option);
+            }
+            SchematicAction::Upload(action) => table_button(host, context, action),
         }
     }
 }
@@ -2234,7 +2280,12 @@ fn upload(
         crate::create_log!("[create] New Schematic Uploaded: {player}/{file}");
     }
     body::set_schematic_data(&mut stack, &SchematicData::written(file, player, bounds));
-    set_slots(lv, pos, &[(0, None), (1, Some(stack))]);
+    if !set_slots(lv, pos, &[(0, None), (1, Some(stack))]) {
+        crate::create_log!(
+            "[create] Failed to finish schematic upload: {player}/{file}: table slots not written"
+        );
+        return vec![format!("upload of {file} failed")];
+    }
     vec![format!(
         "uploaded {file}: {}x{}x{}",
         bounds[0], bounds[1], bounds[2]
@@ -2702,4 +2753,53 @@ fn chunk_load(lv: &ServerLevel<'_>, data: &Compound) {
             d.wake(pos, now);
         }
     });
+}
+
+#[cfg(test)]
+mod menu_tests {
+    use super::*;
+    use body::TableFile::{Local, Saved};
+
+    #[test]
+    fn table_only_decodes_indexed_uploads_for_its_own_backing() {
+        assert_eq!(
+            SchematicAction::decode(TABLE_MENU, Some(TABLE_MENU), screens::UPLOAD + 1),
+            Some(SchematicAction::Upload(TableUpload(1)))
+        );
+        for id in [i32::MIN, 0, screens::UPLOAD - 1] {
+            assert_eq!(TableUpload::decode(id), None);
+        }
+        assert_eq!(
+            TableUpload::decode(i32::MAX),
+            Some(TableUpload((i32::MAX - screens::UPLOAD) as usize))
+        );
+        for (menu, block) in [
+            (TABLE_MENU, None),
+            (TABLE_MENU, Some(CANNON_MENU)),
+            (CANNON_MENU, Some(CANNON_MENU)),
+            ("create:toolbox", Some(TABLE_MENU)),
+        ] {
+            assert_eq!(SchematicAction::decode(menu, block, screens::UPLOAD), None);
+        }
+    }
+
+    #[test]
+    fn table_selection_cannot_escape_the_players_current_list() {
+        let root = || Local("root.nbt".into());
+        let saved = || Saved("saved.nbt".into());
+        let select = |id, files| match SchematicAction::decode(TABLE_MENU, Some(TABLE_MENU), id) {
+            Some(SchematicAction::Upload(action)) => action.select(files),
+            _ => None,
+        };
+        assert_eq!(select(screens::UPLOAD, vec![root()]), Some(root()));
+        // The same ordinal resolves to the owner's save only if the authenticated list includes it.
+        assert_eq!(
+            select(screens::UPLOAD + 1, vec![root(), saved()]),
+            Some(saved())
+        );
+        assert_eq!(select(screens::UPLOAD + 1, vec![root()]), None);
+        assert_eq!(select(screens::UPLOAD, vec![]), None);
+        assert_eq!(select(screens::UPLOAD - 1, vec![root()]), None);
+        assert_eq!(select(i32::MAX, vec![root(), saved()]), None);
+    }
 }
