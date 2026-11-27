@@ -440,27 +440,8 @@ fn free_for(lv: &ServerLevel<'_>, p: [i32; 3], state: BlockState) -> Option<Bloc
     if at.block() == state.block() || host.block_states().replaceable(at) != Some(true) {
         return None;
     }
-    let water = host
-        .block_state_id("minecraft:water")
-        .and_then(|w| w.fluid_state(&host.block_states()));
-    let source = at
-        .fluid_state(&host.block_states())
-        .is_some_and(|f| f.source && water.is_some_and(|w| w.fluid == f.fluid));
-    let has = state
-        .property(&host.block_states(), "waterlogged")
-        .ok()
-        .flatten()
-        .is_some();
-    Some(if has {
-        super::with_props(
-            host,
-            state,
-            &[("waterlogged", if source { "true" } else { "false" })],
-        )
-        .unwrap_or(state)
-    } else {
-        state
-    })
+    let source = super::super::server::is_water_source(host, at);
+    Some(super::super::server::with_waterlogged(host, state, source))
 }
 
 /// `paveTracks`: under each end's straight run (`paveStraight`) and the curve (`paveCurve`),

@@ -298,11 +298,11 @@ fn put_back(lv: &mut ServerLevel<'_>, bearing: [i32; 3], w: &create_engine::worl
         .collect();
     let place = |o| add(bearing, o);
     actors::expect_back(lv, bearing, place);
-    let written = put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+    let written = put_back_blocks(lv, &blocks);
     actors::restore_landed_belts(lv, bearing, place, |p| written.contains(&p));
     let placed = Pose::translated(bearing.map(f64::from));
     colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
-    actors::release_storage(lv, bearing, |o| add(bearing, o));
+    actors::release_storage(lv, bearing, |o| add(bearing, o), |p| written.contains(&p));
     actors::release_extras(lv, &mut w.extras.clone(), |o| add(bearing, o));
 }
 
@@ -772,11 +772,11 @@ fn put_back_turned(
         add(anchor, contraption::rotate(local, quarter, axis))
     };
     actors::expect_back(lv, bearing, turn);
-    let written = put_back_blocks(lv, &turned, |lv, p| lv.is_free(p));
+    let written = put_back_blocks(lv, &turned);
     actors::restore_landed_belts(lv, bearing, turn, |p| written.contains(&p));
     let placed = Pose::turned(bearing, axis, f64::from(quarter));
     colliders::lift_riders(lv, Owner::Anchor(bearing, 0), placed);
-    actors::release_storage(lv, bearing, turn);
+    actors::release_storage(lv, bearing, turn, |p| written.contains(&p));
     actors::release_extras(lv, &mut w.extras.clone(), turn);
 }
 
@@ -953,11 +953,11 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
                     .collect();
                 let place = |o| add(at, o);
                 actors::expect_back(lv, g.start, place);
-                let written = put_back_blocks(lv, &blocks, |lv, p| lv.is_free(p));
+                let written = put_back_blocks(lv, &blocks);
                 actors::restore_landed_belts(lv, g.start, place, |p| written.contains(&p));
                 let placed = Pose::translated(at.map(f64::from));
                 colliders::lift_riders(lv, Owner::Gantry(g.start), placed);
-                actors::release(lv, g.start, at, &mut g.carried);
+                actors::release(lv, g.start, at, &mut g.carried, |p| written.contains(&p));
                 show_gantry(lv, &g, true);
                 super::super::persist::mark_pos_unsaved(dim, g.start);
             }
@@ -1364,7 +1364,7 @@ fn put_back_piston(
     let origin = [0, 1, 2].map(|a| m.anchor[a] + o[a] * grid);
     let place = |l| add(origin, l);
     actors::expect_back(lv, pos, place);
-    let written = put_back_blocks(lv, &cells, |lv, p| lv.passable(p));
+    let written = put_back_blocks(lv, &cells);
     actors::restore_landed_belts(lv, pos, place, |p| written.contains(&p));
     let placed = Pose::translated(origin.map(f64::from));
     colliders::lift_riders(lv, Owner::Anchor(pos, 0), placed);
@@ -1375,7 +1375,7 @@ fn put_back_piston(
         let state = if grid > 0 { "extended" } else { "retracted" };
         lv.set_property(pos, "state", state, update_all());
     }
-    actors::release(lv, pos, origin, &mut m.carried);
+    actors::release(lv, pos, origin, &mut m.carried, |p| written.contains(&p));
     draw::hide(lv, pos);
     super::super::persist::mark_pos_unsaved(lv.dim, pos);
 }

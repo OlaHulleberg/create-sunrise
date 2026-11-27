@@ -316,26 +316,28 @@ pub fn disassemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: Option<Playe
             ]
         };
         super::cargo::expect(lv, t.id, c, place);
-        let mut placed = std::collections::HashSet::new();
-        for (o, s) in car {
-            // The block's centre from the pivot (the middle of the track under the
-            // carriage's leading bogey), turned about it; its height from the track.
-            let p = place(*o);
-            let Some(state) = super::car_state(*s) else {
-                continue;
-            };
-            let state = turned_state(&*lv.host, state, quarter, Axis::Y);
-            // Without shape updates (`Contraption.addBlocksToWorld` places them as they were
-            // carried): a door's half put back before its other half stays.
-            if lv.set_state(
-                p,
-                state,
-                update_all() | mod_api::BlockUpdateFlags::KNOWN_SHAPE,
-            ) {
-                placed.insert(p);
-            }
-        }
-        // The carriage's storage blocks take their items back.
+        // Each block's centre from the pivot (the middle of the track under the carriage's
+        // leading bogey), turned about it; its height from the track.
+        let blocks: Vec<([i32; 3], u32)> = car
+            .iter()
+            .filter_map(|(o, s)| {
+                let state = turned_state(&*lv.host, super::car_state(*s)?, quarter, Axis::Y);
+                Some((place(*o), crate::glue::contraptions::num(state)))
+            })
+            .collect();
+        // `Train.disassemble` -> `CarriageContraptionEntity.disassemble` -> `Contraption.
+        // addBlocksToWorld` (`Train.java:757-777`, `Contraption.java:1104-1206`): sturdy blocks
+        // first, one that can't be broken or won't be placed drops, the rest break what stands
+        // there. Without shape updates, as they were carried: a door's half put back before its
+        // other half stays.
+        let placed = crate::glue::contraptions::put_back_blocks_with_flags(
+            lv,
+            &blocks,
+            update_all()
+                | mod_api::BlockUpdateFlags::KNOWN_SHAPE
+                | mod_api::BlockUpdateFlags::MOVE_BY_PISTON,
+        );
+        // The carriage's storage blocks take their items back, where a block was written.
         super::cargo::release(lv, t.id, c, place, |p| placed.contains(&p));
     }
     super::super::persist::mark_unsaved(dim, [t.column.0, t.column.1]);

@@ -8,13 +8,12 @@ use super::super::server::ServerLevel;
 use super::super::states;
 use super::super::world::with_world;
 use super::{creative, custom, held, set_custom, set_held, sneaking};
-use crate::glue::names::Named as _;
 use create_engine::Block;
 use create_engine::belt_connector::{self as bc, FIRST_SHAFT_KEY};
 use create_engine::kinetics::Axis;
 use mod_api::{
-    BlockState, ClientHost, HostBlockStates, HostSide, InteractionResult, ItemPart, ItemStack,
-    ServerHost, SoundSource, Tag, UseOnEvent,
+    ClientHost, HostBlockStates, HostSide, InteractionResult, ItemPart, ItemStack, ServerHost,
+    SoundSource, Tag, UseOnEvent,
 };
 
 pub(super) struct Connector;
@@ -169,11 +168,6 @@ pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32;
     let Some(belt) = lv.host.block_state_default(states::key(Block::Belt)) else {
         return;
     };
-    // `getFluidState().getType() == Fluids.WATER`: a water source.
-    let water = |lv: &ServerLevel<'_>, s: BlockState| {
-        s.fluid_state(&lv.host.block_states())
-            .is_some_and(|f| f.is_source() && f.fluid.name(&*lv.host) == "minecraft:water")
-    };
     let mut failed = false;
     for (pos, seg) in &layout {
         let pos = *pos;
@@ -187,7 +181,7 @@ pub(crate) fn create_belts(lv: &mut ServerLevel<'_>, start: [i32; 3], end: [i32;
             break;
         }
         let replaceable = facts.replaceable(state).unwrap_or(false);
-        let waterlogged = water(lv, state);
+        let waterlogged = super::super::server::is_water_source(&*lv.host, state);
         if !replaceable {
             // `destroyBlock(pos, false)`: what stays is its fluid.
             lv.destroy_block(pos, false);

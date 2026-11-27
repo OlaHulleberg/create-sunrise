@@ -5,10 +5,11 @@
 //! (`impl ServerLevel<'_> { .. }`).
 
 use super::states;
+use crate::glue::names::Named as _;
 use crate::glue::owned::LevelLists as _;
 use mod_api::{
-    BlockState, BlockUpdateFlags, Compound, Direction, HostBlockStates, LevelRef, NeighbourUpdate,
-    PlayerRef, ServerHost, Tag,
+    BlockState, BlockUpdateFlags, Compound, Direction, Host, HostBlockStates, LevelRef,
+    NeighbourUpdate, PlayerRef, ServerHost, Tag,
 };
 
 /// `minecraft:block`'s particle key, for block break particles (set at registration by the
@@ -30,6 +31,32 @@ pub const UPDATE_CLIENTS: BlockUpdateFlags = BlockUpdateFlags::CLIENTS;
 /// Vanilla's `Block.UPDATE_ALL`: neighbours and clients.
 pub fn update_all() -> BlockUpdateFlags {
     BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS
+}
+
+/// Whether the state contains a still water source, including in a waterlogged block.
+pub fn is_water_source(host: &dyn Host, state: BlockState) -> bool {
+    state
+        .fluid_state(&host.block_states())
+        .is_some_and(|f| f.is_source() && f.fluid.name(host) == "minecraft:water")
+}
+
+/// The waterlogged property value set by the destination fluid, when supported.
+pub fn waterlogged_value(has_waterlogged: bool, water_source: bool) -> Option<&'static str> {
+    has_waterlogged.then_some(if water_source { "true" } else { "false" })
+}
+
+/// Update waterlogging without changing states that have no waterlogged property.
+pub fn with_waterlogged(host: &dyn Host, state: BlockState, water: bool) -> BlockState {
+    let facts = host.block_states();
+    let has = state
+        .property(&facts, "waterlogged")
+        .ok()
+        .flatten()
+        .is_some();
+    match waterlogged_value(has, water) {
+        Some(value) => state.with(&facts, "waterlogged", value).unwrap_or(state),
+        None => state,
+    }
 }
 
 impl<'a> ServerLevel<'a> {

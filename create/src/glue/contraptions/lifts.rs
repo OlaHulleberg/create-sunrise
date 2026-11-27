@@ -112,22 +112,24 @@ fn speed(dim: usize, pos: [i32; 3]) -> f32 {
 }
 
 /// Blocks a structure took go back: each where it was, or dropped where something else took
-/// its place (`Contraption.addBlocksToWorld`).
+/// its place (`Contraption.addBlocksToWorld`). The cells written, the only ones whose carried
+/// contents go back.
 fn lift_put_back(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     origin: [i32; 3],
     blocks: &[([i32; 3], u32)],
-) {
+) -> std::collections::HashSet<[i32; 3]> {
     let place = |o| add(origin, o);
     actors::expect_back(lv, key, place);
-    let written = super::put_back_blocks(lv, blocks, |lv, p| lv.passable(p));
+    let written = super::put_back_blocks(lv, blocks);
     actors::restore_landed_belts(lv, key, place, |p| written.contains(&p));
     // A clock's hour and minute hands are two structures.
     let placed = Pose::translated(origin.map(f64::from));
     for n in 0..2 {
         colliders::lift_riders(lv, Owner::Anchor(key, n), placed);
     }
+    written
 }
 
 fn mark_unsaved(lv: &ServerLevel<'_>, pos: [i32; 3]) {
@@ -185,13 +187,13 @@ pub(super) fn tick_lifts(lv: &mut ServerLevel<'_>) {
             // A clock's hands go back turned to 0, where they started.
             Held::Clock(_) => Some(pos),
         };
-        lift_put_back(lv, pos, origin.unwrap_or(pos), &held.put_back(pos));
+        let written = lift_put_back(lv, pos, origin.unwrap_or(pos), &held.put_back(pos));
         // What rode with it (its storage too, kept apart from its actors) goes back.
         if let Some(origin) = origin {
             let mut carried = PULLEY_CARRIED
                 .with_borrow_mut(|c| c.remove(&(dim, pos)))
                 .unwrap_or_default();
-            actors::release(lv, pos, origin, &mut carried);
+            actors::release(lv, pos, origin, &mut carried, |p| written.contains(&p));
         }
         FLOORS_SENT.with_borrow_mut(|m| m.remove(&(dim, pos)));
         draw::hide(lv, pos);
@@ -401,8 +403,8 @@ fn disassemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     CLOCK_SHOWN.with_borrow_mut(|s| s.remove(&(dim, pos)));
     let held = Held::Clock(c);
-    lift_put_back(lv, pos, pos, &held.put_back(pos));
-    actors::release_storage(lv, pos, |o| add(pos, o));
+    let written = lift_put_back(lv, pos, pos, &held.put_back(pos));
+    actors::release_storage(lv, pos, |o| add(pos, o), |p| written.contains(&p));
     // The hands turned back to 0: their glue and controls go back where they were.
     if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
         actors::release_extras(lv, &mut carried, |o| add(pos, o));
@@ -672,12 +674,12 @@ fn stop_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], grid: i32) {
     draw::set_pulley_rest(lv, pos, grid);
     let origin = p.placed_at(create_engine::pulley::grid_offset(p.offset, p.range));
     let held = Held::Pulley(p);
-    lift_put_back(lv, pos, origin, &held.put_back(pos));
+    let written = lift_put_back(lv, pos, origin, &held.put_back(pos));
     // What rode with it goes back with its blocks (`disassemble`).
     let mut carried = PULLEY_CARRIED
         .with_borrow_mut(|c| c.remove(&(dim, pos)))
         .unwrap_or_default();
-    actors::release(lv, pos, origin, &mut carried);
+    actors::release(lv, pos, origin, &mut carried, |p| written.contains(&p));
     draw::hide(lv, pos);
     mark_unsaved(lv, pos);
 }
@@ -1398,9 +1400,9 @@ fn disassemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let origin = e.placed_at();
     ELEVATOR_MOVED.with_borrow_mut(|m| m.remove(&(dim, pos)));
     let held = Held::Elevator(e);
-    lift_put_back(lv, pos, origin, &held.put_back(pos));
+    let written = lift_put_back(lv, pos, origin, &held.put_back(pos));
     if let Some(mut carried) = PULLEY_CARRIED.with_borrow_mut(|c| c.remove(&(dim, pos))) {
-        actors::release(lv, pos, origin, &mut carried);
+        actors::release(lv, pos, origin, &mut carried, |p| written.contains(&p));
     }
     draw::hide(lv, pos);
     draw::set_pulley_rest(lv, pos, -1);
