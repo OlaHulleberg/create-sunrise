@@ -549,6 +549,15 @@ impl Item {
         copy
     }
 
+    /// `BeltDeployerCallbacks.activate`'s `left`: one less, its fan processing cleared, an
+    /// emptied one too (`BeltInventory.tick` drops it at its next turn).
+    pub fn left_of_one(&self) -> Self {
+        let mut left = self.processing_copy();
+        left.count = left.count.saturating_sub(1);
+        left.fan.clear();
+        left
+    }
+
     /// `BeltPressingCallbacks.whenItemHeld`'s `left`: `copy()` does not copy `locked`.
     pub fn left_after_one(&self) -> Option<Self> {
         (self.count > 1).then(|| {

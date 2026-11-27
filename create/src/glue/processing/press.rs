@@ -139,31 +139,16 @@ fn press_in_world(lv: &mut ServerLevel<'_>, at: [i32; 3]) {
     }
 }
 
-/// The deployers the depots under them asked for (`DepotBehaviour.tick` with
-/// `BeltDeployerCallbacks`), idle presses looking at the ground under them, then the presses
-/// whose cycle changed told to clients. A press over a depot is asked at the depot's turn
+/// Idle presses looking at the ground under them, then the presses whose cycle changed told to
+/// clients. A press over a depot is asked at the depot's turn
 /// (`depot_turn`) and moves its head at its own (`press_turn`), in the transport walk.
 pub fn tick_presses(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
     if recipes::ready() {
         scan_world(lv);
     }
-    let work = with_world(|w| std::mem::take(&mut w.dims[dim].depot_work)).unwrap_or_default();
-    let mut keep = Vec::new();
-    if recipes::ready() {
-        for depot in work {
-            if super::deployer::deployer_on_depot(lv, depot) {
-                keep.push(depot);
-            }
-        }
-    }
     let changed = with_world(|w| {
         let d = &mut w.dims[dim];
-        for p in keep {
-            if !d.depot_work.contains(&p) {
-                d.depot_work.push(p);
-            }
-        }
         let mut c = std::mem::take(&mut d.press_changes);
         c.sort();
         c.dedup();

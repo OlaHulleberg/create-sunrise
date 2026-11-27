@@ -64,6 +64,7 @@ pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
 // The press's depot callbacks and its own turn, and the mixer's, in logistics' transport walk.
 pub(crate) use basin::mixer_turn;
+pub(crate) use deployer::{deployer_on_depot, deployer_turn};
 pub(crate) use press::{depot_turn as press_depot_turn, press_turn};
 pub(crate) use saw::saw_turn;
 pub(crate) use spoutput::turn as basin_turn;
@@ -271,7 +272,6 @@ impl Subsystem for Processing {
         basin::clear();
         spoutput::clear();
         crafter::clear();
-        fist::clear();
     }
 
     fn tags_updated(&self, cx: &dyn mod_api::ReloadContext) {
@@ -329,6 +329,7 @@ impl Subsystem for Processing {
             d.removed_inventories.clear();
             d.removed_deployers.clear();
         });
+        deployer::redstone_updates(lv);
         crafter::tick_crafters(lv);
         millstone::tick_millstones(lv);
         fan::tick_fans(lv);
@@ -616,7 +617,7 @@ impl Subsystem for Tools {
         saw::tick_drills(lv);
         saw::hurt_inside(lv);
         press::tick_presses(lv);
-        deployer::tick_deployers(lv);
+        deployer::send_deployer_changes(lv);
     }
 }
 

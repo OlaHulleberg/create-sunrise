@@ -413,11 +413,11 @@ impl Run {
         }
         let changed = self.w.take_depot_changes(0);
         for p in changed {
-            if self.w.dims[0].depots.get(&p) == Some(&None) && self.depot_stacks.contains_key(&p) {
-                if let Some(h) = self.w.dims[0].depots.get_mut(&p) {
-                    *h = Some(depot::Held::new(180, false));
-                }
-                self.w.wake_depot(0, p);
+            if self.w.dims[0].depots.get(&p) == Some(&None)
+                && self.depot_stacks.contains_key(&p)
+                && let Some(h) = self.w.dims[0].depots.get_mut(&p)
+            {
+                *h = Some(depot::Held::new(180, false));
             }
         }
         // The glue's shared level registration walk (BeltBlockEntity.tick and
@@ -490,6 +490,11 @@ impl Run {
                 // hand-off, then the change of contents, at the basin's own turn).
                 create_engine::world::TransportTick::Basin(p) => {
                     self.basin_turn(p);
+                    continue;
+                }
+                // The glue's `deployer_turn` (`DeployerBlockEntity.tick` at its turn).
+                create_engine::world::TransportTick::Deployer(p) => {
+                    self.deployer_turn(p);
                     continue;
                 }
                 create_engine::world::TransportTick::Belt(c) => c,

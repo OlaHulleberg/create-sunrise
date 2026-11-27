@@ -287,8 +287,7 @@ pub(super) fn tick_depot(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
 
 /// `DepotBehaviour.tick`'s `BeltProcessingBehaviour` two above an arrived stack: none, or an
 /// unlocked stack with the block over the depot in the way (`isBlocked`), and nothing happens;
-/// else the spout's or press's callbacks run now. A deployer's run with the deployers
-/// (`processing::Tools`).
+/// else the spout's, press's or deployer's callbacks run now.
 fn process_held(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
     let Some((block, _)) = super::info_at(lv, [pos[0], pos[1] + 2, pos[2]]) else {
@@ -304,6 +303,7 @@ fn process_held(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     match block {
         Block::Spout => crate::glue::fluids::machines::spout_on_depot(lv, pos),
         Block::MechanicalPress => crate::glue::processing::press_depot_turn(lv, pos),
+        Block::Deployer => crate::glue::processing::deployer_on_depot(lv, pos),
         _ => {}
     }
 }
@@ -337,7 +337,6 @@ pub fn send_changed_depots(lv: &mut ServerLevel<'_>) {
                 if let Some(h) = w.dims[dim].depots.get_mut(&pos) {
                     *h = Some(held);
                 }
-                w.wake_depot(dim, pos);
             });
         }
     }

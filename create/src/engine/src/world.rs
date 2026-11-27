@@ -39,6 +39,9 @@ fn entity_view(block: Block) -> Option<View> {
         // `SawBlockEntity.tick` hands an upward saw's results to the belt or depot beside it at
         // its own turn: one after the saw moves them in that tick.
         Block::MechanicalSaw => Some(View::Transport),
+        // `DeployerBlockEntity.tick` runs its stroke at its own turn, and the depot or belt
+        // under it asks it at theirs.
+        Block::Deployer => Some(View::Transport),
         _ => None,
     }
 }
@@ -256,10 +259,6 @@ pub struct Dimension {
     pub depot_changes: Vec<[i32; 3]>,
     /// Mechanical presses and their cycle.
     pub presses: HashMap<[i32; 3], crate::press::Press>,
-    /// Depots that ask the deployer above them each tick (`DepotBehaviour.tick` after its
-    /// stack arrived), until it has nothing to do with them. A press or spout is asked at the
-    /// depot's own turn.
-    pub depot_work: Vec<[i32; 3]>,
     /// Presses whose cycle clients must see again (started, head down, done).
     pub press_changes: Vec<[i32; 3]>,
     /// Belts by controller, and each segment's controller.
@@ -364,11 +363,10 @@ pub struct Dimension {
     /// (`updateTunnel`, `getStateForPlacement`: the new shape at once); those just placed
     /// (`onPlace`: their connections).
     pub tunnel_checks: Vec<[i32; 3]>,
-    /// Deployers and their cycle and held stack, those mid-stroke or waiting out their pause
-    /// (the only ones that tick), what was saved for those not placed yet, and those whose
-    /// stroke clients must see again; the cracks of removed ones (deployer, block) to clear.
+    /// Deployers and their cycle and held stack, what was saved for those not placed yet, and
+    /// those whose stroke clients must see again; the cracks of removed ones (deployer, block)
+    /// to clear.
     pub deployers: HashMap<[i32; 3], crate::deployer::Deployer>,
-    pub deploying: Vec<[i32; 3]>,
     deployer_saved: HashMap<[i32; 3], crate::deployer::Deployer>,
     brass_saved: HashMap<[i32; 3], crate::tunnel::SavedBrass>,
     pub deployer_changes: Vec<[i32; 3]>,
@@ -891,6 +889,8 @@ pub enum TransportTick {
     Mixer([i32; 3]),
     /// `SawBlockEntity.tick` of a saw holding items.
     Saw([i32; 3]),
+    /// `DeployerBlockEntity.tick`.
+    Deployer([i32; 3]),
     /// `BasinBlockEntity.tick`: the lazy tick (`updateSpoutput`, `recipeBackupCheck`), the spout's
     /// hand-off (`tryClearingSpoutputOverflow`), then the change of contents
     /// ([`CreateWorld::tick_basin`]), all at the basin's own turn.
@@ -955,6 +955,7 @@ impl TransportTicks {
                     continue;
                 }
                 Some(Block::MechanicalPump) => return Some(TransportTick::Pump(p)),
+                Some(Block::Deployer) => return Some(TransportTick::Deployer(p)),
                 Some(
                     Block::FluidPipe
                     | Block::GlassFluidPipe
@@ -1198,15 +1199,10 @@ impl CreateWorld {
         }
         if block == Block::Deployer && !d.deployers.contains_key(&pos) {
             let saved = d.deployer_saved.remove(&pos).unwrap_or_default();
-            if saved.busy() {
-                d.deploying.push(pos);
-            }
             d.deployers.insert(pos, saved);
             d.deployer_changes.push(pos);
             // `onPlace` → `redstoneUpdate`.
             d.deployer_power_checks.push(pos);
-            // A depot below may have work for it.
-            d.depot_work.push([pos[0], pos[1] - 2, pos[2]]);
         }
         if block == Block::BrassTunnel && !d.brass.contains_key(&pos) {
             // `read`: persisted tunnel distribution and connection state, saved with the column.
@@ -2154,7 +2150,6 @@ impl CreateWorld {
                     .extend(c.grid.into_iter().map(|(_, item)| (pos, item)));
             }
             if let Some(dp) = d.deployers.remove(&pos) {
-                d.deploying.retain(|p| *p != pos);
                 d.deployer_changes.push(pos);
                 d.unsaved.push((pos[0] >> 4, pos[2] >> 4));
                 // `DeployerFakePlayer.remove` (`discardPlayer`): its cracks go.
@@ -2461,7 +2456,6 @@ impl CreateWorld {
             d.link_shown.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.deployers
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            d.deploying.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafters.retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.crafter_inputs
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
@@ -2550,7 +2544,6 @@ impl CreateWorld {
                     }
                 }
             }
-            d.depot_work.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.sliding.retain(|p| (p[0] >> 4, p[2] >> 4) != (cx, cz));
         }
         d.block_entities.unload(cx, cz);
@@ -3717,9 +3710,6 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         if let Some(h) = d.depots.get_mut(&pos) {
             *h = held;
-            if held.is_some_and(|h| !h.sliding()) && !d.depot_work.contains(&pos) {
-                d.depot_work.push(pos);
-            }
             if held.is_some_and(|h| h.sliding()) && !d.sliding.contains(&pos) {
                 d.sliding.push(pos);
             }
@@ -4126,9 +4116,6 @@ impl CreateWorld {
             return;
         };
         *live = saved;
-        if live.busy() && !d.deploying.contains(&pos) {
-            d.deploying.push(pos);
-        }
         d.deployer_changes.push(pos);
     }
 
@@ -5566,9 +5553,6 @@ impl CreateWorld {
             return false;
         };
         let arrived = h.slide(upright);
-        if arrived && !d.depot_work.contains(&pos) {
-            d.depot_work.push(pos);
-        }
         if !h.sliding() {
             d.sliding.retain(|p| *p != pos);
         }
@@ -5589,15 +5573,6 @@ impl CreateWorld {
     pub fn depot_changed(&mut self, dim: usize, pos: [i32; 3]) {
         if self.dims[dim].depots.contains_key(&pos) {
             self.dims[dim].depot_changes.push(pos);
-        }
-    }
-
-    /// The depot at `pos` asks the deployer above it from the next tick on (its stack arrived
-    /// or changed).
-    pub fn wake_depot(&mut self, dim: usize, pos: [i32; 3]) {
-        let d = &mut self.dims[dim];
-        if d.depots.contains_key(&pos) && !d.depot_work.contains(&pos) {
-            d.depot_work.push(pos);
         }
     }
 

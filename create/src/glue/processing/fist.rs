@@ -7,20 +7,8 @@
 use super::super::server::ServerLevel;
 use super::super::world::with_world;
 use create_engine::Block;
-use create_engine::deployer::{Mode, State};
+use create_engine::deployer::{Deployer, Mode, State};
 use create_engine::kinetics::Dir;
-use std::cell::RefCell;
-use std::collections::HashSet;
-
-thread_local! {
-    /// The deployers in a bump (`fistBump`), by level and position.
-    static BUMPING: RefCell<HashSet<(usize, [i32; 3])>> = RefCell::new(HashSet::new());
-}
-
-/// The world closed.
-pub(super) fn clear() {
-    BUMPING.with_borrow_mut(HashSet::clear);
-}
 
 /// The first deployer two to four blocks ahead of the one at `pos` facing `facing`, and how
 /// far; None when one of those blocks is not loaded or none is there.
@@ -38,13 +26,15 @@ fn partner(lv: &ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> Option<([i32; 3]
     None
 }
 
-/// `startFistBump` for the punching deployer at `pos` at rest: true when it and the one facing
-/// it set off toward each other.
-pub(super) fn start(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> bool {
+/// `startFistBump` for the punching deployer `d` at `pos` at rest: true when it and the one
+/// facing it set off toward each other.
+pub(super) fn start(
+    lv: &mut ServerLevel<'_>,
+    pos: [i32; 3],
+    facing: Dir,
+    d: &mut Deployer,
+) -> bool {
     let dim = lv.dim;
-    if BUMPING.with_borrow(|b| b.contains(&(dim, pos))) {
-        return false;
-    }
     let Some((other, i)) = partner(lv, pos, facing) else {
         return false;
     };
@@ -54,60 +44,49 @@ pub(super) fn start(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir) -> boo
     if !faces_back || !punching || lv.speed(other) == 0.0 {
         return false;
     }
+    let reach = (i - 2) as f32 * 0.5;
+    bump(d, reach);
     with_world(|w| {
-        let d = &mut w.dims[dim];
-        for p in [pos, other] {
-            if let Some(dp) = d.deployers.get_mut(&p) {
-                dp.reach = (i - 2) as f32 * 0.5;
-                dp.timer = 1000;
-                dp.state = State::Expanding;
-                d.deployer_changes.push(p);
-            }
-            if !d.deploying.contains(&p) {
-                d.deploying.push(p);
-            }
+        let dd = &mut w.dims[dim];
+        if let Some(dp) = dd.deployers.get_mut(&other) {
+            bump(dp, reach);
+            dd.deployer_changes.push(other);
         }
-    });
-    BUMPING.with_borrow_mut(|b| {
-        b.insert((dim, pos));
-        b.insert((dim, other));
     });
     true
 }
 
-/// `triggerFistBump` for the deployer at `pos` at the end of its stroke: its partner there too
-/// is drawn back, the bump sounds between them and its placer earns `FIST_BUMP`.
-pub(super) fn trigger(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+fn bump(d: &mut Deployer, reach: f32) {
+    d.fist_bump = true;
+    d.reach = reach;
+    d.timer = 1000;
+    d.state = State::Expanding;
+}
+
+/// `triggerFistBump` for the deployer `d` at `pos` at the end of its stroke: its partner there
+/// too is drawn back, the bump sounds between them and its placer earns `FIST_BUMP`.
+pub(super) fn trigger(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, d: &mut Deployer) {
     let dim = lv.dim;
-    if !BUMPING.with_borrow(|b| b.contains(&(dim, pos))) {
-        return;
-    }
-    let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
-        return;
-    };
     let Some((other, _)) = partner(lv, pos, facing) else {
         return;
     };
-    let ready = BUMPING.with_borrow(|b| b.contains(&(dim, other)))
-        && with_world(|w| {
-            w.dims[dim]
-                .deployers
-                .get(&other)
-                .is_some_and(|d| d.state == State::Expanding && d.timer <= 0)
-        }) == Some(true);
+    let ready = with_world(|w| {
+        w.dims[dim]
+            .deployers
+            .get(&other)
+            .is_some_and(|o| o.fist_bump && o.state == State::Expanding && o.timer <= 0)
+    }) == Some(true);
     if !ready {
         return;
     }
-    BUMPING.with_borrow_mut(|b| {
-        b.remove(&(dim, pos));
-        b.remove(&(dim, other));
-    });
+    d.fist_bump = false;
     with_world(|w| {
-        let d = &mut w.dims[dim];
-        if let Some(dp) = d.deployers.get_mut(&other) {
+        let dd = &mut w.dims[dim];
+        if let Some(dp) = dd.deployers.get_mut(&other) {
+            dp.fist_bump = false;
             dp.state = State::Retracting;
             dp.timer = 1000;
-            d.deployer_changes.push(other);
+            dd.deployer_changes.push(other);
         }
     });
     crate::glue::advancements::award_placer(lv, pos, "fist_bump");
