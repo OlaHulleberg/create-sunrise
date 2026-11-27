@@ -447,7 +447,8 @@ What the Java does, as measured:
   any wrenchable block, and sneaking picks it up. A click on its front swaps the hand and the held
   stack. A click on the side that holds its filter slot sets or clears the filter. Its item, used
   on top of a belt, a basin, a depot or a weighted ejector, places it two above, facing down;
-  a depot takes the item instead unless the player sneaks.
+  a depot takes the item instead unless the player sneaks. Clicked on a deployer, it places the
+  next one beside it, on the free side nearest the click.
 
 ### Deployers: not driven, and why
 
@@ -459,8 +460,6 @@ What the Java does, as measured:
 - Tools with enchantments or a name: the hand's components.
 - `DeployerRecipeSearchEvent`: other mods cancel recipe lookups there; none is installed.
 - `DeployerMovementBehaviour`, `DeployerMovingInteraction`: a contraption (out of scope).
-- `DeployerBlock$PlacementHelper` (catnip's placement helpers): the packet flow of
-  `IPlacementHelper`, which the port does not have either.
 - The filter's amount (`filter_setting`): a deployer's filter matches items only
   (`FilteringBehaviour.test`, :236); the amount changes nothing it does.
 - The owner's identity beyond "player placed it": the fake player's UUID and name are its owner's
@@ -470,9 +469,10 @@ What the Java does, as measured:
 
 ### Deployers: port differences found
 
-Open, against `main` at `ed78c18e`. `cases/` holds only cases that match on `main` (of the 31
-written for deployers, the four that do: an item used on a depot, a deployer item refused above a
-taken belt, the wrench on a deployer's back and sneaking with it), so a difference's repro is the
+Open, against `main` at `ed78c18e`. `cases/` holds only cases that match on `main` (of the 47
+written for deployers, the five that do: an item used on a depot, a deployer item refused above a
+taken belt, the wrench on a deployer's back, sneaking with it, and a deployer removed in the tick
+it is placed), so a difference's repro is the
 shrunk scenario named in the first column, kept with the report rather than here; the ticks in
 brackets are its checkpoints. The driver mirrors the port, so each shows the port's own answer.
 The three sweeps agree with the cases: `fuzz-lane` on each residue (427 seeds each, 1281 in all)
@@ -492,6 +492,7 @@ is shrunk beside the cases: 64, 320, 576, 832, 1088, 1344, 1600, 1856 and 2112.
 | `deployer-placed-by` (11), `deployer-placed-operator-depot` (11) | A player-placed deployer has an `owner`, saved as `Owner`; its fake player answers with that UUID | None; one fixed fake player | `DeployerBlock.java:86-90`, `DeployerBlockEntity.java:406-407`, `DeployerFakePlayer.java:104-107` | `engine/src/deployer.rs:65-80` (no owner), `glue/processing/deployer.rs:35-36` |
 | `deployer-placed-operator-basin` (11), `deployer-placed-operator-belt` (25) | Placed two above what it works on, it faces down, whatever the player's view | Faces by the player's view: up when not sneaking and looked at from above (pitch 60); `down` only when the player sneaks (`-depot`, which matches but for its owner) | `DeployerBlock.java:167-173`, `AssemblyOperatorBlockItem.java:37`, `:45-48` | `glue/processing/operator.rs:131-146` |
 | `deployer-reload` (31) | `reach` is 0 after a reload: not saved | 1.25 kept | `DeployerBlockEntity.java:389-392`, `:422-425` | `glue/processing/persist.rs:407-440` |
+| `deployer-places-deployer` (13) | A player's deployer item clicked on a deployer places a second one beside it, on the free side nearest the click (above it here); the hand stays empty | No placement helper: the click is the front's, so the first deployer takes the item in its hand | `DeployerBlock.java:104-108`, `:176-203` | `glue/processing/mod.rs:774-814` (`use_block`), `glue/processing/deployer.rs:1284-1323` (`use_deployer`) |
 
 What matches, tick for tick apart from those: the stroke's progress, a punch's `getDestroyProgress × 16`
 a stroke (stone goes in the third stroke of an iron pickaxe, the pickaxe wears), a fist bump
