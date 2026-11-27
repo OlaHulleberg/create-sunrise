@@ -1448,12 +1448,13 @@ fn belt_from_tag(b: &Compound) -> Option<create_engine::belt::Inventory> {
     };
     let positive =
         matches!(b.get(&"positive".into()), Some(Tag::IntArray(v)) if v.first() == Some(&1));
-    let mut items: Vec<create_engine::belt::Item> = numbers
+    // Insertion and assembly metadata refer to the original slots, even if an ID is invalid.
+    let mut items: Vec<Option<create_engine::belt::Item>> = numbers
         .as_chunks::<5>()
         .0
         .iter()
         .zip(ids)
-        .filter_map(|(n, id)| {
+        .map(|(n, id)| {
             let Tag::String(id) = id else { return None };
             let mut item =
                 create_engine::belt::Item::from_saved(id.to_string_lossy(), n[3], n[2], false);
@@ -1465,6 +1466,7 @@ fn belt_from_tag(b: &Compound) -> Option<create_engine::belt::Inventory> {
         .collect();
     if let Some(Tag::IntArray(context)) = b.get(&"insertion".into()) {
         for (item, pair) in items.iter_mut().zip(context.as_chunks::<2>().0) {
+            let Some(item) = item else { continue };
             item.inserted_at = pair[0];
             item.inserted_from = usize::try_from(pair[1])
                 .ok()
@@ -1483,7 +1485,11 @@ fn belt_from_tag(b: &Compound) -> Option<create_engine::belt::Inventory> {
             let (Some(n), Some(step)) = (at.first(), at.get(1)) else {
                 continue;
             };
-            if let Some(item) = items.get_mut(*n as usize) {
+            if let Some(item) = usize::try_from(*n)
+                .ok()
+                .and_then(|idx| items.get_mut(idx))
+                .and_then(Option::as_mut)
+            {
                 item.progress = Some(create_engine::sequenced::Progress {
                     id: id.to_string_lossy().to_string(),
                     step: (*step).max(0) as u32,
@@ -1491,6 +1497,7 @@ fn belt_from_tag(b: &Compound) -> Option<create_engine::belt::Inventory> {
             }
         }
     }
+    let items = items.into_iter().flatten().collect();
     Some(create_engine::belt::Inventory::from_saved(items, positive))
 }
 
@@ -1650,6 +1657,90 @@ fn brass_from_packed(c: &Compound) -> Vec<([i32; 3], create_engine::tunnel::Save
 #[cfg(test)]
 mod belt_save_tests {
     use super::*;
+    use create_engine::belt::{Inventory, Item};
+    use create_engine::sequenced::Progress;
+
+    fn assembly_entry(index: i32, step: i32, recipe: &str) -> Tag {
+        Tag::Compound(Compound::from([
+            ("at".into(), Tag::IntArray(vec![index, step])),
+            ("id".into(), Tag::String(recipe.into())),
+        ]))
+    }
+
+    #[test]
+    fn malformed_belt_id_does_not_shift_item_metadata() {
+        let tag = Compound::from([
+            (
+                "items".into(),
+                Tag::IntArray(vec![0, 0, 180, 1, 0, 0, 0, 180, 2, 0]),
+            ),
+            (
+                "ids".into(),
+                Tag::List(vec![
+                    Tag::Int(0),
+                    Tag::String("minecraft:iron_ingot".into()),
+                ]),
+            ),
+            (
+                "insertion".into(),
+                Tag::IntArray(vec![3, Dir::Up as i32, 7, Dir::East as i32]),
+            ),
+            (
+                "assembly".into(),
+                Tag::List(vec![
+                    assembly_entry(0, 1, "create:first"),
+                    assembly_entry(1, 4, "create:second"),
+                ]),
+            ),
+        ]);
+        let inv = belt_from_tag(&tag).unwrap();
+        let [item] = inv.items.as_slice() else {
+            panic!("expected one surviving belt item");
+        };
+        assert_eq!(item.item, "minecraft:iron_ingot");
+        assert_eq!(item.count, 2);
+        assert_eq!(item.inserted_at, 7);
+        assert_eq!(item.inserted_from, Some(Dir::East));
+        assert_eq!(
+            item.progress,
+            Some(Progress {
+                id: "create:second".into(),
+                step: 4,
+            })
+        );
+    }
+
+    #[test]
+    fn negative_belt_assembly_index_is_ignored() {
+        let inv =
+            Inventory::from_saved(vec![Item::new("minecraft:iron_ingot", 1, 180, false)], true);
+        let mut tag = belt_to_tag(&inv);
+        tag.insert(
+            "assembly".into(),
+            Tag::List(vec![assembly_entry(-1, 4, "create:invalid")]),
+        );
+        assert_eq!(belt_from_tag(&tag), Some(inv));
+    }
+
+    #[test]
+    fn belt_inventory_round_trips_multiple_items() {
+        let mut first = Item::new("minecraft:iron_ingot", 3, 90, false);
+        first.position = 2.75;
+        first.side_offset = -0.125;
+        first.locked = true;
+        first.inserted_at = 2;
+        first.inserted_from = Some(Dir::West);
+        first.progress = Some(Progress {
+            id: "create:first".into(),
+            step: 3,
+        });
+        let mut second = Item::new("minecraft:gold_ingot", 7, 270, false);
+        second.position = 1.25;
+        second.side_offset = 0.25;
+        second.inserted_at = 1;
+        let inv = Inventory::from_saved(vec![first, second], true);
+        assert_eq!(belt_from_tag(&belt_to_tag(&inv)), Some(inv));
+    }
 
     #[test]
     fn belt_inventory_keeps_insertion_context() {
