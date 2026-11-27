@@ -300,7 +300,7 @@ mod tests {
     }
 
     fn belt_items_after_tick(world: &mut CreateWorld, start: [i32; 3]) -> Inventory {
-        let mut turns = world.transport_ticks(0, 0);
+        let mut turns = world.block_entity_ticks(0, 0);
         while turns.next(world).is_some() {}
         let mut belts = world.column_belts(0, start[0] >> 4, start[2] >> 4);
         assert_eq!(belts.len(), 1);

@@ -1,4 +1,4 @@
-//! Level.blockEntityTickers registration order, with indexed transport/fluid and chute views.
+//! Level.blockEntityTickers registration order, with an indexed chute view.
 //! Hash lookups and doubly linked slots make registration/removal O(1) on average;
 //! column unload visits only that column. Walks borrow no world and copy no entries.
 use std::collections::{HashMap, HashSet};
@@ -9,9 +9,6 @@ type Pos = [i32; 3];
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum View {
     All,
-    /// Belts, depots, tanks, valves, spouts, drains, pumps, brass tunnels and funnels share
-    /// their turns.
-    Transport,
     /// Chutes and smart chutes (`ChuteBlockEntity.tick`).
     Chute,
 }
@@ -27,7 +24,7 @@ struct Slot {
     sequence: u64,
     live: bool,
     view: Option<View>,
-    links: [Links; 3],
+    links: [Links; 2],
 }
 
 #[derive(Default)]
@@ -42,7 +39,7 @@ pub(crate) struct BlockEntityOrder {
     columns: HashMap<(i32, i32), HashSet<Pos>>,
     slots: Vec<Slot>,
     free: Vec<usize>,
-    lists: [List; 3],
+    lists: [List; 2],
     sequence: u64,
     /// Slots removed during a walk retain their forward links until all walks end.
     /// This lease prevents reuse while a paused walk could still reference them.
@@ -63,7 +60,7 @@ impl BlockEntityOrder {
             sequence: self.sequence,
             live: true,
             view,
-            links: [Links::default(); 3],
+            links: [Links::default(); 2],
         };
         let index = if Rc::strong_count(&self.walks) == 1 {
             self.free.pop()
@@ -222,15 +219,15 @@ mod tests {
     fn state_change_keeps_slot_and_replacement_registers_at_end() {
         let mut order = BlockEntityOrder::default();
         let (a, b, c) = ([0, 0, 0], [1, 0, 0], [2, 0, 0]);
-        let sequence = order.register(a, Some(View::Transport));
+        let sequence = order.register(a, Some(View::Chute));
         order.register(b, None);
-        order.register(c, Some(View::Transport));
-        assert_eq!(order.register(a, Some(View::Transport)), sequence);
+        order.register(c, Some(View::Chute));
+        assert_eq!(order.register(a, Some(View::Chute)), sequence);
         assert_eq!(positions(&order, View::All), [a, b, c]);
         order.remove(a);
-        assert!(order.register(a, Some(View::Transport)) > sequence);
+        assert!(order.register(a, Some(View::Chute)) > sequence);
         assert_eq!(positions(&order, View::All), [b, c, a]);
-        assert_eq!(positions(&order, View::Transport), [c, a]);
+        assert_eq!(positions(&order, View::Chute), [c, a]);
     }
 
     #[test]
@@ -238,19 +235,19 @@ mod tests {
         let mut order = BlockEntityOrder::default();
         let (a, b, c, d) = ([0, 0, 0], [1, 0, 0], [16, 0, 0], [-1, 0, -1]);
         for p in [a, b, c, d] {
-            order.register(p, Some(View::Transport));
+            order.register(p, Some(View::Chute));
         }
-        let mut walk = order.walk(View::Transport);
+        let mut walk = order.walk(View::Chute);
         assert_eq!(walk.next(&order), Some(a));
         order.unload(0, 0);
-        order.register(b, Some(View::Transport));
+        order.register(b, Some(View::Chute));
         assert_eq!(walk.next(&order), Some(c));
         order.remove(c);
         assert_eq!(walk.next(&order), Some(d));
         assert_eq!(walk.next(&order), None);
         drop(walk);
         let slots = order.slots.len();
-        order.register(a, Some(View::Transport));
+        order.register(a, Some(View::Chute));
         assert_eq!(order.slots.len(), slots, "reuse slots after walks end");
         assert!(order.registration_order(a).unwrap() > order.registration_order(b).unwrap());
         order.unload(-1, -1);

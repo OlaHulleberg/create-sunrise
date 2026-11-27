@@ -543,7 +543,8 @@ thread_local! {
     /// began at, from which they run its countdown on.
     static TOLD: std::cell::RefCell<std::collections::HashMap<(usize, [i32; 3]), Told>> =
         std::cell::RefCell::new(std::collections::HashMap::new());
-    /// Crafters a player clicked, by dimension: their slot or cover may have changed.
+    /// Crafters a player clicked, or looked at or at work in their turn, by dimension: what
+    /// they show may have changed.
     static SHOW: std::cell::RefCell<Vec<(usize, [i32; 3])>> =
         const { std::cell::RefCell::new(Vec::new()) };
 }
@@ -554,23 +555,11 @@ pub fn clear() {
     TOLD.with_borrow_mut(std::collections::HashMap::clear);
 }
 
-/// Mechanical crafters (`run_crafters`), then those looked at or at work tell their clients
-/// what they show (`CRAFTER_KEY`).
-pub fn tick_crafters(lv: &mut ServerLevel<'_>) {
+/// After the level's block entities ticked: the crafters looked at or at work tell their
+/// clients what they show (`CRAFTER_KEY`).
+pub fn show_crafters(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let mut touched = with_world(|w| {
-        let d = &w.dims[dim];
-        if d.crafter_checks.is_empty() && d.crafting.is_empty() {
-            Vec::new()
-        } else {
-            d.crafter_checks
-                .iter()
-                .chain(&d.crafting)
-                .copied()
-                .collect()
-        }
-    })
-    .unwrap_or_default();
+    let mut touched = with_world(|w| w.dims[dim].crafting.clone()).unwrap_or_default();
     SHOW.with_borrow_mut(|s| {
         s.retain(|&(d, p)| {
             if d == dim {
@@ -579,10 +568,6 @@ pub fn tick_crafters(lv: &mut ServerLevel<'_>) {
             d != dim
         })
     });
-    run_crafters(lv);
-    if let Some(now) = with_world(|w| w.dims[dim].crafting.clone()) {
-        touched.extend(now);
-    }
     touched.sort();
     touched.dedup();
     for pos in touched {
@@ -640,38 +625,42 @@ pub fn tick_crafters(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// Mechanical crafters: those looked at start their chain when every one holds an item
-/// (`checkCompletedRecipe`, `begin`); those at work run `tick`'s phases: the grid assembles,
-/// is passed on to the crafter pointed at (`EXPORTING`, 1000), the last one crafts (2000) and
-/// puts the result out. Nothing runs without one of them.
-fn run_crafters(lv: &mut ServerLevel<'_>) {
+/// `MechanicalCrafterBlockEntity.tick` at the crafter's turn in the level's block-entity order,
+/// after its `KineticBlockEntity.tick`: its lazy tick (rate 20) or a change of its slot looks at
+/// it again (`checkCompletedRecipe(false)`); then, unless it is `ACCEPTING`, a crafter newly
+/// powered starts its chain with what it has (`wasPoweredBefore`, `checkCompletedRecipe(true)`:
+/// gaps are empty cells; covers don't count), and one at work runs its phases: the grid
+/// assembles, is passed on to the crafter pointed at (`EXPORTING`, 1000), the last one crafts
+/// (2000) and puts the result out.
+pub(crate) fn crafter_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    let Some((mut checks, drops, working, power)) = with_world(|w| {
+    let Some((check, accepting, power, working)) = with_world(|w| {
         let d = &mut w.dims[dim];
-        let mut checks = std::mem::take(&mut d.crafter_checks);
-        // `lazyTick` (rate 20): an idle crafter looks at its slot again
-        // (`checkCompletedRecipe(false)`).
-        for (p, c) in d.crafters.iter_mut() {
-            if c.lazy.tick() && c.phase == Phase::Idle {
-                checks.push(*p);
-            }
+        let lazy = d
+            .crafters
+            .get_mut(&pos)
+            .is_some_and(|c| c.lazy.tick() && c.phase == Phase::Idle);
+        let changed = d.crafter_checks.contains(&pos);
+        d.crafter_checks.retain(|p| *p != pos);
+        let accepting = d.crafters.get(&pos).map(|c| c.phase) == Some(Phase::Accepting);
+        let power = !accepting && d.crafter_power_checks.contains(&pos);
+        if power {
+            d.crafter_power_checks.retain(|p| *p != pos);
         }
-        (
-            checks,
-            std::mem::take(&mut d.crafter_drops),
-            d.crafting.clone(),
-            std::mem::take(&mut d.crafter_power_checks),
-        )
+        (lazy || changed, accepting, power, d.crafting.contains(&pos))
     }) else {
         return;
     };
-    // `wasPoweredBefore`: a crafter newly powered starts its chain with what it has
-    // (`checkCompletedRecipe(true)`: gaps are empty cells; covers don't count).
-    let mut powered_starts = Vec::new();
-    for pos in power {
-        if crafter_at(lv, pos).is_none() {
-            continue;
-        }
+    if check {
+        crafter_check(lv, pos, false);
+    }
+    if check || working {
+        SHOW.with_borrow_mut(|s| s.push((dim, pos)));
+    }
+    if accepting {
+        return;
+    }
+    if power && crafter_at(lv, pos).is_some() {
         let powered = lv.has_neighbor_signal(pos);
         let rose = with_world(|w| {
             let d = &mut w.dims[dim];
@@ -683,177 +672,189 @@ fn run_crafters(lv: &mut ServerLevel<'_>) {
             }
         }) == Some(true);
         if rose {
-            powered_starts.push(pos);
+            crafter_check(lv, pos, true);
         }
     }
+    if with_world(|w| w.dims[dim].crafting.contains(&pos)) == Some(true) {
+        crafter_work(lv, pos);
+    }
+}
+
+/// The ingredients of crafters that went, dropped where they stood.
+pub fn drop_removed(lv: &mut ServerLevel<'_>) {
+    let dim = lv.dim;
+    let drops = with_world(|w| {
+        let d = &mut w.dims[dim].crafter_drops;
+        if d.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(d)
+        }
+    })
+    .unwrap_or_default();
     for (p, item) in drops {
         lv.spawn_items(p.map(|v| f64::from(v) + 0.5), &item, 1);
     }
-    if checks.is_empty() && working.is_empty() && powered_starts.is_empty() {
+}
+
+/// `checkCompletedRecipe`: an idle, turning crafter holding an item (or newly powered) starts
+/// its chain when every one holds an item (`begin`).
+fn crafter_check(lv: &mut ServerLevel<'_>, pos: [i32; 3], powered_start: bool) {
+    let dim = lv.dim;
+    let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
+        == Some(Phase::Idle);
+    let rpm = lv.speed(pos);
+    // `hasItemOrCover`.
+    let filled = |lv: &ServerLevel<'_>, p: [i32; 3]| {
+        crafter_slot(lv, p).is_some() || !powered_start && crafter_covered(dim, p)
+    };
+    if !idle || rpm == 0.0 || !powered_start && !filled(lv, pos) {
         return;
     }
-    checks.sort();
-    checks.dedup();
-    let starts: Vec<([i32; 3], bool)> = powered_starts
-        .into_iter()
-        .map(|p| (p, true))
-        .chain(checks.into_iter().map(|p| (p, false)))
-        .collect();
-    for (pos, powered_start) in starts {
-        let idle = with_world(|w| w.dims[dim].crafters.get(&pos).map(|c| c.phase)).flatten()
-            == Some(Phase::Idle);
-        let rpm = lv.speed(pos);
-        // `hasItemOrCover`.
-        let filled = |lv: &ServerLevel<'_>, p: [i32; 3]| {
-            crafter_slot(lv, p).is_some() || !powered_start && crafter_covered(dim, p)
-        };
-        if !idle || rpm == 0.0 || !powered_start && !filled(lv, pos) {
-            continue;
+    let Some(chain) = crafter_chain(lv, pos, filled, powered_start) else {
+        return;
+    };
+    for p in chain {
+        let item = crafter_slot(lv, p);
+        if item.is_some() {
+            lv.set_slots(p, &[(0, None)]);
         }
-        let Some(chain) = crafter_chain(lv, pos, filled, powered_start) else {
-            continue;
-        };
-        for p in chain {
-            let item = crafter_slot(lv, p);
-            if item.is_some() {
-                lv.set_slots(p, &[(0, None)]);
+        let first = crafters_preceding(lv, p).is_empty();
+        with_world(|w| {
+            let d = &mut w.dims[dim];
+            let c = d.crafters.entry(p).or_default();
+            c.grid = item.into_iter().map(|i| ((0, 0), i)).collect();
+            c.phase = if first {
+                Phase::Assembling
+            } else {
+                Phase::Accepting
+            };
+            c.count_down = 1;
+            if !d.crafting.contains(&p) {
+                d.crafting.push(p);
             }
-            let first = crafters_preceding(lv, p).is_empty();
+        });
+    }
+}
+
+/// The phases of a crafter at work.
+fn crafter_work(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    let dim = lv.dim;
+    let speed = crafter::count_down_speed(lv.speed(pos));
+    let Some(c) = with_world(|w| w.dims[dim].crafters.get(&pos).cloned()).flatten() else {
+        return;
+    };
+    let mut cd = c.count_down;
+    match c.phase {
+        Phase::Assembling | Phase::Exporting | Phase::Crafting => {
+            cd -= speed;
             with_world(|w| {
-                let d = &mut w.dims[dim];
-                let c = d.crafters.entry(p).or_default();
-                c.grid = item.into_iter().map(|i| ((0, 0), i)).collect();
-                c.phase = if first {
-                    Phase::Assembling
-                } else {
-                    Phase::Accepting
-                };
-                c.count_down = 1;
-                if !d.crafting.contains(&p) {
-                    d.crafting.push(p);
+                if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
+                    x.count_down = cd.max(0);
                 }
             });
+            if cd >= 0 {
+                return;
+            }
         }
+        Phase::Inserting => {
+            crafter_insert(lv, pos);
+            return;
+        }
+        _ => return,
     }
-    let working = with_world(|w| w.dims[dim].crafting.clone()).unwrap_or_default();
-    for pos in working {
-        let speed = crafter::count_down_speed(lv.speed(pos));
-        let Some(c) = with_world(|w| w.dims[dim].crafters.get(&pos).cloned()).flatten() else {
-            continue;
-        };
-        let mut cd = c.count_down;
-        match c.phase {
-            Phase::Assembling | Phase::Exporting | Phase::Crafting => {
-                cd -= speed;
+    match c.phase {
+        Phase::Assembling => {
+            if crafter_target(lv, pos).is_some() {
+                let empty = c.grid.is_empty();
                 with_world(|w| {
                     if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
-                        x.count_down = cd.max(0);
+                        x.phase = Phase::Exporting;
+                        x.count_down = if empty { 0 } else { 1000 };
                     }
                 });
-                if cd >= 0 {
-                    continue;
-                }
+                return;
             }
-            Phase::Inserting => {
-                crafter_insert(lv, pos);
-                continue;
-            }
-            _ => continue,
-        }
-        match c.phase {
-            Phase::Assembling => {
-                if crafter_target(lv, pos).is_some() {
-                    let empty = c.grid.is_empty();
+            // What the ingredients leave (`getCraftingRemainingItem`), after the result.
+            let host = &*lv.host;
+            let containers: Vec<String> = c
+                .grid
+                .iter()
+                .filter_map(|(_, i)| {
+                    let s = stacks::stack(host, i, 1)?;
+                    host.item_crafting_remainder(&s)
+                        .map(|r| stacks::id(host, &r))
+                })
+                .collect();
+            let found = crafter_recipe(lv, &c.grid);
+            match found {
+                Some((item, n)) => {
+                    // `groupedItemsBeforeCraft`, which its clients draw shrinking away.
+                    BEFORE_CRAFT.with_borrow_mut(|b| b.insert((dim, pos), c.grid.clone()));
                     with_world(|w| {
                         if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
-                            x.phase = Phase::Exporting;
-                            x.count_down = if empty { 0 } else { 1000 };
+                            x.grid = (0..n).map(|i| ((i32::from(i), 0), item.clone())).collect();
+                            x.grid.extend(
+                                containers
+                                    .iter()
+                                    .enumerate()
+                                    .map(|(i, r)| ((i32::from(n) + i as i32, 0), r.clone())),
+                            );
+                            x.phase = Phase::Crafting;
+                            x.count_down = 2000;
                         }
                     });
-                    continue;
                 }
-                // What the ingredients leave (`getCraftingRemainingItem`), after the result.
-                let host = &*lv.host;
-                let containers: Vec<String> = c
-                    .grid
-                    .iter()
-                    .filter_map(|(_, i)| {
-                        let s = stacks::stack(host, i, 1)?;
-                        host.item_crafting_remainder(&s)
-                            .map(|r| stacks::id(host, &r))
-                    })
-                    .collect();
-                let found = crafter_recipe(lv, &c.grid);
-                match found {
-                    Some((item, n)) => {
-                        // `groupedItemsBeforeCraft`, which its clients draw shrinking away.
-                        BEFORE_CRAFT.with_borrow_mut(|b| b.insert((dim, pos), c.grid.clone()));
-                        with_world(|w| {
-                            if let Some(x) = w.dims[dim].crafters.get_mut(&pos) {
-                                x.grid =
-                                    (0..n).map(|i| ((i32::from(i), 0), item.clone())).collect();
-                                x.grid.extend(
-                                    containers
-                                        .iter()
-                                        .enumerate()
-                                        .map(|(i, r)| ((i32::from(n) + i as i32, 0), r.clone())),
-                                );
-                                x.phase = Phase::Crafting;
-                                x.count_down = 2000;
-                            }
-                        });
-                    }
-                    None => crafters_eject(lv, pos),
-                }
+                None => crafters_eject(lv, pos),
             }
-            Phase::Exporting => {
-                let Some(t) = crafter_target(lv, pos) else {
-                    crafters_eject(lv, pos);
-                    continue;
-                };
-                let Some((_, pointing)) = crafter_at(lv, pos) else {
-                    continue;
-                };
-                let (ox, oy) = pointing.merge_offset();
+        }
+        Phase::Exporting => {
+            let Some(t) = crafter_target(lv, pos) else {
+                crafters_eject(lv, pos);
+                return;
+            };
+            let Some((_, pointing)) = crafter_at(lv, pos) else {
+                return;
+            };
+            let (ox, oy) = pointing.merge_offset();
+            with_world(|w| {
+                let d = &mut w.dims[dim];
+                let grid = d.crafters.get_mut(&pos).map(|x| {
+                    x.phase = Phase::Waiting;
+                    x.count_down = 0;
+                    std::mem::take(&mut x.grid)
+                });
+                if let Some(tc) = d.crafters.get_mut(&t) {
+                    tc.grid.extend(
+                        grid.unwrap_or_default()
+                            .into_iter()
+                            .map(|((x, y), i)| ((x + ox, y + oy), i)),
+                    );
+                }
+            });
+            // `continueIfAllPrecedingFinished` on the target.
+            let preceding = crafters_preceding(lv, t);
+            let all = with_world(|w| {
+                preceding
+                    .iter()
+                    .all(|p| w.dims[dim].crafters.get(p).map(|c| c.phase) == Some(Phase::Waiting))
+            })
+            .unwrap_or(false);
+            if all {
                 with_world(|w| {
                     let d = &mut w.dims[dim];
-                    let grid = d.crafters.get_mut(&pos).map(|x| {
-                        x.phase = Phase::Waiting;
-                        x.count_down = 0;
-                        std::mem::take(&mut x.grid)
-                    });
-                    if let Some(tc) = d.crafters.get_mut(&t) {
-                        tc.grid.extend(
-                            grid.unwrap_or_default()
-                                .into_iter()
-                                .map(|((x, y), i)| ((x + ox, y + oy), i)),
-                        );
+                    // They wait (taking nothing in) until the chain is done.
+                    for p in &preceding {
+                        d.crafting.retain(|q| q != p);
+                    }
+                    if let Some(x) = d.crafters.get_mut(&t) {
+                        x.phase = Phase::Assembling;
+                        x.count_down = 1;
                     }
                 });
-                // `continueIfAllPrecedingFinished` on the target.
-                let preceding = crafters_preceding(lv, t);
-                let all = with_world(|w| {
-                    preceding.iter().all(|p| {
-                        w.dims[dim].crafters.get(p).map(|c| c.phase) == Some(Phase::Waiting)
-                    })
-                })
-                .unwrap_or(false);
-                if all {
-                    with_world(|w| {
-                        let d = &mut w.dims[dim];
-                        // They wait (taking nothing in) until the chain is done.
-                        for p in &preceding {
-                            d.crafting.retain(|q| q != p);
-                        }
-                        if let Some(x) = d.crafters.get_mut(&t) {
-                            x.phase = Phase::Assembling;
-                            x.count_down = 1;
-                        }
-                    });
-                }
             }
-            Phase::Crafting => crafter_insert(lv, pos),
-            _ => {}
         }
+        Phase::Crafting => crafter_insert(lv, pos),
+        _ => {}
     }
 }

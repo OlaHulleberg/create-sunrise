@@ -709,10 +709,9 @@ impl deployer::World for Turn<'_, '_> {
 }
 
 /// `DeployerBlockEntity.tick` at the deployer's turn in the level's block-entity order:
-/// `KineticBlockEntity.tick` first (`attachKinetics`), then its stroke ([`Deployer::turn`]).
+/// its stroke ([`Deployer::turn`]), after the walk's `KineticBlockEntity.tick`.
 pub(crate) fn deployer_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    with_world(|w| w.kinetic_base_ticks_through(dim, pos));
     let Some(facing) = lv.facing_of(pos, Block::Deployer) else {
         return;
     };

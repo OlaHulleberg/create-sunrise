@@ -59,7 +59,7 @@ impl crate::world::CreateWorld {
 
     /// Whether the funnel at `pos` has acquired its target inventory capability
     /// (`InvManipulationBehaviour.targetCapability != null`): false after placement, load or a
-    /// neighbour change behind it until its own turn in `TransportTicks`.
+    /// neighbour change behind it until its own turn in `BlockEntityTicks`.
     pub fn funnel_inv_ready(&self, dim: usize, pos: [i32; 3]) -> bool {
         !self.dims[dim].funnel_inv_pending.contains(&pos)
     }

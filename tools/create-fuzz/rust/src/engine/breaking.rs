@@ -1,5 +1,5 @@
-//! The block breakers, mirroring glue/processing/saw.rs (`tick_drills`, `fell`, `sawable`,
-//! `cell`): `Tools::level_tick` runs them after logistics' walk and before the presses.
+//! The block breakers, mirroring glue/processing/saw.rs (`breaker_turn`, `fell`, `sawable`,
+//! `cell`): each drill and saw at its turn in the transport walk.
 //! `BlockBreakingKineticBlockEntity`'s rules are the engine's (`drill`, `tree`); this reads the
 //! world for them and writes what the glue asks of the host.
 use super::*;
@@ -27,57 +27,58 @@ fn offset(d: Dir) -> Pos {
 }
 
 impl Run {
-    /// `saw::tick_drills`, over every breaker in its block entity's order.
-    pub(super) fn tick_drills(&mut self) {
+    /// `saw::clear_cracks`: the cracks of the breakers that went.
+    pub(super) fn clear_cracks(&mut self) {
         for (breaker, at) in std::mem::take(&mut self.w.dims[0].breaker_cracks) {
             self.set_break_progress(breaker, at, -1);
         }
-        for pos in self.w.breakers(0) {
-            let Some((block, info)) = self.w.table.get(self.at(pos)) else {
-                continue;
-            };
-            let Some(facing) = info.facing else {
-                continue;
-            };
-            let saw = block == Block::MechanicalSaw;
-            let should_run = !saw || facing.axis() != Axis::Y;
-            self.w.kinetic_base_ticks_through(0, pos);
-            let speed = self.w.speed(0, pos).unwrap_or(0.0);
-            let at = add(pos, offset(facing));
-            let looks = self.w.dims[0].drills.get_mut(&pos).map(|d| {
-                if saw {
-                    d.rearm(should_run);
-                }
-                d.tick(speed, should_run, at)
-            });
-            if looks != Some(true) {
-                continue;
+    }
+
+    /// `saw::breaker_turn`, at a drill's or saw's turn in the walk, after its base tick.
+    pub(super) fn breaker_turn(&mut self, pos: Pos) {
+        let Some((block, info)) = self.w.table.get(self.at(pos)) else {
+            return;
+        };
+        let Some(facing) = info.facing else {
+            return;
+        };
+        let saw = block == Block::MechanicalSaw;
+        let should_run = !saw || facing.axis() != Axis::Y;
+        let speed = self.w.speed(0, pos).unwrap_or(0.0);
+        let at = add(pos, offset(facing));
+        let looks = self.w.dims[0].drills.get_mut(&pos).map(|d| {
+            if saw {
+                d.rearm(should_run);
             }
-            let state = self.state_at(at);
-            let hardness = self.target(at, &state, saw);
-            let step = self.w.dims[0]
-                .drills
-                .get_mut(&pos)
-                .map(|d| d.look(speed, hardness))
-                .unwrap_or(drill::Step::Wait);
-            match step {
-                drill::Step::Wait => {}
-                drill::Step::Progress(stage) => self.set_break_progress(pos, at, stage),
-                drill::Step::Reset => self.set_break_progress(pos, at, -1),
-                drill::Step::Broken => {
-                    let broken = Self::cell(&state);
-                    let centre = at.map(|v| f64::from(v) + 0.5);
-                    for (item, count) in self.destroy_collect(at) {
-                        self.breaker_drop(centre, &item, count, [0.0; 3]);
-                    }
-                    if saw {
-                        self.fell(pos, at, broken);
-                    }
-                    if let Some(d) = self.w.dims[0].drills.get_mut(&pos) {
-                        d.rest();
-                    }
-                    self.set_break_progress(pos, at, -1);
+            d.tick(speed, should_run, at)
+        });
+        if looks != Some(true) {
+            return;
+        }
+        let state = self.state_at(at);
+        let hardness = self.target(at, &state, saw);
+        let step = self.w.dims[0]
+            .drills
+            .get_mut(&pos)
+            .map(|d| d.look(speed, hardness))
+            .unwrap_or(drill::Step::Wait);
+        match step {
+            drill::Step::Wait => {}
+            drill::Step::Progress(stage) => self.set_break_progress(pos, at, stage),
+            drill::Step::Reset => self.set_break_progress(pos, at, -1),
+            drill::Step::Broken => {
+                let broken = Self::cell(&state);
+                let centre = at.map(|v| f64::from(v) + 0.5);
+                for (item, count) in self.destroy_collect(at) {
+                    self.breaker_drop(centre, &item, count, [0.0; 3]);
                 }
+                if saw {
+                    self.fell(pos, at, broken);
+                }
+                if let Some(d) = self.w.dims[0].drills.get_mut(&pos) {
+                    d.rest();
+                }
+                self.set_break_progress(pos, at, -1);
             }
         }
     }

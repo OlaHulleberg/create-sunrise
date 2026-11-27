@@ -20,23 +20,31 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::sync::{OnceLock, RwLock};
 
-/// Crushing wheels: the controllers between wheels turning against each other
-/// (`CrushingWheelBlock.updateControllers`, after a wheel is placed, broken or changes speed),
-/// then the turning controllers' `tick`.
-pub fn tick_crushers(lv: &mut ServerLevel<'_>) {
+/// `CrushingWheelBlock.updateControllers` of the wheels whose controllers must be looked at:
+/// placed or removed since, or whose speed changed (`CrushingWheelBlockEntity.onSpeedChanged`,
+/// `fixControllers`) in a base tick before the next turn.
+pub fn fix_pending(lv: &mut ServerLevel<'_>) {
     let dim = lv.dim;
-    let mut checks =
-        with_world(|w| std::mem::take(&mut w.dims[dim].crusher_checks)).unwrap_or_default();
+    let mut checks = with_world(|w| {
+        let c = &mut w.dims[dim].crusher_checks;
+        if c.is_empty() {
+            Vec::new()
+        } else {
+            std::mem::take(c)
+        }
+    })
+    .unwrap_or_default();
     checks.sort();
     checks.dedup();
     for pos in checks {
         fix_controllers(lv, pos);
     }
-    let running = with_world(|w| w.dims[dim].running_crushers.clone()).unwrap_or_default();
-    if running.is_empty() || !recipes::ready() {
-        return;
-    }
-    for pos in running {
+}
+
+/// `CrushingWheelControllerBlockEntity.tick` at the controller's turn in the level's
+/// block-entity order.
+pub(crate) fn crusher_turn(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
+    if recipes::ready() {
         tick_crusher(lv, pos);
     }
 }

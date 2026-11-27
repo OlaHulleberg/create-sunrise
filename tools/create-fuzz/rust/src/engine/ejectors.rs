@@ -216,9 +216,8 @@ impl Run {
         let Some(mut e) = self.w.dims[0].ejectors.remove(&pos) else {
             return;
         };
-        // `KineticBlockEntity.tick` first (`attachKinetics`), then `DepotBehaviour.tick`
-        // inside `super.tick()`: the slide, then what its arrival asks.
-        self.w.kinetic_base_ticks_through(0, pos);
+        // `DepotBehaviour.tick` inside `super.tick()`, after the walk's base tick: the slide,
+        // then what its arrival asks.
         self.land_incoming(pos);
         if self.w.tick_depot(0, pos, false) {
             // The glue's `process_held` (via `depot::tick_depot`).

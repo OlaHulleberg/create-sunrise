@@ -423,29 +423,35 @@ impl Run {
         // The glue's shared level registration walk (BeltBlockEntity.tick and
         // DepotBehaviour.tick): apply transfers before the next entity's turn.
         self.tick_pumps();
-        let mut phase = self.w.transport_ticks(0, u64::from(self.now));
+        self.refresh_sequencer_signals();
+        let mut phase = self.w.block_entity_ticks(0, u64::from(self.now));
         while let Some(turn) = phase.next(&mut self.w) {
             let c = match turn {
-                create_engine::world::TransportTick::Fluid(p) => {
+                // The glue's `fix_crushers`.
+                create_engine::world::EntityTurn::Wheels => {
+                    self.fix_crushers();
+                    continue;
+                }
+                create_engine::world::EntityTurn::Fluid(p) => {
                     self.tick_transport_pipe(p);
                     self.tick_fluid_entity(p);
                     continue;
                 }
-                create_engine::world::TransportTick::Spout(p) => {
+                create_engine::world::EntityTurn::Spout(p) => {
                     // The glue's `w.tick_spout` (glue/logistics/belt.rs `tick_transport`).
                     self.w.tick_spout(0, p);
                     continue;
                 }
-                create_engine::world::TransportTick::Drain(p) => {
+                create_engine::world::EntityTurn::Drain(p) => {
                     self.tick_drain(p);
                     continue;
                 }
-                create_engine::world::TransportTick::Pump(p)
-                | create_engine::world::TransportTick::Pipe(p) => {
+                create_engine::world::EntityTurn::Pump(p)
+                | create_engine::world::EntityTurn::Pipe(p) => {
                     self.tick_transport_pipe(p);
                     continue;
                 }
-                create_engine::world::TransportTick::Depot(p) => {
+                create_engine::world::EntityTurn::Depot(p) => {
                     self.land_incoming(p);
                     let arrived = self.w.tick_depot(0, p, false);
                     // The glue's `tick_depot`: `handleBeltFunnelOutput` before the processing.
@@ -456,48 +462,71 @@ impl Run {
                 }
                 // The glue's `tick_brass` and `tick_funnel` turns (`BrassTunnelBlockEntity.tick`,
                 // `FunnelBlockEntity.tick` in the level's block-entity order).
-                create_engine::world::TransportTick::Brass(p) => {
+                create_engine::world::EntityTurn::Brass(p) => {
                     self.tick_brass(p);
                     continue;
                 }
-                create_engine::world::TransportTick::Funnel(p) => {
+                create_engine::world::EntityTurn::Funnel(p) => {
                     self.tick_funnel(p);
                     continue;
                 }
                 // A weighted ejector is the depot behaviour it extends, ticked with its
                 // block entity by this walk.
-                create_engine::world::TransportTick::Ejector(p) => {
+                create_engine::world::EntityTurn::Ejector(p) => {
                     self.tick_ejector(p);
                     continue;
                 }
                 // The glue's `press_turn` and `mixer_turn` (`MechanicalPressBlockEntity.tick`
                 // and `MechanicalMixerBlockEntity.tick` at their turns). A basin's own turn
                 // (`BasinBlockEntity.tick`) is the engine's.
-                create_engine::world::TransportTick::Press(p) => {
+                create_engine::world::EntityTurn::Press(p) => {
                     self.press_turn(p);
                     continue;
                 }
-                create_engine::world::TransportTick::Mixer(p) => {
+                create_engine::world::EntityTurn::Mixer(p) => {
                     self.mixer_turn(p);
                     continue;
                 }
-                // The glue's `saw_turn` (`SawBlockEntity.tick` at the saw's turn).
-                create_engine::world::TransportTick::Saw(p) => {
-                    self.tick_saw(p);
+                // The glue's `saw_turn` (`SawBlockEntity.tick` at the saw's turn: its breaking,
+                // then its items) and `drill_turn`.
+                create_engine::world::EntityTurn::Saw(p) => {
+                    self.breaker_turn(p);
+                    if self.w.dims[0].saws.contains_key(&p) {
+                        self.tick_saw(p);
+                    }
                     continue;
                 }
+                create_engine::world::EntityTurn::Drill(p) => {
+                    self.breaker_turn(p);
+                    continue;
+                }
+                // The glue's `millstone_turn`, `fan_turn` and `crusher_turn`; the driver has no
+                // crafters.
+                create_engine::world::EntityTurn::Millstone(p) => {
+                    self.millstone_turn(p);
+                    continue;
+                }
+                create_engine::world::EntityTurn::Fan(p) => {
+                    self.fan_turn(p);
+                    continue;
+                }
+                create_engine::world::EntityTurn::Crusher(p) => {
+                    self.crusher_turn(p);
+                    continue;
+                }
+                create_engine::world::EntityTurn::Crafter(_) => continue,
                 // The glue's `basin_turn` (`BasinBlockEntity.tick`: lazy tick, the spout's
                 // hand-off, then the change of contents, at the basin's own turn).
-                create_engine::world::TransportTick::Basin(p) => {
+                create_engine::world::EntityTurn::Basin(p) => {
                     self.basin_turn(p);
                     continue;
                 }
                 // The glue's `deployer_turn` (`DeployerBlockEntity.tick` at its turn).
-                create_engine::world::TransportTick::Deployer(p) => {
+                create_engine::world::EntityTurn::Deployer(p) => {
                     self.deployer_turn(p);
                     continue;
                 }
-                create_engine::world::TransportTick::Belt(c) => c,
+                create_engine::world::EntityTurn::Belt(c) => c,
             };
             let b = self.w.dims[0].belts.get_mut(&c).unwrap();
             let (seg, length, mut items) = (

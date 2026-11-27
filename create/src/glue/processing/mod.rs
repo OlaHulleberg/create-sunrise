@@ -64,9 +64,13 @@ pub(crate) use persist::{deployers_from_nbt, deployers_to_nbt};
 pub use press::transitional_of;
 // The press's depot callbacks and its own turn, and the mixer's, in logistics' transport walk.
 pub(crate) use basin::mixer_turn;
+pub(crate) use crafter::crafter_turn;
+pub(crate) use crusher::{crusher_turn, fix_pending as fix_crushers};
 pub(crate) use deployer::{deployer_on_depot, deployer_turn};
+pub(crate) use fan::fan_turn;
+pub(crate) use millstone::millstone_turn;
 pub(crate) use press::{depot_turn as press_depot_turn, press_turn};
-pub(crate) use saw::saw_turn;
+pub(crate) use saw::{drill_turn, saw_turn};
 pub(crate) use spoutput::turn as basin_turn;
 // What the other subsystems call: fluids (the spout on a belt
 // or depot runs a sequenced assembly's filling step, pumps reach basins' tanks), logistics (a
@@ -379,10 +383,10 @@ impl Subsystem for Processing {
         persist::live_fields(dim, pos, block, fields);
     }
 
-    /// Legacy `level_tick_post` order: crafters, millstones, fans, crushers, burners, and what the
-    /// basins kept for ones that are gone. Basins (lazy tick, spout, backup check), mixers and
-    /// presses over basins work at their own turns in logistics' transport walk.
-    /// The drills, saws, presses and deployers are `Tools`', after logistics' belts.
+    /// What comes before the level's block entities tick: the deployers' redstone, the drops of
+    /// gone crafters, nozzles whose fan went, the controllers of crushing wheels placed or
+    /// removed, burners, and what the basins kept for ones that are gone. The machines
+    /// themselves work at their own turns in logistics' block-entity walk.
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
         // What a removal without side effects (`UPDATE_SKIP_BLOCK_ENTITY_SIDEEFFECTS`) left.
         with_world(|w| {
@@ -391,10 +395,9 @@ impl Subsystem for Processing {
             d.removed_deployers.clear();
         });
         deployer::redstone_updates(lv);
-        crafter::tick_crafters(lv);
-        millstone::tick_millstones(lv);
-        fan::tick_fans(lv);
-        crusher::tick_crushers(lv);
+        crafter::drop_removed(lv);
+        fan::begin_tick(lv);
+        crusher::fix_pending(lv);
         basin::tick_burners(lv);
         spoutput::forget_gone(lv);
         basin::show_basins(lv);
@@ -668,17 +671,19 @@ fn passes_item_use(
     }
 }
 
-/// The drills and saws (after the vaults and chutes), then the presses and
-/// deployers, which work the depots and belts logistics moved this tick (`DepotBehaviour.tick`
-/// before `PressingBehaviour.tick`).
+/// After logistics' block-entity walk: what the machines' turns leave for their clients (the
+/// cracks of gone breakers, presses, deployers, crafters, fan currents) and the entities inside
+/// turning saws and drills.
 pub struct Tools;
 
 impl Subsystem for Tools {
     fn level_tick(&self, lv: &mut ServerLevel<'_>) {
-        saw::tick_drills(lv);
+        saw::clear_cracks(lv);
         saw::hurt_inside(lv);
         press::tick_presses(lv);
         deployer::send_deployer_changes(lv);
+        crafter::show_crafters(lv);
+        fan::end_tick(lv);
     }
 }
 

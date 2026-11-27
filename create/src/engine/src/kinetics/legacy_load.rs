@@ -61,7 +61,7 @@ impl Kinetics {
         true
     }
 
-    pub(super) fn migrate_saves_without_kinetic_state(&mut self) {
+    pub(crate) fn migrate_saves_without_kinetic_state(&mut self) {
         let pending = std::mem::take(&mut self.legacy_loads);
         let mut visited = HashSet::new();
         for (start, stamp) in pending {

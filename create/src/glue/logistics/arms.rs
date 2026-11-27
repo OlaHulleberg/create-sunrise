@@ -1428,9 +1428,8 @@ pub(crate) fn tick_ejector(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let Some(mut e) = with_world(|w| w.dims[dim].ejectors.remove(&pos)).flatten() else {
         return;
     };
-    // `KineticBlockEntity.tick` first (`attachKinetics`), then `DepotBehaviour.tick` inside
-    // `super.tick()`: the slide, then what its arrival asks.
-    with_world(|w| w.kinetic_base_ticks_through(dim, pos));
+    // `DepotBehaviour.tick` inside `super.tick()`, after the walk's `KineticBlockEntity.tick`:
+    // the slide, then what its arrival asks.
     super::depot::tick_depot(lv, pos);
     let speed = with_world(|w| w.speed(dim, pos)).flatten().unwrap_or(0.0);
     let before = e.state;
