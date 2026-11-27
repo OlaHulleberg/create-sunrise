@@ -739,7 +739,9 @@ fn execute(sc: &Scenario, mut r: Run) -> Snapshot {
                 (Some(b), _) => r.place(&b),
                 // `HandCrankBlock.useWithoutItem`: `turn(sneaking)`.
                 (None, Some(back)) => {
+                    r.refresh_sequencer_signals();
                     r.w.turn_crank(0, e.pos, back);
+                    r.show_sequencer_writes();
                 }
                 (None, None) => {}
             }

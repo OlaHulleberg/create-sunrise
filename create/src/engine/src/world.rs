@@ -2881,10 +2881,6 @@ impl CreateWorld {
         if old.crank != crank {
             self.set_settings(dim, pos, state, Settings { crank, ..old });
         }
-        // `updateGeneratedRotation` attached the network at once: what it turned has its speed
-        // (and `onSpeedChanged` has run) before this tick's block ticks, so a scheduled
-        // sequenced gearshift check sees it turning.
-        self.flush_kinetic_callbacks(dim);
         true
     }
 

@@ -55,6 +55,7 @@ pub(super) fn use_crank(
     }
     let back = items::sneaking(&*lv.host, player);
     let dim = lv.dim;
+    crate::glue::kinetics::refresh_sequencer_signals(lv);
     if with_world(|w| w.turn_crank(dim, pos, back)) != Some(true) {
         return None;
     }
