@@ -44,6 +44,11 @@ categories, so the kinetics harness gaps are the work items of this subsystem al
   `swapShaftsForRotation`).
 - `gearbox/*`, `transmission/*` (clutch, gearshift, the sequenced gearshift and its instructions),
   `chainDrive/*` (chain drives and the adjustable chain gearshift), `speedController/*`.
+- Weak power: `SequencedGearshiftBlock.shouldCheckWeakPower` (`:56-59`) answers false, as
+  `AbstractEncasedShaftBlock` (`:27-30`, the clutch and the gearshift), `ChainDriveBlock`
+  (`:47-50`) and eight other blocks do, so the power a lever gives one of them is read through it
+  by nothing beside it; a conductor (`minecraft:stone`, a casing, a gearbox) passes it on
+  (`redstone-weak-power-*`, #460; `docs/player-actions.md`).
 - `gauge/*`: speed and stress gauges, their dials and comparator output.
 
 ### Block states, placement and the wrench

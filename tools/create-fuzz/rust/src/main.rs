@@ -56,6 +56,7 @@ mod transport;
 mod trig;
 mod tunnels;
 mod waterwheel;
+mod weak_power;
 
 use scenario::{Scenario, Snapshot};
 use std::path::{Path, PathBuf};

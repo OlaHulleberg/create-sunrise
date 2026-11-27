@@ -2,8 +2,10 @@
 //! (`create/src/glue/kinetics.rs`): inputs (split shafts following redstone), then the solve
 //! and the blocks the solve breaks.
 //!
-//! The world outside the engine is a map of positions to state strings. Redstone is only what
-//! the scenarios use: adjacent redstone blocks or controlled 0..15 signal sources.
+//! The world outside the engine is a map of positions to state strings. Redstone is what the
+//! scenarios use: redstone blocks and controlled 0..15 signal sources, read as the game reads
+//! them (`SignalGetter`): a block that checks weak power passes on what it receives
+//! (`weak_power`).
 
 mod basin;
 mod belts;
@@ -727,13 +729,58 @@ impl Run {
         self.publish_interaction();
     }
 
+    /// The block's own signal (`BlockStateBase.getSignal`): a redstone block's 15, or a
+    /// controlled source's `strength`; 0 for anything else.
+    fn own_signal(&self, p: Pos) -> u8 {
+        match self.at(p) {
+            REDSTONE_BLOCK => 15,
+            id @ 3..=18 => (id - 3) as u8,
+            _ => 0,
+        }
+    }
+
+    /// `getDirectSignalTo(p)`: the strongest signal the blocks beside `p` give toward it.
+    fn direct_signal_to(&self, p: Pos) -> u8 {
+        DIRS.iter()
+            .map(|d| self.own_signal(add(p, *d)))
+            .max()
+            .unwrap_or(0)
+    }
+
+    /// `shouldCheckWeakPower` of the block at `p`: a redstone conductor lets the power it
+    /// receives be read through it, unless it is one of the blocks Create overrides it for
+    /// (`weak_power`). The scenarios' other vanilla blocks are one stone to the driver.
+    fn checks_weak_power(&self, p: Pos) -> bool {
+        let id = self.at(p);
+        if id == OTHER {
+            return crate::weak_power::conducts("minecraft:stone");
+        }
+        let Some(name) = self.names.get(id.wrapping_sub(FIRST) as usize) else {
+            return false;
+        };
+        crate::weak_power::conducts(name.split('[').next().unwrap_or(name))
+            && !self
+                .w
+                .table
+                .get(id)
+                .is_some_and(|(block, _)| create_engine::weak_power::refuses(block))
+    }
+
+    /// `SignalGetter.getSignal(p, side)`: how strongly the block at `p` powers its neighbour on
+    /// that side: its own signal, or at least the power it receives when it checks weak power.
+    fn signal_from(&self, p: Pos) -> u8 {
+        let own = self.own_signal(p);
+        if own == 15 || !self.checks_weak_power(p) {
+            return own;
+        }
+        own.max(self.direct_signal_to(p))
+    }
+
+    /// `getBestNeighborSignal(p)`: the strongest power reaching `p` from its neighbours
+    /// (`hasNeighborSignal`: whether any does).
     fn signal(&self, p: Pos) -> u8 {
         DIRS.iter()
-            .map(|d| match self.at(add(p, *d)) {
-                REDSTONE_BLOCK => 15,
-                id @ 3..=18 => (id - 3) as u8,
-                _ => 0,
-            })
+            .map(|d| self.signal_from(add(p, *d)))
             .max()
             .unwrap_or(0)
     }

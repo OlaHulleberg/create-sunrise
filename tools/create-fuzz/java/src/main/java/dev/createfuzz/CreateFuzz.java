@@ -73,6 +73,8 @@ public class CreateFuzz {
             FluidRecipeAudit.check(e.getServer().overworld());
             ProcessingRecipeAudit.check(e.getServer().overworld());
             BasinRecipeAudit.check(e.getServer().overworld());
+            Files.writeString(dir.resolve("weak-power.json"), WeakPower.pretty(WeakPower.json(e.getServer().overworld())));
+            WeakPower.audit(e.getServer().overworld());
             BreakingAudit.check(e.getServer().overworld(), e.getServer());
             DeployerAudit.check(e.getServer().overworld());
             Files.createDirectories(dir);

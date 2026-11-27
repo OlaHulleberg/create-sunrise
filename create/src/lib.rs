@@ -20,7 +20,7 @@ use mod_api::{
     RightClickBlockEvent, RightClickItemEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, ServerStoppedEvent,
-    StandaloneModelsEvent, TagsUpdatedEvent,
+    ShouldCheckWeakPowerEvent, StandaloneModelsEvent, TagsUpdatedEvent,
 };
 
 #[derive(Default)]
@@ -35,6 +35,12 @@ impl Hooks for Create {
 
         for &block in create_engine::Block::ALL.iter() {
             r.block_part(states::key(block), CreateBlock);
+        }
+        for &block in create_engine::Block::ALL
+            .iter()
+            .filter(|&&b| create_engine::weak_power::refuses(b))
+        {
+            r.block_part(states::key(block), NoWeakPower);
         }
         glue::net::register(r, SUBSYSTEMS);
         for s in SUBSYSTEMS {
@@ -787,5 +793,21 @@ impl BlockPart for CreateBlock {
         for s in SUBSYSTEMS {
             s.neighbor_changed(dim, pos, state);
         }
+    }
+}
+
+/// The blocks whose `shouldCheckWeakPower` returns false in Create
+/// (`create_engine::weak_power`): the power they receive is read through them by nothing beside
+/// them, so a lever on a sequenced gearshift powers no clutch next to it.
+struct NoWeakPower;
+
+#[mod_api::sunrise_part]
+impl BlockPart for NoWeakPower {
+    fn should_check_weak_power(
+        &self,
+        _host: &dyn LevelHost,
+        event: &mut ShouldCheckWeakPowerEvent,
+    ) {
+        event.check = false;
     }
 }
