@@ -348,8 +348,9 @@ below 128 shares its owner with r + 128, so those families' seeds and `index` di
 unit test lists the residues that changed owner. Families written for consecutive seeds (water
 wheels, steam engines, source faces, catalogue states) pick their variants by the seed's index
 among their own seeds, so every variant is reached. A seed with `seed & 32` set also reloads
-(`persistence.rs`); a family with one residue mod 128 either always or never reloads, as the
-table's comments say.
+(`persistence.rs`), unless its family picks its reloads itself (`generate::reloading`, the
+deployers); a family with one residue mod 128 either always or never reloads, as the table's
+comments say.
 
 | Family | Residues | Share | Why |
 | --- | --- | --- | --- |
@@ -371,7 +372,7 @@ table's comments say.
 | actions | 3 mod 64; 87, 119 mod 128 | 4/128 = 3% | A few variants of uses on one shaft, clutch or gearshift: 3 mod 64 has `seed % 8 == 3` and `% 32 == 3`, 87 and 119 the `% 8 == 7` half |
 | geometry/states | 109 mod 128 | 1/128 | Static kinetics: one catalogue state per seed by index, every block, face and order; always reloads |
 | geometry/stress_boundary | 0 mod 256 | 1/256 | Every eighth static kinetics seed but 128 mod 256, 64 and 192 having gone to the breaking families; its load steps (seed / 8 mod 3) are all still reached |
-| deployers | 125, 253 mod 256 | 2/256 | Deployers facing every way on a motor: over a depot or a belt (deploying, polishing and item-application recipes, locks, filters), placing blocks, punching blocks, tools, fist bumps, the hand swapped, the block removed and reloaded. Nine histories picked by `index`; both always reload ([deployers](docs/processing-scope.md#deployers)) |
+| deployers | 125, 253 mod 256 | 2/256 | Deployers facing every way on a motor: over a depot or a belt (deploying, polishing and item-application recipes, locks, filters), placing blocks, punching blocks, tools, fist bumps, the hand swapped, the block removed and reloaded. Nine histories picked by `index / 3`; both residues have `seed & 32` set, so the family picks its reloads by `index`: those with `index / 27` odd reload, half the seeds, every history both ways ([deployers](docs/processing-scope.md#deployers)) |
 | processing/millstone, crushing, saw, mixing, compacting | 205, 221, 128, 77, 93 mod 256 | 5/256 | Machine work ([processing scope](docs/processing-scope.md)): geometry/states' 205, 221, 77 and 93 and stress_boundary's 128, none of which reloads |
 | breaking/drill, saw | 64, 192 mod 256 | 2/256 | Stationary block breaking, drills and sideways saws ([processing scope](docs/processing-scope.md#block-breaking)): stress_boundary's 64 and 192; neither reloads by seed bit (the drill history reloads by its own actions) |
 | geometry/network | 92 mod 256 | 1/256 | Random networks through compatible faces (unreached since the fluid families) |
@@ -401,4 +402,5 @@ transmission/flicker's 66 (chutes); geometry/states' 87 and 119 went to actions.
 that cites a `belts-cover` sweep seed reproduces from its `.min.json`; the seed itself generates
 the same history only at 23, 35, 39 or 55 mod 128.
 
-The deployers family then took geometry/states' 125 and 253 (mod 256).
+The deployers family then took geometry/states' 125 and 253 (mod 256), and chooses which of its
+seeds reload from `index` instead of `seed & 32`.

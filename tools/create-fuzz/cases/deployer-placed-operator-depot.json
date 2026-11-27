@@ -1,0 +1,55 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    }
+  ],
+  "checkpoints": [
+    11,
+    12,
+    13,
+    14,
+    15,
+    16
+  ],
+  "events": [
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "minecraft:air",
+      "tick": 1
+    },
+    {
+      "action": {
+        "face": "up",
+        "hit": [
+          0.5,
+          1.0,
+          0.5
+        ],
+        "item": "create:deployer",
+        "kind": "use",
+        "pitch": 60.0,
+        "sneaking": true,
+        "yaw": 90.0
+      },
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "tick": 10
+    }
+  ],
+  "seed": 0,
+  "ticks": 30,
+  "version": 3
+}

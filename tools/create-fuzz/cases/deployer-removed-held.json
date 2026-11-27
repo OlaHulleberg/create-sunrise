@@ -1,0 +1,79 @@
+{
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:depot[waterlogged=false]"
+    },
+    {
+      "motor": 16,
+      "pos": [
+        0,
+        10,
+        -1
+      ],
+      "state": "create:creative_motor[facing=south]"
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "create:deployer[axis_along_first=false,facing=down]"
+    }
+  ],
+  "checkpoints": [
+    10,
+    11,
+    12,
+    13,
+    14,
+    15,
+    40,
+    41,
+    42,
+    43,
+    50,
+    59,
+    60
+  ],
+  "events": [
+    {
+      "action": {
+        "face": "down",
+        "hit": [
+          0.5,
+          0.0,
+          0.5
+        ],
+        "item": "minecraft:oak_planks",
+        "kind": "use",
+        "pitch": 0.0,
+        "sneaking": false,
+        "yaw": 0.0
+      },
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "tick": 12
+    },
+    {
+      "pos": [
+        0,
+        10,
+        0
+      ],
+      "state": "minecraft:air",
+      "tick": 40
+    }
+  ],
+  "seed": 0,
+  "ticks": 60,
+  "version": 3
+}

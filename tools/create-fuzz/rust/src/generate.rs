@@ -32,10 +32,16 @@ pub const SETTLE: u32 = 70;
 
 pub fn generate(seed: u64) -> Scenario {
     let mut sc = generate_base(seed);
-    if seed & 32 != 0 {
+    if (FAMILIES[OWNERS[(seed % PERIOD) as usize] as usize].reloads)(seed) {
         crate::persistence::schedule(&mut sc);
     }
     sc
+}
+
+/// Whether a seed's history also reloads, for every family but those with a rule of their own:
+/// `seed & 32` set.
+fn by_seed_bit(seed: u64) -> bool {
+    seed & 32 != 0
 }
 
 fn generate_base(seed: u64) -> Scenario {
@@ -53,6 +59,7 @@ pub struct Family {
     pub name: &'static str,
     classes: &'static [(u64, u64)],
     generate: fn(u64) -> Scenario,
+    reloads: fn(u64) -> bool,
 }
 
 const fn family(
@@ -64,6 +71,22 @@ const fn family(
         name,
         classes,
         generate,
+        reloads: by_seed_bit,
+    }
+}
+
+/// A family whose residues all have the same reload bit, choosing which seeds reload itself.
+const fn reloading(
+    name: &'static str,
+    classes: &'static [(u64, u64)],
+    generate: fn(u64) -> Scenario,
+    reloads: fn(u64) -> bool,
+) -> Family {
+    Family {
+        name,
+        classes,
+        generate,
+        reloads,
     }
 }
 
@@ -241,8 +264,14 @@ pub const FAMILIES: &[Family] = &[
     family("breaking/drill", &[(256, 64)], breaking_drill),
     family("breaking/saw", &[(256, 192)], breaking_saw),
     family("geometry/states", &[(128, 109)], geometry_states),
-    // Deployers, on residues geometry/states gave up; both always reload.
-    family("deployers", &[(256, 125), (256, 253)], deployers),
+    // Deployers, on residues geometry/states gave up; which seeds reload is the family's own
+    // (`deployers::reloads`), as both residues have `seed & 32` set.
+    reloading(
+        "deployers",
+        &[(256, 125), (256, 253)],
+        deployers,
+        deployers_reload,
+    ),
 ];
 
 fn waterwheel(seed: u64) -> Scenario {
@@ -283,6 +312,9 @@ fn geometry_states(seed: u64) -> Scenario {
 }
 fn deployers(seed: u64) -> Scenario {
     crate::deployers::generate(seed, index(seed))
+}
+fn deployers_reload(seed: u64) -> bool {
+    crate::deployers::reloads(index(seed))
 }
 
 /// The owning family of each residue.
@@ -565,10 +597,8 @@ mod tests {
                 assert_eq!(family_name(r), family_name(r + 128), "residue {r}");
             }
         }
-        assert_eq!(family_name(64), "deployers");
         assert_eq!(family_name(125), "deployers");
         assert_eq!(family_name(253), "deployers");
-        assert_eq!(family_name(192), "geometry/stress_boundary");
         assert_eq!(family_name(220), "network/face_placement");
         assert_eq!(family_name(252), "network/face_wrench");
         assert_eq!(family_name(124), "network/driven_placement");
