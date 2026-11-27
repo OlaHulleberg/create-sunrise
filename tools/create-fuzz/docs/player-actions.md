@@ -53,7 +53,7 @@ is separately compared. Casing items that are not consumed by an encasing handle
 block placement, including when sneaking. Unsupported targeted block overrides
 produce explicit notes, keeping the case and comparison. Other value
 boxes, cog/pipe brackets, cog casing/toggles, fluid placement, world collision,
-lever/wire/conductor simulation and arbitrary machine block overrides
+lever/wire simulation and arbitrary machine block overrides
 remain outside this driver's supported transactions; the manifest names these
 limits. The standalone binary cannot instantiate the SDK host glue itself.
 
@@ -135,9 +135,18 @@ none is silently treated as ordinary-player interaction coverage:
 
 
 Signals use `createfuzz:signal[strength=0..15]`, whose real Java getSignal and
-getDirectSignal supply the requested strength to Create's neighbour queries. Rust
-uses the strongest adjacent source and passes its exact strength to
-set_chain_signal. Redstone blocks supply 15. Strength sweeps remain unchanged.
+getDirectSignal supply the requested strength to Create's neighbour queries. Redstone
+blocks supply 15. Rust reads them as the game does: the strongest power reaching a block
+(`getBestNeighborSignal`), where a block that checks weak power passes on what the sources
+beside it give it (`SignalGetter.getSignal`). That is a redstone conductor that is none of
+the blocks Create overrides `shouldCheckWeakPower` in: `rust/src/weak_power.json` holds each
+Create block's conductor answer and the overrides, measured from the running binary
+(`WeakPower.json`) and audited at startup (`WeakPower.audit`); the driver composes them with
+the port's list (`create_engine::weak_power::refuses`). The signal block itself is no
+conductor (#298), so its output is always its own strength; stone, a casing and a gearbox
+conduct, a sequenced gearshift, a clutch and a shaft do not (`redstone-weak-power-*`, #460).
+A block whose states or sides disagree conducts nothing in the driver. The exact strength is
+passed to set_chain_signal. Strength sweeps remain unchanged.
 Placement beside power retains the documented API_GAPS note for unavailable
 placement-time redstone; no persistent kinetic difference is suppressed.
 

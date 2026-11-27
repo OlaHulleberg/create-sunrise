@@ -1,0 +1,72 @@
+{
+  "version": 3,
+  "seed": 0,
+  "ticks": 20,
+  "checkpoints": [
+    10,
+    11,
+    13,
+    14,
+    15,
+    16,
+    19
+  ],
+  "blocks": [
+    {
+      "pos": [
+        0,
+        8,
+        0
+      ],
+      "state": "create:creative_motor[facing=east]",
+      "motor": 32
+    },
+    {
+      "pos": [
+        1,
+        8,
+        0
+      ],
+      "state": "create:gearbox[axis=x]"
+    },
+    {
+      "pos": [
+        2,
+        8,
+        0
+      ],
+      "state": "create:clutch[axis=x,powered=false]"
+    },
+    {
+      "pos": [
+        3,
+        8,
+        0
+      ],
+      "state": "create:shaft[axis=x,waterlogged=false]"
+    }
+  ],
+  "events": [
+    {
+      "tick": 10,
+      "pos": [
+        1,
+        9,
+        0
+      ],
+      "action": {
+        "kind": "signal",
+        "strength": 15
+      }
+    },
+    {
+      "tick": 14,
+      "pos": [
+        3,
+        8,
+        0
+      ],
+      "state": "minecraft:stone"
+    }
+  ]
+}

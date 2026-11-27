@@ -113,6 +113,7 @@ pub mod turntable;
 pub mod valve;
 pub mod vault;
 pub mod waterwheel;
+pub mod weak_power;
 pub mod whistle;
 pub mod world;
 pub mod worldshaper;

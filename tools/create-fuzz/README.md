@@ -76,7 +76,9 @@ Initial state specifications are injected one per tick, in order. `motor` sets a
 it. Each event happens before its tick runs: `state` places a block (`minecraft:air` removes it), `turn` turns a hand
 crank (true: backwards). A `minecraft:redstone_block` powers the blocks beside it. The `signal` action places `createfuzz:signal`, a controlled
 power source that is not a redstone conductor: adjacent signal blocks do not relay power, so each one's output is
-strictly its own `strength`.
+strictly its own `strength`. Both are read as the game reads redstone: a redstone conductor beside a source passes
+what it receives on to its own neighbours unless it is one of the blocks Create overrides `shouldCheckWeakPower` in
+(`rust/src/weak_power.json`, measured from the running binary and audited at startup; `docs/player-actions.md`).
 
 ## How the two sides are kept comparable
 
