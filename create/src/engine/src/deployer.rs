@@ -298,24 +298,17 @@ pub fn on_depot(d: &Deployer, rpm: f32, locked: bool, fits: bool) -> Depot {
     Depot::Hold
 }
 
-/// Where a block the deployer holds goes (`BlockItem.useOn` from `DeployerHandler`): the block
-/// it reaches (two ahead) when that can be replaced, else the space before it; None when
-/// neither can, or the block there already is the held one (`shouldActivate`).
-pub fn placement(
-    reached_replaceable: bool,
-    before_replaceable: bool,
-    reached_is_held: bool,
-) -> Option<bool> {
-    if reached_is_held {
-        return None;
-    }
-    if reached_replaceable {
-        Some(true)
-    } else if before_replaceable {
-        Some(false)
-    } else {
-        None
-    }
+/// `DeployerHandler.shouldActivate` for a deployer using what it holds on the block two ahead:
+/// not when that block is the one a held block item places, nor the fluid a held bucket holds,
+/// nor, holding anything and facing down, a belt or a depot (`TransportedItemStackHandlerBehaviour`),
+/// whose callbacks do the work.
+pub fn should_activate(
+    holding: bool,
+    places_what_is_there: bool,
+    bucket_fluid_there: bool,
+    down_over_transport: bool,
+) -> bool {
+    !places_what_is_there && !bucket_fluid_there && !(holding && down_over_transport)
 }
 
 /// The held stack after a recipe used it (`keepHeldItem`, else one less; damage is not

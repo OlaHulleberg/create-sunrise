@@ -436,35 +436,29 @@ impl Run {
         }
     }
 
-    /// Where the block a deployer holds would go (`deployer_place_target`), as a position;
-    /// None when it holds no block, or nowhere fits.
-    fn deployer_place_target(&self, pos: Pos, facing: Dir, d: &Deployer) -> Option<Pos> {
-        let held = d.held.clone()?;
-        let placed = deployers::item_block(&held.0)?;
+    /// `should_activate`'s facts for the deployer `d` at `pos` facing `facing`: the block two
+    /// ahead is the one its block item places, or the source of its bucket's fluid.
+    fn deployer_should_activate(&self, pos: Pos, facing: Dir, d: &Deployer) -> bool {
         let reached = step(pos, facing, 2);
-        let before = step(pos, facing, 1);
-        let is_held = self.block_name(reached).as_deref() == Some(block_of(placed).as_str());
-        deployer::placement(self.replaceable(reached), self.replaceable(before), is_held)
-            .map(|at_reached| if at_reached { reached } else { before })
-    }
-
-    /// `shouldActivate` for a held item that is not a block: always, except a bucket of a fluid
-    /// whose source is already in the block it reaches.
-    fn deployer_uses(&self, pos: Pos, facing: Dir, d: &Deployer) -> bool {
-        let Some((item, _)) = d.held.clone() else {
-            return true;
+        let held = d.held.as_ref().map(|h| h.0.as_str());
+        let there = self.block_name(reached);
+        let places_there = held
+            .and_then(deployers::item_block)
+            .is_some_and(|b| there.as_deref() == Some(block_of(b).as_str()));
+        let fluid = match held {
+            Some("minecraft:water_bucket") => Some("minecraft:water"),
+            Some("minecraft:lava_bucket") => Some("minecraft:lava"),
+            _ => None,
         };
-        if deployers::item_block(&item).is_some() {
-            return false;
-        }
-        let reached = step(pos, facing, 2);
-        let fluid = match item.as_str() {
-            "minecraft:water_bucket" => "minecraft:water",
-            "minecraft:lava_bucket" => "minecraft:lava",
-            _ => return true,
-        };
-        self.block_name(reached).as_deref() != Some(fluid)
-            || self.property(reached, "level").is_some_and(|l| l != "0")
+        let bucket_there = fluid.is_some_and(|f| {
+            there.as_deref() == Some(f) && self.property(reached, "level").as_deref() == Some("0")
+        });
+        deployer::should_activate(
+            held.is_some(),
+            places_there,
+            bucket_there,
+            facing == Dir::Down && self.takes_from_side(reached),
+        )
     }
 
     /// The block at `p` by name, None for air.
@@ -932,11 +926,7 @@ impl deployer::World for Turn<'_> {
     }
 
     fn should_activate(&mut self, d: &Deployer) -> bool {
-        let (run, pos, facing) = (&*self.run, self.pos, self.facing);
-        if facing == Dir::Down && run.takes_from_side(step(pos, facing, 2)) {
-            return false;
-        }
-        run.deployer_place_target(pos, facing, d).is_some() || run.deployer_uses(pos, facing, d)
+        self.run.deployer_should_activate(self.pos, self.facing, d)
     }
 
     fn start_fist_bump(&mut self, d: &mut Deployer) -> bool {
