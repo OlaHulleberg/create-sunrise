@@ -524,6 +524,12 @@ impl belt::BreakWorld for Run {
     fn take_breaks(&mut self) -> Vec<create_engine::world::BeltBreak> {
         std::mem::take(&mut self.w.dims[0].belt_breaks)
     }
+    fn is_belt(&self, pos: [i32; 3]) -> bool {
+        self.w
+            .table
+            .get(self.at(pos))
+            .is_some_and(|(b, _)| b == Block::Belt)
+    }
     fn replace(&mut self, b: create_engine::world::BeltBreak) {
         let s = b.shaft.map(|axis| {
             format!(

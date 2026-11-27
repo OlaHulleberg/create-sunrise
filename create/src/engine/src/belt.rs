@@ -10,6 +10,9 @@ use crate::kinetics::{Axis, Dir};
 pub trait BreakWorld {
     /// Take removals discovered by the engine's `BeltBlock.onRemove` translation.
     fn take_breaks(&mut self) -> Vec<crate::world::BeltBreak>;
+    /// Whether `pos` still holds a belt block (`BeltBlock.onRemove`: only belt segments become
+    /// shafts or air).
+    fn is_belt(&self, pos: [i32; 3]) -> bool;
     /// Write the shaft or air replacement, including the normal block-change notification.
     fn replace(&mut self, broken: crate::world::BeltBreak);
 }
@@ -19,6 +22,9 @@ pub trait BreakWorld {
 /// Both game glue and standalone drivers must use this entry before settling belts.
 pub fn break_cascade(world: &mut impl BreakWorld) {
     for broken in world.take_breaks() {
+        if !world.is_belt(broken.pos) {
+            continue;
+        }
         world.replace(broken);
         break_cascade(world);
     }
