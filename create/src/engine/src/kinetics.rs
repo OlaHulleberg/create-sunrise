@@ -547,6 +547,8 @@ pub struct Kinetics {
     touched: Vec<[i32; 3]>,
     /// The ticks counted (`advance`), for the parts' flicker scores.
     now: u64,
+    /// From `advance` to the end of the solve: the block entities are taking their turns.
+    walking: bool,
     /// Monotonic base-tick pass, including phases run before solve.
     base_pass: u64,
 }
@@ -718,10 +720,12 @@ impl Kinetics {
         self.loaded_columns.remove(&(cx, cz));
     }
 
-    /// One tick went by: every part's flicker score falls by one (`KineticBlockEntity.tick`),
-    /// and the parts whose validation countdown ran out validate in their own tick.
+    /// A tick begins: each entity's flicker tally falls by one at its turn
+    /// (`KineticBlockEntity.tick`), and the parts whose validation countdown ran out validate
+    /// in their own tick.
     pub fn advance(&mut self) {
         self.now += 1;
+        self.walking = true;
         while let Some(due) = self.scheduler.take_reactivation(self.now) {
             self.reactivation_due.extend(due);
         }
@@ -789,8 +793,38 @@ impl Kinetics {
     pub fn flicker_score(&self, pos: [i32; 3]) -> i32 {
         self.at
             .get(&pos)
-            .and_then(|s| (s[0] != NONE).then(|| self.nodes[s[0] as usize].state.flicker(self.now)))
+            .and_then(|s| (s[0] != NONE).then(|| self.flicker_score_of(s[0])))
             .unwrap_or(0)
+    }
+
+    /// The last tick whose `KineticBlockEntity.tick` this entity has had: its turn in this
+    /// tick's walk decays its tally after validation and before the network update.
+    fn flicker_through(&self, id: u32) -> u64 {
+        if self.walking
+            && !self.nodes[id as usize]
+                .state
+                .lifecycle
+                .ran(self.base_pass + 1)
+        {
+            self.now.saturating_sub(1)
+        } else {
+            self.now
+        }
+    }
+
+    /// `KineticBlockEntity.getFlickerScore`.
+    fn flicker_score_of(&self, id: u32) -> i32 {
+        self.nodes[id as usize]
+            .state
+            .flicker(self.flicker_through(id))
+    }
+
+    /// `flickerTally = getFlickerScore() + gain`.
+    fn add_flicker(&mut self, id: u32, gain: i32) {
+        let through = self.flicker_through(id);
+        let n = &mut self.nodes[id as usize];
+        n.state.flicker = n.state.flicker(through) + gain;
+        n.state.flicker_at = through;
     }
 
     /// Adds or replaces the part at `pos` (`sub` 1 is a split shaft's second half).
@@ -1346,8 +1380,8 @@ impl Kinetics {
         if over != n.state.overstressed {
             let previous = n.state.speed;
             let shown = if over { 0.0 } else { n.state.theoretical };
-            n.state.flicker = n.state.flicker(self.now) + flicker_gain(previous, shown);
-            n.state.flicker_at = self.now;
+            self.add_flicker(id, flicker_gain(previous, shown));
+            let n = &mut self.nodes[id as usize];
             n.state.overstressed = over;
             n.state.speed = shown;
             if n.sub == 0 {
@@ -1486,8 +1520,11 @@ impl Kinetics {
     /// before its `super.tick()`. It ticks again in the next pass.
     pub fn skip_registered_base(&mut self, pos: [i32; 3]) {
         for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+            let through = self.now.saturating_sub(1);
             let n = &mut self.nodes[id as usize];
             if n.live && !n.state.lifecycle.is_new() {
+                n.state.flicker = n.state.flicker(through);
+                n.state.flicker_at = self.now;
                 n.state.lifecycle = state::Lifecycle::Ticked(self.base_pass + 1);
             }
         }
@@ -1540,6 +1577,7 @@ impl Kinetics {
             self.scheduler
                 .validate_later(tick, id, self.nodes[id as usize].stamp);
         }
+        // The flicker tally's decay (`getFlickerScore() - 1`) comes with this turn's mark.
         self.nodes[id as usize].state.lifecycle = state::Lifecycle::Ticked(self.base_pass + 1);
         if self.networks.has_dirty() && self.networks.take_entity_dirty(id, &self.nodes) {
             let net = self.nodes[id as usize].state.net;
@@ -1605,6 +1643,7 @@ impl Kinetics {
     ) -> SolveStats {
         if !ticking && !self.has_dirty() {
             self.late = None;
+            self.walking = false;
             self.base_pass += 1;
             return SolveStats::default();
         }
@@ -1651,6 +1690,7 @@ impl Kinetics {
             n.live && n.state.update_speed
         });
         let mut stats = SolveStats::default();
+        self.walking = false;
         self.base_pass += 1;
         let mut touched_nets = HashSet::new();
         let mut changed = std::mem::take(&mut self.changed);
@@ -2103,9 +2143,9 @@ mod tests {
         solve(&mut k);
         let mut broke = false;
         for t in 0..200 {
-            k.advance();
             let before = k.flicker_score(pos);
             k.set(pos, 0, generator(if t % 2 == 0 { -16.0 } else { 16.0 }));
+            k.advance();
             let e = solve(&mut k);
             if e.iter().any(|e| matches!(e, Event::Break { .. })) {
                 assert!(e.contains(&Event::Break { pos: [1, 0, 0] }), "{e:?}");
@@ -2115,11 +2155,51 @@ mod tests {
             }
             assert_eq!(
                 k.flicker_score(pos),
-                before + 5,
-                "onSpeedChanged adds 5 once"
+                before + 4,
+                "onSpeedChanged adds 5 once, the turn takes 1"
             );
         }
         assert!(broke, "the reversing generator breaks");
+    }
+
+    #[test]
+    fn the_flicker_tally_decays_at_the_entitys_turn() {
+        let pos = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(pos, 0, Part::shaft(Axis::X));
+        k.advance();
+        solve(&mut k);
+        let id = k.at[&pos][0];
+        k.advance();
+        k.add_flicker(id, 5);
+        assert_eq!(k.flicker_score(pos), 5, "before its turn");
+        solve(&mut k);
+        assert_eq!(k.flicker_score(pos), 4, "its turn took one");
+        k.add_flicker(id, 5);
+        assert_eq!(k.flicker_score(pos), 9, "after its turn");
+        k.advance();
+        assert_eq!(k.flicker_score(pos), 9, "read in the walk before its turn");
+        solve(&mut k);
+        assert_eq!(k.flicker_score(pos), 8);
+    }
+
+    #[test]
+    fn a_skipped_turn_keeps_the_flicker_tally() {
+        let pos = [0, 0, 0];
+        let mut k = Kinetics::new();
+        k.set(pos, 0, Part::shaft(Axis::X));
+        k.advance();
+        solve(&mut k);
+        let id = k.at[&pos][0];
+        k.add_flicker(id, 5);
+        k.advance();
+        k.level_walks();
+        k.skip_registered_base(pos);
+        solve(&mut k);
+        assert_eq!(k.flicker_score(pos), 5);
+        k.advance();
+        solve(&mut k);
+        assert_eq!(k.flicker_score(pos), 4);
     }
 
     #[test]

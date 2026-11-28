@@ -37,8 +37,8 @@ pub(super) struct KineticState {
     /// The sequence context it took from what turns it (`copySequenceContextFrom`): its
     /// holder's, and the value per RPM of its own speed (`SequenceContext.relativeValue`).
     pub(super) seq: Option<(Context, f32)>,
-    /// `KineticBlockEntity.flickerTally` as of tick `flicker_at`: 5 more each time its speed
-    /// starts, stops or turns round (`onSpeedChanged`), one less each tick (`tick`).
+    /// `KineticBlockEntity.flickerTally` once its turns through tick `flicker_at` took one each
+    /// (`tick`): 5 more each time its speed starts, stops or turns round (`onSpeedChanged`).
     pub(super) flicker: i32,
     pub(super) flicker_at: u64,
     /// KineticBlockEntity.network: identity inherited from the immediate source.
@@ -79,9 +79,10 @@ impl Default for KineticState {
     }
 }
 impl KineticState {
-    /// KineticBlockEntity.tick's linear flicker decay, evaluated lazily.
-    pub(super) fn flicker(&self, now: u64) -> i32 {
-        (self.flicker - now.saturating_sub(self.flicker_at).min(i32::MAX as u64) as i32).max(0)
+    /// The flicker tally once its turns through tick `through` took one each
+    /// (`KineticBlockEntity.tick`).
+    pub(super) fn flicker(&self, through: u64) -> i32 {
+        (self.flicker - through.saturating_sub(self.flicker_at).min(i32::MAX as u64) as i32).max(0)
     }
 }
 

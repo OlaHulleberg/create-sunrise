@@ -137,15 +137,15 @@ impl Kinetics {
     /// KineticBlockEntity.onSpeedChanged: the flicker tally gains 5 when the speed started,
     /// stopped or turned round since `before`, and the subclass callbacks run.
     pub(super) fn speed_changed(&mut self, id: u32, before: f32, changed: bool) {
-        let n = &mut self.nodes[id as usize];
+        let n = &self.nodes[id as usize];
         let shown = n.state.speed;
-        n.state.flicker = n.state.flicker(self.now)
-            + if n.sub == 0 {
-                flicker_gain(before, shown)
-            } else {
-                0
-            };
-        n.state.flicker_at = self.now;
+        let gain = if n.sub == 0 {
+            flicker_gain(before, shown)
+        } else {
+            0
+        };
+        self.add_flicker(id, gain);
+        let n = &self.nodes[id as usize];
         if changed && n.sub == 0 {
             self.speed_notifications.push((n.pos, shown));
         }
@@ -302,7 +302,7 @@ impl Kinetics {
             }
             if new.abs() > MAX_SPEED
                 || opposite.abs() > MAX_SPEED
-                || self.nodes[cur as usize].state.flicker(self.now) > MAX_FLICKER_SCORE
+                || self.flicker_score_of(cur) > MAX_FLICKER_SCORE
                 || (new != 0.0 && other != 0.0 && new.signum() != other.signum())
             {
                 let pos = self.nodes[cur as usize].pos;
