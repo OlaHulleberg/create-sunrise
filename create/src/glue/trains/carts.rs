@@ -285,7 +285,7 @@ struct OnCart {
     /// The glue that held it (`Contraption.superglue`), in offsets from its anchor.
     glue: Vec<Glue>,
     /// What its other block entities and the engine kept for its blocks
-    /// (`StructureBlockInfo.nbt`), as `actors::carry_held` saves it.
+    /// (`StructureBlockInfo.nbt`), as `actors::held_to_nbt` saves it.
     held: Option<Tag>,
     /// Its actors (drills, saws, harvesters, ploughs, rollers, deployers) and what they work
     /// on (`MovementContext`), made again from its blocks when it loads.
@@ -1287,14 +1287,35 @@ fn live_links(lv: &mut ServerLevel<'_>) -> Vec<(EntityRef, Arc<OnCart>, coupling
     links
 }
 
-/// Borrow the live links for one coupling operation, without saving a second copy of them.
-fn edit_couplings(
+struct CouplingEdit {
+    link: coupling::Link,
+    ordinary: Couplings,
+    reversed: Vec<(EntityRef, Arc<OnCart>)>,
+}
+
+impl CouplingEdit {
+    fn apply(self, host: &mut dyn ServerHost) -> coupling::Link {
+        for (rider, on) in self.reversed {
+            save_rider(host, rider, on);
+        }
+        CARTS.with_borrow_mut(|c| {
+            if c.couplings != self.ordinary {
+                c.couplings = self.ordinary;
+                c.dirty = true;
+            }
+        });
+        self.link
+    }
+}
+
+/// Check the link and plan any chain reversals without publishing them yet.
+fn prepare_coupling(
     lv: &mut ServerLevel<'_>,
     a: u128,
     b: u128,
     distance: f64,
     contraption: bool,
-) -> Result<coupling::Link, coupling::Refused> {
+) -> Result<CouplingEdit, coupling::Refused> {
     let mut merged = CARTS.with_borrow(|c| c.couplings.clone());
     let links = live_links(lv);
     for &(_, _, link) in &links {
@@ -1307,27 +1328,27 @@ fn edit_couplings(
             .is_some()
     })?;
     let link = merged.get(a).leading.ok_or(coupling::Refused::Silent)?;
-    for (rider, mut on, before) in links {
-        if let Some(after) = merged.get(before.main).connected
-            && after.contraption
-            && after.main == before.connected
-        {
+    let reversed = links
+        .into_iter()
+        .filter_map(|(rider, mut on, before)| {
+            let after = merged.get(before.main).connected?;
+            if !after.contraption || after.main != before.connected {
+                return None;
+            }
             Arc::make_mut(&mut on).link = Some(after);
-            save_rider(lv.host, rider, on);
-        }
-    }
+            Some((rider, on))
+        })
+        .collect();
     merged.carts.retain(|_, c| {
         c.leading = c.leading.filter(|l| !l.contraption);
         c.connected = c.connected.filter(|l| !l.contraption);
         !c.is_empty()
     });
-    CARTS.with_borrow_mut(|c| {
-        if c.couplings != merged {
-            c.couplings = merged;
-            c.dirty = true;
-        }
-    });
-    Ok(link)
+    Ok(CouplingEdit {
+        link,
+        ordinary: merged,
+        reversed,
+    })
 }
 
 fn anchor_state(host: &dyn Host, axis: &str) -> Option<BlockState> {
@@ -1345,6 +1366,7 @@ fn is_anchor(id: u32) -> bool {
 /// centres and coupled (`tryToCoupleCarts` with no player: a contraption's coupling), and the
 /// contraption spans them, facing from the first to the second.
 fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool, nc: &Cart) {
+    use crate::glue::contraptions::actors;
     let taken = rider_of(lv, nc).is_some() || linked_rider(lv, nc.uuid).is_some();
     if taken || nc.occupied(&*lv.host) {
         return;
@@ -1407,7 +1429,8 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
         return;
     };
     let mut initial = cart::horizontal_direction(axis, backwards);
-    let mut link = None;
+    // The carts' coupling and places, set once the blocks have left the world.
+    let mut meeting = None;
     if let Some((other, p)) = &connected {
         let centre = |b: [i32; 3]| {
             [
@@ -1423,29 +1446,15 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             rider.remove(lv.host, RemovalReason::Discarded);
             return;
         }
-        let Ok(created) = edit_couplings(lv, nc.uuid, other.uuid, distance, true) else {
+        let Ok(edit) = prepare_coupling(lv, nc.uuid, other.uuid, distance, true) else {
             rider.remove(lv.host, RemovalReason::Discarded);
             return;
         };
-        link = Some(created);
-        nc.entity.teleport_to(lv.host, here, None);
-        other.entity.teleport_to(lv.host, there, None);
+        meeting = Some((edit, other.entity, other.uuid, here, there));
         initial = coupling::dir_from_y_rot(d[2].atan2(d[0]).to_degrees());
-        CARTS.with_borrow_mut(|c| {
-            c.known.insert(
-                other.uuid,
-                Known {
-                    dim: lv.dim,
-                    entity: other.entity,
-                    rider: None,
-                    pos: there,
-                    prev: there,
-                },
-            );
-        });
     }
     // `MountedStorageManager`: the storage blocks' items ride with the contraption.
-    let storage: Vec<([i32; 3], Vec<Option<ItemStack>>)> = blocks
+    let mut storage: Vec<([i32; 3], Vec<Option<ItemStack>>)> = blocks
         .iter()
         .filter(|(o, _)| *o != [0, 0, 0])
         .filter_map(|(o, _)| {
@@ -1455,19 +1464,52 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
         .collect();
     // `Contraption.superglue`: the glue holding its blocks leaves the world with them, and its
     // contraption controls' settings with their blocks (turning their kinds off).
-    let mut extras =
-        crate::glue::contraptions::actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-    let glue = std::mem::take(&mut extras.glue);
+    let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
     // What their block entities and the engine keep for its other blocks rides too.
-    let held = crate::glue::contraptions::actors::carry_held(lv, held_key(nc.uuid), pos, &blocks);
-    // `removeBlocksFromWorld`: anchors stay.
-    for (o, s) in blocks.iter().filter(|(o, _)| *o != [0, 0, 0]) {
-        if is_anchor(*s) {
-            continue;
-        }
-        let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-        lv.set_state(p, air, update_all());
+    let key = held_key(nc.uuid);
+    actors::carry_held(lv, key, pos, &blocks);
+    // `removeBlocksFromWorld`: anchors stay. A block that refuses to go stays standing.
+    let cells: Vec<([i32; 3], u32)> = blocks
+        .iter()
+        .filter(|(o, s)| *o != [0, 0, 0] && !is_anchor(*s))
+        .map(|(o, s)| ([pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]], *s))
+        .collect();
+    let refused = super::remove_car_cells(lv, &cells, air, "contraption assembly");
+    // What the standing blocks gave up goes back to them, and the cart carries only what
+    // left the world.
+    crate::glue::contraptions::drop_refused_for(lv, key, pos, &refused, &mut blocks, &mut extras);
+    actors::return_refused_stored(lv, pos, &refused, &mut storage);
+    let held = actors::held_to_nbt(lv, key);
+    if !refused.is_empty() && blocks.iter().all(|(o, s)| *o == [0, 0, 0] || is_anchor(*s)) {
+        // Nothing left the world: its glue goes back and no contraption rides the cart.
+        actors::release_extras(
+            lv,
+            &mut extras,
+            |o| [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]],
+            |_| false,
+        );
+        rider.remove(lv.host, RemovalReason::Discarded);
+        return;
     }
+    let glue = std::mem::take(&mut extras.glue);
+    let link = meeting.map(|(edit, other, uuid, here, there)| {
+        let link = edit.apply(lv.host);
+        nc.entity.teleport_to(lv.host, here, None);
+        other.teleport_to(lv.host, there, None);
+        CARTS.with_borrow_mut(|c| {
+            c.known.insert(
+                uuid,
+                Known {
+                    dim: lv.dim,
+                    entity: other,
+                    rider: None,
+                    pos: there,
+                    prev: there,
+                },
+            );
+        });
+        link
+    });
     let dim = lv.dim;
     let mode = CARTS.with_borrow(|c| {
         c.stations
@@ -1475,8 +1517,8 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .map(|s| s.mode)
             .unwrap_or_default()
     });
-    let carried = crate::glue::contraptions::actors::with_extras(
-        crate::glue::contraptions::actors::structure_actors(&*lv.host, &blocks, super::car_state),
+    let carried = actors::with_extras(
+        actors::structure_actors(&*lv.host, &blocks, super::car_state),
         &extras,
     );
     crate::glue::advancements::assembled(lv, pos, &blocks);
@@ -2231,8 +2273,9 @@ fn click_coupling(lv: &mut ServerLevel<'_>, player: mod_api::PlayerRef, nc: &Car
         .map(|k| (first.pos[k] - nc.pos[k]).powi(2))
         .sum::<f64>()
         .sqrt();
-    match edit_couplings(lv, first.uuid, nc.uuid, distance, false) {
-        Ok(_) => {
+    match prepare_coupling(lv, first.uuid, nc.uuid, distance, false) {
+        Ok(edit) => {
+            edit.apply(lv.host);
             CARTS.with_borrow_mut(|c| {
                 for k in [&first, nc] {
                     c.known.insert(
@@ -2877,9 +2920,212 @@ fn load(lv: &mut ServerLevel<'_>) {
 }
 
 #[cfg(test)]
+#[path = "carts/test_server.rs"]
+mod test_server;
+
+#[cfg(test)]
 mod tests {
     use super::*;
+    use crate::glue::{contraptions::actors, world::with_test_world};
+    use create_engine::belt::{Inventory, Item};
     use mod_api::{Identifier, prelude::ItemsHost, testing::FakeHost};
+
+    use test_server::{AIR, ASSEMBLER, BARREL, BELT, STONE, TestServer, isolated_assembly};
+
+    const ASSEMBLER_POS: [i32; 3] = [0, 64, 0];
+
+    #[test]
+    fn assemble_partial_refusal_keeps_refused_blocks_and_cargo_standing() {
+        isolated_assembly(
+            "glue::trains::carts::tests::assemble_partial_refusal_keeps_refused_blocks_and_cargo_standing",
+            || {
+                let (mut s, mut world) = TestServer::new(&[[0.5, 64.0, 0.5]]);
+                let nc = s.carts[0].clone();
+                let (cleared_barrel, refused_barrel) = ([0, 65, 0], [1, 65, 0]);
+                let (cleared_belt, refused_belt) = ([0, 66, 0], [1, 66, 0]);
+                let taken_stack = s.barrel(cleared_barrel, 3);
+                let standing_stack = s.barrel(refused_barrel, 7);
+                s.place(ASSEMBLER_POS, ASSEMBLER);
+                s.refuse.extend([refused_barrel, refused_belt]);
+                world.dims[0]
+                    .glue
+                    .push(Glue::span(cleared_barrel, refused_belt));
+
+                // A controller can already hold its inventory before its full chain loads.
+                let belt_id = states::id(s.state(BELT)).unwrap();
+                let carried_item = Item::new("minecraft:iron_ingot", 4, 0, false);
+                let standing_item = Item::new("minecraft:gold_ingot", 9, 0, false);
+                for (pos, item) in [
+                    (cleared_belt, carried_item),
+                    (refused_belt, standing_item.clone()),
+                ] {
+                    s.place(pos, BELT);
+                    world.block_loaded(0, pos, belt_id);
+                    world.restore_staged_belt(0, pos, Inventory::fresh(vec![item]), Some(2));
+                }
+
+                with_test_world(world, || {
+                    assemble(&mut s.level(), ASSEMBLER_POS, Axis::X, false, &nc);
+                    s.writes.sort_unstable();
+                    assert_eq!(
+                        s.writes,
+                        [cleared_barrel, cleared_belt, refused_barrel, refused_belt]
+                    );
+                    assert_eq!(s.blocks[&cleared_barrel], s.state(AIR));
+                    assert_eq!(s.blocks[&cleared_belt], s.state(AIR));
+                    assert_eq!(s.blocks[&refused_barrel], s.state(BARREL));
+                    assert_eq!(s.blocks[&refused_belt], s.state(BELT));
+                    assert_eq!(s.barrel_slot(refused_barrel), Some(&standing_stack));
+                    assert!(s.removed.is_empty());
+                    assert!(s.drops.is_empty());
+                    let rider = s.rider.expect("assembly must spawn a rider");
+                    assert_eq!(s.mounted, Some((rider, nc.entity)));
+                    let saved = keys()
+                        .unwrap()
+                        .payload
+                        .get_existing(&mut s, Holder::Entity(rider.id()), |p| p.cloned())
+                        .unwrap()
+                        .expect("the rider must own a saved payload");
+                    let on = decode_payload(&s, &saved, |name| super::super::car_of_text(&s, name))
+                        .unwrap();
+                    assert_eq!(on.cart, nc.uuid);
+                    let mut blocks = on.m.blocks;
+                    blocks.sort_unstable();
+                    assert_eq!(
+                        blocks,
+                        [
+                            (
+                                [0, 0, 0],
+                                super::super::car_id(anchor_state(&s, "x").unwrap())
+                            ),
+                            ([0, 1, 0], super::super::car_id(s.state(BARREL))),
+                            ([0, 2, 0], belt_id),
+                        ]
+                    );
+                    let [(offset, slots)] = on.storage.as_slice() else {
+                        panic!(
+                            "only the cleared barrel's storage should ride: {:?}",
+                            on.storage
+                        );
+                    };
+                    assert_eq!(*offset, [0, 1, 0]);
+                    assert_eq!(slots[0], Some(taken_stack));
+                    assert!(slots[1..].iter().all(Option::is_none));
+                    let Some(Tag::List(held)) = on.held else {
+                        panic!("the cleared belt's inventory should ride");
+                    };
+                    let [Tag::Compound(cell)] = held.as_slice() else {
+                        panic!("only the cleared belt should have held data: {held:?}");
+                    };
+                    assert_eq!(get(cell, "pos"), Some(&Tag::IntArray(vec![0, 2, 0])));
+                    let Some(Tag::Compound(data)) = get(cell, "held") else {
+                        panic!("missing held data")
+                    };
+                    let Some(Tag::Compound(engine)) = get(data, "engine") else {
+                        panic!("missing belt data")
+                    };
+                    let Some(Tag::List(belts)) = get(engine, "BeltItems") else {
+                        panic!("missing belt inventory")
+                    };
+                    let [Tag::Compound(belt)] = belts.as_slice() else {
+                        panic!("expected one carried belt inventory")
+                    };
+                    assert_eq!(
+                        get(belt, "ids"),
+                        Some(&Tag::List(vec![Tag::String("minecraft:iron_ingot".into())]))
+                    );
+                    let Some(Tag::IntArray(items)) = get(belt, "items") else {
+                        panic!("missing belt item fields")
+                    };
+                    assert_eq!(items.get(3), Some(&4));
+                    assert!(!actors::has_test_held(0, held_key(nc.uuid)));
+
+                    with_world(|w| {
+                        let belts = w.column_belts(0, 0, 0);
+                        let [(pos, contents)] = belts.as_slice() else {
+                            panic!("only the standing belt should keep its inventory")
+                        };
+                        assert_eq!(*pos, refused_belt);
+                        assert_eq!(
+                            contents.items.as_slice(),
+                            std::slice::from_ref(&standing_item)
+                        );
+                        assert!(w.dims[0].belt_drops.is_empty());
+                        // A leftover quiet marker would swallow this ordinary removal.
+                        w.apply_block_change(0, refused_belt, belt_id, 0, false);
+                        let [(pos, _, _, dropped)] = w.dims[0].belt_drops.as_slice() else {
+                            panic!("ordinary removal of the standing belt should drop its item");
+                        };
+                        assert_eq!(*pos, refused_belt);
+                        assert_eq!(dropped, &standing_item);
+                    })
+                    .unwrap();
+                });
+            },
+        );
+    }
+
+    #[test]
+    fn assemble_all_refused_discards_rider_restores_glue_and_skips_coupling() {
+        isolated_assembly(
+            "glue::trains::carts::tests::assemble_all_refused_discards_rider_restores_glue_and_skips_coupling",
+            || {
+                let positions = [[0.25, 64.0, 0.5], [2.75, 64.0, 0.5], [-2.5, 64.0, 0.5]];
+                let (mut s, mut world) = TestServer::new(&positions);
+                let nc = s.carts[0].clone();
+                let (other, tail) = (s.carts[1].uuid, s.carts[2].uuid);
+                let second = [2, 64, 0];
+                s.place(ASSEMBLER_POS, ASSEMBLER);
+                s.place(second, ASSEMBLER);
+                let removable = [[0, 65, 0], [1, 65, 0], [2, 65, 0]];
+                for pos in removable {
+                    s.place(pos, STONE);
+                }
+                s.refuse.extend(removable);
+                let standing = s.blocks.clone();
+                let glue = Glue::span(ASSEMBLER_POS, removable[2]);
+                world.dims[0].glue.push(glue);
+
+                // The primary cart already leads an ordinary link. Coupling the second
+                // assembler's cart would reverse that link, not just create a rider link.
+                let mut before = Couplings::default();
+                before
+                    .try_couple(nc.uuid, tail, 3.0, false, |_| true)
+                    .unwrap();
+                CARTS.with_borrow_mut(|c| c.couplings = before.clone());
+                with_test_world(world, || {
+                    let edit = prepare_coupling(&mut s.level(), nc.uuid, other, 2.0, true).unwrap();
+                    assert_ne!(edit.ordinary, before);
+
+                    assemble(&mut s.level(), ASSEMBLER_POS, Axis::X, false, &nc);
+                    s.writes.sort_unstable();
+                    assert_eq!(s.writes, removable);
+                    assert_eq!(s.blocks, standing);
+                    assert!(
+                        !s.glue_present_at_write,
+                        "the glue must have been taken first"
+                    );
+                    assert_eq!(with_world(|w| w.dims[0].glue.clone()), Some(vec![glue]));
+                    let rider = s
+                        .rider
+                        .expect("assembly must have boarded a temporary rider");
+                    assert_eq!(s.removed, [(rider, RemovalReason::Discarded)]);
+                    assert_eq!(s.mounted, None);
+                    let holder = Holder::Entity(rider.id());
+                    let keys = keys().unwrap();
+                    assert!(!keys.payload.has(&mut s, holder).unwrap());
+                    assert!(!keys.motion.has(&mut s, holder).unwrap());
+                    CARTS.with_borrow(|c| {
+                        assert_eq!(c.couplings, before);
+                        assert!(!c.dirty);
+                        assert!(c.known.is_empty());
+                    });
+                    assert!(s.teleports.is_empty());
+                    assert!(s.carts.iter().map(|cart| cart.pos).eq(positions));
+                });
+            },
+        );
+    }
 
     #[test]
     fn rider_structure_keeps_the_blocks_storage_and_owned_link_without_motion() {
