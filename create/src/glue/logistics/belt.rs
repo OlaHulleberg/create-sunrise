@@ -858,8 +858,9 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
         }
         if !ticked.ejected.is_empty() {
             let last = if speed > 0.0 { length - 1 } else { 0 };
-            let last = belt::position_for_offset(c, &seg, length, last);
-            super::flaps::tunnel(lv, last, belt::movement_facing(rpm, seg.facing), false);
+            if let Some(last) = belt::position_for_offset(c, &seg, length, last) {
+                super::flaps::tunnel(lv, last, belt::movement_facing(rpm, seg.facing), false);
+            }
         }
     }
     let changed = with_world(|w| {
@@ -1007,7 +1008,7 @@ pub struct BeltSide<'a, 'l> {
 }
 
 impl BeltSide<'_, '_> {
-    fn past_end(&self) -> [i32; 3] {
+    fn past_end(&self) -> Option<[i32; 3]> {
         belt::position_for_offset(
             self.controller,
             &self.segment,
@@ -1020,7 +1021,7 @@ impl BeltSide<'_, '_> {
         belt::movement_facing(self.rpm, self.segment.facing)
     }
 
-    fn at(&self, segment: i32) -> [i32; 3] {
+    fn at(&self, segment: i32) -> Option<[i32; 3]> {
         belt::position_for_offset(self.controller, &self.segment, self.length, segment)
     }
 }
@@ -1039,7 +1040,9 @@ fn block_face(d: Dir) -> BlockFace {
 
 impl belt::Surroundings for BeltSide<'_, '_> {
     fn ending(&mut self) -> belt::Ending {
-        let next = self.past_end();
+        let Some(next) = self.past_end() else {
+            return belt::Ending::Eject;
+        };
         if direct_input_at(self.lv, next) {
             return belt::Ending::Insert;
         }
@@ -1056,18 +1059,19 @@ impl belt::Surroundings for BeltSide<'_, '_> {
     }
 
     fn insert(&mut self, item: &belt::Item) -> Option<u8> {
-        let (next, side) = (self.past_end(), self.movement());
+        let (next, side) = (self.past_end()?, self.movement());
         let left = insert_into(self.lv, next, side, item);
-        if left.is_some_and(|l| l != item.count) {
-            let last = self.at(if self.positive { self.length - 1 } else { 0 });
+        if left.is_some_and(|l| l != item.count)
+            && let Some(last) = self.at(if self.positive { self.length - 1 } else { 0 })
+        {
             super::flaps::tunnel(self.lv, last, side, false);
         }
         left
     }
 
     fn funnel(&mut self, segment: i32) -> Option<(create_engine::funnel::OnBelt, Dir)> {
-        let at = self.at(segment);
-        let f = funnel_at(self.lv, [at[0], at[1] + 1, at[2]])?;
+        let [x, y, z] = self.at(segment)?;
+        let f = funnel_at(self.lv, [x, y.checked_add(1)?, z])?;
         let on = create_engine::funnel::OnBelt {
             facing: f.facing,
             shape: f.belt?,
@@ -1077,8 +1081,8 @@ impl belt::Surroundings for BeltSide<'_, '_> {
     }
 
     fn funnel_insert(&mut self, segment: i32, item: &belt::Item) -> Option<u8> {
-        let at = self.at(segment);
-        let pos = [at[0], at[1] + 1, at[2]];
+        let [x, y, z] = self.at(segment)?;
+        let pos = [x, y.checked_add(1)?, z];
         let f = funnel_at(self.lv, pos)?;
         if with_world(|w| w.funnel_inv_ready(self.lv.dim, pos)) != Some(true) {
             return Some(item.count);
@@ -1130,8 +1134,12 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         if step == belt::TunnelStep::Pass || (item.count == 0 && before > 0) {
             let movement = self.movement();
             let step_dir = if self.positive { 1 } else { -1 };
-            super::flaps::tunnel(self.lv, self.at(segment - step_dir), movement, false);
-            super::flaps::tunnel(self.lv, self.at(segment), movement.opposite(), true);
+            if let Some(from) = segment.checked_sub(step_dir).and_then(|i| self.at(i)) {
+                super::flaps::tunnel(self.lv, from, movement, false);
+            }
+            if let Some(to) = self.at(segment) {
+                super::flaps::tunnel(self.lv, to, movement.opposite(), true);
+            }
         }
         step
     }
@@ -1146,9 +1154,12 @@ impl belt::Surroundings for BeltSide<'_, '_> {
         item: &mut belt::Item,
         locked: bool,
     ) -> Option<belt::Process> {
-        let at = self.at(segment);
+        let at = self.at(segment)?;
         // `getBeltProcessingAtSegment`: none, and nothing acts.
-        let above = self.lv.info([at[0], at[1] + 2, at[2]]).map(|(b, _)| b);
+        let above = self
+            .lv
+            .info([at[0], at[1].checked_add(2)?, at[2]])
+            .map(|(b, _)| b);
         if !above.is_some_and(belt::processes_below) {
             return None;
         }
@@ -1164,8 +1175,13 @@ impl belt::Surroundings for BeltSide<'_, '_> {
 impl BeltSide<'_, '_> {
     /// The tunnel over segment `segment` of a horizontal belt takes some of `item` (`tunnel`).
     fn tunnel_takes(&mut self, segment: i32, item: &mut belt::Item) -> belt::TunnelStep {
-        let at = self.at(segment);
-        let t = [at[0], at[1] + 1, at[2]];
+        let Some(at) = self.at(segment) else {
+            return belt::TunnelStep::Pass;
+        };
+        let Some(y) = at[1].checked_add(1) else {
+            return belt::TunnelStep::Pass;
+        };
+        let t = [at[0], y, at[2]];
         let Some((axis, shape)) = tunnel_state(self.lv, t) else {
             return belt::TunnelStep::Pass;
         };
