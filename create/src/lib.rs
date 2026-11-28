@@ -10,13 +10,13 @@ use glue::server::ServerLevel;
 use glue::{SUBSYSTEMS, persist, states, world};
 use mod_api::{
     AttackEntityEvent, BlockChangedEvent, BlockPart, BreakBlockEvent, ChunkLoadEvent,
-    ChunkUnloadEvent, ClientHost, ClientLevelUnloadEvent, ClientTickPostEvent, EntityInteractEvent,
-    EntityJoinLevelEvent, EntityMountEvent, EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent,
-    InteractionKeyMappingTriggeredEvent, InteractionResult, KeyMappingPreEvent,
-    LeftClickBlockEvent, LevelHost, LevelLoadEvent, LevelSaveEvent, LevelTickPostEvent,
-    LevelWriteHost, MouseScrollingEvent, NeighborChangedEvent, PlayerContainerCloseEvent,
-    PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent, PlayerTickPostEvent,
-    RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
+    ChunkUnloadEvent, ClientBreakProgressEvent, ClientHost, ClientLevelUnloadEvent,
+    ClientTickPostEvent, EntityInteractEvent, EntityJoinLevelEvent, EntityMountEvent,
+    EntityPlaceEvent, Flow, Hooks, HostSide, InputKeyEvent, InteractionKeyMappingTriggeredEvent,
+    InteractionResult, KeyMappingPreEvent, LeftClickBlockEvent, LevelHost, LevelLoadEvent,
+    LevelSaveEvent, LevelTickPostEvent, LevelWriteHost, MouseScrollingEvent, NeighborChangedEvent,
+    PlayerContainerCloseEvent, PlayerContainerOpenEvent, PlayerLoggedInEvent, PlayerLoggedOutEvent,
+    PlayerTickPostEvent, RegisterCommandsEvent, Registrar, RegistrationContext, RenderGuiPostEvent,
     RightClickBlockEvent, RightClickItemEvent, ScreenCharTypedPreEvent, ScreenClosingEvent,
     ScreenKeyPressedPreEvent, ScreenMouseButtonPressedPreEvent, ScreenMouseButtonReleasedPreEvent,
     ScreenMouseScrolledPreEvent, ScreenRenderPostEvent, ServerHost, ServerStoppedEvent,
@@ -239,6 +239,15 @@ impl Hooks for Create {
         }
     }
 
+    /// `LevelRendererMixin`: a crack on one part of a multiblock shows on its other parts.
+    fn client_break_progress(
+        &self,
+        host: &dyn ClientHost,
+        event: &mut ClientBreakProgressEvent<'_>,
+    ) {
+        glue::cracks::told(host, event);
+    }
+
     fn client_pick(&self, host: &mut dyn ClientHost, event: &mut mod_api::ClientPickEvent<'_>) {
         glue::equipment::grip_pick(host, event);
     }
@@ -305,10 +314,11 @@ impl Hooks for Create {
 
     fn render_frame_pre(
         &self,
-        _host: &mut dyn ClientHost,
+        host: &mut dyn ClientHost,
         _event: &mut mod_api::RenderFramePreEvent,
     ) {
         glue::equipment::grip_frame();
+        glue::cracks::show(host);
     }
 
     fn render_hand(

@@ -5,6 +5,7 @@ pub(crate) mod advancements;
 pub mod blocks;
 pub mod contraptions;
 pub mod copycat;
+pub mod cracks;
 mod data_dir;
 pub mod decor;
 pub mod display;
@@ -306,6 +307,7 @@ pub fn client_table<R>(host: &dyn Host, f: impl FnOnce(&StateTable) -> R) -> Opt
 pub fn client_reset(_host: &mut dyn ClientHost) {
     CLIENT_TABLE.with_borrow_mut(|t| *t = None);
     models::forget();
+    cracks::forget();
     for s in SUBSYSTEMS {
         s.client_reset();
     }

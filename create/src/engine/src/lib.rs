@@ -25,6 +25,7 @@ pub mod contraption;
 pub mod controller;
 pub mod copycat;
 pub mod coupling;
+pub mod cracks;
 pub mod crafter;
 pub mod crafter_input;
 pub mod crusher;

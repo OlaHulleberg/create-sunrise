@@ -200,6 +200,26 @@ impl Subsystem for Sources {
         ambience::client_reset();
     }
 
+    /// `WaterWheelStructuralBlock.RenderProperties.getExtraPositions`: the wheel its frame
+    /// cell holds.
+    fn crack_parts(
+        &self,
+        host: &dyn ClientHost,
+        level: mod_api::LevelRef,
+        block: Block,
+        pos: [i32; 3],
+        info: &create_engine::parts::StateInfo,
+    ) -> Option<Vec<[i32; 3]>> {
+        if block != Block::WaterWheelStructure {
+            return None;
+        }
+        let facing = info.facing?;
+        let wheel = create_engine::cracks::frame_wheel(pos, facing, &|p| {
+            super::cracks::block_at(host, level, p)
+        })?;
+        Some(vec![wheel])
+    }
+
     fn fluid_passage(&self, level: &dyn LevelHost, event: &mut FluidPassageEvent<'_>) {
         waterwheels::fluid_passage(level, event);
     }

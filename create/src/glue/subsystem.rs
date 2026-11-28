@@ -365,6 +365,21 @@ pub trait Subsystem: Sync {
     /// The client left its world: drop what it kept.
     fn client_reset(&self) {}
 
+    /// `MultiPosDestructionHandler.getExtraPositions`: the other parts of the multiblock the
+    /// Create block `block` in state `info` at `pos` of a client's level `level` belongs to,
+    /// which a crack on it is drawn on too (`glue::cracks`); `None` for a block that is no part
+    /// of one. Read-only.
+    fn crack_parts(
+        &self,
+        _host: &dyn ClientHost,
+        _level: mod_api::LevelRef,
+        _block: create_engine::Block,
+        _pos: [i32; 3],
+        _info: &create_engine::parts::StateInfo,
+    ) -> Option<Vec<[i32; 3]>> {
+        None
+    }
+
     /// `Hooks::register_particle_providers`: the mod's particle types moved by code.
     fn particle_providers(&self, _providers: &mut dyn mod_api::ParticleProviders) {}
 

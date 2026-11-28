@@ -65,7 +65,12 @@ API, and remove it once the API has it and the port uses it.
   picks its sheet per position.
   Create uses: Create's own `ConnectedTextureBehaviour`, calling `BlockState.getAppearance` ([`ConnectedTextureBehaviour.java:79`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/block/connected/ConnectedTextureBehaviour.java#L79)).
   sunrise-org/sunrise#5081, sunrise-org/sunrise#1106
-- **Mining cracks on positions beyond 8 blocks of the broken block**: large multiblocks crack only near the broken part.
+- **A crack drawn on a block the port draws**: `set_client_break_progress` has no radius cap, so a belt's whole
+  chain, the large wheel a mined frame cell holds and the tracks a curve joins are given the crack of the part
+  mined (`LevelRendererMixin`), and a track's is seen. A belt's or the wheel's is not: the game draws a crack
+  from the models of a block whose render shape is `Model`, or for its own block entities, and on Dev `ba1f24e`
+  a block entity's draw has no way to ask for it (`BlockEntityDrawContext::crumbling` comes with
+  sunrise-org/sunrise#5079, merged after that build).
   Create uses: Create mixin `LevelRendererMixin` on `LevelRenderer.destroyBlockProgress`, reading NeoForge
   `IClientBlockExtensions` ([`LevelRendererMixin.java:37`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/foundation/mixin/client/LevelRendererMixin.java#L37)). sunrise-org/sunrise#5079
 - **Editing a humanoid's final pose after vanilla's animation** (`HumanoidModel.setupAnim`): a skyhook rider can't hold
