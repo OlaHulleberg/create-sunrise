@@ -135,22 +135,12 @@ impl Segment {
         if self.part == Part::End && forward || self.part == Part::Start && !forward {
             return None;
         }
-        if self.slope == Slope::Vertical {
-            let up = if self.facing.positive() {
-                offset
-            } else {
-                -offset
-            };
-            return Some([pos[0], pos[1] + up, pos[2]]);
-        }
-        let n = self.facing.offset();
-        let mut p = [pos[0] + n[0] * offset, pos[1], pos[2] + n[2] * offset];
-        match self.slope {
-            Slope::Upward => p[1] += offset,
-            Slope::Downward => p[1] -= offset,
-            _ => {}
-        }
-        Some(p)
+        let [x, y, z] = self.vector();
+        Some([
+            pos[0].checked_add(x * offset)?,
+            pos[1].checked_add(y * offset)?,
+            pos[2].checked_add(z * offset)?,
+        ])
     }
 
     /// `BeltHelper.getBeltVector`: from one segment to the next toward the end.
@@ -245,7 +235,7 @@ impl Segment {
 }
 
 /// `BeltBlock.initBelt`'s search for the controller: back along the chain from `pos`, at most
-/// 1000 steps. None when the chain is broken (a missing segment) or too long.
+/// 1000 steps (`BeltBlock.java:416-473, 559-594`). None when the chain is broken or too long.
 pub fn controller_of(
     pos: [i32; 3],
     segment_at: impl Fn([i32; 3]) -> Option<Segment>,
@@ -254,7 +244,7 @@ pub fn controller_of(
     for _ in 0..1000 {
         let s = segment_at(current)?;
         match s.next(current, false) {
-            None => return Some(current),
+            None => return (s.part == Part::Start).then_some(current),
             Some(p) => current = p,
         }
     }
@@ -262,7 +252,7 @@ pub fn controller_of(
 }
 
 /// Walks forward from `controller` (whose segment `start` the caller already read), at most 1000
-/// segments, reading each later segment once: the positions walked and the last segment read.
+/// segments (`BeltBlock.java:416-473, 559-594`): the positions walked and the last segment read.
 fn walk_chain(
     controller: [i32; 3],
     start: Segment,
@@ -309,19 +299,22 @@ pub fn whole_chain(
     (out.len() >= 2 && last.part == Part::End).then_some((start, out))
 }
 
-/// `BeltHelper.getPositionForOffset` from the controller's segment.
+/// `BeltHelper.getPositionForOffset` from the controller's segment, if representable.
 pub fn position_for_offset(
     controller: [i32; 3],
     c: &Segment,
     length: i32,
     offset: i32,
-) -> [i32; 3] {
-    let n = c.facing.offset();
-    [
-        controller[0] + offset * n[0],
-        controller[1] + offset.clamp(0, (length - 1).max(0)) * c.verticality(),
-        controller[2] + offset * n[2],
-    ]
+) -> Option<[i32; 3]> {
+    let [x, _, z] = c.facing.offset();
+    let horizontal =
+        |origin, step| i32::try_from(i64::from(origin) + i64::from(offset) * i64::from(step)).ok();
+    let rise = offset.clamp(0, length.saturating_sub(1).max(0)) * c.verticality();
+    Some([
+        horizontal(controller[0], x)?,
+        controller[1].checked_add(rise)?,
+        horizontal(controller[2], z)?,
+    ])
 }
 
 /// `BeltHelper.getVectorForOffset`: the point on the belt `offset` blocks from its start.
@@ -507,6 +500,12 @@ pub struct SavedSegment {
     pub length: i32,
 }
 
+// Belt processing uses signed block offsets as segment indices. This also keeps arithmetic
+// on two individually finite positions (spacing and interpolation) from overflowing.
+fn valid_item_position(position: f32) -> bool {
+    (i32::MIN as f32..i32::MAX as f32).contains(&position)
+}
+
 /// A stack on a belt (`TransportedItemStack`): how far along it is, sideways offset, angle, the
 /// stack, and whether a machine holds it.
 #[derive(Clone, Debug, PartialEq)]
@@ -568,13 +567,13 @@ impl Item {
     }
 
     /// `new TransportedItemStack(stack)`.
-    pub fn new(item: &str, count: u8, angle: i32, upright: bool) -> Item {
+    pub fn new(item: impl Into<String>, count: u8, angle: i32, upright: bool) -> Item {
         let angle = if upright { 180 } else { angle };
         let mut i = Item {
             position: 0.0,
             side_offset: 0.0,
             angle,
-            item: item.to_owned(),
+            item: item.into(),
             count,
             locked: false,
             inserted_at: 0,
@@ -593,19 +592,33 @@ impl Item {
     /// `TransportedItemStack.read` (`ItemStack.parseOptional`): an emptied stack (`count == 0`,
     /// or saved as `minecraft:air`) reads back as empty (`minecraft:air`, count 0), never
     /// clamped up to 1.
-    pub fn from_saved(item: impl Into<String>, count: i32, angle: i32, upright: bool) -> Item {
-        let item = item.into();
-        let count = if item == "minecraft:air" {
-            0
-        } else {
-            count.clamp(0, 255) as u8
-        };
+    pub fn from_saved(
+        item: impl Into<String>,
+        count: i32,
+        angle: i32,
+        upright: bool,
+        [position, side_offset]: [f32; 2],
+    ) -> Item {
+        let count = count.clamp(0, 255) as u8;
         let item = if count == 0 {
-            "minecraft:air".to_owned()
+            String::from("minecraft:air")
         } else {
-            item
+            item.into()
         };
-        Item::new(&item, count, angle, upright)
+        let count = if item == "minecraft:air" { 0 } else { count };
+        let mut item = Item::new(
+            item,
+            count,
+            angle.clamp(i32::from(i16::MIN), i32::from(i16::MAX)),
+            upright,
+        );
+        if valid_item_position(position) {
+            item.position = position;
+        }
+        if side_offset.is_finite() {
+            item.side_offset = side_offset;
+        }
+        item
     }
 
     /// `getTargetSideOffset`.
@@ -694,16 +707,21 @@ pub fn casing_model(seg: &Segment) -> (&'static str, i32, i32) {
         };
     }
     let slope = if diagonal {
-        "diagonal"
+        "diagonal_"
     } else if vertical || sideways {
-        "sideways"
+        "sideways_"
     } else {
-        "horizontal"
+        "horizontal_"
     };
+    let part = part.name();
     let name = CASING_MODELS
         .iter()
-        .find(|m| m.ends_with(&format!("/{slope}_{}", part.name())))
         .copied()
+        .find(|m| {
+            m.strip_prefix("create:block/belt_casing/")
+                .and_then(|m| m.strip_prefix(slope))
+                == Some(part)
+        })
         .unwrap_or(CASING_MODELS[5]);
     let x = if vertical {
         90
@@ -755,7 +773,7 @@ pub const PARTIAL_MODELS: [&str; 9] = [
 
 /// `BeltRenderer.getSpriteShiftEntry`: the sprite a segment's partial is textured with and the
 /// scrolling one drawn in its place, for an undyed belt or one dyed `color` (a `DyeColor` name).
-pub fn sprite_shift(seg: &Segment, color: Option<&str>, bottom: bool) -> (String, String) {
+pub fn sprite_shift(seg: &Segment, color: Option<&str>, bottom: bool) -> (&'static str, String) {
     let diagonal = matches!(seg.slope, Slope::Upward | Slope::Downward);
     let source = if diagonal {
         "create:block/belt_diagonal"
@@ -770,7 +788,7 @@ pub fn sprite_shift(seg: &Segment, color: Option<&str>, bottom: bool) -> (String
         (None, true) => "create:block/belt_diagonal_scroll".to_owned(),
         (None, false) => "create:block/belt_scroll".to_owned(),
     };
-    (source.to_owned(), target)
+    (source, target)
 }
 
 /// `BeltRenderer`'s UV scroll of a segment's partial turning at `speed` (its rpm) at render
@@ -1227,9 +1245,12 @@ impl Inventory {
 
     /// `ItemHandlerBeltSegment.extractItem`: up to `amount` of the stack at segment `offset`
     /// splits off (the item's stack shrinks in place; `simulate` leaves it untouched); one it
-    /// empties is only marked `toRemove`. None when no stack is at the segment. What was taken,
-    /// and its name.
+    /// empties is only marked `toRemove`. None when the request is for zero or no stack is at
+    /// the segment (`ItemHandlerBeltSegment.java:51-67`). What was taken, and its name.
     pub fn extract_at(&mut self, offset: i32, amount: u8, simulate: bool) -> Option<(String, u8)> {
+        if amount == 0 {
+            return None;
+        }
         let (min, max) = (offset as f32, offset as f32 + 1.0);
         let within = |s: &Item| !s.removing && s.position <= max && s.position > min;
         let i = self.items.iter().position(within)?;
@@ -1306,11 +1327,13 @@ impl Inventory {
         horizontal: bool,
         world: &mut impl Surroundings,
     ) -> Ticked {
-        // BeltBlockEntity.write -> BeltInventory.write saves current items even
-        // when movement needs no notifyUpdate for clients.
-        let before = self.clone();
+        // BeltInventory.write already includes pending insertions and excludes removals;
+        // flushing them on a stopped belt doesn't change what is saved.
+        let before = (speed != 0.0 && !self.is_empty()).then(|| self.clone());
+        let positive = self.positive;
         let mut out = self.tick_items(length, speed, horizontal, world);
-        out.saved_changed = !self.saved_eq(&before);
+        out.saved_changed =
+            self.positive != positive || before.is_some_and(|before| !self.saved_eq(&before));
         out
     }
 
@@ -1650,10 +1673,6 @@ pub struct Contents {
     pub items: Inventory,
 }
 
-fn slope_index(s: Slope) -> u8 {
-    s as u8
-}
-
 fn slope_of(i: u8) -> Slope {
     [
         Slope::Horizontal,
@@ -1676,24 +1695,48 @@ fn dir_of(i: u8) -> Dir {
 /// contents is a few thousand bytes).
 pub const NAME_MAX: usize = 8192;
 
+// Mod messages carry at most 30,000 bytes (client.rs:649-652).
+const PAYLOAD_MAX: usize = 30_000;
+const ITEM_HEADER: usize = 4 + 4 + 2 + 1 + 1 + 2;
+
 fn encode_one(c: &Contents, out: &mut Vec<u8>) {
     for v in c.controller {
         out.extend_from_slice(&v.to_le_bytes());
     }
     out.extend_from_slice(&[
-        c.segment.facing as u8,
-        slope_index(c.segment.slope),
-        c.segment.part as u8,
-        c.ending as u8,
+        match c.segment.facing {
+            Dir::Down => 0,
+            Dir::Up => 1,
+            Dir::North => 2,
+            Dir::South => 3,
+            Dir::West => 4,
+            Dir::East => 5,
+        },
+        match c.segment.slope {
+            Slope::Horizontal => 0,
+            Slope::Upward => 1,
+            Slope::Downward => 2,
+            Slope::Vertical => 3,
+            Slope::Sideways => 4,
+        },
+        match c.segment.part {
+            Part::Start => 0,
+            Part::Middle => 1,
+            Part::End => 2,
+            Part::Pulley => 3,
+        },
+        match c.ending {
+            Ending::Eject => 0,
+            Ending::Insert => 1,
+            Ending::Blocked => 2,
+        },
         u8::from(c.items.positive),
     ]);
     out.extend_from_slice(&c.length.to_le_bytes());
-    let items = &c.items.items;
-    out.extend_from_slice(&(items.len().min(u16::MAX as usize) as u16).to_le_bytes());
-    for i in items.iter().take(u16::MAX as usize) {
-        out.extend_from_slice(&i.position.to_le_bytes());
-        out.extend_from_slice(&i.side_offset.to_le_bytes());
-        out.extend_from_slice(&(i.angle as i16).to_le_bytes());
+    let count_at = out.len();
+    let mut count = 0u16;
+    out.extend_from_slice(&count.to_le_bytes());
+    for i in &c.items.items {
         // An item named with its components (a package's contents) runs long: two bytes of
         // length; one too long to send whole is left nameless.
         let name = if i.item.len() <= NAME_MAX {
@@ -1701,88 +1744,110 @@ fn encode_one(c: &Contents, out: &mut Vec<u8>) {
         } else {
             &[]
         };
+        if out.len() + ITEM_HEADER + name.len() > PAYLOAD_MAX {
+            break;
+        }
+        out.extend_from_slice(&i.position.to_le_bytes());
+        out.extend_from_slice(&i.side_offset.to_le_bytes());
+        let angle = i.angle.clamp(i32::from(i16::MIN), i32::from(i16::MAX)) as i16;
+        out.extend_from_slice(&angle.to_le_bytes());
         // Standing still, by why: bit 0 locked, 1 held at a funnel, 2 stalled.
         let still = u8::from(i.locked) | u8::from(i.at_funnel) << 1 | u8::from(i.stalled) << 2;
         out.extend_from_slice(&[i.count, still]);
         out.extend_from_slice(&(name.len() as u16).to_le_bytes());
         out.extend_from_slice(name);
+        count += 1;
     }
+    out[count_at..][..2].copy_from_slice(&count.to_le_bytes());
 }
 
-/// Messages of at most 30,000 bytes, whole belts in each (a belt longer than that is cut).
+/// Messages of at most 30,000 bytes, whole belts in each. Only whole items fit in a long belt's
+/// message.
 pub fn encode(all: &[Contents]) -> Vec<Vec<u8>> {
     let mut out: Vec<Vec<u8>> = Vec::new();
     let mut one = Vec::new();
     for c in all {
-        one.clear();
         encode_one(c, &mut one);
-        one.truncate(30_000);
         match out.last_mut() {
-            Some(m) if m.len() + one.len() <= 30_000 => m.extend_from_slice(&one),
-            _ => out.push(one.clone()),
+            Some(m) if m.len() + one.len() <= PAYLOAD_MAX => {
+                m.extend_from_slice(&one);
+                one.clear();
+            }
+            _ => out.push(std::mem::take(&mut one)),
         }
     }
     out
 }
 
 pub fn decode(mut d: &[u8]) -> Vec<Contents> {
-    fn take<'a>(d: &mut &'a [u8], n: usize) -> Option<&'a [u8]> {
-        let (a, b) = (d.get(..n)?, d.get(n..)?);
-        *d = b;
-        Some(a)
+    fn take_array<const N: usize>(d: &mut &[u8]) -> Option<[u8; N]> {
+        let (head, rest) = d.split_first_chunk()?;
+        *d = rest;
+        Some(*head)
     }
-    let i32_of = |b: &[u8]| i32::from_le_bytes(b.try_into().unwrap());
-    let f32_of = |b: &[u8]| f32::from_le_bytes(b.try_into().unwrap());
-    let mut out = Vec::new();
-    while !d.is_empty() {
-        let Some(h) = take(&mut d, 12 + 5 + 2 + 2) else {
-            break;
+
+    std::iter::from_fn(|| {
+        let controller = [
+            i32::from_le_bytes(take_array(&mut d)?),
+            i32::from_le_bytes(take_array(&mut d)?),
+            i32::from_le_bytes(take_array(&mut d)?),
+        ];
+        let [facing, slope, part, ending, positive] = take_array(&mut d)?;
+        let length = u16::from_le_bytes(take_array(&mut d)?);
+        let count = u16::from_le_bytes(take_array(&mut d)?);
+        // Length zero removes the belt from the client's view; it cannot carry items.
+        if length == 0 && count != 0 {
+            return None;
+        }
+        let mut items = Inventory {
+            positive: positive != 0,
+            ..Inventory::default()
         };
-        let mut c = Contents {
-            controller: [i32_of(&h[0..4]), i32_of(&h[4..8]), i32_of(&h[8..12])],
-            segment: Segment {
-                facing: dir_of(h[12]),
-                slope: slope_of(h[13]),
-                part: part_of(h[14]),
-            },
-            ending: match h[15] {
-                1 => Ending::Insert,
-                2 => Ending::Blocked,
-                _ => Ending::Eject,
-            },
-            items: Inventory {
-                positive: h[16] != 0,
-                ..Inventory::default()
-            },
-            length: u16::from_le_bytes([h[17], h[18]]),
-        };
-        for _ in 0..u16::from_le_bytes([h[19], h[20]]) {
-            let Some(r) = take(&mut d, 4 + 4 + 2 + 4) else {
-                return out;
-            };
-            let Some(name) = take(&mut d, usize::from(u16::from_le_bytes([r[12], r[13]]))) else {
-                return out;
-            };
-            c.items.items.push(Item {
-                position: f32_of(&r[0..4]),
-                side_offset: f32_of(&r[4..8]),
-                angle: i32::from(i16::from_le_bytes([r[8], r[9]])),
-                count: r[10],
-                locked: r[11] & 1 != 0,
-                item: String::from_utf8_lossy(name).into_owned(),
+        for _ in 0..count {
+            let position = f32::from_le_bytes(take_array(&mut d)?);
+            let side_offset = f32::from_le_bytes(take_array(&mut d)?);
+            let angle = i32::from(i16::from_le_bytes(take_array(&mut d)?));
+            let [count, still] = take_array(&mut d)?;
+            let name_len = usize::from(u16::from_le_bytes(take_array(&mut d)?));
+            if !valid_item_position(position) || !side_offset.is_finite() || name_len > NAME_MAX {
+                return None;
+            }
+            let (name, rest) = d.split_at_checked(name_len)?;
+            d = rest;
+            items.items.push(Item {
+                position,
+                side_offset,
+                angle,
+                count,
+                locked: still & 1 != 0,
+                item: std::str::from_utf8(name).ok()?.to_owned(),
                 inserted_at: 0,
                 inserted_from: None,
                 fan: Default::default(),
                 held_externally: false,
                 removing: false,
-                at_funnel: r[11] & 2 != 0,
-                stalled: r[11] & 4 != 0,
+                at_funnel: still & 2 != 0,
+                stalled: still & 4 != 0,
                 progress: None,
             });
         }
-        out.push(c);
-    }
-    out
+        Some(Contents {
+            controller,
+            segment: Segment {
+                facing: dir_of(facing),
+                slope: slope_of(slope),
+                part: part_of(part),
+            },
+            ending: match ending {
+                1 => Ending::Insert,
+                2 => Ending::Blocked,
+                _ => Ending::Eject,
+            },
+            length,
+            items,
+        })
+    })
+    .collect()
 }
 
 #[cfg(test)]
@@ -1866,6 +1931,46 @@ mod tests {
         // Nothing for one inside the belt, or on a belt too slow.
         assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.1, 0.5], 48.0, false).is_none());
         assert!(passenger_motion(&seg, [0, 64, 0], [0.5, 64.8, 0.5], 0.5, false).is_none());
+    }
+
+    #[test]
+    fn saved_changed_tracks_persisted_inventory_not_client_notifications() {
+        let mut world = Open(Ending::Eject);
+        let mut inv = Inventory::from_saved(Vec::new(), true);
+        assert!(!inv.tick(4, 0.25, true, &mut world).saved_changed);
+        assert!(inv.tick(4, -0.25, true, &mut world).saved_changed);
+
+        let mut item = Item::new("minecraft:iron_ingot", 1, 180, false);
+        item.position = 0.5;
+        inv.add(item.clone());
+        let queued = inv.clone();
+        let stopped = inv.tick(4, 0.0, true, &mut world);
+        assert!(stopped.changed);
+        assert!(!stopped.saved_changed);
+        assert!(inv.saved_eq(&queued));
+        assert!(!inv.tick(4, 0.0, true, &mut world).saved_changed);
+
+        let moved = inv.tick(4, -0.25, true, &mut world);
+        assert!(moved.saved_changed);
+        assert!(!moved.changed);
+        assert_eq!(inv.items[0].position, 0.25);
+        let ejected = inv.tick(4, -0.5, true, &mut world);
+        assert!(ejected.saved_changed);
+        assert_eq!(ejected.ejected.len(), 1);
+        assert!(inv.is_empty());
+
+        inv.add(item.clone());
+        assert!(inv.tick(4, -0.25, true, &mut world).saved_changed);
+        assert_eq!(inv.extract_at(0, 1, false), Some((item.item.clone(), 1)));
+        assert!(!inv.tick(4, 0.0, true, &mut world).saved_changed);
+        assert!(inv.is_empty());
+
+        item.position = 0.45;
+        inv.items.push(item);
+        let stalled = inv.tick(4, -0.25, true, &mut Open(Ending::Blocked));
+        assert!(inv.items[0].stalled);
+        assert!(stalled.changed);
+        assert!(!stalled.saved_changed, "the stall flag itself isn't saved");
     }
 
     #[test]
@@ -1962,14 +2067,31 @@ mod tests {
         assert_eq!(controller_of([2, 2, 0], at), Some([0, 0, 0]));
         assert_eq!(chain([0, 0, 0], at), [[0, 0, 0], [1, 1, 0], [2, 2, 0]]);
         let c = at([0, 0, 0]).unwrap();
-        assert_eq!(position_for_offset([0, 0, 0], &c, 3, 2), [2, 2, 0]);
+        assert_eq!(position_for_offset([0, 0, 0], &c, 3, 2), Some([2, 2, 0]));
         assert_eq!(
             position_for_offset([0, 0, 0], &c, 3, 3),
-            [3, 2, 0],
+            Some([3, 2, 0]),
             "past the end: level"
         );
         assert_eq!(c.rotation_axis(), Axis::Z);
         assert!(c.has_pulley() && !at([1, 1, 0]).unwrap().has_pulley());
+    }
+
+    #[test]
+    fn segment_positions_do_not_wrap_at_coordinate_edges() {
+        let flat = seg(Dir::East, Slope::Horizontal, Part::Middle);
+        assert_eq!(flat.next([i32::MAX, 0, 0], true), None);
+        assert_eq!(flat.next([i32::MIN, 0, 0], false), None);
+        assert_eq!(
+            flat.next([i32::MAX - 1, 0, 0], true),
+            Some([i32::MAX, 0, 0])
+        );
+        let vertical = seg(Dir::East, Slope::Vertical, Part::Middle);
+        assert_eq!(vertical.next([0, i32::MAX, 0], true), None);
+        let slope = seg(Dir::East, Slope::Downward, Part::Middle);
+        assert_eq!(slope.next([0, i32::MIN, 0], true), None);
+        assert_eq!(position_for_offset([i32::MAX, 0, 0], &flat, 2, 1), None);
+        assert_eq!(position_for_offset([0, i32::MIN, 0], &slope, 2, 1), None);
     }
 
     #[test]
@@ -2035,7 +2157,8 @@ mod tests {
         let up = seg(Dir::East, Slope::Upward, Part::Start);
         let q = item_place(&up, 3, 1.5, 0.0);
         // The 1/8 lift is in the tilted frame: it also moves it sin 45° / 8 along x.
-        assert!((q.at.x - 1.5).abs() - (0.125 * 45f32.to_radians().sin()) < 1e-5);
+        let expected_x = 1.5 - 0.125 * 45f32.to_radians().sin();
+        assert!((q.at.x - expected_x).abs() < 1e-5);
         assert!(q.at.y > 15.0 / 16.0 + 1.0);
         assert!(q.tilt != 0.0);
         assert_eq!(
@@ -2292,6 +2415,18 @@ mod tests {
     }
 
     #[test]
+    fn zero_extraction_leaves_the_stack_untouched() {
+        let mut item = Item::new("minecraft:iron_ingot", 2, 180, false);
+        item.position = 0.5;
+        let mut inv = Inventory::from_saved(vec![item], true);
+        let before = inv.clone();
+        for simulate in [false, true] {
+            assert_eq!(inv.extract_at(0, 0, simulate), None);
+            assert_eq!(inv, before);
+        }
+    }
+
+    #[test]
     fn speeds_follow_the_facing() {
         // getDirectionAwareBeltMovementSpeed: x axis flips the sign.
         assert_eq!(direction_aware_speed(48.0, Dir::South), 0.1);
@@ -2450,8 +2585,14 @@ mod tests {
         let mut press = Press(0);
         // 0.2 a tick: at 1.4 it crosses the segment's centre and is held (tick 8), pressed on
         // the fifth ask (tick 12), the sheet inserted the tick after.
-        for _ in 0..13 {
-            inv.tick(3, movement_speed(96.0), true, &mut press);
+        for n in 1..=13 {
+            let before = inv.clone();
+            let ticked = inv.tick(3, movement_speed(96.0), true, &mut press);
+            assert_eq!(ticked.saved_changed, !inv.saved_eq(&before), "tick {n}");
+            if n == 8 {
+                assert!(inv.items[0].locked);
+                assert!(ticked.saved_changed);
+            }
         }
         assert_eq!(inv.items.len(), 1);
         assert_eq!(inv.items[0].item, "sheet");
@@ -2524,6 +2665,75 @@ mod tests {
     }
 
     #[test]
+    fn payload_budget_counts_only_whole_items_and_keeps_later_belts() {
+        let item = Item::new("a".repeat(NAME_MAX), 1, 180, false);
+        let long = Contents {
+            controller: [1, 0, 0],
+            segment: seg(Dir::South, Slope::Horizontal, Part::Start),
+            length: 5,
+            ending: Ending::Eject,
+            items: Inventory::from_saved(vec![item; 5], true),
+        };
+        let gone = Contents {
+            controller: [2, 0, 0],
+            length: 0,
+            items: Inventory::default(),
+            ..long.clone()
+        };
+        let messages = encode(&[long.clone(), gone.clone(), long.clone()]);
+        assert_eq!(messages.len(), 2);
+        assert!(messages.iter().all(|m| m.len() <= 30_000));
+        assert_eq!(u16::from_le_bytes([messages[0][19], messages[0][20]]), 3);
+        assert_eq!(messages[0].len(), 2 * 21 + 3 * (14 + NAME_MAX));
+        let mut whole = long;
+        whole.items.items.truncate(3);
+        assert_eq!(decode(&messages[0]), vec![whole.clone(), gone]);
+        assert_eq!(decode(&messages[1]), vec![whole]);
+    }
+
+    #[test]
+    fn malformed_item_records_are_not_decoded() {
+        let mut contents = Contents {
+            controller: [0; 3],
+            segment: seg(Dir::East, Slope::Upward, Part::Start),
+            length: 3,
+            ending: Ending::Eject,
+            items: Inventory::from_saved(vec![Item::new("test", 1, 180, false)], true),
+        };
+        let good = encode(std::slice::from_ref(&contents)).pop().unwrap();
+        for start in [21, 25] {
+            for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+                let mut bytes = good.clone();
+                bytes[start..start + 4].copy_from_slice(&bad.to_le_bytes());
+                assert!(decode(&bytes).is_empty());
+            }
+        }
+        let mut oversized = good;
+        oversized[33..35].copy_from_slice(&((NAME_MAX + 1) as u16).to_le_bytes());
+        oversized.resize(35 + NAME_MAX + 1, b'a');
+        assert!(decode(&oversized).is_empty());
+        contents.length = 0;
+        assert!(decode(&encode(&[contents])[0]).is_empty());
+    }
+
+    #[test]
+    fn saved_stack_normalizes_its_angle_and_invalid_offsets() {
+        let angle = i32::MIN;
+        for bad in [f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            let item = Item::from_saved("minecraft:iron_ingot", 5, angle, false, [bad, bad]);
+            assert_eq!(item.angle, i32::from(i16::MIN));
+            assert_eq!(item.position, 0.0);
+            assert_eq!(item.side_offset, item.target_side_offset());
+            assert!(item.side_offset.is_finite());
+        }
+        let item = Item::from_saved("minecraft:iron_ingot", 5, angle, false, [f32::MAX, 0.25]);
+        assert_eq!((item.position, item.side_offset), (0.0, 0.25));
+        let item = Item::from_saved("minecraft:iron_ingot", 5, -5, false, [0.5, f32::NAN]);
+        assert_eq!(item.angle, -5);
+        assert_eq!(item.side_offset, item.target_side_offset());
+    }
+
+    #[test]
     fn emptied_stack_reads_back_empty_and_clears_on_next_tick() {
         // Observed in s3-emptied-stack-saved-as-one: a 4-item iron ingot stack at 1.9708341 on a
         // 5-long belt at 32 rpm enters segment 2 where a brass tunnel empties it; that tick's save
@@ -2556,13 +2766,13 @@ mod tests {
         assert_eq!(saved.items.len(), 1);
         assert_eq!(saved.items[0].count, 0);
 
-        let mut reloaded_item = Item::from_saved(
+        let reloaded_item = Item::from_saved(
             &saved.items[0].item,
             i32::from(saved.items[0].count),
             saved.items[0].angle,
             false,
+            [saved.items[0].position, saved.items[0].side_offset],
         );
-        reloaded_item.position = saved.items[0].position;
         assert_eq!(reloaded_item.item, "minecraft:air");
         assert_eq!(reloaded_item.count, 0);
 
@@ -2602,10 +2812,16 @@ mod tests {
         stack.position = 1.9708341;
         let mut inv = Inventory::from_saved(vec![stack], true);
         let mut world = StuckAt(2, TunnelStep::Stuck);
-        inv.tick(5, movement_speed(32.0), true, &mut world);
+        assert!(
+            inv.tick(5, movement_speed(32.0), true, &mut world)
+                .saved_changed
+        );
         assert_eq!(inv.items[0].position, 1.99);
         assert!(!inv.items[0].stalled);
-        inv.tick(5, movement_speed(32.0), true, &mut world);
+        assert!(
+            !inv.tick(5, movement_speed(32.0), true, &mut world)
+                .saved_changed
+        );
         assert_eq!(inv.items[0].position, 1.99);
         assert!(inv.items[0].stalled);
 
