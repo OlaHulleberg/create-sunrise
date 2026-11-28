@@ -460,7 +460,7 @@ pub(super) fn tick_windmills(lv: &mut ServerLevel<'_>) {
         actors::carry_storage(lv, pos, pos, &blocks);
         let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
         let refused = take_blocks(lv, pos, &blocks, air);
-        super::drop_refused_for(dim, pos, pos, &refused, &mut blocks, &mut extras);
+        super::drop_refused_for(lv, pos, pos, &refused, &mut blocks, &mut extras);
         if blocks.is_empty() {
             actors::release_storage(lv, pos, |o| add(pos, o), |_| false);
             actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
@@ -742,7 +742,7 @@ pub(super) fn tick_bearings(lv: &mut ServerLevel<'_>) {
                 actors::carry_storage(lv, pos, pos, &blocks);
                 let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
                 let refused = take_blocks(lv, pos, &blocks, air);
-                super::drop_refused_for(dim, pos, pos, &refused, &mut blocks, &mut extras);
+                super::drop_refused_for(lv, pos, pos, &refused, &mut blocks, &mut extras);
                 if blocks.is_empty() {
                     actors::release_storage(lv, pos, |o| add(pos, o), |_| false);
                     actors::release_extras(lv, &mut extras, |o| add(pos, o), |_| false);
@@ -908,7 +908,7 @@ pub(super) fn tick_gantries(lv: &mut ServerLevel<'_>) {
         };
         let mut carried = actors::carry(lv, c, c, &blocks, |p| p == shaft);
         let refused = take_blocks(lv, c, &blocks, air);
-        super::drop_refused_for(dim, c, c, &refused, &mut blocks, &mut carried);
+        super::drop_refused_for(lv, c, c, &refused, &mut blocks, &mut carried);
         if blocks.is_empty() {
             actors::release_storage(lv, c, |o| add(c, o), |_| false);
             actors::release_extras(lv, &mut carried, |o| add(c, o), |_| false);
@@ -1348,7 +1348,7 @@ fn assemble_piston(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     set_exception(lv, pos, None);
     let mut carried = actors::carry(lv, pos, origin, &local, |p| p == pos);
     let refused = super::remove_cells(lv, &cells, air);
-    super::drop_refused_for(dim, pos, origin, &refused, &mut blocks, &mut carried);
+    super::drop_refused_for(lv, pos, origin, &refused, &mut blocks, &mut carried);
     if refused.len() == cells.len() {
         actors::release_storage(lv, pos, |o| add(origin, o), |_| false);
         actors::release_extras(lv, &mut carried, |o| add(origin, o), |_| false);

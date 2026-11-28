@@ -1018,7 +1018,7 @@ pub(super) fn drop_refused(
 }
 
 pub(super) fn drop_refused_for(
-    dim: usize,
+    lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     origin: [i32; 3],
     refused: &HashSet<[i32; 3]>,
@@ -1029,7 +1029,7 @@ pub(super) fn drop_refused_for(
         return;
     }
     drop_refused(origin, refused, blocks, Some(carried));
-    actors::drop_refused_tanks(dim, key, origin, refused);
+    actors::return_refused_cargo(lv, key, origin, refused);
 }
 
 /// A radial chassis as the search reads it: its axis, glued sides and range.

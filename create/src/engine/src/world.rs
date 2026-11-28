@@ -3923,6 +3923,12 @@ impl CreateWorld {
         self.dims[dim].belt_quiet.insert(pos);
     }
 
+    /// Clears a pending quiet-removal marker when a belt segment stays standing (for example,
+    /// after a refused contraption removal).
+    pub fn cancel_belt_quiet(&mut self, dim: usize, pos: [i32; 3]) {
+        self.dims[dim].belt_quiet.remove(&pos);
+    }
+
     /// `BeltBlockEntity.destroy` while the slicer sets the clicked START to air: the block
     /// entity is still the controller, so `getInventory().ejectAll()` takes every item off the
     /// belt and drops it where it is (against the `beltLength` the slicer has just zeroed).
@@ -6523,6 +6529,29 @@ mod tests {
         assert!(w.dims[0].block_entities.registration_order(a) > original);
         w.block_changed(0, [6, 0, 0], 16, 13);
         assert_eq!(w.dims[0].block_entities.registration_order([6, 0, 0]), None);
+    }
+
+    #[test]
+    fn cancel_belt_quiet_restores_normal_belt_removal_cleanup() {
+        let mut w = belt_states_world();
+        let (start, end) = ([0, 8, 0], [0, 8, 1]);
+        w.block_changed(0, start, 0, BELT_START);
+        w.block_changed(0, end, 0, BELT_END);
+        transport_walk(&mut w);
+        let item = crate::belt::Item::new("minecraft:iron_ingot", 3, 0, false);
+        w.dims[0].belts.get_mut(&start).unwrap().items =
+            crate::belt::Inventory::from_saved(vec![item.clone()], false);
+
+        w.remove_belt_quietly(0, start);
+        w.remove_belt_quietly(0, end);
+        w.cancel_belt_quiet(0, start);
+        w.block_changed(0, start, BELT_START, 0);
+
+        let [drop] = w.dims[0].belt_drops.as_slice() else {
+            panic!("normal removal should drop the belt inventory");
+        };
+        assert_eq!(drop.3, item);
+        assert_eq!(w.dims[0].belt_breaks, [end]);
     }
 
     /// Java #130: `BeltSlicer` sets the clicked START to air, which runs
