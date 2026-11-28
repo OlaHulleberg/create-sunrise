@@ -432,6 +432,11 @@ impl Run {
                     self.fix_crushers();
                     continue;
                 }
+                // The glue's `apply_breaks`.
+                create_engine::world::EntityTurn::Breaks(events) => {
+                    self.apply_breaks(events);
+                    continue;
+                }
                 create_engine::world::EntityTurn::Fluid(p) => {
                     self.tick_transport_pipe(p);
                     self.tick_fluid_entity(p);

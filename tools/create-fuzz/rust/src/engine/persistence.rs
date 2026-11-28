@@ -161,10 +161,16 @@ impl Run {
         self.publish_after_effects(Vec::new());
     }
     /// Complete world callbacks and chain shapes before writing any saved record.
-    pub(super) fn publish_after_effects(
-        &mut self,
-        mut events: Vec<create_engine::kinetics::Event>,
-    ) {
+    pub(super) fn publish_after_effects(&mut self, events: Vec<create_engine::kinetics::Event>) {
+        self.apply_breaks(events);
+        self.show_sequencer_writes();
+        self.persisted.dirty_columns.extend(self.w.take_unsaved(0));
+        self.publish_entities();
+        self.flush_persistence();
+    }
+    /// The glue's `apply_events`: each break, then its chain shapes, until world callbacks
+    /// enqueue no more.
+    pub(super) fn apply_breaks(&mut self, mut events: Vec<create_engine::kinetics::Event>) {
         loop {
             for event in events {
                 if let create_engine::kinetics::Event::Break { pos } = event {
@@ -177,10 +183,6 @@ impl Run {
                 break;
             }
         }
-        self.show_sequencer_writes();
-        self.persisted.dirty_columns.extend(self.w.take_unsaved(0));
-        self.publish_entities();
-        self.flush_persistence();
     }
     /// persist::flush: only marked column attachments, after entity publication.
     pub(super) fn flush_persistence(&mut self) {
