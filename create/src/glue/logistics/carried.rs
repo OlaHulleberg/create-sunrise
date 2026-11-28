@@ -162,6 +162,39 @@ pub(crate) fn restore_belt_items(
     drops
 }
 
+/// A staged controller that never left (its removal was refused, or a debug carry put it back)
+/// takes its items straight back: it still stands as a belt segment, so they need no whole chain
+/// (its member column may be unloaded). Its former length applies only to the controller at `pos`.
+/// Items whose controller no longer stands as a belt stay in `data` for `restore_belt_items` to drop.
+pub(crate) fn return_standing_belt_items(
+    world: &mut create_engine::world::CreateWorld,
+    dim: usize,
+    pos: [i32; 3],
+    data: &mut Compound,
+    staged_length: Option<i32>,
+    level_state: impl Fn([i32; 3]) -> u32,
+) {
+    let Some(Tag::List(list)) = data.get(&BELT_ITEMS.into()) else {
+        return;
+    };
+    let saved = Compound::from([("belts".into(), Tag::List(list.clone()))]);
+    let mut kept = Vec::new();
+    for (offset, items) in super::belts_from_nbt(&saved) {
+        match checked_add(pos, offset) {
+            Some(controller) if world.table.belt_segment(level_state(controller)).is_some() => {
+                let length = (offset == [0, 0, 0]).then_some(staged_length).flatten();
+                world.restore_staged_belt(dim, controller, items, length);
+            }
+            _ => kept.push((offset, items.to_save())),
+        }
+    }
+    if kept.is_empty() {
+        data.remove(&BELT_ITEMS.into());
+    } else {
+        data.insert(BELT_ITEMS.into(), super::belts_to_nbt(&kept));
+    }
+}
+
 fn checked_add(a: [i32; 3], b: [i32; 3]) -> Option<[i32; 3]> {
     Some([
         a[0].checked_add(b[0])?,
@@ -185,6 +218,13 @@ fn carry_belt(dim: usize, pos: [i32; 3], out: &mut Compound) {
     })
     .flatten();
     let Some((controller, belt)) = taken else {
+        // A controller whose chain was not whole (a member's column unloaded) still holds its items.
+        if let Some(items) = with_world(|w| w.take_staged_belt_items(dim, pos)).flatten() {
+            out.insert(
+                BELT_ITEMS.into(),
+                super::belts_to_nbt(&[([0, 0, 0], items.to_save())]),
+            );
+        }
         return;
     };
     let offset = [0, 1, 2].map(|i| controller[i] - pos[i]);
@@ -274,6 +314,90 @@ mod tests {
             .iter()
             .map(|(p, i)| (*p, i.item.as_str(), i.count))
             .collect()
+    }
+
+    #[test]
+    fn return_standing_belt_items_restores_staged_controller_without_dropping() {
+        let controller = [14, 8, 0];
+        let mut world = CreateWorld::new(StateTable::new(
+            10,
+            ["start", "middle", "end"].into_iter().map(|part| {
+                (
+                    "create:belt",
+                    [("facing", "east"), ("slope", "upward"), ("part", part)].into_iter(),
+                )
+            }),
+        ));
+        world.block_loaded(0, controller, 10);
+        world.block_loaded(0, [15, 9, 0], 11);
+        world.block_loaded(0, [16, 10, 0], 12);
+        assert!(belt_items_after_tick(&mut world, controller).is_empty());
+        let mut item = Item::new("minecraft:iron_ingot", 3, 0, false);
+        item.position = 1.5;
+        world.read_belt_items(0, controller, Inventory::fresh(vec![item]));
+
+        // The end's column is unloaded, so the controller has no whole chain.
+        world.column_unloaded(0, 1, 0);
+        let staged_length = world.staged_belt_length(0, controller);
+        assert_eq!(staged_length, Some(3));
+        let items = world.take_staged_belt_items(0, controller).unwrap();
+        let mut data = Compound::from([(
+            BELT_ITEMS.into(),
+            super::super::belts_to_nbt(&[([0, 0, 0], items)]),
+        )]);
+        let only_controller = |p: [i32; 3]| if p == controller { 10 } else { 0 };
+        return_standing_belt_items(
+            &mut world,
+            0,
+            controller,
+            &mut data,
+            staged_length,
+            only_controller,
+        );
+        assert!(data.get(&BELT_ITEMS.into()).is_none());
+        let belts = world.column_belts(0, 0, 0);
+        assert_eq!(belts.len(), 1);
+        assert_eq!(belts[0].0, controller);
+        assert_eq!(belts[0].1.items.len(), 1);
+        assert_eq!(belts[0].1.items[0].item, "minecraft:iron_ingot");
+        assert_eq!(belts[0].1.items[0].count, 3);
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            controller,
+            &data,
+            Transform::NONE,
+            |_| true,
+            only_controller,
+        );
+        assert!(drops.is_empty());
+
+        world.apply_block_change(0, controller, 10, 0, false);
+        let [drop] = world.dims[0].belt_drops.as_slice() else {
+            panic!("the restored item should drop when the controller breaks");
+        };
+        assert_eq!(drop.2, 3);
+        let height =
+            create_engine::belt::vector_for_offset(drop.0, &drop.1, drop.2, drop.3.position)[1];
+        assert_eq!(height, f64::from(controller[1]) + 0.5 + 1.0);
+    }
+
+    #[test]
+    fn return_standing_belt_items_keeps_items_when_controller_is_not_a_belt() {
+        let (mut world, mut data) = belt_landing_at([0, 0, 0]);
+        return_standing_belt_items(&mut world, 0, CONTROLLER, &mut data, None, |_| 0);
+        assert!(data.get(&BELT_ITEMS.into()).is_some());
+        assert!(world.column_belts(0, 0, 0).is_empty());
+        let drops = restore_belt_items(
+            &mut world,
+            0,
+            CONTROLLER,
+            &data,
+            Transform::NONE,
+            |_| true,
+            |_| 0,
+        );
+        assert_eq!(iron(&drops), [(CONTROLLER, "minecraft:iron_ingot", 3)]);
     }
 
     #[test]

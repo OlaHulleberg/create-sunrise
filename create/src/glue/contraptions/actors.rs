@@ -76,6 +76,8 @@ struct BlockData<T = ItemStack> {
     block: Option<Block>,
     own: Option<Compound>,
     engine: Option<Compound>,
+    /// In-memory drop geometry for staged belt items returned to their original controller.
+    staged_belt_length: Option<i32>,
     /// Set by [`stage_held`] when its cell was free: what waited for it is still staged.
     staged: bool,
 }
@@ -90,6 +92,7 @@ impl<T> Default for BlockData<T> {
             block: None,
             own: None,
             engine: None,
+            staged_belt_length: None,
             staged: false,
         }
     }
@@ -1121,6 +1124,9 @@ fn take_block_data(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> Option<BlockData>
         Some(Block::FluidTank) => {
             out.tank = with_world(|w| w.dims[dim].tanks.take(pos)).flatten();
         }
+        Some(Block::Belt) => {
+            out.staged_belt_length = with_world(|w| w.staged_belt_length(dim, pos)).flatten();
+        }
         _ => {}
     }
     if let Some(b) = block {
@@ -1674,6 +1680,23 @@ pub(crate) fn return_refused_cargo(
                 } else {
                     data.deployer = Some(dp);
                 }
+            }
+            if data.block == Some(Block::Belt)
+                && let Some(engine) = data.engine.as_mut()
+            {
+                // The standing controller takes its items back even with its member column
+                // unloaded; `restore_belt_items` would need a whole chain.
+                with_world(|w| {
+                    crate::glue::logistics::carried::return_standing_belt_items(
+                        w,
+                        dim,
+                        p,
+                        engine,
+                        data.staged_belt_length.take(),
+                        |q| lv.block(q),
+                    );
+                });
+                mark_pos_unsaved(dim, p);
             }
         }
         release_held_list(lv, refused_held, place, |_| true);
@@ -4055,10 +4078,26 @@ fn debug_carried(lv: &mut ServerLevel<'_>, pos: [i32; 3]) -> String {
             .collect::<Vec<_>>()
             .join("; ");
     }
-    let Some(d) = take_block_data(lv, pos) else {
+    let Some(mut d) = take_block_data(lv, pos) else {
         return "nothing carried".into();
     };
     let line = show(&[0; 3], &d);
+    if d.block == Some(Block::Belt)
+        && let Some(engine) = d.engine.as_mut()
+    {
+        with_world(|w| {
+            // No block was removed, so a later break must still drop its inventory.
+            w.cancel_belt_quiet(dim, pos);
+            crate::glue::logistics::carried::return_standing_belt_items(
+                w,
+                dim,
+                pos,
+                engine,
+                d.staged_belt_length.take(),
+                |q| lv.block(q),
+            );
+        });
+    }
     let key = [i32::MIN + 1, pos[1], i32::MIN + 1];
     HELD.with_borrow_mut(|m| m.insert((dim, key), vec![([0; 3], d)]));
     expect_back(lv, key, |o| add(pos, o), |_| true);
