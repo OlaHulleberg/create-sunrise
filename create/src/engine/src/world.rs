@@ -4021,7 +4021,14 @@ impl CreateWorld {
         pos: [i32; 3],
         saved: crate::belt::SavedSegment,
     ) {
-        if saved.length < 2 || saved.index < 0 || saved.index >= saved.length {
+        // `BeltBlock.java:563` caps the chain at 1,000 segments.
+        if saved.length < 2
+            || saved.length as usize > crate::belt::MAX_CHAIN_LENGTH
+            || saved.index < 0
+            || saved.index >= saved.length
+            || !crate::belt::in_world_bounds(pos)
+            || !crate::belt::in_world_bounds(saved.controller)
+        {
             return;
         }
         let Some(state) = self.dims[dim].states.get(&pos).copied() else {
@@ -4030,19 +4037,17 @@ impl CreateWorld {
         let Some(mut segment) = self.table.belt_segment(state) else {
             return;
         };
+        let chain = (pos == saved.controller).then(|| {
+            segment.part = crate::belt::Part::Start;
+            let [dx, dy, dz] = segment.vector();
+            (0..saved.length)
+                .map(|i| [pos[0] + i * dx, pos[1] + i * dy, pos[2] + i * dz])
+                .collect()
+        });
         let d = &mut self.dims[dim];
         d.belt_of.insert(pos, saved.controller);
         d.settings.entry(pos).or_default().belt = Some(saved.controller);
-        if pos == saved.controller {
-            let mut chain = vec![pos];
-            segment.part = crate::belt::Part::Middle;
-            for _ in 1..saved.length {
-                let Some(next) = segment.next(*chain.last().unwrap(), true) else {
-                    return;
-                };
-                chain.push(next);
-            }
-            segment.part = crate::belt::Part::Start;
+        if let Some(chain) = chain {
             let items = d.belt_saved.remove(&pos).unwrap_or_default();
             d.belts.insert(
                 pos,
@@ -6489,6 +6494,58 @@ mod tests {
         transport_walk(&mut w);
         w.tick(0, &mut Vec::new());
         w
+    }
+
+    #[test]
+    fn restore_belt_segment_rejects_invalid_geometry_before_publishing_membership() {
+        let at = [0, 8, 0];
+        for (pos, controller, index, length) in [
+            (at, [30_000_000, 8, 0], 1, 2),
+            ([0, 2032, 0], at, 1, 2),
+            (at, at, 0, 1001),
+        ] {
+            let mut w = belt_states_world();
+            let state = if index == 0 { BELT_START } else { BELT_END };
+            w.dims[0].states.insert(pos, state);
+            w.restore_belt_segment(
+                0,
+                pos,
+                crate::belt::SavedSegment {
+                    controller,
+                    index,
+                    length,
+                },
+            );
+            let d = &w.dims[0];
+            assert!(d.belt_of.is_empty());
+            assert!(d.settings.get(&pos).is_none_or(|s| s.belt.is_none()));
+            assert!(d.belts.is_empty());
+            assert!(!d.kinetics.has_part(pos, 0));
+        }
+    }
+
+    #[test]
+    fn restore_belt_segment_accepts_a_controller_at_the_chain_limit() {
+        let at = [29_999_999, 2031, -30_000_000];
+        let mut w = belt_states_world();
+        w.dims[0].states.insert(at, BELT_START);
+        w.restore_belt_segment(
+            0,
+            at,
+            crate::belt::SavedSegment {
+                controller: at,
+                index: 0,
+                length: 1000,
+            },
+        );
+        let d = &w.dims[0];
+        assert_eq!(d.belt_of.get(&at), Some(&at));
+        assert_eq!(d.settings[&at].belt, Some(at));
+        let chain = &d.belts[&at].chain;
+        assert_eq!(chain.len(), 1000);
+        assert_eq!(chain.first(), Some(&at));
+        assert_eq!(chain.last(), Some(&[29_999_999, 2031, -29_999_001]));
+        assert!(d.kinetics.has_part(at, 0));
     }
 
     #[test]
