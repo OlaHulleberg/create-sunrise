@@ -265,18 +265,36 @@ impl Subsystem for Trains {
         super::relocate::client_tick(host);
     }
 
+    /// `TrackBlock.RenderProperties.getExtraPositions`: `TrackBlockEntity.connections`' keys.
+    fn crack_parts(
+        &self,
+        host: &dyn ClientHost,
+        level: mod_api::LevelRef,
+        block: Block,
+        pos: [i32; 3],
+        _info: &create_engine::parts::StateInfo,
+    ) -> Option<Vec<[i32; 3]>> {
+        if block != Block::Track {
+            return None;
+        }
+        let data = host.block_entity(level, pos).and_then(|e| e.data(host))?;
+        Some(tracks::connected_of(&data))
+    }
+
     fn input_handled(&self, host: &mut dyn ClientHost) {
         super::station_screen::tick_client(host);
         super::schedule_screen::flush(host);
     }
 
-    /// A station's flag, marker and assembly track, a track's curves, and a signal's light and
-    /// state (its indicator, and a nixie tube on it), for its clients.
+    /// A station's flag, marker and assembly track, a track's curves and the tracks it is
+    /// connected to, and a signal's light and state (its indicator, and a nixie tube on it), for
+    /// its clients.
     fn synced_keys(&self) -> &'static [&'static str] {
         &[
             super::station_draw::KEY,
             super::station_draw::MARK,
             super::tracks::CURVES,
+            super::tracks::CONNECTED,
             super::tracks::LIGHT,
             super::tracks::SIGNAL_STATE,
         ]

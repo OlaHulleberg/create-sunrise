@@ -460,6 +460,23 @@ impl Subsystem for Logistics {
         client::reset_logistics();
     }
 
+    /// `BeltBlock.RenderProperties.getExtraPositions`: the belt's whole chain.
+    fn crack_parts(
+        &self,
+        host: &dyn ClientHost,
+        level: mod_api::LevelRef,
+        block: Block,
+        pos: [i32; 3],
+        _info: &StateInfo,
+    ) -> Option<Vec<[i32; 3]>> {
+        if block != Block::Belt {
+            return None;
+        }
+        Some(create_engine::cracks::belt_chain(pos, &|p| {
+            crate::glue::cracks::block_at(host, level, p).and_then(|(_, i)| i.belt)
+        }))
+    }
+
     /// The belt partials, drawn with their texture scrolling, and the model naming the
     /// scrolling sprites (so the block sprites hold them).
     fn standalone_models(&self, models: &mut Vec<String>) {

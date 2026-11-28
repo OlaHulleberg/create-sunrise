@@ -38,6 +38,9 @@ use std::collections::HashMap;
 
 /// The key in a track block entity's data holding the curves drawn from it.
 pub const CURVES: &str = "Curves";
+/// The key in a track block entity's data holding the tracks it is connected to, each end of
+/// each of its curves (`TrackBlockEntity.connections`' keys).
+pub const CONNECTED: &str = "Connected";
 /// The key in a signal's block entity data: 1 while it shows red.
 pub const LIGHT: &str = "Light";
 
@@ -750,21 +753,55 @@ pub fn sync(lv: &mut ServerLevel<'_>) {
     }
 }
 
-/// The curves drawn from the track at `pos`, into its block entity's data (sent to clients).
+/// The curves drawn from the track at `pos` and the tracks it is connected to, into its block
+/// entity's data (sent to clients).
 fn set_curves(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     let dim = lv.dim;
-    let curves = with_world(|w| w.dims[dim].track_curves.drawn_from(pos)).unwrap_or_default();
+    let (curves, connected) = with_world(|w| {
+        let c = &w.dims[dim].track_curves;
+        (
+            c.drawn_from(pos),
+            c.at.get(&pos)
+                .map_or_else(Vec::new, |l| l.iter().map(|c| c.to).collect()),
+        )
+    })
+    .unwrap_or_default();
     let Some(entity) = lv.host.block_entity(lv.level, pos) else {
         return;
     };
     let has = entity
         .data(&*lv.host)
-        .is_some_and(|d| d.contains_key(&CURVES.into()));
-    if curves.is_empty() && !has {
+        .is_some_and(|d| d.contains_key(&CURVES.into()) || d.contains_key(&CONNECTED.into()));
+    if curves.is_empty() && connected.is_empty() && !has {
         return;
     }
-    let data = Compound::from([(CURVES.into(), saved::curves_to_nbt(&curves))]);
+    let data = Compound::from([
+        (CURVES.into(), saved::curves_to_nbt(&curves)),
+        (CONNECTED.into(), connected_to_nbt(&connected)),
+    ]);
     let _ = entity.merge_data(&mut *lv.host, data);
+}
+
+fn connected_to_nbt(connected: &[[i32; 3]]) -> Tag {
+    Tag::List(
+        connected
+            .iter()
+            .map(|p| Tag::IntArray(p.to_vec()))
+            .collect(),
+    )
+}
+
+/// The tracks a track's block entity data names as connected to it, as its clients read it.
+pub fn connected_of(data: &Compound) -> Vec<[i32; 3]> {
+    let Some(Tag::List(list)) = crate::glue::kinetics::synced(data, CONNECTED) else {
+        return Vec::new();
+    };
+    list.iter()
+        .filter_map(|t| match t {
+            Tag::IntArray(p) => <[i32; 3]>::try_from(p.as_slice()).ok(),
+            _ => None,
+        })
+        .collect()
 }
 
 /// The keys in the signal stack's custom data holding its pick
@@ -1426,9 +1463,21 @@ fn decompose(m: &Mat4) -> ([f32; 3], [f32; 3], f32, f32) {
 #[cfg(test)]
 mod tests {
     use super::{
-        Compound, TARGET_DIRECTION, TARGET_TRACK, Tag, data_target, decompose, expand_curve_bounds,
-        within_signal_reach,
+        CONNECTED, Compound, TARGET_DIRECTION, TARGET_TRACK, Tag, connected_of, connected_to_nbt,
+        data_target, decompose, expand_curve_bounds, within_signal_reach,
     };
+
+    #[test]
+    fn a_track_keeps_the_tracks_it_is_connected_to() {
+        // The other end of each of its curves, whichever end draws it.
+        let connected = [[0, 64, 0], [8, 64, 8]];
+        let data = Compound::from([(CONNECTED.into(), connected_to_nbt(&connected))]);
+        assert_eq!(connected_of(&data), connected);
+        assert!(connected_of(&Compound::new()).is_empty());
+        // What an update tag carries for a key the block entity does not hold.
+        let absent = Compound::from([(CONNECTED.into(), crate::glue::kinetics::absent())]);
+        assert!(connected_of(&absent).is_empty());
+    }
 
     #[test]
     fn saved_signal_target_rejects_overflow_and_decodes_valid_offsets() {
