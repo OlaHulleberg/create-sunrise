@@ -33,6 +33,26 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `6a02076` |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `6a02076` |
 
+## #558 in game on Dev `ba1f24e` (branch `fix/motor-paste`, main `21a6e5fb`)
+
+One run on 2026-11-28 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
+socket), with launcher 1.3.7. The mod is `create/` at `207bd9cc` plus the one uncommitted tag file of #359
+(`data/c/tags/block/barrels.json`), built by `sunrise-launcher native-build` as `native-ba1f24e-8defdb7d7a9f`, the
+instance's selected build. The port's behaviour is unchanged: the branch adds an engine test. A creative world on a smooth
+stone platform at y 199: four motors set to 32 rpm on the value board to copy from, six to paste onto, one network each.
+Compared with Create 6.0.11 (`b62e837`) by its code and data, and by running it in create-fuzz (below). Details and
+screenshots are not kept in the repository.
+
+| Area | Result |
+|---|---|
+| A clipboard's speed pasted on a motor facing up, down, north or east (#558) | **As in Create.** A right click with a clipboard on a motor set to 32 rpm copies `Speed: {Value: 32, Row: 1}` whichever way that motor faces. Pasting it with a left click sets `ScrollValue: 32` on a motor facing up, down, north, east, west or south ("Applied settings to Creative Motor"); the speed it turns at (`Gen`, `Speeds`, `Theory`, the saved `Speed`) is +32 facing up, south or east and −32 facing down, north or west. The report's own paste, `Row: 1, Value: 1` on the north face of a downward-facing motor, reads `ScrollValue: 1, Gen: -1.0f`, and `Gen: 1.0f` on an east-facing one. `Row: 0` pastes give −1 and −32 the same way, column 0 gives 1 rpm, and a freshly placed motor reads `Gen: -16.0f` facing down and `16.0f` facing east. The value box shows 32 without a sign, and the board opens on 32 clockwise on the down-facing motor as on the east-facing one. Create does the same: a paste hands the row and value to `KineticScrollValueBehaviour.setValueSettings`, which sets `row == 0 ? -value : value` without looking at the block (`ValueSettingsBehaviour.java:66-76`, `KineticScrollValueBehaviour.java:34-40`), and `CreativeMotorBlockEntity.getGeneratedSpeed` negates it for a facing against its axis (`CreativeMotorBlockEntity.java:73-78`, `KineticBlockEntity.java:506-508`). Run in create-fuzz on one server from this checkout (a one-off case, not kept: its `speed_setting` is that `setValueSettings` on six motors, and the engine matched), Create saves `ScrollValue: 1` on all six with `Speed: -1.0f` on the down, north and west ones and `1.0f` on the others. |
+
+The fuzzer has no clipboard events, so the engine test stands for the rule and the fuzzer is a regression only, on one
+dedicated server from this checkout (9 GB available): `check cases/*.json` 250 matched, 0 differed; `fuzz 0 4000` 4000
+matched, 0 differed, 0 java-unstable, 0 driver-unsupported, as on main.
+
+Not run: pasting onto a rotation speed controller, which shares the motor's behaviour and clipboard key.
+
 ## #355 in game on Dev `ba1f24e` (branch `fix/multiblock-cracks`, main `1e73b019`)
 
 One run on 2026-11-28 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
