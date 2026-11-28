@@ -2596,7 +2596,11 @@ impl CreateWorld {
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
             d.windmills
                 .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
-            // A belt reaching into the column stops being whole until it is back.
+            d.belt_saved
+                .retain(|p, _| (p[0] >> 4, p[2] >> 4) != (cx, cz));
+            // A belt reaching into the column stops being whole until it is back. Its
+            // controller's block entity keeps the inventory while its own column stays loaded
+            // (`BeltBlockEntity.write`/`read`), so that waits in `belt_saved` for the chain.
             let gone: Vec<[i32; 3]> = d
                 .belt_of
                 .iter()
@@ -2607,6 +2611,9 @@ impl CreateWorld {
                 if let Some(b) = d.belts.remove(&c) {
                     for p in &b.chain {
                         d.belt_of.remove(p);
+                    }
+                    if (c[0] >> 4, c[2] >> 4) != (cx, cz) {
+                        d.belt_saved.insert(c, b.items);
                     }
                 }
             }
@@ -3808,6 +3815,14 @@ impl CreateWorld {
             d.belt_changes.push(c);
             d.belt_saved_changes.insert(c);
         }
+        // A controller whose chain is not whole (a member's column is unloaded) holds its items
+        // in `belt_saved`; they drop with it.
+        if let Some(staged) = d.belt_saved.remove(&pos) {
+            for item in staged.items {
+                d.belt_drops.push((pos, seg, 0, item));
+            }
+            d.belt_saved_changes.insert(pos);
+        }
         for forward in [true, false] {
             let Some(next) = seg.next(pos, forward) else {
                 continue;
@@ -3915,6 +3930,19 @@ impl CreateWorld {
         d.belt_changes.push(c);
         d.belt_saved_changes.insert(c);
         Some((c, b))
+    }
+
+    /// The inventory of the controller at `pos` while its chain is not whole (a member's column is
+    /// unloaded), for a structure carrying the controller away.
+    pub fn take_staged_belt_items(
+        &mut self,
+        dim: usize,
+        pos: [i32; 3],
+    ) -> Option<crate::belt::Inventory> {
+        let d = &mut self.dims[dim];
+        let items = d.belt_saved.remove(&pos)?;
+        d.belt_saved_changes.insert(pos);
+        Some(items)
     }
 
     /// The belt segment at `pos` leaves without breaking its neighbours or dropping anything
@@ -4037,6 +4065,15 @@ impl CreateWorld {
         let Some(mut segment) = self.table.belt_segment(state) else {
             return;
         };
+        // A member whose controller stayed loaded while its column was away finds the chain
+        // again at `initBelt`, which gives the controller back its inventory.
+        let d = &self.dims[dim];
+        if pos != saved.controller
+            && !d.belts.contains_key(&saved.controller)
+            && d.states.contains_key(&saved.controller)
+        {
+            return;
+        }
         let chain = (pos == saved.controller).then(|| {
             segment.part = crate::belt::Part::Start;
             let [dx, dy, dz] = segment.vector();
@@ -4296,12 +4333,27 @@ impl CreateWorld {
         cx: i32,
         cz: i32,
     ) -> Vec<([i32; 3], crate::belt::Inventory)> {
-        let mut out: Vec<_> = self.dims[dim]
+        let d = &self.dims[dim];
+        let inside = |c: &[i32; 3]| (c[0] >> 4, c[2] >> 4) == (cx, cz);
+        let mut out: Vec<_> = d
             .belts
             .iter()
-            .filter(|(c, _)| (c[0] >> 4, c[2] >> 4) == (cx, cz))
+            .filter(|(c, _)| inside(c))
             .map(|(c, b)| (*c, b.items.to_save()))
             .collect();
+        // A controller whose chain is not whole keeps its inventory (`BeltBlockEntity.write`).
+        out.extend(
+            d.belt_saved
+                .iter()
+                .filter(|(c, _)| {
+                    inside(c)
+                        && !d.belts.contains_key(*c)
+                        && d.states
+                            .get(*c)
+                            .is_some_and(|s| self.table.belt_segment(*s).is_some())
+                })
+                .map(|(c, items)| (*c, items.to_save())),
+        );
         out.sort_by_key(|(c, _)| *c);
         out
     }
@@ -6609,6 +6661,100 @@ mod tests {
         };
         assert_eq!(drop.3, item);
         assert_eq!(w.dims[0].belt_breaks, [end]);
+    }
+
+    const SPLIT_CONTROLLER: [i32; 3] = [15, 8, 0];
+    const SPLIT_END: [i32; 3] = [16, 8, 0];
+
+    /// A two-segment belt facing east across the boundary of columns 0 and 1 (states 10 start,
+    /// 11 end), holding one item.
+    fn split_belt_world() -> (CreateWorld, crate::belt::Item) {
+        let belt = |part| {
+            (
+                "create:belt",
+                vec![("facing", "east"), ("slope", "horizontal"), ("part", part)],
+            )
+        };
+        let names = [belt("start"), belt("end")];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        w.block_changed(0, SPLIT_CONTROLLER, 0, 10);
+        w.block_changed(0, SPLIT_END, 0, 11);
+        transport_walk(&mut w);
+        let item = crate::belt::Item::new("minecraft:iron_ingot", 3, 0, false);
+        w.dims[0].belts.get_mut(&SPLIT_CONTROLLER).unwrap().items =
+            crate::belt::Inventory::from_saved(vec![item.clone()], false);
+        (w, item)
+    }
+
+    #[test]
+    fn member_column_unload_keeps_the_controller_inventory_for_save_and_reform() {
+        for restored in [false, true] {
+            let (mut w, item) = split_belt_world();
+            w.column_unloaded(0, 1, 0);
+            assert!(w.dims[0].belts.is_empty());
+            let saved = w.column_belts(0, 0, 0);
+            assert_eq!(saved.len(), 1);
+            assert_eq!(saved[0].0, SPLIT_CONTROLLER);
+            assert_eq!(saved[0].1.items, [item.clone()]);
+
+            w.dims[0].belt_changes.clear();
+            w.block_loaded(0, SPLIT_END, 11);
+            if restored {
+                w.restore_belt_segment(
+                    0,
+                    SPLIT_END,
+                    crate::belt::SavedSegment {
+                        controller: SPLIT_CONTROLLER,
+                        index: 1,
+                        length: 2,
+                    },
+                );
+            }
+            transport_walk(&mut w);
+            let d = &w.dims[0];
+            assert_eq!(d.belts[&SPLIT_CONTROLLER].items.items, [item]);
+            assert!(d.belt_saved.is_empty());
+            assert!(d.belt_changes.contains(&SPLIT_CONTROLLER));
+        }
+    }
+
+    #[test]
+    fn controller_column_unload_leaves_no_staged_inventory() {
+        let (mut w, _) = split_belt_world();
+        w.column_unloaded(0, 1, 0);
+        assert_eq!(w.dims[0].belt_saved.len(), 1);
+        w.column_unloaded(0, 0, 0);
+        assert!(w.dims[0].belt_saved.is_empty());
+        let (mut w, _) = split_belt_world();
+        w.column_unloaded(0, 0, 0);
+        assert!(w.dims[0].belts.is_empty());
+        assert!(w.dims[0].belt_saved.is_empty());
+    }
+
+    #[test]
+    fn breaking_the_controller_drops_its_staged_inventory() {
+        let (mut w, item) = split_belt_world();
+        w.column_unloaded(0, 1, 0);
+        w.block_changed(0, SPLIT_CONTROLLER, 10, 0);
+        let [drop] = w.dims[0].belt_drops.as_slice() else {
+            panic!("the staged item should drop");
+        };
+        assert_eq!((drop.0, drop.3.clone()), (SPLIT_CONTROLLER, item));
+        assert!(w.dims[0].belt_saved.is_empty());
+        assert!(w.column_belts(0, 0, 0).is_empty());
+    }
+
+    #[test]
+    fn a_structure_takes_the_staged_inventory_with_its_controller() {
+        let (mut w, item) = split_belt_world();
+        w.column_unloaded(0, 1, 0);
+        let taken = w.take_staged_belt_items(0, SPLIT_CONTROLLER).unwrap();
+        assert_eq!(taken.items, [item]);
+        assert!(w.dims[0].belt_saved.is_empty());
+        assert!(w.take_staged_belt_items(0, SPLIT_CONTROLLER).is_none());
     }
 
     /// Java #130: `BeltSlicer` sets the clicked START to air, which runs
