@@ -35,6 +35,8 @@ mod guided;
 mod handles;
 mod java;
 mod kinetic_faces;
+#[cfg(test)]
+mod leaves;
 mod logistics;
 mod loot;
 mod mutate;

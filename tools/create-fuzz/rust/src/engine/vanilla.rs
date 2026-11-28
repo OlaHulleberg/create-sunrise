@@ -1,7 +1,9 @@
 //! The game around the breakers' glue (glue/processing/saw.rs reads a block's hardness, its tags
 //! and a leaf's `distance`): the vanilla blocks of `breaking.json` in the driver's world, and
 //! the game's own block ticks among them, a leaf's distance and a falling block. Each rule is
-//! as the Java server ran it (docs/processing-scope.md#block-breaking).
+//! as the Java server ran it (docs/processing-scope.md#block-breaking); the leaf ticks are held
+//! to the timelines of `leaves.json`, which the Java harness's `LeafDistance` replays at every
+//! server start.
 use super::*;
 use crate::breaking::Loot;
 use crate::transport::{Placed, Spreader};
@@ -14,13 +16,44 @@ struct Falling {
     speed: f64,
 }
 
+/// A scheduled block tick: the block it is for, where, and the level tick it is due.
+struct Tick {
+    pos: Pos,
+    block: String,
+    at: u32,
+}
+
+/// The level's scheduled block ticks (`LevelTicks`), in the order they were scheduled. One
+/// tick a block at a position.
+#[derive(Default)]
+struct Ticks(Vec<Tick>);
+
+impl Ticks {
+    fn pending(&self, p: Pos, block: &str) -> bool {
+        self.0.iter().any(|t| t.pos == p && t.block == block)
+    }
+
+    fn schedule(&mut self, tick: Tick) {
+        if !self.pending(tick.pos, &tick.block) {
+            self.0.push(tick);
+        }
+    }
+
+    /// The ticks due by `now`, all taken out before any of them runs.
+    fn due(&mut self, now: u32) -> Vec<Tick> {
+        let (due, waiting): (Vec<_>, Vec<_>) = std::mem::take(&mut self.0)
+            .into_iter()
+            .partition(|t| t.at <= now);
+        self.0 = waiting;
+        due
+    }
+}
+
 #[derive(Default)]
 pub(super) struct Vanilla {
     /// Each catalogue block's state by position; the world map keeps `OTHER` there.
     pub states: HashMap<Pos, String>,
-    /// The scheduled block ticks: position, the level tick they are due, and their order.
-    ticks: Vec<(Pos, u32, u32)>,
-    order: u32,
+    ticks: Ticks,
     falling: Vec<Falling>,
 }
 
@@ -86,7 +119,7 @@ impl Run {
         self.fluid_world_changed(p);
         // `onPlace` runs before the neighbours' `updateShape`.
         if falls(&full) {
-            self.schedule_tick(p, 2);
+            self.schedule_tick(p, &parse_state(&full).0, 2);
         }
         // The game breaks a plant on a block it does not stand on at a later tick; not followed.
         if let Some(b) = crate::breaking::block(&parse_state(&full).0)
@@ -103,16 +136,14 @@ impl Run {
         self.neighbours_changed(p, OTHER);
     }
 
-    /// `scheduleTick`: one pending tick a position. A request made during a level tick runs
-    /// `delay` ticks later, one made between ticks `delay` − 1 ticks after the next.
-    fn schedule_tick(&mut self, p: Pos, delay: u32) {
-        if self.vanilla.ticks.iter().any(|(q, ..)| *q == p) {
-            return;
-        }
-        self.vanilla.order += 1;
-        self.vanilla
-            .ticks
-            .push((p, self.now + delay, self.vanilla.order));
+    /// `scheduleTick`: one pending tick a block at a position. A request made during a level tick
+    /// runs `delay` ticks later, one made between ticks `delay` − 1 ticks after the next.
+    fn schedule_tick(&mut self, p: Pos, block: &str, delay: u32) {
+        self.vanilla.ticks.schedule(Tick {
+            pos: p,
+            block: block.to_owned(),
+            at: self.now + delay,
+        });
     }
 
     /// `updateShape` of the six neighbours, in the game's order: a leaf schedules its distance,
@@ -125,10 +156,11 @@ impl Run {
             let Some(state) = self.vanilla.states.get(&q).cloned() else {
                 continue;
             };
+            let block = parse_state(&state).0;
             if falls(&state) {
-                self.schedule_tick(q, 2);
+                self.schedule_tick(q, &block, 2);
             } else if leaf(&state) {
-                self.schedule_tick(q, 1);
+                self.schedule_tick(q, &block, 1);
             }
             // A face that turned to its skin stays so when the other block goes.
             if mushroom(&state)
@@ -141,39 +173,27 @@ impl Run {
         }
     }
 
-    /// The level's scheduled block ticks, before its entities and block entities. Each is taken
-    /// out before it runs: a tick that ran can be scheduled again within the pass, one still
-    /// waiting cannot.
+    /// The level's scheduled block ticks, before its entities and block entities. The ticks due
+    /// are all taken out before any runs, in the order they were scheduled, and each runs only
+    /// while its block is still at its position. A leaf that changes in the pass schedules the
+    /// next tick of each neighbour, the ones still waiting in the pass included.
     pub(super) fn vanilla_ticks(&mut self) {
-        let mut due: Vec<(Pos, u32)> = self
-            .vanilla
-            .ticks
-            .iter()
-            .filter(|(_, at, _)| *at <= self.now)
-            .map(|(p, _, order)| (*p, *order))
-            .collect();
-        if due.is_empty() {
-            return;
-        }
-        due.sort_by_key(|(_, order)| *order);
-        for (p, _) in due {
-            let index = self.vanilla.ticks.iter().position(|(q, ..)| *q == p);
-            let Some(index) = index else {
+        for tick in self.vanilla.ticks.due(self.now) {
+            let state = self.state_at(tick.pos);
+            if parse_state(&state).0 != tick.block {
                 continue;
-            };
-            self.vanilla.ticks.swap_remove(index);
-            let state = self.state_at(p);
+            }
             if leaf(&state) {
-                self.leaf_tick(p, &state);
+                self.leaf_tick(tick.pos, &state);
             } else if falls(&state) {
-                self.fall_tick(p, &state);
+                self.fall_tick(tick.pos, &state);
             }
         }
     }
 
     /// `LeavesBlock.tick`: 1 beside a log (`minecraft:logs`), else the least of the leaves
-    /// around it one further, else 7. The leaf does not decay: the server runs without random
-    /// ticks.
+    /// around it one further, else 7. A leaf gets its tick when a neighbour changes; it does
+    /// not decay: the server runs without random ticks.
     fn leaf_tick(&mut self, p: Pos, state: &str) {
         let mut best = 7;
         for d in ORDER {
@@ -199,6 +219,22 @@ impl Run {
             let next = crate::breaking::with(state, "distance", &text);
             self.set_state(p, &next);
         }
+    }
+
+    /// The leaf at `p` as the Java harness reads it for `leaves.json`: its `distance` and
+    /// whether one of its ticks is pending; dots while another block is there.
+    #[cfg(test)]
+    pub(crate) fn leaf_cell(&self, p: Pos) -> (char, char) {
+        let state = self.state_at(p);
+        if !leaf(&state) {
+            return ('.', '.');
+        }
+        let distance = crate::breaking::property(&state, "distance")
+            .and_then(|d| d.parse::<u32>().ok())
+            .and_then(|d| char::from_digit(d, 10))
+            .unwrap_or('.');
+        let pending = self.vanilla.ticks.pending(p, &parse_state(&state).0);
+        (distance, if pending { '*' } else { '.' })
     }
 
     fn free(&self, p: Pos) -> bool {

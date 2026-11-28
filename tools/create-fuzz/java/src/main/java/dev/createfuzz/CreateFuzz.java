@@ -56,6 +56,8 @@ public class CreateFuzz {
     static final int SLOTS = 128;
 
     int startup = -1;
+    /** The leaf shapes of the driver's contract, replayed before the server is ready. */
+    Batch leafAudit;
     final RequestQueue<Batch> requests = new RequestQueue<>();
 
     public CreateFuzz(IEventBus modBus) {
@@ -117,7 +119,8 @@ public class CreateFuzz {
     void tick(ServerTickEvent.Post e) {
         MinecraftServer server = e.getServer();
         ServerLevel level = server.overworld();
-        // Ready once every slot's blocks tick, and 100 ticks more for their chunks to settle.
+        // Ready once every slot's blocks tick, and 100 ticks more for their chunks to settle;
+        // then the leaf shapes are replayed and held to the driver's contract.
         if (startup >= 0) {
             boolean all = true;
             for (int i = 0; i < SLOTS && all; i++) all = level.isPositionEntityTicking(slot(i));
@@ -126,10 +129,23 @@ public class CreateFuzz {
                 try {
                     for (int i = 0; i < SLOTS; i++) CaseIsolation.clear(level, slot(i));
                     CaseIsolation.initialize(level, dir);
-                    Files.writeString(dir.resolve("ready"), "ready\n");
+                    leafAudit = LeafDistance.start(level, dir);
                 } catch (Exception ex) {
                     throw new RuntimeException(ex);
                 }
+            }
+            return;
+        }
+        if (leafAudit != null) {
+            try {
+                if (leafAudit.step(level)) {
+                    LeafDistance.done(dir, leafAudit);
+                    leafAudit = null;
+                    Files.writeString(dir.resolve("ready"), "ready\n");
+                }
+            } catch (Exception ex) {
+                leafAudit = null;
+                throw new RuntimeException(ex);
             }
             return;
         }
