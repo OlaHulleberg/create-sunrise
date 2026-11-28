@@ -305,7 +305,9 @@ impl Rolls {
                     d.stack.count = 0;
                 }
             }
-            drops.dedup_by(|a, b| a == b);
+            // Two drops of one stack from one origin are equal records on the driver's side and
+            // two entities on Java's: only a `counted` item's number of stacks is chance's.
+            drops.dedup_by(|a, b| a == b && self.counted.contains(&a.stack.item));
         }
         for b in s.blocks.values_mut() {
             if let Some(t) = b.transport.as_mut() {
