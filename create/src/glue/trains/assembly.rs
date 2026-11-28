@@ -687,35 +687,11 @@ fn remove_carriage_blocks(
     car: &[([i32; 3], u32)],
     air: BlockState,
 ) -> HashSet<[i32; 3]> {
-    let brittle: Vec<bool> = car
-        .iter()
-        .map(|&(_, s)| {
-            super::car_state(s)
-                .and_then(|st| super::state_parts(&*lv.host, st))
-                .is_some_and(|(name, props)| crate::glue::contraptions::brittle(&name, &props))
-        })
-        .collect();
-    let flags = update_all()
-        | mod_api::BlockUpdateFlags::KNOWN_SHAPE
-        | mod_api::BlockUpdateFlags::SUPPRESS_DROPS
-        | mod_api::BlockUpdateFlags::MOVE_BY_PISTON;
     let cells: Vec<([i32; 3], u32)> = car
         .iter()
         .map(|&(o, s)| ([origin[0] + o[0], origin[1] + o[1], origin[2] + o[2]], s))
         .collect();
-    let dim = lv.dim;
-    crate::glue::contraptions::remove_cells_with(
-        &cells,
-        &brittle,
-        |p| {
-            let cleared = lv.set_state(p, air, flags);
-            if cleared {
-                super::super::persist::mark_pos_unsaved(dim, p);
-            }
-            cleared
-        },
-        |p| crate::create_log!("[create] refused removing block at {p:?} during train assembly"),
-    )
+    super::remove_car_cells(lv, &cells, air, "train assembly")
 }
 
 /// Drops the riders of carriage `car` on seats whose cells the world refused to clear.
@@ -911,171 +887,14 @@ fn bogey_clicked(
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_server::{HEIGHT, MIN_Y, TestServer};
     use super::super::{car_id, cargo};
     use super::*;
     use crate::glue::{persist, world::with_test_world};
     use create_engine::glue::Glue;
     use create_engine::world::{CreateWorld, StateTable};
-    use mod_api::__private::game::{BackendMutRefOf, BackendRefOf};
-    use mod_api::prelude::*;
-    use mod_api::testing::FakeHost;
-    use mod_api::{
-        BackendMutRef, BackendRef, BlockEntityRef, BlockUpdateFlags, Host, LevelReadError,
-        LevelRef, LevelWriteError,
-    };
+    use mod_api::BlockUpdateFlags;
     use mod_api::{Compound, Tag};
-
-    const MIN_Y: i32 = -64;
-    const HEIGHT: i32 = 384;
-
-    struct TestServer {
-        fake: FakeHost,
-        level: LevelRef,
-        names: Vec<(&'static str, BlockState)>,
-        blocks: HashMap<[i32; 3], BlockState>,
-        unloaded: HashSet<[i32; 2]>,
-        refuse: HashSet<[i32; 3]>,
-        writes: Vec<([i32; 3], BlockState, BlockUpdateFlags)>,
-        dropped: Vec<([f64; 3], u32)>,
-    }
-
-    mod_api::__mod_api_impl_host_areas!(TestServer, except(block_entities, block_states, items));
-    mod_api::__mod_api_impl_server_host_areas!(TestServer);
-    mod_api::__mod_api_impl_backend_areas!(
-        TestServer,
-        except(
-            items,
-            level_blocks,
-            level_chunks,
-            level_dimension,
-            level_entities
-        )
-    );
-    mod_api::__mod_api_impl_backend_mut_areas!(TestServer, except(level_blocks, level_entities));
-    impl Host for TestServer {
-        fn backend(&self) -> Option<BackendRef<'_>> {
-            Some(BackendRef::of(self))
-        }
-    }
-    impl ServerHost for TestServer {
-        fn backend_mut(&mut self) -> Option<BackendMutRef<'_>> {
-            Some(BackendMutRef::of(self))
-        }
-    }
-    impl mod_api::Backend for TestServer {}
-    impl mod_api::BackendMut for TestServer {}
-    impl BlockStatesHost for TestServer {
-        fn block_state_id(&self, name: &str) -> Option<BlockState> {
-            self.names.iter().find(|(n, _)| *n == name).map(|(_, s)| *s)
-        }
-        fn block_state_string(&self, state: BlockState) -> Option<String> {
-            self.names
-                .iter()
-                .find(|(_, s)| *s == state)
-                .map(|(n, _)| (*n).to_owned())
-        }
-    }
-    impl ItemsHost for TestServer {
-        fn item_key(&self, id: &mod_api::Identifier) -> Option<mod_api::ItemKey> {
-            self.fake.item_key(id)
-        }
-        fn max_damage(&self, _: mod_api::ItemKey) -> Option<u32> {
-            None
-        }
-        fn built_creative_tabs(
-            &self,
-        ) -> Result<Option<std::sync::Arc<mod_api::CreativeModeTabs>>, mod_api::CreativeTabReadError>
-        {
-            Ok(None)
-        }
-    }
-    impl ItemsBackend for TestServer {
-        fn creative_stack_key(&self, stack: &mod_api::ItemStack) -> Option<mod_api::ItemStack> {
-            Some(stack.clone())
-        }
-    }
-    impl LevelEntitiesBackendMut for TestServer {
-        fn level_spawn_item_with_motion(
-            &mut self,
-            _: LevelRef,
-            x: f64,
-            y: f64,
-            z: f64,
-            stack: mod_api::ItemStack,
-            _: [f64; 3],
-            _: i32,
-        ) -> Result<Option<mod_api::EntityRef>, mod_api::StackWriteError> {
-            self.dropped.push(([x, y, z], stack.count()));
-            Ok(None)
-        }
-    }
-    impl BlockEntitiesHost for TestServer {
-        fn block_entity(&self, _: LevelRef, _: [i32; 3]) -> Option<BlockEntityRef> {
-            None
-        }
-    }
-    impl LevelEntitiesBackend for TestServer {
-        fn level_visit_online_players(
-            &self,
-            _: LevelRef,
-            _: &mut dyn FnMut(PlayerRef) -> std::ops::ControlFlow<()>,
-        ) -> Result<std::ops::ControlFlow<()>, LevelReadError> {
-            Ok(std::ops::ControlFlow::Continue(()))
-        }
-    }
-    impl LevelDimensionBackend for TestServer {
-        fn level_height(&self, _: LevelRef) -> Option<(i32, i32)> {
-            Some((MIN_Y, HEIGHT))
-        }
-    }
-    impl LevelChunksBackend for TestServer {
-        fn level_is_loaded(&self, _: LevelRef, pos: [i32; 3]) -> bool {
-            (MIN_Y..MIN_Y + HEIGHT).contains(&pos[1])
-                && !self.unloaded.contains(&[pos[0] >> 4, pos[2] >> 4])
-        }
-    }
-    impl LevelBlocksBackend for TestServer {
-        fn level_block_state(&self, _: LevelRef, pos: [i32; 3]) -> Option<BlockState> {
-            self.blocks.get(&pos).copied()
-        }
-    }
-    impl LevelBlocksBackendMut for TestServer {
-        fn level_set_block(
-            &mut self,
-            _: LevelRef,
-            pos: [i32; 3],
-            state: BlockState,
-            flags: BlockUpdateFlags,
-        ) -> Result<bool, LevelWriteError> {
-            self.writes.push((pos, state, flags));
-            if self.refuse.contains(&pos) {
-                return Ok(false);
-            }
-            self.blocks.insert(pos, state);
-            Ok(true)
-        }
-    }
-
-    /// A server whose block states are `table`: a name and its ordinal each.
-    fn server(table: &[(&'static str, u16)]) -> TestServer {
-        let fake = FakeHost::new();
-        let key = mod_api::LevelHost::block_state(&fake, [0, 0, 0])
-            .unwrap()
-            .block();
-        TestServer {
-            level: fake.level.level(),
-            fake,
-            names: table
-                .iter()
-                .map(|&(n, ord)| (n, mod_api::__private::block_state_from_ordinal(key, ord)))
-                .collect(),
-            blocks: HashMap::new(),
-            unloaded: HashSet::new(),
-            refuse: HashSet::new(),
-            writes: Vec::new(),
-            dropped: Vec::new(),
-        }
-    }
 
     const ALL: [(&str, u16); 4] = [
         ("minecraft:air", 0),
@@ -1083,20 +902,6 @@ mod tests {
         ("minecraft:torch", 2),
         ("create:small_bogey", 3),
     ];
-
-    fn state(server: &TestServer, name: &str) -> BlockState {
-        server.block_state_id(name).unwrap()
-    }
-
-    fn level(server: &mut TestServer) -> ServerLevel<'_> {
-        let level = server.level;
-        ServerLevel {
-            host: server,
-            level,
-            dim: 0,
-            dimension: "minecraft:overworld",
-        }
-    }
 
     const TARGET: AssemblyTarget = AssemblyTarget {
         station: [14, 64, 1],
@@ -1162,9 +967,9 @@ mod tests {
             sideways: false,
         })
         .unwrap();
-        let mut s = server(&ALL);
-        let stone = state(&s, "minecraft:stone");
-        let torch = state(&s, "minecraft:torch");
+        let mut s = TestServer::with_states(&ALL);
+        let stone = s.state("minecraft:stone");
+        let torch = s.state("minecraft:torch");
         let (stone_id, torch_id) = (car_id(stone), car_id(torch));
         let cars = vec![
             vec![([-1, 0, 0], stone_id), ([0, 0, 0], torch_id)],
@@ -1176,7 +981,7 @@ mod tests {
             ([19, 65, 0], stone),
             ([20, 65, 0], stone),
         ]);
-        assembly_failed(&level(&mut s), TARGET.station, AssemblyError::NoControls);
+        assembly_failed(&s.level(), TARGET.station, AssemblyError::NoControls);
         AssemblyFixture {
             world,
             server: s,
@@ -1203,7 +1008,7 @@ mod tests {
 
         with_test_world(world, || {
             assert!(!commit_assembly(
-                &mut level(&mut s),
+                &mut s.level(),
                 TARGET,
                 &laid,
                 &BOGEYS,
@@ -1244,7 +1049,7 @@ mod tests {
 
         with_test_world(world, || {
             assert!(!commit_assembly(
-                &mut level(&mut s),
+                &mut s.level(),
                 TARGET,
                 &laid,
                 &BOGEYS,
@@ -1279,16 +1084,16 @@ mod tests {
             cars,
             ..
         } = assembly_fixture();
-        let air = state(&s, "minecraft:air");
-        let stone = state(&s, "minecraft:stone");
-        let (stone_id, torch_id) = (car_id(stone), car_id(state(&s, "minecraft:torch")));
+        let air = s.state("minecraft:air");
+        let stone = s.state("minecraft:stone");
+        let (stone_id, torch_id) = (car_id(stone), car_id(s.state("minecraft:torch")));
         let station = TARGET.station;
         assert!(failure(0, station).is_some());
         s.refuse.insert([20, 65, 0]);
 
         with_test_world(world, || {
             assert!(commit_assembly(
-                &mut level(&mut s),
+                &mut s.level(),
                 TARGET,
                 &laid,
                 &BOGEYS,
@@ -1369,7 +1174,7 @@ mod tests {
             .registries
             .resolve_items([mod_api::Identifier::parse("minecraft:diamond").unwrap()])
             .unwrap();
-        cargo::from_nbt(&level(server), TRAIN, Some(&Tag::List(carriages)));
+        cargo::from_nbt(&server.level(), TRAIN, Some(&Tag::List(carriages)));
     }
 
     fn mounted_counts() -> Vec<u32> {
@@ -1383,7 +1188,7 @@ mod tests {
 
     fn held_offsets(server: &mut TestServer, car: usize) -> Vec<[i32; 3]> {
         let shown = crate::glue::contraptions::actors::shown_entities(
-            &level(server),
+            &server.level(),
             cargo::key(TRAIN, car),
         );
         let mut offsets: Vec<[i32; 3]> = shown.into_keys().collect();
@@ -1401,7 +1206,7 @@ mod tests {
             mut cars,
             ..
         } = assembly_fixture();
-        let stone = state(&s, "minecraft:stone");
+        let stone = s.state("minecraft:stone");
         cars[1].push(([2, 0, 0], car_id(stone)));
         s.blocks.insert([21, 65, 0], stone);
         seed_cargo(
@@ -1425,7 +1230,7 @@ mod tests {
 
         with_test_world(world, || {
             assert!(commit_assembly(
-                &mut level(&mut s),
+                &mut s.level(),
                 TARGET,
                 &laid,
                 &BOGEYS,
@@ -1469,7 +1274,7 @@ mod tests {
 
         with_test_world(world, || {
             assert!(!commit_assembly(
-                &mut level(&mut s),
+                &mut s.level(),
                 TARGET,
                 &laid,
                 &BOGEYS,
@@ -1492,17 +1297,17 @@ mod tests {
     }
 
     fn preflight(server: &mut TestServer, cells: &[[i32; 3]]) -> Option<BlockState> {
-        let lv = level(server);
+        let lv = server.level();
         crate::glue::contraptions::preflight_cells(&lv, cells.iter().copied())
     }
 
     #[test]
     fn preflight_checks_all_carriages_through_server_level() {
-        let mut s = server(&ALL);
+        let mut s = TestServer::with_states(&ALL);
         let (air, stone, torch) = (
-            state(&s, "minecraft:air"),
-            state(&s, "minecraft:stone"),
-            state(&s, "minecraft:torch"),
+            s.state("minecraft:air"),
+            s.state("minecraft:stone"),
+            s.state("minecraft:torch"),
         );
         let front = [[0, 64, 0], [1, 64, 0]];
         let back = [[10, 64, 0], [11, 64, 0]];
@@ -1533,19 +1338,19 @@ mod tests {
         s.blocks.insert([30, 64, 0], air);
         assert_eq!(preflight(&mut s, &[[30, 64, 0]]), None);
 
-        let mut missing = server(&ALL[1..]);
-        let stone = state(&missing, "minecraft:stone");
+        let mut missing = TestServer::with_states(&ALL[1..]);
+        let stone = missing.state("minecraft:stone");
         missing.blocks.insert([0, 64, 0], stone);
         assert_eq!(preflight(&mut missing, &[[0, 64, 0]]), None);
     }
 
     #[test]
     fn remove_carriage_blocks_clears_brittle_first_and_records_refusals() {
-        let mut s = server(&ALL);
+        let mut s = TestServer::with_states(&ALL);
         let (air, stone, torch) = (
-            state(&s, "minecraft:air"),
-            state(&s, "minecraft:stone"),
-            state(&s, "minecraft:torch"),
+            s.state("minecraft:air"),
+            s.state("minecraft:stone"),
+            s.state("minecraft:torch"),
         );
         let (stone_id, torch_id) = (car_id(stone), car_id(torch));
         let origin = [10, 64, 10];
@@ -1561,7 +1366,7 @@ mod tests {
         }
         s.refuse.insert([12, 64, 10]);
 
-        let refused = remove_carriage_blocks(&mut level(&mut s), origin, &car, air);
+        let refused = remove_carriage_blocks(&mut s.level(), origin, &car, air);
 
         let flags = update_all()
             | BlockUpdateFlags::KNOWN_SHAPE
