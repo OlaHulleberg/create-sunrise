@@ -126,3 +126,17 @@ pub fn level_index(dimension: &str) -> Option<usize> {
 pub fn level_id(dim: usize) -> Option<String> {
     LEVELS.with_borrow(|l| l.get(dim).cloned())
 }
+
+#[cfg(test)]
+pub(crate) fn with_test_world<R>(world: CreateWorld, f: impl FnOnce() -> R) -> R {
+    struct Restore(Option<CreateWorld>);
+
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            WORLD.replace(self.0.take());
+        }
+    }
+
+    let _restore = Restore(WORLD.replace(Some(world)));
+    f()
+}
