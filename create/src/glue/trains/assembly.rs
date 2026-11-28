@@ -687,14 +687,6 @@ fn remove_carriage_blocks(
     car: &[([i32; 3], u32)],
     air: BlockState,
 ) -> HashSet<[i32; 3]> {
-    let brittle: Vec<bool> = car
-        .iter()
-        .map(|&(_, s)| {
-            super::car_state(s)
-                .and_then(|st| super::state_parts(&*lv.host, st))
-                .is_some_and(|(name, props)| crate::glue::contraptions::brittle(&name, &props))
-        })
-        .collect();
     let flags = update_all()
         | mod_api::BlockUpdateFlags::KNOWN_SHAPE
         | mod_api::BlockUpdateFlags::SUPPRESS_DROPS
@@ -704,10 +696,10 @@ fn remove_carriage_blocks(
         .map(|&(o, s)| ([origin[0] + o[0], origin[1] + o[1], origin[2] + o[2]], s))
         .collect();
     let dim = lv.dim;
-    crate::glue::contraptions::remove_cells_with(
+    super::remove_car_cells(
+        lv,
         &cells,
-        &brittle,
-        |p| {
+        |lv, p| {
             let cleared = lv.set_state(p, air, flags);
             if cleared {
                 super::super::persist::mark_pos_unsaved(dim, p);

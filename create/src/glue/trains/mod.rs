@@ -92,7 +92,7 @@ pub(crate) use tracks::signal_state_of;
 use super::states;
 use mod_api::{BlockState, Host, HostBlockStates, PlayerRef, ServerHost, Text};
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 /// `TrainStatusDisplaySource`: the schedule status of the train at the station at `pos`
 /// (None: `EMPTY_LINE`).
@@ -203,6 +203,25 @@ pub fn state_parts(host: &dyn Host, state: BlockState) -> Option<(String, Vec<(S
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect(),
     ))
+}
+
+/// Removes carriage or cart cells at world positions, using the car palette to order brittle
+/// blocks first. Returns the positions whose writes were refused.
+pub(super) fn remove_car_cells(
+    lv: &mut super::server::ServerLevel<'_>,
+    cells: &[([i32; 3], u32)],
+    mut set: impl FnMut(&mut super::server::ServerLevel<'_>, [i32; 3]) -> bool,
+    on_refused: impl FnMut([i32; 3]),
+) -> HashSet<[i32; 3]> {
+    let brittle: Vec<bool> = cells
+        .iter()
+        .map(|&(_, s)| {
+            car_state(s)
+                .and_then(|st| state_parts(&*lv.host, st))
+                .is_some_and(|(name, props)| crate::glue::contraptions::brittle(&name, &props))
+        })
+        .collect();
+    crate::glue::contraptions::remove_cells_with(cells, &brittle, |p| set(lv, p), on_refused)
 }
 
 /// Property `key` of `state`.
