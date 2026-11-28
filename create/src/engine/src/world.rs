@@ -922,6 +922,10 @@ pub enum EntityTurn {
     /// `CrushingWheelBlockEntity.onSpeedChanged` of the wheels whose speed the last base tick
     /// changed: their controllers are looked at (`fixControllers`) before anything else ticks.
     Wheels,
+    /// `level.destroyBlock(pos, true)` of the parts a turn broke (`RotationPropagator`,
+    /// `GeneratingKineticBlockEntity.applyNewSpeed`), inside the tick that decided it: the
+    /// kinetic events taken ([`crate::kinetics::Kinetics::take_pending_events`]).
+    Breaks(Vec<crate::kinetics::Event>),
     /// `BasinBlockEntity.tick`: the lazy tick (`updateSpoutput`, `recipeBackupCheck`), the spout's
     /// hand-off (`tryClearingSpoutputOverflow`), then the change of contents
     /// ([`CreateWorld::tick_basin`]), all at the basin's own turn.
@@ -936,9 +940,16 @@ pub struct BlockEntityTicks {
     dim: usize,
     now: u64,
     entities: Walk,
-    /// An entity whose base tick changed a crushing wheel's speed: its own turn follows the
-    /// wheels' [`EntityTurn::Wheels`].
-    after_wheels: Option<[i32; 3]>,
+    /// An entity whose turn the host is in the middle of, and what of it is left.
+    resume: Option<([i32; 3], Stage)>,
+}
+
+/// What is left of an entity's turn after its base tick, in order.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Stage {
+    Breaks,
+    Wheels,
+    Turn,
 }
 impl BlockEntityTicks {
     fn controller_turn(world: &mut CreateWorld, dim: usize, c: [i32; 3]) -> bool {
@@ -956,35 +967,53 @@ impl BlockEntityTicks {
         false
     }
     pub fn next(&mut self, world: &mut CreateWorld) -> Option<EntityTurn> {
-        if let Some(p) = self.after_wheels.take()
-            && let Some(turn) = world
-                .block_at(self.dim, p)
-                .and_then(|block| self.turn(world, p, block))
-        {
-            return Some(turn);
-        }
-        while let Some(p) = self.entities.next(&world.dims[self.dim].block_entities) {
-            let Some(&state) = world.dims[self.dim].states.get(&p) else {
-                continue;
+        loop {
+            let (p, stage) = match self.resume.take() {
+                Some(resume) => resume,
+                None => {
+                    if world.dims[self.dim].kinetics.has_pending_breaks() {
+                        return Some(EntityTurn::Breaks(
+                            world.dims[self.dim].kinetics.take_pending_events(),
+                        ));
+                    }
+                    let p = self.entities.next(&world.dims[self.dim].block_entities)?;
+                    let Some(&state) = world.dims[self.dim].states.get(&p) else {
+                        continue;
+                    };
+                    let block = world.table.get(state).map(|(b, _)| b);
+                    if block == Some(Block::Belt) {
+                        // `BeltBlockEntity.tick` runs `initBelt` before its `super.tick()`.
+                        world.initialize_belt(self.dim, p);
+                    }
+                    if world.table.is_kinetic(state) {
+                        world.kinetic_turn(self.dim, p, block);
+                        world.flush_kinetic_callbacks(self.dim);
+                    }
+                    (p, Stage::Breaks)
+                }
             };
-            let block = world.table.get(state).map(|(b, _)| b);
-            if block == Some(Block::Belt) {
-                // `BeltBlockEntity.tick` runs `initBelt` before its `super.tick()`.
-                world.initialize_belt(self.dim, p);
-            }
-            if world.table.is_kinetic(state) {
-                world.kinetic_turn(self.dim, p, block);
-                world.flush_kinetic_callbacks(self.dim);
-            }
-            if !world.dims[self.dim].crusher_checks.is_empty() {
-                self.after_wheels = Some(p);
-                return Some(EntityTurn::Wheels);
-            }
-            if let Some(turn) = block.and_then(|block| self.turn(world, p, block)) {
+            if let Some(turn) = self.finish(world, p, stage) {
                 return Some(turn);
             }
         }
-        None
+    }
+
+    /// The rest of the turn of the entity at `p` after its base tick, from `stage`; None when
+    /// nothing is left for the host.
+    fn finish(&mut self, world: &mut CreateWorld, p: [i32; 3], stage: Stage) -> Option<EntityTurn> {
+        let dim = self.dim;
+        if stage <= Stage::Breaks && world.dims[dim].kinetics.has_pending_breaks() {
+            self.resume = Some((p, Stage::Wheels));
+            return Some(EntityTurn::Breaks(
+                world.dims[dim].kinetics.take_pending_events(),
+            ));
+        }
+        if stage <= Stage::Wheels && !world.dims[dim].crusher_checks.is_empty() {
+            self.resume = Some((p, Stage::Turn));
+            return Some(EntityTurn::Wheels);
+        }
+        let block = world.block_at(dim, p)?;
+        self.turn(world, p, block)
     }
 
     /// What the entity at `p` does at its turn, after its base tick; None when nothing.
@@ -5801,7 +5830,7 @@ impl CreateWorld {
             dim,
             now,
             entities: self.dims[dim].block_entities.walk(View::All),
-            after_wheels: None,
+            resume: None,
         }
     }
 

@@ -688,6 +688,13 @@ impl Kinetics {
         std::mem::take(&mut self.pending_events)
     }
 
+    /// Whether a part broke since the host last took the pending events.
+    pub fn has_pending_breaks(&self) -> bool {
+        self.pending_events
+            .iter()
+            .any(|e| matches!(e, Event::Break { .. }))
+    }
+
     pub fn new() -> Self {
         Self::default()
     }

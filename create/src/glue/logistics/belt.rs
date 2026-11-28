@@ -762,6 +762,10 @@ pub fn tick_transport(lv: &mut ServerLevel<'_>) {
                 crate::glue::processing::fix_crushers(lv);
                 continue;
             }
+            create_engine::world::EntityTurn::Breaks(events) => {
+                crate::glue::kinetics::apply_breaks(lv, events);
+                continue;
+            }
             create_engine::world::EntityTurn::Fluid(p) => {
                 crate::glue::fluids::pipes::tick_transport_pipe(lv, p);
                 crate::glue::fluids::plumbing::tick_entity(lv, p);

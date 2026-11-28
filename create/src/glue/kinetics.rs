@@ -656,6 +656,11 @@ fn tick_solve(lv: &mut ServerLevel<'_>) {
     apply_events(lv, events);
 }
 
+/// The breaks of a turn in the level's walk, destroyed before the next entity's turn.
+pub(crate) fn apply_breaks(lv: &mut ServerLevel<'_>, events: Vec<Event>) {
+    apply_events(lv, events);
+}
+
 /// World callbacks can enqueue more breaks; finish their chain shapes before returning.
 fn apply_events(lv: &mut ServerLevel<'_>, mut events: Vec<Event>) {
     loop {
