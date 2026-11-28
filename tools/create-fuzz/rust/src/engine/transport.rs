@@ -955,7 +955,7 @@ impl depot::PlayerUse for DepotUse<'_> {
 
 struct Side<'a> {
     run: &'a mut Run,
-    past: Pos,
+    past: Option<Pos>,
     movement: Dir,
     controller: Pos,
     segment: belt::Segment,
@@ -963,16 +963,19 @@ struct Side<'a> {
 }
 impl belt::Surroundings for Side<'_> {
     fn ending(&mut self) -> belt::Ending {
-        if self.run.direct_input_at(self.past) || self.run.belt_location(self.past).is_some() {
+        let Some(past) = self.past else {
+            return belt::Ending::Eject;
+        };
+        if self.run.direct_input_at(past) || self.run.belt_location(past).is_some() {
             belt::Ending::Insert
-        } else if self.run.sturdy(self.past, self.movement.opposite()) {
+        } else if self.run.sturdy(past, self.movement.opposite()) {
             belt::Ending::Blocked
         } else {
             belt::Ending::Eject
         }
     }
     fn insert(&mut self, i: &belt::Item) -> Option<u8> {
-        self.run.insert_transport(self.past, self.movement, i)
+        self.run.insert_transport(self.past?, self.movement, i)
     }
     fn process(
         &mut self,
@@ -980,7 +983,7 @@ impl belt::Surroundings for Side<'_> {
         item: &mut belt::Item,
         locked: bool,
     ) -> Option<belt::Process> {
-        let p = belt::position_for_offset(self.controller, &self.segment, self.length, index);
+        let p = belt::position_for_offset(self.controller, &self.segment, self.length, index)?;
         // The glue's `BeltSide::process`: no machine two above, or (arriving) `isBlocked`, and
         // nothing acts.
         let above = self.run.w.block_at(0, [p[0], p[1] + 2, p[2]]);
@@ -1002,7 +1005,7 @@ impl belt::Surroundings for Side<'_> {
     }
     /// The glue's `BeltSide::funnel`: the belt funnel over `segment`, with the belt's way.
     fn funnel(&mut self, segment: i32) -> Option<(create_engine::funnel::OnBelt, Dir)> {
-        let at = belt::position_for_offset(self.controller, &self.segment, self.length, segment);
+        let at = belt::position_for_offset(self.controller, &self.segment, self.length, segment)?;
         let pos = [at[0], at[1] + 1, at[2]];
         let (facing, shape) = self.run.belt_funnel_at(pos)?;
         let powered = self
@@ -1023,7 +1026,7 @@ impl belt::Surroundings for Side<'_> {
     /// The glue's `BeltSide::funnel_insert`: an andesite belt funnel puts the whole stack into
     /// the inventory behind it (`InvManipulationBehaviour.insert`); the count left.
     fn funnel_insert(&mut self, segment: i32, item: &belt::Item) -> Option<u8> {
-        let at = belt::position_for_offset(self.controller, &self.segment, self.length, segment);
+        let at = belt::position_for_offset(self.controller, &self.segment, self.length, segment)?;
         let pos = [at[0], at[1] + 1, at[2]];
         let (facing, _) = self.run.belt_funnel_at(pos)?;
         if !self.run.w.funnel_inv_ready(0, pos) {

@@ -958,10 +958,11 @@ impl belt::Surroundings for ClientSide<'_> {
         (locked || item.locked).then_some(belt::Process::Hold)
     }
     fn funnel(&mut self, segment: i32) -> Option<(create_engine::funnel::OnBelt, Dir)> {
-        let at = belt::position_for_offset(self.controller, &self.segment, self.length, segment);
+        let [x, y, z] =
+            belt::position_for_offset(self.controller, &self.segment, self.length, segment)?;
         let state = self
             .level?
-            .block_state(self.host, [at[0], at[1] + 1, at[2]])?;
+            .block_state(self.host, [x, y.checked_add(1)?, z])?;
         let (block, info) = table_info(self.host, state)?;
         if !matches!(block, Block::AndesiteBeltFunnel | Block::BrassBeltFunnel) {
             return None;
@@ -1175,7 +1176,7 @@ impl BlockEntityPart for LogisticsEntity {
         };
         let ends = [0, length - 1].map(|i| belt::position_for_offset(pos, &seg, length, i));
         let b = &mut *event.bounds;
-        for e in ends {
+        for e in ends.into_iter().flatten() {
             for k in 0..3 {
                 let rel = (e[k] - pos[k]) as f32;
                 b[k] = b[k].min(rel);
@@ -1316,7 +1317,7 @@ fn scrolled(
     };
     let (source, target) = belt::sprite_shift(seg, color, bottom);
     // The belt sprites are 16 by 16, the scrolling ones 16 by 32.
-    let shift = mod_api::TerrainUvShift::new(&source, &target, [1.0, 0.5], [0.0, offset]);
+    let shift = mod_api::TerrainUvShift::new(source, &target, [1.0, 0.5], [0.0, offset]);
     let options = mod_api::TerrainModelOptions::default().with_uv_shift(shift);
     terrain(draw, host, file, options)
 }

@@ -272,7 +272,9 @@ impl Run {
         if seg.slope != belt::Slope::Horizontal {
             return belt::TunnelStep::Pass;
         }
-        let at = belt::position_for_offset(controller, &seg, length, segment);
+        let Some(at) = belt::position_for_offset(controller, &seg, length, segment) else {
+            return belt::TunnelStep::Pass;
+        };
         let t = [at[0], at[1] + 1, at[2]];
         let Some((axis, shape)) = self.tunnel_state(t) else {
             return belt::TunnelStep::Pass;
