@@ -368,7 +368,7 @@ fn assemble_clock(lv: &mut ServerLevel<'_>, pos: [i32; 3], facing: Dir, rpm: f32
     actors::carry_storage(lv, pos, pos, &all);
     let mut extras = actors::carry_extras(lv, pos, &all, |p| p == pos);
     let refused = take_blocks(lv, pos, &all, air);
-    super::drop_refused_for(dim, pos, pos, &refused, &mut hands.hour, &mut extras);
+    super::drop_refused_for(lv, pos, pos, &refused, &mut hands.hour, &mut extras);
     if let Some((_, m)) = &mut hands.minute {
         super::drop_refused(pos, &refused, m, None);
         if m.is_empty() {
@@ -637,7 +637,7 @@ fn assemble_pulley(lv: &mut ServerLevel<'_>, pos: [i32; 3], rpm: f32) {
     // Its actors, storage, glue and controls ride with it (`Contraption.addBlock`).
     let mut carried = actors::carry(lv, pos, anchor, &p.blocks, |_| false);
     let refused = take_blocks(lv, anchor, &p.blocks, air);
-    super::drop_refused_for(dim, pos, anchor, &refused, &mut p.blocks, &mut carried);
+    super::drop_refused_for(lv, pos, anchor, &refused, &mut p.blocks, &mut carried);
     if !cleared_rope && !targets.is_empty() && p.blocks.is_empty() {
         actors::release_storage(lv, pos, |o| add(anchor, o), |_| false);
         actors::release_extras(lv, &mut carried, |o| add(anchor, o), |_| false);
@@ -1363,7 +1363,7 @@ fn assemble_elevator(lv: &mut ServerLevel<'_>, pos: [i32; 3]) {
     };
     let mut carried = actors::carry(lv, pos, anchor, &blocks, |_| false);
     let refused = take_blocks(lv, anchor, &blocks, air);
-    super::drop_refused_for(dim, pos, anchor, &refused, &mut blocks, &mut carried);
+    super::drop_refused_for(lv, pos, anchor, &refused, &mut blocks, &mut carried);
     if blocks.is_empty() {
         actors::release_storage(lv, pos, |o| add(anchor, o), |_| false);
         actors::release_extras(lv, &mut carried, |o| add(anchor, o), |_| false);

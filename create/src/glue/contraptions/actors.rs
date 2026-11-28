@@ -1593,9 +1593,20 @@ fn prune_held_tanks<T>(
     }
 }
 
-/// Prunes refused fluid-tank cells from `HELD` for contraption `key`.
-pub(super) fn drop_refused_tanks(
-    dim: usize,
+/// Take the cargo of cells that refused removal, in its original order.
+fn take_refused<T>(
+    list: &mut Vec<([i32; 3], T)>,
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+) -> Vec<([i32; 3], T)> {
+    list.extract_if(.., |(o, _)| refused.contains(&add(origin, *o)))
+        .collect()
+}
+
+/// Give cargo back to the standing blocks that refused removal. Only cleared cells keep
+/// their cargo on the contraption; carried fluid tanks retain their existing pruning rules.
+pub(crate) fn return_refused_cargo(
+    lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     origin: [i32; 3],
     refused: &HashSet<[i32; 3]>,
@@ -1603,16 +1614,61 @@ pub(super) fn drop_refused_tanks(
     if refused.is_empty() {
         return;
     }
-    HELD.with_borrow_mut(|m| {
-        let Some(list) = m.get_mut(&(dim, key)) else {
-            return;
-        };
-        prune_held_tanks(list, origin, refused);
-        list.retain(|(_, d)| !d.is_empty());
-        if list.is_empty() {
-            m.remove(&(dim, key));
+    let dim = lv.dim;
+    let place = |o| add(origin, o);
+    let refused_stored = STORAGE
+        .with_borrow_mut(|m| {
+            let list = m.get_mut(&(dim, key))?;
+            let out = take_refused(list, origin, refused);
+            if list.is_empty() {
+                m.remove(&(dim, key));
+            }
+            Some(out)
+        })
+        .unwrap_or_default();
+    if !refused_stored.is_empty() {
+        release_stored(&mut ServerStorage(lv), refused_stored, place, |_| true);
+    }
+
+    let mut refused_held = HELD
+        .with_borrow_mut(|m| {
+            let list = m.get_mut(&(dim, key))?;
+            prune_held_tanks(list, origin, refused);
+            let out = take_refused(list, origin, refused);
+            list.retain(|(_, d)| !d.is_empty());
+            if list.is_empty() {
+                m.remove(&(dim, key));
+            }
+            Some(out)
+        })
+        .unwrap_or_default();
+    refused_held.retain(|(_, d)| !d.is_empty());
+    if !refused_held.is_empty() {
+        for (o, data) in &mut refused_held {
+            let p = place(*o);
+            if let Some(dp) = data.deployer.take() {
+                if lv.create_block(p) == Some(Block::Deployer) {
+                    // The standing deployer keeps its hand; held-data release must not drop it.
+                    with_world(|w| w.dims[dim].deployers.insert(p, dp));
+                    mark_pos_unsaved(dim, p);
+                } else {
+                    data.deployer = Some(dp);
+                }
+            }
         }
-    });
+        let turn = create_engine::contraption::Transform::from_place(place);
+        restore_engine_data(lv, &refused_held, place, turn, |_| true);
+        let mut drops = restore_landed_belts(lv, &refused_held, place, turn, |_| true);
+        drops.extend(release_held_data(
+            &mut ServerHeld(lv),
+            refused_held,
+            place,
+            |_| true,
+        ));
+        for (pos, stack) in drops {
+            lv.drop_stack(center(pos), [0.0; 3], stack, 10);
+        }
+    }
 }
 
 /// Each storage block's items `o` back at `place(o)`: a fresh storage block written there
@@ -4132,8 +4188,8 @@ mod tests {
 
     type Stack = (&'static str, u32);
 
-    /// A world whose slot writes all answer `Ok(false)`, as onto an identical stack. Its block
-    /// entity is `Some(true)` for a Create one, `Some(false)` for another's, `None` for none.
+    /// A world whose accepted slot writes answer `Ok(false)`, as onto an identical stack.
+    /// `entity` is `Some(true)` for a Create entity, `Some(false)` for another's, `None` for none.
     #[derive(Default)]
     struct Fake {
         now: Option<Block>,
@@ -4143,20 +4199,33 @@ mod tests {
         storage_lookups: Cell<usize>,
         restores: usize,
         merges: usize,
+        restored_storage: Vec<([i32; 3], Vec<Option<Stack>>)>,
+        restored_slots: Vec<([i32; 3], Vec<Option<Stack>>)>,
+        merged_at: Vec<[i32; 3]>,
+        reject_storage: Option<Stack>,
         drops: Vec<([i32; 3], Stack)>,
     }
 
     impl StorageRelease<Stack> for Fake {
-        type Target = ();
+        type Target = [i32; 3];
 
-        fn storage_target(&self, _: [i32; 3]) -> Option<()> {
+        fn storage_target(&self, p: [i32; 3]) -> Option<Self::Target> {
             self.storage_lookups.set(self.storage_lookups.get() + 1);
-            self.storage.then_some(())
+            self.storage.then_some(p)
         }
 
-        fn restore_storage(&mut self, _: (), stored: Vec<Option<Stack>>) -> Vec<Stack> {
+        fn restore_storage(&mut self, p: Self::Target, stored: Vec<Option<Stack>>) -> Vec<Stack> {
             self.restores += 1;
-            rejected_slots(&stored, 20, identical)
+            let mut accepted = vec![None; stored.len().min(20)];
+            let left = rejected_slots(&stored, accepted.len(), |i, stack| {
+                if self.reject_storage == Some(*stack) {
+                    return Err("refused");
+                }
+                accepted[i] = Some(*stack);
+                identical(i, stack)
+            });
+            self.restored_storage.push((p, accepted));
+            left
         }
 
         fn drop_stack(&mut self, p: [i32; 3], stack: Stack) {
@@ -4165,7 +4234,7 @@ mod tests {
     }
 
     impl HeldRelease<Stack> for Fake {
-        type Entity = bool;
+        type Entity = ([i32; 3], bool);
 
         fn staged_held(&mut self, _: [i32; 3]) -> Option<(String, u8)> {
             None
@@ -4175,16 +4244,16 @@ mod tests {
             None
         }
 
-        fn block_entity(&self, _: [i32; 3]) -> Option<bool> {
+        fn block_entity(&self, p: [i32; 3]) -> Option<Self::Entity> {
             self.lookups.set(self.lookups.get() + 1);
-            self.entity
+            self.entity.map(|create| (p, create))
         }
 
-        fn is_create_entity(&self, entity: bool) -> bool {
-            entity
+        fn is_create_entity(&self, (_, create): Self::Entity) -> bool {
+            create
         }
 
-        fn replace_data(&mut self, _: bool, _: &Compound) -> bool {
+        fn replace_data(&mut self, _: Self::Entity, _: &Compound) -> bool {
             false
         }
 
@@ -4194,13 +4263,16 @@ mod tests {
             self.now
         }
 
-        fn merge_own(&mut self, _: [i32; 3], _: bool, _: Block, _: &Compound) {
+        fn merge_own(&mut self, p: [i32; 3], _: Self::Entity, _: Block, _: &Compound) {
             self.merges += 1;
+            self.merged_at.push(p);
         }
 
-        fn restore_slots(&mut self, _: bool, slots: Vec<Option<Stack>>) -> Vec<Stack> {
+        fn restore_slots(&mut self, (p, _): Self::Entity, slots: Vec<Option<Stack>>) -> Vec<Stack> {
             self.restores += 1;
-            rejected_slots(&slots, slots.len(), identical)
+            let left = rejected_slots(&slots, slots.len(), identical);
+            self.restored_slots.push((p, slots));
+            left
         }
     }
 
@@ -4215,6 +4287,76 @@ mod tests {
             own: Some(Compound::new()),
             ..BlockData::default()
         }
+    }
+
+    #[test]
+    fn return_refused_storage_restores_refused_cell_and_keeps_cleared_cell() {
+        let origin = [10, 20, 30];
+        let standing = [11, 20, 30];
+        let place = |o| add(origin, o);
+        let iron = Some(("iron", 4));
+        let gold = Some(("gold", 7));
+        let stored = vec![([0, 0, 0], vec![iron]), ([1, 0, 0], vec![gold])];
+        let partial = HashSet::from([standing]);
+
+        let mut carried = stored.clone();
+        let mut world = Fake {
+            storage: true,
+            ..Fake::default()
+        };
+        let refused = take_refused(&mut carried, origin, &partial);
+        assert_eq!(carried, [([0, 0, 0], vec![iron])]);
+        release_stored(&mut world, refused, place, |_| true);
+        assert_eq!(world.restored_storage, [(standing, vec![gold])]);
+        assert!(world.drops.is_empty());
+
+        let mut carried = stored.clone();
+        let refused = take_refused(&mut carried, origin, &HashSet::from([origin, standing]));
+        assert!(carried.is_empty());
+        world.restored_storage.clear();
+        release_stored(&mut world, refused, place, |_| true);
+        assert_eq!(
+            world.restored_storage,
+            [(origin, vec![iron]), (standing, vec![gold])]
+        );
+        assert!(world.drops.is_empty());
+
+        let mut carried = stored;
+        carried[1].1.push(iron);
+        world.restored_storage.clear();
+        world.reject_storage = gold;
+        let refused = take_refused(&mut carried, origin, &partial);
+        assert_eq!(carried, [([0, 0, 0], vec![iron])]);
+        release_stored(&mut world, refused, place, |_| true);
+        assert_eq!(world.restored_storage, [(standing, vec![None, iron])]);
+        assert_eq!(world.drops, [(standing, ("gold", 7))]);
+    }
+
+    #[test]
+    fn return_refused_held_restores_refused_block_entity_and_keeps_cleared_cell() {
+        let origin = [10, 20, 30];
+        let standing = [11, 20, 30];
+        let iron = vec![Some(("iron", 4))];
+        let gold = vec![Some(("gold", 7))];
+        let mut carried = vec![
+            ([0, 0, 0], belt(iron.clone())),
+            ([1, 0, 0], belt(gold.clone())),
+        ];
+        let refused = take_refused(&mut carried, origin, &HashSet::from([standing]));
+        let [(offset, data)] = carried.as_slice() else {
+            panic!("only the cleared cell should keep its cargo");
+        };
+        assert_eq!(*offset, [0, 0, 0]);
+        assert_eq!(data.slots, iron);
+        let mut world = Fake {
+            now: Some(Block::Belt),
+            entity: Some(true),
+            ..Fake::default()
+        };
+        let drops = release_held_data(&mut world, refused, |o| add(origin, o), |_| true);
+        assert_eq!(world.merged_at, [standing]);
+        assert_eq!(world.restored_slots, [(standing, gold)]);
+        assert!(drops.is_empty());
     }
 
     #[test]
