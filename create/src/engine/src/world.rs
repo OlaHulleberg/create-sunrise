@@ -8509,6 +8509,69 @@ mod tests {
     }
 
     #[test]
+    fn a_pasted_speed_is_the_setting_whatever_the_facing_and_turns_with_it() {
+        use crate::board::Settings as Pick;
+        use crate::kinetics::Dir;
+        // `KineticScrollValueBehaviour.getValueSettings` and `setValueSettings`, which a
+        // clipboard's `readFromClipboard` calls, never look at the block: its row and value are
+        // one setting on a motor of any facing. `CreativeMotorBlockEntity.getGeneratedSpeed`
+        // turns that setting by the facing's axis direction (`KineticBlockEntity.convertToDirection`).
+        let names: Vec<(&str, Vec<(&str, &str)>)> = Dir::ALL
+            .iter()
+            .map(|f| {
+                (
+                    "create:creative_motor",
+                    vec![("facing", crate::copycat::dir_name(*f))],
+                )
+            })
+            .collect();
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let motors: Vec<(Dir, [i32; 3])> = Dir::ALL
+            .into_iter()
+            .enumerate()
+            .map(|(i, f)| (f, [i as i32 * 4, 64, 0]))
+            .collect();
+        for (i, (_, pos)) in motors.iter().enumerate() {
+            w.block_changed(0, *pos, 0, 10 + i as u32);
+        }
+        w.tick(0, &mut Vec::new());
+        let setting = |w: &CreateWorld, pos| w.motor_setting(0, pos).map(|rpm| rpm as i32);
+        let pick = |row, value| Pick { row, value };
+        // Copied from a motor set to 32 in each orientation: the row is clockwise whatever way
+        // that motor turns.
+        for &(_, pos) in &motors {
+            assert_eq!(w.board_motor(0, pos, pick(1, 32)), Some(32.0));
+            let copied = crate::board::kinetic_settings(setting(&w, pos).unwrap());
+            assert_eq!(copied, pick(1, 32));
+        }
+        // `Dir::ALL`'s order (down, up, north, south, west, east): a facing against its axis
+        // turns the other way.
+        let axis = [-1.0, 1.0, -1.0, 1.0, -1.0, 1.0];
+        let paste = |w: &mut CreateWorld, row: i32, value: i32| {
+            let speed = value.max(1) as f32;
+            let setting = if row == 0 { -speed } else { speed };
+            for &(_, pos) in &motors {
+                let pasted = w.board_motor(0, pos, pick(row, value));
+                assert_eq!(pasted, Some(setting), "{pos:?}");
+            }
+            w.tick(0, &mut Vec::new());
+            for (&(facing, pos), axis) in motors.iter().zip(axis) {
+                assert_eq!(w.motor_setting(0, pos), Some(setting), "{facing:?}");
+                assert_eq!(w.speed(0, pos), Some(axis * setting), "{facing:?}");
+            }
+        };
+        paste(&mut w, 1, 32);
+        // Column 0 is 1 rpm: -1 on the downward-facing motor, +1 on the east-facing one.
+        paste(&mut w, 1, 1);
+        paste(&mut w, 0, 1);
+        paste(&mut w, 1, 0);
+        paste(&mut w, 0, 0);
+    }
+
+    #[test]
     fn a_removed_deployer_clears_its_cracks() {
         let names: Vec<(&str, Vec<(&str, &str)>)> = vec![(
             "create:deployer",
