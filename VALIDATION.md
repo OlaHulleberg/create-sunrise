@@ -33,6 +33,22 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `6a02076` |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `6a02076` |
 
+## #538 and #540 in game on Dev `ba1f24e` (branch `fix/basin-entity-hand`, main `d0ffeba2`)
+
+One run on 2026-11-27 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
+socket), with launcher 1.3.7. The mod is a copy of `create/` at `ab765baf` (after the run, #540's commit only had the
+private constants of its message renamed) plus the one uncommitted tag file of #359
+(`data/c/tags/block/barrels.json`), built by `sunrise-launcher native-build` as `native-ba1f24e-26ba47cc3317`, in a fresh
+creative world on a smooth stone platform at y 149. Compared with Create 6.0.11 (`b62e837`) Java. Details and screenshots
+are not kept in the repository.
+
+| Area | Result |
+|---|---|
+| An item entity past its stack limit on a basin (#538) | **Passes.** A `/summon`ed entity of 64 snowballs (limit 16) falls into a basin under a press on a 16 rpm motor: 2 s later the basin's input holds 16 and three item entities of 16 each lie where it landed. As the press compacts, they top the input up; 72 s after the summon no item entity is left and the basin holds 7 snow blocks and 1 ice, the press idle (64 snowballs are 16 snow blocks, 9 of which are one ice). An entity of 16 is consumed at once. Before the fix, on a build with DEBUG lines (not committed): the basin took 16 and handed 48 back, the next landing read 64 again, and the game's log said why, `mod create hook item_after_vertical_collision output stack refused: CountExceeded { maximum: 16 }`, the item keeping all it had. A depot takes 16 of 64 and three entities of 16 lie on it. The basin draws as its block template on this build, so its contents were read with `/data get`, not seen. |
+| A deployer's hand with its motor removed mid-stroke (#540) | **Passes.** An empty-handed deployer facing down on a 16 rpm motor, the motor taken off at `EXPANDING` timer 680: the server reads 680 after 11 s and after 22 s, and two screenshots 11 s apart have the same 7124 pixels of pole and hand in the same place, where the stroke's frame before differs in 9290 and the frame 0.2 s after the motor's return in 6986 (the hand 31 px further out, the server at timer 456). It goes on to the bottom, back up, and strokes on. Its place follows `getHandOffset`: frozen at timers 872, 360 and 200 and at the stroke's end, the hand's tip is 427, 490, 506 and 519 px down the frame, 91 px for 0.872 of a stroke of reach 1.25 (1.09 blocks, beside the deployer's face at 80 px a block). |
+
+Not run: a punching deployer or one holding an item (its hand is 3/16 or 4/16 long), a fist bump, a deployer on a contraption, an over-limit item on a saw, a millstone, a drain, a funnel, sand paper or a press in the world, multiplayer.
+
 ## Deployers (#529) in game on Dev `ba1f24e` (main `7669a8e6`)
 
 One run on 2026-11-27 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
