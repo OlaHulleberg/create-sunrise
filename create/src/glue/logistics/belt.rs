@@ -294,8 +294,7 @@ pub fn use_belt(lv: &mut ServerLevel<'_>, pos: [i32; 3], player: u128) -> bool {
         let b = w.dims[dim].belts.get_mut(&c)?;
         let taken = b.items.take_within(index as f32 + 0.5, 0.55);
         if !taken.is_empty() {
-            w.dims[dim].belt_changes.push(c);
-            w.belt_inventory_changed(dim, c);
+            w.belt_mutated(dim, c);
         }
         Some(taken)
     })
@@ -360,8 +359,7 @@ pub fn put_on_from_above(
     let angle = items::random_angle(lv, pos);
     let up = items::upright(&*lv.host, id);
     let added = with_world(|w| {
-        let d = &mut w.dims[dim];
-        let b = d.belts.get_mut(&c)?;
+        let b = w.dims[dim].belts.get_mut(&c)?;
         let movement = belt::movement_facing(rpm, b.segment.facing);
         if !b.items.can_insert_at_from_side(index, Dir::Up, movement) {
             return None;
@@ -375,8 +373,7 @@ pub fn put_on_from_above(
         i.inserted_from = Some(Dir::Up);
         i.position = index as f32 + 0.5 + if b.items.positive { -1.0 } else { 1.0 } / 16.0;
         b.items.add(i);
-        d.belt_changes.push(c);
-        w.belt_inventory_changed(dim, c);
+        w.belt_mutated(dim, c);
         Some(())
     })
     .flatten();
@@ -544,8 +541,7 @@ pub fn handle_insertion(
         moved.inserted_at = index;
         moved.inserted_from = Some(side);
         b.items.add(moved);
-        w.dims[dim].belt_changes.push(c2);
-        w.belt_inventory_changed(dim, c2);
+        w.belt_mutated(dim, c2);
         Some(0)
     })
     .flatten()

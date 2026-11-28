@@ -440,19 +440,10 @@ impl ResourceHandler<ItemResource> for BeltItems {
         }
         let dim = lv.dim;
         Ok(with_world(|w| {
-            let d = &mut w.dims[dim];
-            let b = d.belts.get_mut(&c)?;
-            let taken = b
-                .items
-                .extract_at(segment, amount.min(u32::from(u8::MAX)) as u8, false)?
-                .1;
-            if taken > 0 {
-                d.belt_changes.push(c);
-            }
-            Some(u32::from(taken))
+            w.extract_belt_item(dim, c, segment, amount.min(u32::from(u8::MAX)) as u8, false)
         })
         .flatten()
-        .unwrap_or(0))
+        .map_or(0, |(_, n)| u32::from(n)))
     }
 }
 /// `ItemVaultBlockEntity`'s capability: the whole vault's stacks (`CombinedInvWrapper` of each
