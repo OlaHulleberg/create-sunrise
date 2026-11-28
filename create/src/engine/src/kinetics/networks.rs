@@ -126,16 +126,20 @@ impl KineticNetwork {
         }
         true
     }
-    /// Detach a port; the entity leaves only when its last enrolled port leaves.
+    /// KineticNetwork.remove: detach a port; the entity leaves only when its last enrolled port
+    /// leaves, and its capacity entry with it only while it is a source (`isSource`).
     pub(super) fn remove(&mut self, id: u32, nodes: &[Node]) -> bool {
         let mut removed = false;
+        let source = nodes[id as usize].part.generated != 0.0;
         self.members.retain(|entity, member| {
             if entity.0 != nodes[id as usize].entity {
                 return true;
             }
             removed |= member.ports.remove(&id);
             if member.ports.is_empty() {
-                self.sources.remove(entity);
+                if source {
+                    self.sources.remove(entity);
+                }
                 false
             } else {
                 true
@@ -426,6 +430,32 @@ mod tests {
             (256.0, 262144.0)
         );
         assert_eq!(propagator.totals(Some(8), &kinetics.nodes), (0.0, 0.0));
+    }
+
+    #[test]
+    fn a_member_keeps_its_capacity_entry_unless_it_leaves_as_a_source() {
+        let generator = Part {
+            generated: 16.0,
+            capacity: 256.0,
+            ..Part::shaft(Axis::X)
+        };
+        let mut kinetics = Kinetics::new();
+        kinetics.set([1, 8, 0], 0, generator);
+        kinetics.set([2, 8, 0], 0, Part::shaft(Axis::X));
+        let mut network = KineticNetwork::default();
+        network.add(0, &mut kinetics.nodes);
+        network.add(1, &mut kinetics.nodes);
+        kinetics.nodes[0].part.generated = 0.0;
+        assert!(network.remove(0, &kinetics.nodes));
+        assert!(
+            network
+                .sources
+                .contains_key(&Entity(kinetics.nodes[0].entity))
+        );
+        kinetics.nodes[0].part.generated = 16.0;
+        network.add(0, &mut kinetics.nodes);
+        assert!(network.remove(0, &kinetics.nodes));
+        assert!(network.sources.is_empty());
     }
 
     #[test]
