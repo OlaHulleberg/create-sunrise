@@ -33,8 +33,8 @@ impl Run {
         out
     }
 
-    /// `WaterWheelBlockEntity.determineAndApplyFlowScore` when a wheel's surroundings changed or
-    /// its lazy tick came.
+    /// `WaterWheelBlock.tick`'s `determineAndApplyFlowScore`: a wheel placed, or its surroundings
+    /// changed.
     pub(super) fn apply_wheel_flow(&mut self) {
         for (p, _, _) in self.w.take_wheel_checks(0) {
             self.apply_flow(p);
@@ -42,7 +42,7 @@ impl Run {
     }
 
     /// One wheel's flow score, from its axis and the flow at its sample cells.
-    fn apply_flow(&mut self, p: Pos) {
+    pub(super) fn apply_flow(&mut self, p: Pos) {
         let Some((block, info)) = self.w.table.get(self.at(p)) else {
             return;
         };
@@ -63,7 +63,7 @@ impl Run {
             .collect();
         let score = create_engine::waterwheel::flow_score(axis, &samples);
         self.w.set_wheel_flow(0, p, score);
-        self.wheel_scores.insert(p, score.clamp(-1, 1) as i8);
+        self.wheel_scores.insert(p, score as i8);
     }
 
     /// `WaterWheelBlockEntity.getFlowVectorAtPosition`: a bubble column reads its drag, anything

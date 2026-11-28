@@ -922,6 +922,14 @@ pub enum EntityTurn {
     /// `CrushingWheelBlockEntity.onSpeedChanged` of the wheels whose speed the last base tick
     /// changed: their controllers are looked at (`fixControllers`) before anything else ticks.
     Wheels,
+    /// `WaterWheelBlockEntity.lazyTick` (`determineAndApplyFlowScore`) of the wheel at `pos`, on
+    /// `axis`, large or not, inside its base tick: the host looks at its flow
+    /// ([`CreateWorld::set_wheel_flow`]) before its turn goes on.
+    WheelFlow {
+        pos: [i32; 3],
+        axis: crate::kinetics::Axis,
+        large: bool,
+    },
     /// `level.destroyBlock(pos, true)` of the parts a turn broke (`RotationPropagator`,
     /// `GeneratingKineticBlockEntity.applyNewSpeed`), inside the tick that decided it: the
     /// kinetic events taken ([`crate::kinetics::Kinetics::take_pending_events`]).
@@ -944,9 +952,13 @@ pub struct BlockEntityTicks {
     resume: Option<([i32; 3], Stage)>,
 }
 
-/// What is left of an entity's turn after its base tick, in order.
+/// What is left of an entity's turn, in order.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Stage {
+    /// A water wheel's lazy tick, after the breaks its `attachKinetics` made.
+    Flow,
+    /// The rest of its base tick and the engine's subclass ticks.
+    Base,
     Breaks,
     Wheels,
     Turn,
@@ -985,11 +997,14 @@ impl BlockEntityTicks {
                         // `BeltBlockEntity.tick` runs `initBelt` before its `super.tick()`.
                         world.initialize_belt(self.dim, p);
                     }
-                    if world.table.is_kinetic(state) {
-                        world.kinetic_turn(self.dim, p, block);
-                        world.flush_kinetic_callbacks(self.dim);
+                    if world.table.is_kinetic(state) && world.kinetic_turn(self.dim, p, block) {
+                        (p, Stage::Flow)
+                    } else {
+                        if world.table.is_kinetic(state) {
+                            world.flush_kinetic_callbacks(self.dim);
+                        }
+                        (p, Stage::Breaks)
                     }
-                    (p, Stage::Breaks)
                 }
             };
             if let Some(turn) = self.finish(world, p, stage) {
@@ -1002,6 +1017,23 @@ impl BlockEntityTicks {
     /// nothing is left for the host.
     fn finish(&mut self, world: &mut CreateWorld, p: [i32; 3], stage: Stage) -> Option<EntityTurn> {
         let dim = self.dim;
+        if stage == Stage::Flow {
+            if world.dims[dim].kinetics.has_pending_breaks() {
+                self.resume = Some((p, Stage::Flow));
+                return Some(EntityTurn::Breaks(
+                    world.dims[dim].kinetics.take_pending_events(),
+                ));
+            }
+            self.resume = Some((p, Stage::Base));
+            if let Some(turn) = world.wheel_flow_turn(dim, p) {
+                return Some(turn);
+            }
+            self.resume = None;
+        }
+        if stage <= Stage::Base {
+            world.finish_kinetic_turn(dim, p);
+            world.flush_kinetic_callbacks(dim);
+        }
         if stage <= Stage::Breaks && world.dims[dim].kinetics.has_pending_breaks() {
             self.resume = Some((p, Stage::Wheels));
             return Some(EntityTurn::Breaks(
@@ -1624,15 +1656,11 @@ impl CreateWorld {
             self.creative_tanks_touched(dim, false);
         }
         let d = &mut self.dims[dim];
-        // A wheel loaded with its column looks at its flow (`lazyTick`); placed ones are listed
-        // by `block_changed`.
-        if matches!(block, Block::WaterWheel | Block::LargeWaterWheel)
-            && !d.wheels.contains_key(&pos)
-        {
+        // A wheel loaded with its column looks at its flow in its first turn (`initialize`).
+        if matches!(block, Block::WaterWheel | Block::LargeWaterWheel) {
             d.wheels
                 .entry(pos)
                 .or_insert_with(|| crate::block_entity::SmartBlockEntity::new(60));
-            d.wheel_checks.push(pos);
         }
         if block == Block::Depot && !d.depots.contains_key(&pos) {
             // Placed or loaded: clients draw what its block entity holds.
@@ -2797,9 +2825,10 @@ impl CreateWorld {
     }
 
     /// A kinetic block entity's tick at its turn in the level's walk: `KineticBlockEntity.tick`,
-    /// then the subclass ticks the engine owns.
-    fn kinetic_turn(&mut self, dim: usize, pos: [i32; 3], block: Option<Block>) {
-        let table = &self.table;
+    /// then the subclass ticks the engine owns. A water wheel whose lazy tick came
+    /// (`SmartBlockEntity.tick`, after `initialize`) stops there for the host to look at its
+    /// flow: true, and [`CreateWorld::finish_kinetic_turn`] goes on.
+    fn kinetic_turn(&mut self, dim: usize, pos: [i32; 3], block: Option<Block>) -> bool {
         let d = &mut self.dims[dim];
         // `BasinOperatingBlockEntity.tick` returns before its `super.tick()` in the tick it
         // hears its basin went.
@@ -2807,11 +2836,24 @@ impl CreateWorld {
             && d.operator_mut(pos).is_some_and(|o| o.removed)
         {
             d.kinetics.skip_registered_base(pos);
-            return;
+            return false;
         }
-        if !d.kinetics.tick_registered_base(pos) {
-            return;
+        let began = d.kinetics.begin_registered_base(pos);
+        // `WaterWheelBlockEntity.lazyTick`: once in `initialize`, then every 61 ticks.
+        if d.wheels.get_mut(&pos).is_some_and(|be| be.tick()) {
+            return true;
         }
+        if began {
+            self.finish_kinetic_turn(dim, pos);
+        }
+        false
+    }
+
+    /// The rest of a kinetic block entity's turn after `SmartBlockEntity.tick`'s lazy tick.
+    fn finish_kinetic_turn(&mut self, dim: usize, pos: [i32; 3]) {
+        let table = &self.table;
+        let d = &mut self.dims[dim];
+        d.kinetics.finish_registered_base();
         let cranks = d.cranks_ticking;
         let Dimension {
             kinetics,
@@ -3381,32 +3423,37 @@ impl CreateWorld {
         }
     }
 
-    /// The water wheels to look at in this tick: those whose neighbour changed, and those whose
-    /// lazy tick came (`setLazyTickRate(60)`), with their axis.
+    /// The water wheels whose block tick came (`WaterWheelBlock.tick`): placed, or a neighbour
+    /// changed. With their axis, and whether they are large.
     pub fn take_wheel_checks(
         &mut self,
         dim: usize,
     ) -> Vec<([i32; 3], crate::kinetics::Axis, bool)> {
-        let d = &mut self.dims[dim];
-        let mut list = std::mem::take(&mut d.wheel_checks);
-        for (pos, be) in d.wheels.iter_mut() {
-            if be.tick() {
-                list.push(*pos);
-            }
-        }
+        let mut list = std::mem::take(&mut self.dims[dim].wheel_checks);
         list.sort();
         list.dedup();
         list.into_iter()
             .filter_map(|p| {
-                let state = *self.dims[dim].states.get(&p)?;
-                let (block, info) = self.table.get(state)?;
-                match block {
-                    Block::WaterWheel => Some((p, info.facing?.axis(), false)),
-                    Block::LargeWaterWheel => Some((p, info.axis?, true)),
-                    _ => None,
-                }
+                let (axis, large) = self.wheel_axis(dim, p)?;
+                Some((p, axis, large))
             })
             .collect()
+    }
+
+    /// The axis of the water wheel at `pos`, and whether it is large.
+    fn wheel_axis(&self, dim: usize, pos: [i32; 3]) -> Option<(crate::kinetics::Axis, bool)> {
+        let (block, info) = self.table.get(*self.dims[dim].states.get(&pos)?)?;
+        match block {
+            Block::WaterWheel => Some((info.facing?.axis(), false)),
+            Block::LargeWaterWheel => Some((info.axis?, true)),
+            _ => None,
+        }
+    }
+
+    /// The lazy tick of the water wheel at `pos` in its turn, if it still is one.
+    fn wheel_flow_turn(&self, dim: usize, pos: [i32; 3]) -> Option<EntityTurn> {
+        let (axis, large) = self.wheel_axis(dim, pos)?;
+        Some(EntityTurn::WheelFlow { pos, axis, large })
     }
 
     /// `WaterWheelStructuralBlock.getMaster` of the structure block `state` at `pos`: the block
@@ -3495,9 +3542,10 @@ impl CreateWorld {
             .collect()
     }
 
-    /// A water wheel's new flow score: it turns again when the score changed.
+    /// `WaterWheelBlockEntity.setFlowScoreAndUpdate`: a new flow score; the wheel turns again
+    /// when its generated speed (the score clamped to -1..=1) changed.
     pub fn set_wheel_flow(&mut self, dim: usize, pos: [i32; 3], score: i32) {
-        let flow = score.clamp(-1, 1) as i8;
+        let flow = score as i8;
         let d = &mut self.dims[dim];
         let Some(&state) = d.states.get(&pos) else {
             return;
@@ -5181,7 +5229,7 @@ impl CreateWorld {
     /// `WaterWheelBlockEntity.read`: the saved flow score is the wheel's field again, without
     /// an attachment or a speed-change notification (its first tick attaches it).
     pub fn restore_wheel_flow(&mut self, dim: usize, pos: [i32; 3], score: i32) {
-        self.read_settings(dim, pos, |s| s.flow = score.clamp(-1, 1) as i8);
+        self.read_settings(dim, pos, |s| s.flow = score as i8);
     }
 
     /// `PoweredShaftBlockEntity.read`: the saved engine and its power are the shaft's fields
@@ -10706,6 +10754,101 @@ mod tests {
         assert!(w.dims[0].fans[&fan].rebuild);
     }
 
+    /// The level's walk of one tick, the host looking at a wheel's flow (`flow`) and recording
+    /// the turns it was given.
+    fn walk_with_flow(w: &mut CreateWorld, flow: i32) -> Vec<EntityTurn> {
+        let mut turns = w.block_entity_ticks(0, 0);
+        let mut seen = Vec::new();
+        while let Some(turn) = turns.next(w) {
+            if let EntityTurn::WheelFlow { pos, .. } = turn {
+                assert!(
+                    w.dims[0].kinetics.saved_state(pos, 0).is_some(),
+                    "the wheel's base tick began"
+                );
+                w.set_wheel_flow(0, pos, flow);
+            }
+            seen.push(turn);
+        }
+        seen
+    }
+
+    #[test]
+    fn a_wheel_s_first_flow_comes_after_the_motor_registered_before_it_attached() {
+        // #372 D6: `WaterWheelBlockEntity.lazyTick` runs in `initialize`, inside the wheel's
+        // own tick. The motor registered before it has attached and drives it, so a flow
+        // turning it the other way breaks the wheel (`applyNewSpeed`'s `destroyBlock`), not
+        // the motor.
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:water_wheel", vec![("facing", "east")]),
+        ];
+        let (motor, wheel) = ([0, 8, 0], [1, 8, 0]);
+        let mut breaks = Vec::new();
+        for flow in [-1, 1] {
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                names.iter().map(|(n, p)| (*n, p.iter().copied())),
+            ));
+            w.block_changed(0, motor, 0, 10);
+            w.block_changed(0, wheel, 0, 11);
+            let turns = walk_with_flow(&mut w, flow);
+            assert!(turns.contains(&EntityTurn::WheelFlow {
+                pos: wheel,
+                axis: crate::kinetics::Axis::X,
+                large: false,
+            }));
+            breaks.extend(turns.into_iter().filter_map(|t| match t {
+                EntityTurn::Breaks(events) => Some(events),
+                _ => None,
+            }));
+        }
+        assert_eq!(
+            breaks,
+            [vec![crate::kinetics::Event::Break { pos: wheel }]],
+            "one flow opposes the motor"
+        );
+    }
+
+    #[test]
+    fn a_break_is_destroyed_before_the_next_entity_s_turn() {
+        // #372 D12: `level.destroyBlock` runs inside the tick that decides it, here the
+        // wheel's (`applyNewSpeed` with a flow against the motor driving it): the depot
+        // registered after the wheel takes its turn with the block gone.
+        let names: Vec<(&str, Vec<(&str, &str)>)> = vec![
+            ("create:creative_motor", vec![("facing", "east")]),
+            ("create:water_wheel", vec![("facing", "east")]),
+            ("create:depot", vec![]),
+        ];
+        let (motor, wheel, depot) = ([0, 8, 0], [1, 8, 0], [5, 8, 0]);
+        let mut broke = 0;
+        for flow in [-1, 1] {
+            let mut w = CreateWorld::new(StateTable::new(
+                10,
+                names.iter().map(|(n, p)| (*n, p.iter().copied())),
+            ));
+            w.block_changed(0, motor, 0, 10);
+            w.block_changed(0, wheel, 0, 11);
+            w.block_changed(0, depot, 0, 12);
+            let turns = walk_with_flow(&mut w, flow);
+            if turns.iter().any(|t| matches!(t, EntityTurn::Breaks(_))) {
+                broke += 1;
+                assert_eq!(
+                    turns,
+                    [
+                        EntityTurn::WheelFlow {
+                            pos: wheel,
+                            axis: crate::kinetics::Axis::X,
+                            large: false,
+                        },
+                        EntityTurn::Breaks(vec![crate::kinetics::Event::Break { pos: wheel }]),
+                        EntityTurn::Depot(depot),
+                    ]
+                );
+            }
+        }
+        assert_eq!(broke, 1);
+    }
+
     #[test]
     fn a_reloaded_water_wheel_keeps_its_flow_network() {
         // Issue #89, Java tick 122 of create-fuzz seed 20: a flowing wheel saved with
@@ -10964,8 +11107,8 @@ mod tests {
 
     #[test]
     fn a_water_wheel_looks_at_its_flow_on_the_first_tick_and_the_sixty_first() {
-        // `WaterWheelBlockEntity`: `setLazyTickRate(60)`; `lazyTick` runs on the first tick
-        // (`initialize`), then after the counter of 60 ran down.
+        // `WaterWheelBlockEntity`: `setLazyTickRate(60)`; `lazyTick` runs in its turn on the
+        // first tick (`initialize`), then after the counter of 60 ran down.
         let mut w = CreateWorld::new(StateTable::new(
             10,
             [(
@@ -10976,9 +11119,17 @@ mod tests {
             .map(|(n, p)| (*n, p.iter().copied())),
         ));
         w.block_changed(0, [0, 0, 0], 0, 10);
-        let fired: Vec<u32> = (1..=61)
-            .filter(|_| !w.take_wheel_checks(0).is_empty())
-            .collect();
+        assert_eq!(w.take_wheel_checks(0).len(), 1, "WaterWheelBlock.tick");
+        let mut fired = Vec::new();
+        for t in 1..=61 {
+            let mut turns = w.block_entity_ticks(0, t);
+            while let Some(turn) = turns.next(&mut w) {
+                if matches!(turn, EntityTurn::WheelFlow { pos: [0, 0, 0], .. }) {
+                    fired.push(t);
+                }
+            }
+            w.tick(0, &mut Vec::new());
+        }
         assert_eq!(fired, [1, 61]);
     }
 

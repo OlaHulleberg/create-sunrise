@@ -551,6 +551,8 @@ pub struct Kinetics {
     walking: bool,
     /// Monotonic base-tick pass, including phases run before solve.
     base_pass: u64,
+    /// The entities whose base tick the host interrupted after `initialize`.
+    begun: Vec<u32>,
 }
 
 /// Create's BlockPos.asLong, used by GeneratingKineticBlockEntity.createNetworkId.
@@ -1537,7 +1539,42 @@ impl Kinetics {
         }
     }
 
+    /// KineticBlockEntity.tick up to `SmartBlockEntity.tick`'s lazy tick: `attachKinetics` and
+    /// `initialize`, for each port of the live entity at `pos` that has not ticked in this pass.
+    /// Whether one began: [`Kinetics::finish_registered_base`] then ends its tick.
+    pub fn begin_registered_base(&mut self, pos: [i32; 3]) -> bool {
+        let mut events = Vec::new();
+        let mut began = false;
+        for id in self.ordered_ports(pos).into_iter().filter(|&id| id != NONE) {
+            if self.begin_base(id, &mut events) {
+                self.begun.push(id);
+                began = true;
+            }
+        }
+        self.pending_events.extend(events);
+        began
+    }
+
+    /// The rest of the base ticks [`Kinetics::begin_registered_base`] began.
+    pub fn finish_registered_base(&mut self) {
+        let mut events = Vec::new();
+        for id in std::mem::take(&mut self.begun) {
+            if self.nodes[id as usize].live {
+                self.finish_base(id, self.now, &mut events);
+            }
+        }
+        self.pending_events.extend(events);
+    }
+
     fn tick_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) -> bool {
+        if !self.begin_base(id, events) {
+            return false;
+        }
+        self.finish_base(id, tick, events);
+        true
+    }
+
+    fn begin_base(&mut self, id: u32, events: &mut Vec<Event>) -> bool {
         if !self.nodes[id as usize].live
             || self.nodes[id as usize]
                 .state
@@ -1561,6 +1598,10 @@ impl Kinetics {
         if self.nodes[id as usize].state.lifecycle.is_new() {
             self.initialize_network(id);
         }
+        true
+    }
+
+    fn finish_base(&mut self, id: u32, tick: u64, events: &mut Vec<Event>) {
         let n = &self.nodes[id as usize];
         if n.state.lifecycle.is_new()
             && (n.load_origin == LoadOrigin::Placement
@@ -1615,7 +1656,6 @@ impl Kinetics {
             }
             self.propagate_new_source(id, events);
         }
-        true
     }
 
     /// BeltBlock.initBelt invokes attachKinetics immediately for each chain member.

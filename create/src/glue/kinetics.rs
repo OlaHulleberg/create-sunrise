@@ -558,7 +558,7 @@ fn tick_inputs(lv: &mut ServerLevel<'_>) {
     with_world(|w| w.flush_kinetic_callbacks(dim));
     apply_sequencer_writes(lv);
     with_world(|w| w.tick_cranks(dim));
-    // Water wheels whose surroundings changed, and those whose lazy tick came.
+    // Water wheels whose block tick came: placed, or their surroundings changed.
     for (pos, axis, large) in with_world(|w| w.take_wheel_checks(dim)).unwrap_or_default() {
         super::sources::waterwheels::determine_flow(lv, pos, axis, large);
     }
