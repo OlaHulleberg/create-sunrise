@@ -534,7 +534,7 @@ pub fn handle_insertion(
             }
         } else {
             // A smoother hand-over from the belt behind it.
-            let extra = if from_belt { 0.26 } else { 0.0 };
+            let extra = if from_belt { belt::HANDOFF_EXTRA } else { 0.0 };
             moved.position = if speed2 > 0.0 {
                 index as f32 - extra
             } else {
