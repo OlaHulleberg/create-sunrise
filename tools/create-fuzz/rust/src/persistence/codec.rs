@@ -402,10 +402,13 @@ pub fn belts_from_nbt(data: &Compound) -> Vec<([i32; 3], create_engine::belt::In
                 .zip(ids)
                 .filter_map(|(n, id)| {
                     let Tag::String(id) = id else { return None };
-                    let mut item =
-                        create_engine::belt::Item::from_saved(id.as_str(), n[3], n[2], false);
-                    item.position = f32::from_bits(n[0] as u32);
-                    item.side_offset = f32::from_bits(n[1] as u32);
+                    let mut item = create_engine::belt::Item::from_saved(
+                        id.as_str(),
+                        n[3],
+                        n[2],
+                        false,
+                        [f32::from_bits(n[0] as u32), f32::from_bits(n[1] as u32)],
+                    );
                     item.locked = n[4] != 0;
                     Some(item)
                 })
