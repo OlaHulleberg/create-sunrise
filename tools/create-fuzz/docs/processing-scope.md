@@ -196,6 +196,10 @@ the cobblestone milled after it sat in output slot 1 or 2. Depots' saved payload
 compared, nor the comparator of one holding such an item. Inputs, times and fixed recipes'
 results compare exactly.
 
+Item entities are not slot stacks: two of one stack dropped from one block in a tick are two on
+both sides, the driver's records of them being equal and Java's lying at random spots
+(`processing-millstone-destroy`). Only the stacks of an item whose count chance decides merge.
+
 Where the rolls would change what happens next, the family does not go on:
 
 - A depot below a controller takes one stack of the results, and how many more stay in the
@@ -311,6 +315,13 @@ The driver spilled a broken millstone's slots as `Block.popResource` does; the g
 mod container as `Containers.dropContents` does, as Create's `destroy` (:144,
 `ItemHelper.dropContents`) does, so seeds 973 and 1485 differed whenever Java's items landed
 outside the narrower range.
+
+Seed 40653 (`processing-millstone-destroy`) had the port's side drop one gravel of a broken
+millstone's two, its input's and its output's. The port's mirror drops both, as the game spills the
+millstone's ten slots; the comparison read them as one. Once a rolled recipe's input has been
+offered (`Rolls::of`), `Rolls::by_stack` merged equal drop records, and the driver's two drops
+from one block are equal where Java's lie at random spots. Only a stack whose count chance
+decides is merged now.
 
 Fixed (#458), each with a case in `cases/`:
 
@@ -442,9 +453,10 @@ After the change (`fuzz-lane 0 327680 <residue> 256`, or `163840 <residue> 128`)
 1279 of 1280, crushing 221, saw 128, mixing 77, compacting 93, `breaking/drill` 64, deployers 125
 and 253, `press_processing` 78, `depot_outputs` 55 and `chute_columns` 35 all 1280; `breaking/saw`
 192 1267 (the 13 leaf `distance` seeds above); `flicker` 2 320 of 320 and
-`sequenced_gearshift` 173 315 of 320; `fuzz 0 4000` 4000. The millstone seed (40653: Java drops
-two gravel where the port drops one when the millstone is broken) and the five gearshift seeds
-(the gearshift drops two ticks early) differ the same way on `main`.
+`sequenced_gearshift` 173 315 of 320; `fuzz 0 4000` 4000. The five gearshift seeds (the gearshift
+drops two ticks early) differ the same way on `main`. The millstone's one, 40653, was the
+comparison reading a broken millstone's two drops as one (above): with them kept apart, millstone
+205, crushing 221, saw 128, mixing 77 and compacting 93 match 1280 of 1280 and `fuzz 0 4000` 4000.
 
 ## Deployers
 

@@ -94,6 +94,10 @@ API, and remove it once the API has it and the port uses it.
 - **Throwing a stack from a block entity's removal** (`BlockRemovalEffects` can only spawn a still stack): a broken
   deployer's stacks drop from where its fake player stands but are not thrown about, with the default pickup delay.
   Create uses: calls vanilla `Player.drop(stack, true, false)` on its fake player ([`DeployerBlockEntity.java:466`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/deployer/DeployerBlockEntity.java#L466)). Not filed.
+- **Popping a stack from a block entity's removal** (`BlockRemovalEffects` scatters as `Containers.dropItemStack`
+  does, over a wider box, or places a still stack): a broken basin's items waiting at its spout appear at the
+  block's middle, where Create scatters them a quarter block each way. Create uses: calls vanilla
+  `Block.popResource` ([`BasinBlockEntity.java:228`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/processing/basin/BasinBlockEntity.java#L228)). Not filed.
 
 ## Client
 

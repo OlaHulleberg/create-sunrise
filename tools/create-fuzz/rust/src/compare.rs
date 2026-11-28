@@ -909,6 +909,50 @@ mod tests {
         assert!(diff(&java(0.9, 2), &split(4))[0].starts_with("drops:"));
     }
     #[test]
+    fn a_stacks_drops_keep_their_number_unless_chance_decides_it() {
+        // Seed 40653: a broken millstone's input and output gravel, in a case that offered a
+        // rolled recipe's input, so both sides are read by stack.
+        let offered = |input: &str, drops| Snapshot {
+            item_outcomes: vec![crate::transport::Outcome {
+                pos: [0, 8, 0],
+                offered: Some(crate::transport::Stack {
+                    item: input.into(),
+                    count: 1,
+                }),
+                remainder: None,
+                taken: vec![],
+                handler: None,
+            }],
+            ..dropping(drops)
+        };
+        let java = offered(
+            "minecraft:gravel",
+            vec![
+                dropped(96, "minecraft:gravel", 1, [0.63, 8.4, 0.42], None),
+                dropped(96, "minecraft:gravel", 1, [0.24, 8.47, 0.48], None),
+            ],
+        );
+        let spilled = Some(Placed::Spread(crate::transport::Spreader::DropItemStack));
+        let rust = |n| {
+            offered(
+                "minecraft:gravel",
+                vec![dropped(96, "minecraft:gravel", 1, [0.5, 8.375, 0.5], spilled); n],
+            )
+        };
+        assert!(diff(&java, &rust(2)).is_empty());
+        assert!(diff(&rust(2), &java).is_empty());
+        assert!(!diff(&java, &rust(1)).is_empty());
+        assert!(!diff(&java, &rust(3)).is_empty());
+        // A counted item's stacks are chance's: two the driver threw are the one Java did.
+        let coal = |n, placed| dropped(96, "minecraft:coal", n, [1.55, 7.5, 0.5], placed);
+        let one = offered("minecraft:coal_ore", vec![coal(3, None)]);
+        let two = offered(
+            "minecraft:coal_ore",
+            vec![coal(2, Some(Placed::Exact)), coal(1, Some(Placed::Exact))],
+        );
+        assert!(diff(&one, &two).is_empty());
+    }
+    #[test]
     fn checkpoints_and_air_positions_are_compared() {
         let mut j = Snapshot::default();
         let mut r = Snapshot::default();
