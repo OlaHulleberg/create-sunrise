@@ -285,7 +285,7 @@ struct OnCart {
     /// The glue that held it (`Contraption.superglue`), in offsets from its anchor.
     glue: Vec<Glue>,
     /// What its other block entities and the engine kept for its blocks
-    /// (`StructureBlockInfo.nbt`), as `actors::carry_held` saves it.
+    /// (`StructureBlockInfo.nbt`), as `actors::held_to_nbt` saves it.
     held: Option<Tag>,
     /// Its actors (drills, saws, harvesters, ploughs, rollers, deployers) and what they work
     /// on (`MovementContext`), made again from its blocks when it loads.
@@ -1345,6 +1345,7 @@ fn is_anchor(id: u32) -> bool {
 /// centres and coupled (`tryToCoupleCarts` with no player: a contraption's coupling), and the
 /// contraption spans them, facing from the first to the second.
 fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool, nc: &Cart) {
+    use crate::glue::contraptions::actors;
     let taken = rider_of(lv, nc).is_some() || linked_rider(lv, nc.uuid).is_some();
     if taken || nc.occupied(&*lv.host) {
         return;
@@ -1408,6 +1409,8 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
     };
     let mut initial = cart::horizontal_direction(axis, backwards);
     let mut link = None;
+    // The carts' places, set once the blocks have left the world.
+    let mut meeting = None;
     if let Some((other, p)) = &connected {
         let centre = |b: [i32; 3]| {
             [
@@ -1428,24 +1431,11 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             return;
         };
         link = Some(created);
-        nc.entity.teleport_to(lv.host, here, None);
-        other.entity.teleport_to(lv.host, there, None);
+        meeting = Some((other.entity, other.uuid, here, there));
         initial = coupling::dir_from_y_rot(d[2].atan2(d[0]).to_degrees());
-        CARTS.with_borrow_mut(|c| {
-            c.known.insert(
-                other.uuid,
-                Known {
-                    dim: lv.dim,
-                    entity: other.entity,
-                    rider: None,
-                    pos: there,
-                    prev: there,
-                },
-            );
-        });
     }
     // `MountedStorageManager`: the storage blocks' items ride with the contraption.
-    let storage: Vec<([i32; 3], Vec<Option<ItemStack>>)> = blocks
+    let mut storage: Vec<([i32; 3], Vec<Option<ItemStack>>)> = blocks
         .iter()
         .filter(|(o, _)| *o != [0, 0, 0])
         .filter_map(|(o, _)| {
@@ -1455,18 +1445,56 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
         .collect();
     // `Contraption.superglue`: the glue holding its blocks leaves the world with them, and its
     // contraption controls' settings with their blocks (turning their kinds off).
-    let mut extras =
-        crate::glue::contraptions::actors::carry_extras(lv, pos, &blocks, |p| p == pos);
-    let glue = std::mem::take(&mut extras.glue);
+    let mut extras = actors::carry_extras(lv, pos, &blocks, |p| p == pos);
     // What their block entities and the engine keep for its other blocks rides too.
-    let held = crate::glue::contraptions::actors::carry_held(lv, held_key(nc.uuid), pos, &blocks);
-    // `removeBlocksFromWorld`: anchors stay.
+    let key = held_key(nc.uuid);
+    actors::carry_held(lv, key, pos, &blocks);
+    // `removeBlocksFromWorld`: anchors stay. A block that refuses to go stays standing.
+    let mut refused = HashSet::new();
     for (o, s) in blocks.iter().filter(|(o, _)| *o != [0, 0, 0]) {
         if is_anchor(*s) {
             continue;
         }
         let p = [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]];
-        lv.set_state(p, air, update_all());
+        if !lv.set_state(p, air, update_all()) {
+            crate::create_log!(
+                "[create] refused removing block at {p:?} during contraption assembly"
+            );
+            refused.insert(p);
+        }
+    }
+    // What the standing blocks gave up goes back to them, and the cart carries only what
+    // left the world.
+    crate::glue::contraptions::drop_refused_for(lv, key, pos, &refused, &mut blocks, &mut extras);
+    actors::return_refused_stored(lv, pos, &refused, &mut storage);
+    let held = actors::held_to_nbt(lv, key);
+    if !refused.is_empty() && blocks.iter().all(|(o, s)| *o == [0, 0, 0] || is_anchor(*s)) {
+        // Nothing left the world: its glue goes back and no contraption rides the cart.
+        actors::release_extras(
+            lv,
+            &mut extras,
+            |o| [pos[0] + o[0], pos[1] + o[1], pos[2] + o[2]],
+            |_| false,
+        );
+        rider.remove(lv.host, RemovalReason::Discarded);
+        return;
+    }
+    let glue = std::mem::take(&mut extras.glue);
+    if let Some((other, uuid, here, there)) = meeting {
+        nc.entity.teleport_to(lv.host, here, None);
+        other.teleport_to(lv.host, there, None);
+        CARTS.with_borrow_mut(|c| {
+            c.known.insert(
+                uuid,
+                Known {
+                    dim: lv.dim,
+                    entity: other,
+                    rider: None,
+                    pos: there,
+                    prev: there,
+                },
+            );
+        });
     }
     let dim = lv.dim;
     let mode = CARTS.with_borrow(|c| {
@@ -1475,8 +1503,8 @@ fn assemble(lv: &mut ServerLevel<'_>, pos: [i32; 3], axis: Axis, backwards: bool
             .map(|s| s.mode)
             .unwrap_or_default()
     });
-    let carried = crate::glue::contraptions::actors::with_extras(
-        crate::glue::contraptions::actors::structure_actors(&*lv.host, &blocks, super::car_state),
+    let carried = actors::with_extras(
+        actors::structure_actors(&*lv.host, &blocks, super::car_state),
         &extras,
     );
     crate::glue::advancements::assembled(lv, pos, &blocks);

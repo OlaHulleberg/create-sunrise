@@ -1049,14 +1049,15 @@ pub(crate) fn shown_entities_of(
 pub(crate) const SHOWN_CARRIED: &str = "Carried";
 
 /// What the block entities of a cart's contraption hold (all but its storage blocks, which
-/// the cart keeps, and the anchor at offset 0), taken as it assembles and kept with the cart
-/// as a save keeps it ([`storage_to_nbt`]); none when they hold nothing.
+/// the cart keeps, and the anchor at offset 0), taken as it assembles and left in [`HELD`]
+/// under `key`: [`return_refused_cargo`] gives back what a refused cell held, and
+/// [`held_to_nbt`] then keeps the rest with the cart.
 pub(crate) fn carry_held(
     lv: &mut ServerLevel<'_>,
     key: [i32; 3],
     origin: [i32; 3],
     blocks: &[([i32; 3], u32)],
-) -> Option<Tag> {
+) {
     let dim = lv.dim;
     let mut held = Vec::new();
     for (o, _) in blocks.iter().filter(|(o, _)| *o != [0, 0, 0]) {
@@ -1068,12 +1069,16 @@ pub(crate) fn carry_held(
             held.push((*o, d));
         }
     }
-    if held.is_empty() {
-        return None;
+    if !held.is_empty() {
+        HELD.with_borrow_mut(|m| m.insert((dim, key), held));
     }
-    HELD.with_borrow_mut(|m| m.insert((dim, key), held));
+}
+
+/// What [`carry_held`] left for `key`, out of [`HELD`] and as a save keeps it
+/// ([`storage_to_nbt`]), for the cart to keep; none when it holds nothing.
+pub(crate) fn held_to_nbt(lv: &ServerLevel<'_>, key: [i32; 3]) -> Option<Tag> {
     let tag = storage_to_nbt(lv, key);
-    HELD.with_borrow_mut(|m| m.remove(&(dim, key)));
+    HELD.with_borrow_mut(|m| m.remove(&(lv.dim, key)));
     tag
 }
 
@@ -1624,6 +1629,20 @@ fn take_refused<T>(
         .collect()
 }
 
+/// Give the items of storage blocks that refused removal back to them, out of `stored`
+/// (offsets from `origin`), which keeps only the cleared cells' items.
+pub(crate) fn return_refused_stored(
+    lv: &mut ServerLevel<'_>,
+    origin: [i32; 3],
+    refused: &HashSet<[i32; 3]>,
+    stored: &mut Mounted,
+) {
+    let back = take_refused(stored, origin, refused);
+    if !back.is_empty() {
+        release_stored(&mut ServerStorage(lv), back, |o| add(origin, o), |_| true);
+    }
+}
+
 /// Give cargo back to the standing blocks that refused removal. Only cleared cells keep
 /// their cargo on the contraption; carried fluid tanks retain their existing pruning rules.
 pub(crate) fn return_refused_cargo(
@@ -1642,18 +1661,11 @@ pub(crate) fn return_refused_cargo(
         }
     });
     let place = |o| add(origin, o);
-    let refused_stored = STORAGE
-        .with_borrow_mut(|m| {
-            let list = m.get_mut(&(dim, key))?;
-            let out = take_refused(list, origin, refused);
-            if list.is_empty() {
-                m.remove(&(dim, key));
-            }
-            Some(out)
-        })
-        .unwrap_or_default();
-    if !refused_stored.is_empty() {
-        release_stored(&mut ServerStorage(lv), refused_stored, place, |_| true);
+    if let Some(mut list) = STORAGE.with_borrow_mut(|m| m.remove(&(dim, key))) {
+        return_refused_stored(lv, origin, refused, &mut list);
+        if !list.is_empty() {
+            STORAGE.with_borrow_mut(|m| m.insert((dim, key), list));
+        }
     }
 
     let mut refused_held = HELD
@@ -4449,6 +4461,51 @@ mod tests {
         let mut list = carried();
         prune_held_tanks(&mut list, origin, &HashSet::from([origin]));
         assert_eq!(list[0].1.tank, None);
+    }
+
+    #[test]
+    fn held_to_nbt_keeps_only_the_cells_that_were_cleared() {
+        use mod_api::testing::FakeHost;
+
+        let (dim, key, origin) = (0, [i32::MIN + 2, 5, 6], [10, 20, 30]);
+        let standing = add(origin, [1, 0, 0]);
+        let entry = || BlockData {
+            block: Some(Block::Belt),
+            own: Some(Compound::new()),
+            ..BlockData::default()
+        };
+        HELD.with_borrow_mut(|m| {
+            m.insert((dim, key), vec![([0, 1, 0], entry()), ([1, 0, 0], entry())]);
+        });
+        // `return_refused_cargo` takes the standing cell's entry out of the table.
+        HELD.with_borrow_mut(|m| {
+            take_refused(
+                m.get_mut(&(dim, key)).unwrap(),
+                origin,
+                &HashSet::from([standing]),
+            )
+        });
+        let mut host = FakeHost::new();
+        let level = host.level.level();
+        let lv = ServerLevel {
+            host: &mut host,
+            level,
+            dim,
+            dimension: "minecraft:overworld",
+        };
+        let Some(Tag::List(blocks)) = held_to_nbt(&lv, key) else {
+            panic!("the cleared cell's cargo should be kept");
+        };
+        let offsets: Vec<_> = blocks
+            .iter()
+            .map(|b| match b {
+                Tag::Compound(c) => c.get(&"pos".into()).cloned(),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(offsets, [Some(Tag::IntArray(vec![0, 1, 0]))]);
+        assert!(HELD.with_borrow(|m| !m.contains_key(&(dim, key))));
+        assert_eq!(held_to_nbt(&lv, key), None);
     }
 
     #[test]
