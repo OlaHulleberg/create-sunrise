@@ -810,11 +810,17 @@ pub(crate) fn run_trace_at(sc: &Scenario, java_ties: bool, phase: u8, origin: Po
     execute(sc, r)
 }
 
-fn execute(sc: &Scenario, mut r: Run) -> Snapshot {
+fn execute(sc: &Scenario, r: Run) -> Snapshot {
+    execute_with(sc, r, |_, _| {})
+}
+
+/// Runs the scenario, telling `at` of each snapshot taken, before the tick's actions.
+pub(crate) fn execute_with(sc: &Scenario, mut r: Run, mut at: impl FnMut(&Run, u32)) -> Snapshot {
     let mut checkpoints = BTreeMap::new();
     for t in 0..sc.ticks {
         if sc.checkpoints.contains(&t) {
             checkpoints.insert(t, r.snapshot(sc));
+            at(&r, t);
         }
         // A player places the blocks, one each tick.
         if let Some(b) = sc.blocks.get(t as usize) {
@@ -850,6 +856,7 @@ fn execute(sc: &Scenario, mut r: Run) -> Snapshot {
     }
     if !r.native_failed && sc.checkpoints.contains(&sc.ticks) {
         checkpoints.insert(sc.ticks, r.snapshot(sc));
+        at(&r, sc.ticks);
     }
     let mut out = r.snapshot(sc);
     out.checkpoints = checkpoints;

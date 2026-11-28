@@ -255,6 +255,16 @@ and the rest is the native fluid host's ([fluid world](fluid-world.md)). `rust/s
 is the vanilla contract (hardness, property domains, tags, fixed and rolled drops, `stands_on`,
 what falls); `BreakingAudit` checks it against the loaded game at startup.
 
+The block ticks a leaf's `distance` runs by are held to `rust/src/leaves.json` (#448): the leaf
+shapes of the families, the smallest case of the issue and a small shape for each rule, and for
+every leaf of a shape its `distance` after each level tick and whether a tick of it is pending.
+The server replays the shapes at every start (`LeafDistance`) and refuses a binary that departs
+from them; the driver's timelines are tested against them (`leaf_traces_are_the_server_s`). A
+leaf gets a tick when a neighbour changes and none when it is placed. A tick is for one block at
+one position and runs only while that block is there. The ticks due in a level tick are all taken
+out first and run as they were scheduled, so a leaf changed in the pass schedules the next tick
+of each neighbour, the ones still waiting in the pass included.
+
 `breaking/drill` puts a drill on a motor against a block, in twelve histories on six facings at
 six speeds: the target from the start, swapped, taken away and put back, the drill or its motor
 removed while it cracks, the world saved and reloaded, a block arriving in front of an idle drill,
@@ -391,12 +401,13 @@ carrying Create's numbers and a case in `cases/`:
 
 After the fixes, each lane's first 1280 seeds (`fuzz-lane 0 327680 <residue> 256`):
 `breaking/drill` 1280 matched and `breaking/saw` 1267 matched, 13 differed; `fuzz 0 4000` matched.
-The 13 are the saw's leaves-alone history at −48 and 256 rpm, and differ in the `distance`
-of vanilla leaves alone: on the server the leaves around a cut one recompute their distances in
-another order than the driver's model of them does (`engine/vanilla.rs`, `leaf_tick`), as they did
-before the fixes. The smallest is one leaf (seed 23488 shrunk: at tick 12 `3,14,-1` is 6 on Java and
-7 on the driver). A wrench on a drill does not arm it: `IWrenchable.onWrenched` runs the drill's own
-`updateShape` and its neighbours' `neighborChanged`, never the drill's own.
+The 13 were the saw's leaves-alone history at −48 and 256 rpm, each differing in the `distance`
+of vanilla leaves alone: the driver's model of the block ticks left a waiting tick alone, so the
+leaves around a cut one recomputed in another order than on the server (seed 23488 shrunk to 11
+leaves: at tick 12 `3,14,-1` is 6 on Java and was 7 on the driver). Since the model above
+(#448), `breaking/saw` matches 1280 of 1280 as `breaking/drill` does, and so do every case in
+`cases/` and `fuzz 0 4000`. A wrench on a drill does not arm it: `IWrenchable.onWrenched` runs the
+drill's own `updateShape` and its neighbours' `neighborChanged`, never the drill's own.
 
 ## Deployers
 

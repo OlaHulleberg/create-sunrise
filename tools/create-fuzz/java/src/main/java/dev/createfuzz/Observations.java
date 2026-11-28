@@ -147,6 +147,7 @@ final class Observations {
                         snap.addProperty(
                                 "debug", be.saveWithoutMetadata(level.registryAccess()).toString());
                     if(be!=null) {var payload=Persistence.payload(be,origin);if(payload!=null) snap.add("payload",payload);}
+                    if (c.has("pending_ticks") && !state.isAir() && level.getBlockTicks().hasScheduledTick(pos, state.getBlock())) snap.addProperty("tick_pending", true);
                     blocks.add(key, snap);
                 }
         cracks.forEach((p, stages) -> {

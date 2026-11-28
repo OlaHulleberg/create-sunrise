@@ -99,6 +99,10 @@ what it receives on to its own neighbours unless it is one of the blocks Create 
   processing results: those compare by structure, and no family does what a roll would change
   ([rolled results](docs/processing-scope.md#rolled-results)).
 - `rust/src/allow.rs` lists the differences confirmed not to be port bugs, each with its evidence.
+- A leaf's `distance` is the game's own, recomputed by block ticks the port has no part in. The
+  driver's model of them is held to `rust/src/leaves.json`, the per-tick distances and pending
+  ticks of the breaking families' leaf shapes, which the server replays at every start
+  (`LeafDistance`; [processing scope](docs/processing-scope.md#block-breaking)).
 - A block's cached network `stress` and `capacity`, live and saved, are not compared: Create syncs them per
   member on a schedule its `HashMap` order picks, so Java does not repeat them (`allow.rs`,
   `cached_network_figures`). The network's recalculated totals are (`network_stress`, `network_capacity`),
