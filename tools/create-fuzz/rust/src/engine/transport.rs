@@ -437,6 +437,11 @@ impl Run {
                     self.apply_breaks(events);
                     continue;
                 }
+                // The glue's `determine_flow` in the wheel's lazy tick.
+                create_engine::world::EntityTurn::WheelFlow { pos, .. } => {
+                    self.apply_flow(pos);
+                    continue;
+                }
                 create_engine::world::EntityTurn::Fluid(p) => {
                     self.tick_transport_pipe(p);
                     self.tick_fluid_entity(p);
