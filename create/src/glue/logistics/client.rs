@@ -1316,7 +1316,7 @@ fn scrolled(
     };
     let (source, target) = belt::sprite_shift(seg, color, bottom);
     // The belt sprites are 16 by 16, the scrolling ones 16 by 32.
-    let shift = mod_api::TerrainUvShift::new(&source, &target, [1.0, 0.5], [0.0, offset]);
+    let shift = mod_api::TerrainUvShift::new(source, &target, [1.0, 0.5], [0.0, offset]);
     let options = mod_api::TerrainModelOptions::default().with_uv_shift(shift);
     terrain(draw, host, file, options)
 }
