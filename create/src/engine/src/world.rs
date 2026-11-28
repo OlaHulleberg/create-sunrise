@@ -4030,11 +4030,8 @@ impl CreateWorld {
         let Some(mut segment) = self.table.belt_segment(state) else {
             return;
         };
-        let d = &mut self.dims[dim];
-        d.belt_of.insert(pos, saved.controller);
-        d.settings.entry(pos).or_default().belt = Some(saved.controller);
+        let mut chain = vec![pos];
         if pos == saved.controller {
-            let mut chain = vec![pos];
             segment.part = crate::belt::Part::Middle;
             for _ in 1..saved.length {
                 let Some(next) = segment.next(*chain.last().unwrap(), true) else {
@@ -4043,6 +4040,11 @@ impl CreateWorld {
                 chain.push(next);
             }
             segment.part = crate::belt::Part::Start;
+        }
+        let d = &mut self.dims[dim];
+        d.belt_of.insert(pos, saved.controller);
+        d.settings.entry(pos).or_default().belt = Some(saved.controller);
+        if pos == saved.controller {
             let items = d.belt_saved.remove(&pos).unwrap_or_default();
             d.belts.insert(
                 pos,
@@ -6489,6 +6491,50 @@ mod tests {
         transport_walk(&mut w);
         w.tick(0, &mut Vec::new());
         w
+    }
+
+    #[test]
+    fn restore_belt_segment_leaves_no_membership_when_the_chain_overflows() {
+        let names = [
+            ("create:creative_motor", vec![("facing", "east")]),
+            (
+                "create:belt",
+                vec![
+                    ("facing", "east"),
+                    ("slope", "horizontal"),
+                    ("part", "start"),
+                ],
+            ),
+        ];
+        let mut w = CreateWorld::new(StateTable::new(
+            10,
+            names.iter().map(|(n, p)| (*n, p.iter().copied())),
+        ));
+        let saved = |controller| crate::belt::SavedSegment {
+            controller,
+            index: 0,
+            length: 2,
+        };
+
+        let edge = [i32::MAX, 0, 0];
+        w.dims[0].states.insert(edge, 11);
+        w.restore_belt_segment(0, edge, saved(edge));
+        assert!(!w.dims[0].belt_of.contains_key(&edge));
+        assert!(
+            w.dims[0]
+                .settings
+                .get(&edge)
+                .is_none_or(|s| s.belt.is_none())
+        );
+        assert!(!w.dims[0].belts.contains_key(&edge));
+
+        let at = [0, 0, 0];
+        w.dims[0].states.insert(at, 11);
+        w.restore_belt_segment(0, at, saved(at));
+        assert_eq!(w.dims[0].belt_of.get(&at), Some(&at));
+        assert_eq!(w.dims[0].settings[&at].belt, Some(at));
+        assert_eq!(w.dims[0].belts[&at].chain, [at, [1, 0, 0]]);
+        assert_eq!(w.block_at(0, at), Some(Block::Belt));
     }
 
     #[test]
