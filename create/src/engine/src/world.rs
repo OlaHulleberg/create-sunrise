@@ -937,8 +937,7 @@ impl TransportTicks {
         }
         let speed = crate::belt::direction_aware_speed(rpm, b.segment.facing);
         if b.items.update_direction(speed) {
-            world.dims[dim].belt_changes.push(c);
-            world.belt_inventory_changed(dim, c);
+            world.belt_mutated(dim, c);
         }
         false
     }
@@ -3827,9 +3826,9 @@ impl CreateWorld {
             for p in &belt.chain {
                 d.belt_of.remove(p);
             }
-            d.belt_changes.push(c);
-            d.belt_saved_changes.insert(c);
+            self.belt_mutated(dim, c);
         }
+        let d = &mut self.dims[dim];
         // A controller whose chain is not whole (a member's column is unloaded) holds its items
         // in `belt_saved`; they drop with it.
         if let Some(staged) = d.belt_saved.remove(&pos) {
@@ -3900,8 +3899,7 @@ impl CreateWorld {
                 items,
             },
         );
-        d.belt_changes.push(controller);
-        d.belt_saved_changes.insert(controller);
+        self.belt_mutated(dim, controller);
         for p in chain {
             let Some(&state) = self.dims[dim].states.get(&p) else {
                 continue;
@@ -3949,8 +3947,7 @@ impl CreateWorld {
             d.belt_of.remove(p);
             d.kinetics.detach_kinetics(*p);
         }
-        d.belt_changes.push(c);
-        d.belt_saved_changes.insert(c);
+        self.belt_mutated(dim, c);
         Some((c, b))
     }
 
@@ -3996,8 +3993,7 @@ impl CreateWorld {
         let d = &mut self.dims[dim];
         if let Some(belt) = d.belts.get_mut(&controller) {
             belt.items = items;
-            d.belt_changes.push(controller);
-            d.belt_saved_changes.insert(controller);
+            self.belt_mutated(dim, controller);
         } else {
             d.belt_saved
                 .insert(controller, StagedBelt { items, length });
@@ -4039,11 +4035,9 @@ impl CreateWorld {
         controller: [i32; 3],
         items: impl IntoIterator<Item = crate::belt::Item>,
     ) {
-        let d = &mut self.dims[dim];
-        if let Some(belt) = d.belts.get_mut(&controller) {
+        if let Some(belt) = self.dims[dim].belts.get_mut(&controller) {
             belt.items.add_all(items);
-            d.belt_changes.push(controller);
-            d.belt_saved_changes.insert(controller);
+            self.belt_mutated(dim, controller);
         }
     }
 
@@ -4373,6 +4367,48 @@ impl CreateWorld {
                 },
             )
         }));
+    }
+
+    /// Extract from a live belt's segment, publishing only a committed, nonempty extraction.
+    pub fn extract_belt_item(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+        index: i32,
+        amount: u8,
+        simulate: bool,
+    ) -> Option<(String, u8)> {
+        let b = self.dims[dim].belts.get_mut(&controller)?;
+        let out = b.items.extract_at(index, amount, simulate)?;
+        if !simulate && out.1 > 0 {
+            self.belt_mutated(dim, controller);
+        }
+        Some(out)
+    }
+
+    /// Remove and publish a live belt item only if it still matches the caller's snapshot.
+    pub fn take_belt_item_at(
+        &mut self,
+        dim: usize,
+        controller: [i32; 3],
+        index: usize,
+        expected: &crate::belt::Item,
+    ) -> bool {
+        let Some(b) = self.dims[dim].belts.get_mut(&controller) else {
+            return false;
+        };
+        if b.items.items.get(index) != Some(expected) {
+            return false;
+        }
+        b.items.items.remove(index);
+        self.belt_mutated(dim, controller);
+        true
+    }
+
+    /// Queue a belt controller's client update and journal the change for saving.
+    pub fn belt_mutated(&mut self, dim: usize, controller: [i32; 3]) {
+        self.dims[dim].belt_changes.push(controller);
+        self.belt_inventory_changed(dim, controller);
     }
 
     /// Journal a mutation of `BeltInventory.write`'s items or PositiveOrder.
@@ -6726,8 +6762,8 @@ mod tests {
     const SPLIT_CONTROLLER: [i32; 3] = [15, 8, 0];
     const SPLIT_END: [i32; 3] = [16, 8, 0];
 
-    /// A two-segment belt facing east across the boundary of columns 0 and 1 (states 10 start,
-    /// 11 end), holding one item.
+    /// A stopped two-segment belt facing east across columns 0 and 1 (states 10 start,
+    /// 11 end), holding one item on the end segment.
     fn split_belt_world() -> (CreateWorld, crate::belt::Item) {
         let belt = |part| {
             (
@@ -6743,10 +6779,63 @@ mod tests {
         w.block_changed(0, SPLIT_CONTROLLER, 0, 10);
         w.block_changed(0, SPLIT_END, 0, 11);
         transport_walk(&mut w);
-        let item = crate::belt::Item::new("minecraft:iron_ingot", 3, 0, false);
+        let mut item = crate::belt::Item::new("minecraft:iron_ingot", 3, 0, false);
+        item.position = 1.5;
         w.dims[0].belts.get_mut(&SPLIT_CONTROLLER).unwrap().items =
             crate::belt::Inventory::from_saved(vec![item.clone()], false);
         (w, item)
+    }
+
+    #[test]
+    fn extract_belt_item_marks_controller_saved_changes_on_stopped_cross_column_belt() {
+        let (mut w, _) = split_belt_world();
+        w.dims[0].belt_changes.clear();
+        w.take_belt_saved_changes(0);
+
+        assert_eq!(
+            w.extract_belt_item(0, SPLIT_CONTROLLER, 1, 3, true),
+            Some(("minecraft:iron_ingot".to_owned(), 3))
+        );
+        assert!(w.dims[0].belt_changes.is_empty());
+        assert!(w.take_belt_saved_changes(0).is_empty());
+
+        assert_eq!(w.extract_belt_item(0, SPLIT_CONTROLLER, 1, 0, false), None);
+        assert!(w.dims[0].belt_changes.is_empty());
+        assert!(w.take_belt_saved_changes(0).is_empty());
+
+        assert_eq!(
+            w.extract_belt_item(0, SPLIT_CONTROLLER, 1, 3, false),
+            Some(("minecraft:iron_ingot".to_owned(), 3))
+        );
+        assert_eq!(w.dims[0].belt_changes, [SPLIT_CONTROLLER]);
+        assert_eq!(w.take_belt_saved_changes(0), [SPLIT_CONTROLLER].into());
+        let saved = w.column_belts(0, 0, 0);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, SPLIT_CONTROLLER);
+        assert!(saved[0].1.items.is_empty());
+    }
+
+    #[test]
+    fn take_belt_item_at_marks_controller_saved_changes_on_stopped_belt() {
+        let (mut w, item) = split_belt_world();
+        w.dims[0].belt_changes.clear();
+        w.take_belt_saved_changes(0);
+
+        let wrong = crate::belt::Item {
+            count: 2,
+            ..item.clone()
+        };
+        assert!(!w.take_belt_item_at(0, SPLIT_CONTROLLER, 0, &wrong));
+        assert!(w.dims[0].belt_changes.is_empty());
+        assert!(w.take_belt_saved_changes(0).is_empty());
+
+        assert!(w.take_belt_item_at(0, SPLIT_CONTROLLER, 0, &item));
+        assert_eq!(w.dims[0].belt_changes, [SPLIT_CONTROLLER]);
+        assert_eq!(w.take_belt_saved_changes(0), [SPLIT_CONTROLLER].into());
+        let saved = w.column_belts(0, 0, 0);
+        assert_eq!(saved.len(), 1);
+        assert_eq!(saved[0].0, SPLIT_CONTROLLER);
+        assert!(saved[0].1.items.is_empty());
     }
 
     #[test]

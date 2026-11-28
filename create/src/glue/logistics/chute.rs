@@ -835,18 +835,8 @@ fn lift_from_below(lv: &mut ServerLevel<'_>, pos: [i32; 3], block: Block, powere
                 if !chute_accepts(lv, pos, block, powered, &stack) {
                     continue;
                 }
-                let removed = with_world(|w| {
-                    let d = &mut w.dims[dim];
-                    let b = d.belts.get_mut(&c)?;
-                    if b.items.items.get(n) != Some(&it) {
-                        return None;
-                    }
-                    b.items.items.remove(n);
-                    d.belt_changes.push(c);
-                    Some(())
-                })
-                .flatten();
-                if removed.is_none() {
+                let removed = with_world(|w| w.take_belt_item_at(dim, c, n, &it)).unwrap_or(false);
+                if !removed {
                     continue;
                 }
                 set_chute_stack(lv, pos, Some(stack));

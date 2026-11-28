@@ -568,17 +568,7 @@ impl arm::World for ArmWorld<'_, '_> {
                 // `ItemHandlerBeltSegment.extractItem` (the arm's `BeltPoint` reaches the belt
                 // through its capability): the stack splits in place, one it empties only
                 // marked `toRemove`.
-                let taken = with_world(|w| {
-                    let d = &mut w.dims[dim];
-                    let b = d.belts.get_mut(&c)?;
-                    let out = b.items.extract_at(index, amount, simulate);
-                    if !simulate && out.as_ref().is_some_and(|(_, n)| *n > 0) {
-                        d.belt_changes.push(c);
-                    }
-                    out
-                })
-                .flatten()?;
-                Some(taken)
+                with_world(|w| w.extract_belt_item(dim, c, index, amount, simulate)).flatten()
             }
             Kind::Chute => {
                 let s = chute_stack(lv, pos)?;
