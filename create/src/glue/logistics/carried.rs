@@ -185,6 +185,13 @@ fn carry_belt(dim: usize, pos: [i32; 3], out: &mut Compound) {
     })
     .flatten();
     let Some((controller, belt)) = taken else {
+        // A controller whose chain was not whole (a member's column unloaded) still holds its items.
+        if let Some(items) = with_world(|w| w.take_staged_belt_items(dim, pos)).flatten() {
+            out.insert(
+                BELT_ITEMS.into(),
+                super::belts_to_nbt(&[([0, 0, 0], items.to_save())]),
+            );
+        }
         return;
     };
     let offset = [0, 1, 2].map(|i| controller[i] - pos[i]);
