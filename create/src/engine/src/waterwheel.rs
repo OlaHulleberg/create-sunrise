@@ -1,7 +1,9 @@
 //! Water wheels, after Create's `WaterWheelBlockEntity`: the flow around a wheel turns it one way
-//! or the other at 8 RPM (4 for a large one).
+//! or the other at 8 RPM (4 for a large one). And a large wheel's frame (`WaterWheelStructuralBlock`).
 
+use crate::Block;
 use crate::kinetics::{Axis, Dir};
+use crate::parts::StateInfo;
 
 /// `WaterWheelBlockEntity.SMALL_OFFSETS`: the four blocks beside a wheel, across its axis.
 pub fn small_offsets(axis: Axis) -> [[i32; 3]; 4] {
@@ -108,6 +110,46 @@ pub fn plane(axis: Axis) -> Vec<[i32; 3]> {
         }
     }
     out
+}
+
+/// `WaterWheelStructuralBlock.stillValid`: whether the frame cell at `pos` facing `facing` points
+/// at a large wheel turning across it, directly or through the frame cell beside the wheel.
+/// `info_at` reads the Create block at a position.
+pub fn frame_holds(
+    pos: [i32; 3],
+    facing: Dir,
+    directly_adjacent: bool,
+    info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+) -> bool {
+    let target = add(pos, facing.offset());
+    let target_info = info_at(target);
+    if !directly_adjacent
+        && let Some((Block::WaterWheelStructure, info)) = target_info
+        && let Some(next) = info.facing
+        && frame_holds(target, next, true, info_at)
+    {
+        return true;
+    }
+    matches!(target_info, Some((Block::LargeWaterWheel, info))
+        if info.axis.is_some_and(|a| a != facing.axis()))
+}
+
+/// `WaterWheelStructuralBlock.getMaster`: the block the frame cell at `pos` facing `facing`
+/// points at, through the frame cells on the way, and where it is.
+pub fn master(
+    pos: [i32; 3],
+    facing: Dir,
+    info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
+) -> Option<([i32; 3], Block, StateInfo)> {
+    let target = add(pos, facing.offset());
+    match info_at(target)? {
+        (Block::WaterWheelStructure, info) => master(target, info.facing?, info_at),
+        (block, info) => Some((target, block, info)),
+    }
+}
+
+fn add(a: [i32; 3], b: [i32; 3]) -> [i32; 3] {
+    [a[0] + b[0], a[1] + b[1], a[2] + b[2]]
 }
 
 /// Catnip's `VecHelper.rotate(v, 90, axis)`.

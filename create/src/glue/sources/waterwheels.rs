@@ -17,7 +17,7 @@ use create_engine::Block;
 use create_engine::client::{Draw, Model};
 use create_engine::kinetics::{Axis, Dir};
 use create_engine::parts::StateInfo;
-use create_engine::waterwheel::{DEFAULT_WOOD, wood_of_planks};
+use create_engine::waterwheel::{DEFAULT_WOOD, frame_holds, wood_of_planks};
 use mod_api::{
     BlockEntityPart, BlockPart, BlockState, CanSurviveEvent, ClientHost, Compound, Flow,
     FluidPassageEvent, Hand, HostBlockStates, HostSide, InteractionResult, LevelHost, Registrar,
@@ -379,27 +379,6 @@ fn wheel_blocks(
     axis == Some(direction.axis())
 }
 
-/// `WaterWheelStructuralBlock.stillValid`: the frame cell at `pos` facing `facing` points at a
-/// large wheel turning across it, directly or through the frame cell beside the wheel.
-fn frame_holds(
-    pos: [i32; 3],
-    facing: Dir,
-    directly_adjacent: bool,
-    info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
-) -> bool {
-    let target = add(pos, facing.offset());
-    let target_info = info_at(target);
-    if !directly_adjacent
-        && let Some((Block::WaterWheelStructure, info)) = target_info
-        && let Some(next) = info.facing
-        && frame_holds(target, next, true, info_at)
-    {
-        return true;
-    }
-    matches!(target_info, Some((Block::LargeWaterWheel, info))
-        if info.axis.is_some_and(|a| a != facing.axis()))
-}
-
 /// `WaterWheelStructuralBlock.getMaster`'s wheel: the rotation axis of the large wheel the frame
 /// cell at `pos` facing `facing` leads to, through any frame cells on the way.
 fn master_axis(
@@ -407,10 +386,8 @@ fn master_axis(
     facing: Dir,
     info_at: &impl Fn([i32; 3]) -> Option<(Block, StateInfo)>,
 ) -> Option<Axis> {
-    let target = add(pos, facing.offset());
-    match info_at(target)? {
-        (Block::WaterWheelStructure, info) => master_axis(target, info.facing?, info_at),
-        (Block::LargeWaterWheel, info) => info.axis,
+    match create_engine::waterwheel::master(pos, facing, info_at)? {
+        (_, Block::LargeWaterWheel, info) => info.axis,
         _ => None,
     }
 }
