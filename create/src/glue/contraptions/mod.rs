@@ -971,7 +971,7 @@ fn remove_cells(lv: &mut ServerLevel<'_>, cells: &[Cell], air: BlockState) -> Ha
     refused
 }
 
-fn remove_cells_with(
+pub(super) fn remove_cells_with(
     cells: &[Cell],
     brittle: &[bool],
     mut set: impl FnMut([i32; 3]) -> bool,
@@ -1164,7 +1164,7 @@ fn bits(dirs: &[Dir]) -> u8 {
 
 /// `BlockMovementChecksImpl.isBrittleFallback`: blocks that hang on to another and break
 /// without it.
-fn brittle(name: &str, props: &[(String, String)]) -> bool {
+pub(super) fn brittle(name: &str, props: &[(String, String)]) -> bool {
     let id = name.strip_prefix("minecraft:").unwrap_or(name);
     prop(props, "hanging").is_some()
         || id == "ladder"
