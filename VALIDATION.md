@@ -33,6 +33,37 @@ In a fresh clone run `cargo sunrise-mod check` first: it fetches the SDK into `c
 | `tools/create-fuzz/rust/` | `cargo +1.99.1 test --release` with `CREATE_HORIZON_DIR` set to the checkout | Not run on `6a02076` |
 | `tools/create-fuzz/` | `./run.sh fuzz check cases/*.json` against a running server | Not run on `6a02076` |
 
+## #355 in game on Dev `ba1f24e` (branch `fix/multiblock-cracks`, main `1e73b019`)
+
+One run on 2026-11-28 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
+socket), with launcher 1.3.7. The mod is `create/` at `7e2b85b0` plus the one uncommitted tag file of #359
+(`data/c/tags/block/barrels.json`), built by `sunrise-launcher native-build` as `native-ba1f24e-2481d5650192`, the
+instance's selected build. The runs that read each crack were made with two earlier builds of the same code with
+DEBUG lines (`create_log!`, not committed) that log every crack `client_break_progress` is told and every
+`set_client_break_progress`: `native-ba1f24e-0e330ae1baf3`, and for one row `native-ba1f24e-77c9e9f840f3`, whose
+parts go by the breaker's own id. A creative world on a smooth stone platform at y 149, the player in survival to
+dig. Compared with Create 6.0.11 (`b62e837`) by its code and data: Java Create was not run. Details and screenshots
+are not kept in the repository.
+
+| Area | Result |
+|---|---|
+| The hook | In single player `client_break_progress` is told twice a frame for the local player's dig (its stage every tick, -1 when it stops or the block breaks) and once for a machine's stage (a drill's clear comes as 255), on the main thread. The hook lends a host to read only, so the parts' cracks are set just after it, in `render_frame_pre`: they show in the frame the broken block's own crack does. None of the 1148 `set_client_break_progress` calls the first DEBUG build logged returned false. |
+| A track curve (#355) | **Passes.** Laid with the track item from (10, 150, 10) east to (19, 150, 19) north, the curve joins (11, 150, 10) and (19, 150, 18), 11.3 blocks apart, and each end's block entity data names the other (`Connected`). Dug in survival at (19, 150, 18): every stage is set on the far end too (`set_client_break_progress` true), and the break's -1 takes it away. Then a drill on a 1 rpm motor facing down over the same end: stages 1 to 9 four seconds apart, then the clear. While it cracks, the far end under the crosshair and in a view of the whole curve shows the same crack pattern as the end under the drill; after the break both are clean. Seen again in the committed build. |
+| A belt chain (#355) | **The cracks are set, none is drawn.** 20 belts from (2, 151, 0) to (21, 151, 0), the first broken by a drill on a 1 rpm motor: each stage is set on the other 19 and the clear (255) on all of them again, `set_client_break_progress` true every time, for the belt 19 blocks away too. No belt shows a crack, not the broken one by the game's own path: a close-up of the far end is the same before and while (1 of 243200 pixels differ). On this build a crack is drawn from the models of a block whose render shape is `Model` (a track, Create's andesite casing) and on the game's own block entities (a vanilla chest), and on nothing a mod draws: a Create shaft does not under the player's own dig, nor a belt under a drill's, nor the large water wheel under the crack set on it. So `set_client_break_progress` has no radius cap; a belt's crack stays unseen for the reason in `API_GAPS.md`. |
+| A large water wheel's frame cell (#355) | **The crack is set on the wheel, none is drawn.** A large wheel at (30, 152, 4) on the z axis, placed with its item; its frame cell above it, (30, 153, 4) facing down, dug in survival: stages 0 to 9 in 2.8 s, each set on the wheel (true), and the break's -1 takes it away. A dig let go at stage 7 clears it too. No crack is drawn on the wheel (83 to 123 of 540000 pixels differ from the frame before: the arm), for the reason in the row above. |
+| A part's own breaker id | With the breaker's own id on the part, the crack leaves the end under the drill for the far end of the curve: the game keeps one crack per breaker id, so each part shows under an id of its own. |
+| A fluid tank, an item vault | No part is named for them, as Create's mixin leaves them: nothing is set. |
+
+The fuzzer cannot see a crack, so it is a regression only, on one dedicated server from this checkout (9 GB
+available): `check cases/*.json` 250 matched, 0 differed; `fuzz 0 4000` 4000 matched, 0 differed, 0 java-unstable,
+0 driver-unsupported, as on main.
+
+Not run: another player's crack on a remote server (a machine's cracks reached the hook by the server's packet), a
+belt with a casing, a track junction, contraptions, sound; a belt or a wheel cannot be seen cracked on this build.
+Found on the way, not among these fixes: later in the session the control socket's `tp` was undone by the server
+within a second, while `tp @s` run as a command held; a clipboard pasted on a downward-facing creative motor's north
+face set −1 rpm where it sets +1 on an east-facing one (not traced).
+
 ## #538 and #540 in game on Dev `ba1f24e` (branch `fix/basin-entity-hand`, main `d0ffeba2`)
 
 One run on 2026-11-27 of the Linux build of Dev `dev-2026-11-26-ba1f24e` (headless, software Vulkan, driven by the control
