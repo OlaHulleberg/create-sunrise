@@ -95,6 +95,12 @@ API, and remove it once the API has it and the port uses it.
   deployer's stacks drop from where its fake player stands but are not thrown about, with the default pickup delay.
   Create uses: calls vanilla `Player.drop(stack, true, false)` on its fake player ([`DeployerBlockEntity.java:466`](https://github.com/Creators-of-Create/Create/blob/b62e837acab5e2ceeb7bfd0c9fd551c64b52dd18/src/main/java/com/simibubi/create/content/kinetics/deployer/DeployerBlockEntity.java#L466)). Not filed.
 
+- **Mod-owned stores joining a host transaction** (`SnapshotJournal` / `RootCommitJournal`,
+  `updateSnapshots(tx)` and a root-commit callback): [`BeltItems`](create/src/glue/logistics/handlers.rs#L327)
+  `insert_at` and `extract_at` ignore `TransactionContext` and write directly to the engine's belt inventory.
+  `TunnelItems` has the same gap when it delegates to the belt below (some inserts and all extracts).
+  An aborted or simulated host transaction cannot roll back those writes. Create #562 / sunrise-org/sunrise#985
+
 ## Client
 
 - **Client-side structure capture with saved block and entity data**: Java Create saves the quill's ordinary
